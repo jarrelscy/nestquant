@@ -1,4 +1,4 @@
-"""NestQuant grouped MoE layer: pools, device table, launch wrapper, dense reference decode.
+"""NestQuant grouped MoE layer: pools, device table, launch wrapper, dense reference decode (thread 15 RM_P spec).
 Plane layout: see nqmoe.cu header."""
 import torch,numpy as np
 from build import get
@@ -6,10 +6,20 @@ M=get()
 TBL_W=16
 A_=float(np.array([0x1eee],np.uint16).view(np.float16)[0]);B_=float(np.array([0xc931],np.uint16).view(np.float16)[0])
 
-def proj_sizes(N,K,nm=None):
-    """int32 words per plane (flags: int64 per strip). nm=None: dense P4; else nm flagged chunks per strip."""
+# residual window patterns (table code -> (KA, MASK)); LSB-first period-16 fractional steps (thread 15)
+RKP={0:(2,0),1:(1,0xEEEE),2:(2,0xAAAA),3:(2,0x8888),4:(3,0),5:(1,0xAAAA)}
+RK_OF={2:0,1.75:1,2.5:2,2.25:3,3:4,1.5:5}
+popc=lambda m:bin(m).count('1')
+def rbits(rk):KA,M=RKP[rk];return 4*(16*KA+popc(M))
+def step_off(p,KA,MASK):
+    per=[sum(KA+((MASK>>i)&1) for i in range(r)) for r in range(16)]
+    p=torch.as_tensor(p);return (p>>4)*(16*KA+popc(MASK))+torch.tensor(per,device=p.device)[p&15]
+def split_bits(bits):n4=bits//128;r=bits%128;return n4,r//64,(r%64)//32,(r%32)//16
+
+def proj_sizes(N,K,nm=None,rk=0):
+    """bytes per plane (flags: int64 per strip). nm=None: dense P4; else nm flagged chunks per strip."""
     S,C=N//16,K//128;R=C if nm is None else nm
-    return dict(S=S,C=C,nm=nm,base=S*C*32*4,p4=S*R*32*4,d4=S*R,flags=0 if nm is None else S)
+    return dict(S=S,C=C,nm=nm,rk=rk,base=S*C*32*16,p4=S*R*32*rbits(rk)//8,d4=S*R*4,flags=0 if nm is None else S*8,nrec_r=S*R*32)
 
 def make_flags(S,C,nm,gen,grp=8):
     """nm flagged chunks per strip; identical across each group of `grp` strips (128x128 block granularity)."""
@@ -19,57 +29,105 @@ def make_flags(S,C,nm,gen,grp=8):
     fl=fl.repeat_interleave(grp,0)[:S]
     return (fl.long()<<torch.arange(C)).sum(1),fl        # C <= 63
 
+def pack_words(w,bits):
+    """w [nrec, NW] int64 (uint32 values) -> int32 tensor of the sub-array layout (uint4 x n4 | uint2 | uint | ushort)."""
+    n4,n2,n1,nh=split_bits(bits);parts=[];k=0
+    def as_bytes(t,nb):                                   # int64 values -> little-endian bytes, nb bytes each
+        return torch.stack([(t>>(8*i))&255 for i in range(nb)],-1).to(torch.uint8).reshape(-1)
+    if n4:parts.append(as_bytes(w[:,:4*n4],4));k=4*n4
+    if n2:parts.append(as_bytes(w[:,k:k+2],4));k+=2
+    if n1:parts.append(as_bytes(w[:,k],4));k+=1
+    if nh:parts.append(as_bytes(w[:,k]&0xFFFF,2))
+    return torch.cat(parts).view(torch.int32)
+
+MB_LIST=None
+def all_MbN():
+    """every valid block word (Mb, N): 1<=Mb<=255, 0<=N<=255, Mb+N<=257"""
+    global MB_LIST
+    if MB_LIST is None:
+        MB_LIST=torch.tensor([(m,n) for m in range(1,256) for n in range(0,min(255,257-m)+1)])
+    return MB_LIST
+
 class Proj:
-    """Random packed planes of one projection of one expert (separate tensors so they can live in pools)."""
-    def __init__(s,N,K,gen,nm=None):
-        z=proj_sizes(N,K,nm);s.z=z;s.N,s.K=N,K
+    """Random packed planes of one projection of one expert (separate tensors so they can live in pools).
+    base: int32 [S*C*32*4] (uint4 per record). p4: int32 view of the packed residual sub-arrays. d4: int32 Mb|N<<8 per block.
+    mbn: 'rand' (realistic delta ~0.1-0.8 plus random extremes) or ('exh', offset): cycle through every valid (Mb, N)."""
+    def __init__(s,N,K,gen,nm=None,rk=0,mbn='rand'):
+        z=proj_sizes(N,K,nm,rk);s.z=z;s.N,s.K,s.rk=N,K,rk
+        S,C=z['S'],z['C'];R=C if nm is None else nm;nr=S*R*32;bits=rbits(rk);nw=(bits+31)//32
         ri=lambda n:torch.randint(-2**31,2**31-1,(n,),generator=gen,dtype=torch.int32)
-        dl=lambda n:(torch.rand(n,generator=gen)*0.2+0.2).half().repeat_interleave(2).view(torch.int32)
-        s.base=ri(z['base']);s.p4=ri(z['p4']);s.d4=dl(z['d4'])
+        s.base=ri(S*C*32*4)
+        w=torch.randint(0,2**32,(nr,nw),generator=gen,dtype=torch.int64)
+        if bits%32:w[:,-1]&=0xFFFF
+        s.p4w=w;s.p4=pack_words(w,bits)
+        nb=S*R
+        if mbn=='rand':
+            Mb=torch.randint(120,256,(nb,),generator=gen);Nn=(torch.rand(nb,generator=gen)*0.8*Mb).round().long()
+            ext=torch.rand(nb,generator=gen)<0.05;Mb2=torch.randint(1,256,(nb,),generator=gen)
+            N2=(torch.rand(nb,generator=gen)*(torch.clamp(257-Mb2,max=255)+1)).floor().long()
+            Mb=torch.where(ext,Mb2,Mb);Nn=torch.where(ext,N2,Nn);Nn=torch.minimum(Nn,257-Mb)
+        else:
+            L=all_MbN();idx=(torch.arange(nb)+mbn[1])%len(L);Mb,Nn=L[idx,0],L[idx,1]
+        s.Mb,s.Nn=Mb,Nn;s.d4=(Mb|(Nn<<8)).to(torch.int32)
         if nm is None:s.flags=None;s.fl=None
-        else:s.flags,s.fl=make_flags(z['S'],z['C'],nm,gen)
+        else:s.flags,s.fl=make_flags(S,C,nm,gen)
     def to(s,dev):
-        for k in ['base','p4','d4','flags']:
+        for k in ['base','p4','d4','flags','p4w','Mb','Nn']:
             if getattr(s,k) is not None:setattr(s,k,getattr(s,k).to(dev))
         return s
 
-def _codes(rec,G=2):
-    """rec [S,C,32,4] int64 (uint32 values) -> [S,C,32,64] fp64 codes 1024+bytesum (2 bit/weight windows)."""
-    lane=torch.arange(32,device=rec.device);src=lane^1 if G==2 else ((lane&~3)|((lane+1)&3))
-    ext=torch.cat([rec,rec[:,:,src,:1]],-1)
-    out=[]
-    for j in range(64):
-        o=2*j;i,sh=o>>5,o&31
-        v=((ext[...,i]>>sh)|(ext[...,i+1]<<(32-sh))) if sh else ext[...,i]
-        v=v&0xFFFF;x=(v*0x83DCD12D)&0xFFFFFFFF
-        out.append(1024+((x&255)+((x>>8)&255)+((x>>16)&255)+((x>>24)&255)))
-    return torch.stack(out,-1).double()
-
-EMU=True   # emulate the kernel's fp16 HFMA2 rounding (delta folded into B*(1+delta), delta*A)
-def r16(t):return t.half().double() if EMU else t
-def dense_W(p,level,G=2):
-    """Independent dense decode of one projection at level 2 or 4 -> [N,K] fp32 (EMU: fp16 rounding per HFMA2)."""
+K0=np.float32(-3.453125)
+RCP=torch.tensor(np.concatenate([[0],np.float32(1)/np.arange(1,256,dtype=np.float32)]).astype(np.float32))
+def _bits(w,nbits):
+    """[n, NW] int64 -> [n, nbits] uint8 LSB-first"""
+    return ((w[...,None]>>torch.arange(32,device=w.device))&1).to(torch.uint8).reshape(w.shape[0],-1)[:,:nbits]
+def _S(st):
+    x=(st*0x83DCD12D)&0xFFFFFFFF
+    return (x&255)+((x>>8)&255)+((x>>16)&255)+((x>>24)&255)
+def lane_sums(w,nbits,KA,MASK,G,chunk=1<<14):
+    """ring streams of G lanes (records lane-minor); S(state) at every lane weight -> [nrec, 64] int64 (ref15_spec.states + S)."""
+    n=w.shape[0];out=torch.empty(n,64,dtype=torch.int64,device=w.device)
+    L=G*nbits;off=step_off(torch.arange(64*G,device=w.device),KA,MASK)
+    assert int(step_off(torch.tensor(64*G),KA,MASK))==L
+    idx=(off[:,None]+torch.arange(16,device=w.device))%L;pw=(1<<torch.arange(16,device=w.device))
+    for a in range(0,n,chunk):
+        b=_bits(w[a:a+chunk],nbits).reshape(-1,L)                   # [rings, L]
+        st=(b[:,idx].long()*pw).sum(-1)                               # [rings, 64G]
+        out[a:a+chunk]=_S(st).reshape(-1,64)
+    return out
+def fold_vals(Sb,Sr,Mb,N):
+    """ref15_spec.fold in torch (fp32 ops in spec order), Mb/N broadcast [..,1]"""
+    rc=RCP.to(Sb.device)[Mb]
+    Ah=(np.float32(1.732421875)*rc).half()
+    t=(N.float()*rc)*np.float32(K0);t=t+np.float32(K0);C=(t-1024*Ah.float()).half()
+    F=(Mb*Sb+N*Sr+128)>>8
+    return (Ah.double()*(1024+F)+C.double()).half()
+def lane_vals(p,level,G):
+    """decoded fp16 weights [S, C, 32, 64] in lane-weight order"""
     z=p.z;S,C=z['S'],z['C'];dev=p.base.device
-    u=lambda t:(t.long()&0xFFFFFFFF)
-    hb=_codes(u(p.base).view(S,C,32,4),G);f=r16(A_*hb+B_)
-    if level==4:
-        R=C if p.fl is None else z['nm']
-        h4=_codes(u(p.p4).view(S,R,32,4),G)
-        d4=p.d4.view(torch.int16).view(torch.float16)[::2].double().view(S,R)
-        if p.fl is None:on=torch.ones(S,C,dtype=torch.bool,device=dev);rank=torch.arange(C,device=dev)[None].expand(S,C)
-        else:on=p.fl.to(dev);rank=(torch.cumsum(on.long(),1)-on.long()).clamp(max=R-1)
-        si=torch.arange(S,device=dev)[:,None].expand(S,C)
-        d=d4[si,rank][...,None,None];h=h4[si,rank]
-        r4=r16(h*r16(d*A_)+r16(A_*hb+r16(d*B_+B_))) if EMU else d*(A_*h+B_)+f
-        f=torch.where(on[...,None,None],r4,f)
-    W=torch.zeros(p.N,p.K,device=dev,dtype=torch.float64)
+    wb=(p.base.long()&0xFFFFFFFF).view(-1,4)
+    Sb=lane_sums(wb,128,2,0,G).view(S,C,32,64)
+    q2=(A_*(1024+Sb.double())+B_).half()
+    if level==2:return q2
+    KA,M=RKP[p.rk];R=C if p.fl is None else z['nm']
+    Sr=lane_sums(p.p4w,rbits(p.rk),KA,M,G).view(S,R,32,64)
+    Mb=p.Mb.view(S,R);Nn=p.Nn.view(S,R)
+    if p.fl is None:on=torch.ones(S,C,dtype=torch.bool,device=dev);rank=torch.arange(C,device=dev)[None].expand(S,C)
+    else:on=p.fl.to(dev);rank=(torch.cumsum(on.long(),1)-on.long()).clamp(max=R-1)
+    si=torch.arange(S,device=dev)[:,None].expand(S,C)
+    q4=fold_vals(Sb,Sr[si,rank],Mb[si,rank][...,None,None],Nn[si,rank][...,None,None])
+    return torch.where(on[...,None,None],q4,q2)
+def dense_W(p,level,G=4,dtype=torch.float32):
+    """Independent dense decode of one projection at level 2 or 4 -> [N,K] (bit-exact fp16 values)."""
+    f=lane_vals(p,level,G);S,C=f.shape[:2];dev=f.device
+    W=torch.zeros(p.N,p.K,device=dev,dtype=torch.float16)
     lane=torch.arange(32,device=dev);g=lane>>2;t4=lane&3
     sI=torch.arange(S,device=dev)[:,None,None];cI=torch.arange(C,device=dev)[None,:,None]
     for j in range(64):
         pp,e=j>>1,j&1;t,r_=pp>>2,pp&3
         rows=(sI*16+g[None,None]+(r_&1)*8).expand(S,C,32);ks=(cI*128+t*16+t4[None,None]*2+(r_>>1)*8+e).expand(S,C,32)
         W[rows,ks]=f[...,j]
-    return W.float()
+    return W.to(dtype)
 
 def H128(dev='cuda'):
     H=torch.ones(1,1)
@@ -77,9 +135,9 @@ def H128(dev='cuda'):
     return (H/128**0.5).to(dev)
 
 class Expert:
-    def __init__(s,H,I,seed,nm_gu=None,nm_dn=None,dev='cuda'):
+    def __init__(s,H,I,seed,nm_gu=None,nm_dn=None,dev='cuda',rk_gu=0,rk_dn=0,mbn='rand'):
         gen=torch.Generator().manual_seed(seed)
-        s.gu=Proj(2*I,H,gen,nm_gu).to(dev);s.dn=Proj(H,I,gen,nm_dn).to(dev)
+        s.gu=Proj(2*I,H,gen,nm_gu,rk_gu,mbn).to(dev);s.dn=Proj(H,I,gen,nm_dn,rk_dn,mbn if mbn=='rand' else ('exh',mbn[1]+(2*I//16)*(H//128))).to(dev)
         s.signs=((torch.randint(0,2,(2*H+3*I,),generator=gen)*2-1).half()).to(dev)
         s.H,s.I=H,I
     def bytes(s,level):
@@ -88,11 +146,11 @@ class Expert:
             b+=p.base.numel()*4
             if level>=4:b+=(p.p4.numel()+p.d4.numel())*4+(0 if p.flags is None else p.flags.numel()*8)
         return b
-    def ref(s,x,level):
+    def ref(s,x,level,G=4):
         """x [T,H] fp32 -> [T,H] fp32, through the dense-decoded weights."""
         H,I=s.H,s.I;Hm=H128(x.device);wht=lambda v:(v.view(*v.shape[:-1],-1,128)@Hm).view(v.shape)
         sg=s.signs.float();su,svg,svu,sud,svo=sg[:H],sg[H:H+I],sg[H+I:H+2*I],sg[H+2*I:H+3*I],sg[H+3*I:]
-        Wg=dense_W(s.gu,level);Wd=dense_W(s.dn,level)
+        Wg=dense_W(s.gu,level,G);Wd=dense_W(s.dn,level,G)
         xr=wht(x*su).half().float();a=xr@Wg.T
         g=wht(a[:,:I])*svg;u=wht(a[:,I:])*svu
         h=wht(torch.nn.functional.silu(g)*u*sud).half().float()
@@ -104,12 +162,12 @@ def entry(ex,level):
     for off,p in ((1,ex.gu),(5,ex.dn)):
         for i,k in enumerate(['base','p4','d4','flags']):
             t=getattr(p,k);e[off+i]=0 if t is None else t.data_ptr()
-    e[9]=ex.signs.data_ptr()
+    e[9]=ex.signs.data_ptr();e[10]=ex.gu.rk;e[11]=ex.dn.rk
     return e
 
 class MoELayer:
     """Device table [E,16] + workspace for up to Bmax tokens. Table entries are flipped in place (graph-safe)."""
-    def __init__(s,E,H,I,nm_gu=0,nm_dn=0,Bmax=4,topk=8,G=2,dev='cuda',mod=None):
+    def __init__(s,E,H,I,nm_gu=0,nm_dn=0,Bmax=4,topk=8,G=4,dev='cuda',mod=None):
         """nm_*: flagged chunks per strip for experts in mask mode (ignored for dense experts)."""
         s.M=mod or M;s.E,s.H,s.I,s.nm_gu,s.nm_dn,s.G=E,H,I,nm_gu,nm_dn,G
         s.table=torch.zeros(E,TBL_W,dtype=torch.int64,device=dev)
@@ -140,11 +198,11 @@ class Mailbox:
         with torch.cuda.stream(stream):s.stage[e].copy_(r,non_blocking=True);s.seq[e:e+1].copy_(q,non_blocking=True)
     def done(s,e):return int(s.applied_host[e])==s.hseq[e]
 
-def moe_ref(experts,levels,x,sel,rw):
+def moe_ref(experts,levels,x,sel,rw,G=4):
     y=torch.zeros(x.shape[0],x.shape[1],device=x.device);xf=x.float();cache={}
     for b in range(x.shape[0]):
         for k in range(sel.shape[1]):
             e=int(sel[b,k]);w=float(rw[b,k])
             if levels[e]<=0 or w==0:continue
-            y[b]+=w*experts[e].ref(xf[b:b+1],levels[e])[0]
+            y[b]+=w*experts[e].ref(xf[b:b+1],levels[e],G)[0]
     return y
