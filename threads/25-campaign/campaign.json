@@ -105,15 +105,15 @@
    "threads/25-campaign/nq25_campaign.py": "26cef5a5ecd76a14",
    "threads/25-campaign/nq25_finalize.py": "ff0e81d83c3dda65",
    "threads/25-campaign/nq25_st.py": "25e0b8dc9309891e",
-   "threads/25-campaign/nq25_spot.py": "bdbba643d28eb5a3",
+   "threads/25-campaign/nq25_spot.py": "9210681daa5b5cc9",
    "threads/25-campaign/nq25_upload.py": "df2083e28bf751d2"
   },
   "code_id": "2d29edea6b00349d",
   "t23_id": "c149a800ed4e17c9",
-  "t25_id": "ce67509332f87051",
-  "git_head": "785633a",
+  "t25_id": "9c160acb175a78a2",
+  "git_head": "4a5561e",
   "dirty": [],
-  "pinned": "2026-09-29 03:49:58"
+  "pinned": "2026-09-29 03:58:31"
  },
  "_gates": "Per-layer (coordinator 2026-09-29): layer L encodes once (a) T19's LOCAL final marker 19-capture-glmfmt/final/L{L}.json exists (atomic, all 25 plan shards, fit_tokens 15363584) -> stats pinned to its immutable version_dir (flashblade done_full is restart insurance, not a gate: gate_backup=false), (b) T26 vision stats for L merged, (c) MMW_GO file (lead-written, holds mm_w) exists; if it differs from frozen vision_weight and nothing is encoded yet, the driver adopts it (config_id changes), else alerts mmw_mismatch and holds, (d) T23 gate passed = T23_GO file committed next to this (t23b layers only). fixed_set only feeds manifest default_allocation: not in config_id; manifests are refreshed + re-uploaded when fixed_set.json changes.",
  "config_id": "0f996ec4b4f8d4dd"
