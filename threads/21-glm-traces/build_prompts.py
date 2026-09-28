@@ -1,4 +1,5 @@
-"""Part A prompt set -> /tmp/nestquant/21-traces/prompts.jsonl (one line per request; samples expanded).
+"""[NOT RUN: Part A (paid generation) was cancelled by the user 2026-09-28; kept for reference only.]
+Part A prompt set -> /tmp/nestquant/21-traces/prompts.jsonl (one line per request; samples expanded).
 
 Sources:
   tb     Terminal-Bench 2.1 (harbor-framework/terminal-bench archive/ = 2.0 tasks with 2.1 revisions) + the 8
@@ -28,20 +29,38 @@ def grams(text, n=13):
     return {tuple(ids[i:i + n]) for i in range(len(ids) - n + 1)}
 
 
+CACHE = f"{W}/hf_rows_cache"
+
+
+def _get(url):
+    import os
+    os.makedirs(CACHE, exist_ok=True)
+    cf = f"{CACHE}/{hashlib.sha1(url.encode()).hexdigest()}.json"
+    if os.path.exists(cf):
+        return json.load(open(cf))
+    for t in range(10):
+        try:
+            j = json.load(urllib.request.urlopen(url, timeout=60))
+            json.dump(j, open(cf, "w")); time.sleep(1.0)
+            return j
+        except Exception as e:
+            print("  hf retry", t, type(e).__name__, getattr(e, "code", ""), flush=True)
+            time.sleep(min(120, 5 * 2 ** t))
+    return None
+
+
 def rows(ds, config, split, n_blocks, length=100, total=None):
     base = "https://datasets-server.huggingface.co/rows?"
     if total is None:
         q = urllib.parse.urlencode(dict(dataset=ds, config=config, split=split, offset=0, length=1))
-        total = json.load(urllib.request.urlopen(base + q, timeout=60))["num_rows_total"]
+        total = _get(base + q)["num_rows_total"]
     out = []
     for off in rng.sample(range(0, max(1, total - length)), n_blocks):
         q = urllib.parse.urlencode(dict(dataset=ds, config=config, split=split, offset=off, length=length))
-        for t in range(5):
-            try:
-                out += [r["row"] for r in json.load(urllib.request.urlopen(base + q, timeout=60))["rows"]]
-                break
-            except Exception as e:
-                time.sleep(2 + 3 * t)
+        j = _get(base + q)
+        if j:
+            out += [r["row"] for r in j["rows"]]
+    print(ds, config, len(out), "rows", flush=True)
     return out
 
 

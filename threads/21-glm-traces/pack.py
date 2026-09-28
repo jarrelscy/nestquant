@@ -66,9 +66,11 @@ class Deficit(Exception):
     pass
 
 
-def pack(anchors, fillers, C, rng):
+def pack(anchors, fillers, C, rng, extra_items=None):
     """anchors: non-splittable pieces; fillers: splittable pieces (consumed in order). Returns windows as lists of
-    (doc, start, end), leftover filler tokens dropped count, and the unused filler pieces."""
+    (doc, start, end), leftover filler tokens dropped count, and the unused filler pieces. With extra_items=k, extra
+    full windows are only started while the stream is still inside the first k filler items (the rest of the
+    stream is gap-fill only)."""
     anchors = sorted(anchors, key=lambda it: -(it[2] - it[1]))
     wins, free = [], []
     # first-fit decreasing with a size-bucketed free list (window free space is 0..C)
@@ -105,6 +107,8 @@ def pack(anchors, fillers, C, rng):
         if free[w]:
             got, left = take(free[w]); wins[w].extend(got); free[w] = left
     while True:
+        if extra_items is not None and (fi - 1 if cur is not None else fi) >= extra_items:
+            break
         got, left = take(C)
         if not got:
             break
@@ -263,8 +267,84 @@ def main_corpus():
     return mans
 
 
+TRACES = "/tmp/nestquant/21-traces/trace_docs.jsonl"   # ingest_traces.py
+TRACE_DEDUP = "/tmp/nestquant/21-traces/trace_dedup.json"  # dedup_traces.py
+TRACE_INDEX0 = 100_000  # trace doc_index = TRACE_INDEX0 + line (corpus doc_index < 40k; < SEG_STRIDE)
+THINK_ONLY = {"claude-opus46"}  # sessions dominated by tool output: keep only the anchor pieces with a </think>
+VAL_SOURCES = ("claude-opus46", "prime-glm53f", "dsv41flash")  # many small docs; tb21 / gpqa docs are few and huge
+
+
+def main_traces():
+    rng = random.Random(SEED + 1)
+    C = 2048
+    docs = load_docs(TRACES, start_index=TRACE_INDEX0)
+    raw = [json.loads(l) for l in open(TRACES)]
+    for d, r in zip(docs, raw):
+        d.update(source=r["source"], model=r["model"], truncated=r["truncated"], conv_id=r["conv_id"],
+                 gpqa_index=r.get("gpqa_index"), gpqa_record_id=r.get("gpqa_record_id"))
+    dd = json.load(open(TRACE_DEDUP)); drop = dd["drop"]
+    docs = [d for d in docs if d["source_id"] not in drop]
+    # val: whole docs from the small-doc sources until ~VAL_FRAC of the trace tokens
+    tot = sum(len(d["ids"]) for d in docs)
+    cand = [d for d in docs if d["source"] in VAL_SOURCES and d["th"] and len(d["ids"]) <= 4 * C]
+    rng.shuffle(cand); val, vt = [], 0
+    for d in cand:
+        if vt >= VAL_FRAC * tot:
+            break
+        val.append(d); vt += len(d["ids"])
+    vset = {d["doc_index"] for d in val}
+    fit = [d for d in docs if d["doc_index"] not in vset]
+    # reserved raw corpus pool (not in c512/c2048): gap fill only
+    rs = json.load(open(f"{ROOT}/reserve_raw.json"))["reserve_doc_indices"]
+    corpus = load_docs(CONV); byi = {d["doc_index"]: d for d in corpus}
+    reserve = [byi[i] for i in rs]; rng.shuffle(reserve)
+    rv = reserve[:max(4, len(reserve) // 20)]; rf = reserve[len(rv):]  # disjoint raw pools for val / fit
+    groups = {}; dropped_think_only = 0
+    for split, ds, raws in (("fit", fit, rf), ("val", val, rv)):
+        A, F = [], []
+        order = list(ds); rng.shuffle(order)
+        for d in order:
+            a, f = make_items(d, C)
+            if d["source"] in THINK_ONLY:
+                keep = [it for it in a if any(it[1] <= x < it[2] for x in d["th"])]
+                dropped_think_only += sum(it[2] - it[1] for it in a if it not in keep) + sum(it[2] - it[1] for it in f)
+                a, f = keep, []
+            A += a; F += f
+        wins, dropped, unused = pack(A, F + [(d, 0, len(d["ids"])) for d in raws], C, rng, extra_items=len(F))
+        groups[split] = (wins, dropped)
+    used_raw = {p[0]["doc_index"] for s in groups.values() for w in s[0] for p in w if p[0]["doc_index"] < TRACE_INDEX0}
+    assert used_raw <= set(rs)
+    # per-source mix over the packed windows
+    mix = {}
+    for split, (wins, _) in groups.items():
+        for w in wins:
+            for d, a, b in w:
+                k = d.get("source", "reserve-raw:" + d["category"])
+                m = mix.setdefault(k, dict(fit_tokens=0, val_tokens=0, think_boundaries=0, end_boundaries=0, docs=set(), truncated_docs=set()))
+                m[f"{split}_tokens"] += b - a
+                m["think_boundaries"] += sum(a <= x < b for x in d["th"]); m["end_boundaries"] += sum(a <= x < b for x in d["en"])
+                m["docs"].add(d["doc_index"])
+                if d.get("truncated"):
+                    m["truncated_docs"].add(d["doc_index"])
+    for m in mix.values():
+        m["docs"] = len(m["docs"]); m["truncated_docs"] = len(m["truncated_docs"])
+    gq = sorted({(d["gpqa_index"], d["gpqa_record_id"]) for d in docs if d.get("gpqa_index") is not None})
+    (fw, fd), (vw, vd) = groups["fit"], groups["val"]
+    meta = dict(dropped_tail_tokens=dict(fit=fd, val=vd), source_corpus="on-box reasoning traces (ingest_traces.py) + reserved raw orbit docs as gap fill",
+                source_mix=mix, think_only_dropped_tokens=dropped_think_only,
+                trace_sources_excluded="Qwen (ctap2 round013, ICH eval gens) and gpt-oss-120b (rad-agent batches) excluded by user override 2026-09-28",
+                gpqa_included=dict(note="GLM-5.2 hybrid GPQA-diamond traces included by user override; later GPQA evals should exclude these questions",
+                                   question_index=[i for i, _ in gq], record_id=[r for _, r in gq]),
+                truncated_semantics="truncated/runaway traces are included without an end token (and without </think> when cut inside the reasoning)",
+                dedup=dict(rule="13-gram: >=5% overlap with GPQA/tb4/ICH/thread-18 evals dropped (GPQA traces vs GPQA and TB2.1 vs tb4 exempt by user/lead decision), >=50% overlap with the converted corpus dropped",
+                           dropped=len(drop), kept_overlaps=dd.get("kept_overlaps")))
+    return write_group("c2048_traces", fw, vw, C, meta, rng)
+
+
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--traces", default=None)
+    ap = argparse.ArgumentParser(); ap.add_argument("--traces", action="store_true")
     a = ap.parse_args()
-    if a.traces is None:
+    if a.traces:
+        main_traces()
+    else:
         main_corpus()
