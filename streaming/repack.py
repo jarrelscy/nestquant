@@ -17,7 +17,9 @@ def main():
     layers=parse_layers(sys.argv[4]) if len(sys.argv)>4 else list(range(3,78))
     os.makedirs(out,exist_ok=True)
     for L in layers:
-        if not os.path.exists(f'{root}/L{L}/manifest.json'):print(f'L{L}: not fitted yet');continue
+        d=NQ.layer_dir(root,L)
+        if not os.path.exists(d+'/manifest.json') or not all(os.path.exists(f'{d}/tp{i}.pt') or os.path.exists(f'{d}/tp{i}.safetensors') for i in range(8)):
+            print(f'L{L}: not fitted / downloaded yet');continue
         for r in range(tp):
             ip=f'{out}/rank{r}.json';idx=json.load(open(ip)) if os.path.exists(ip) else dict(format='nq-p4rec-v1',tp=tp,rank=r,L0=L0,NE=NE,layers={})
             rp=f'{out}/res/rank{r}/L{L}.pt';os.makedirs(os.path.dirname(rp),exist_ok=True)
@@ -26,7 +28,7 @@ def main():
             if not os.path.exists(rp):RS.save(RL,rp);print(f'L{L} rank{r}: resident planes {os.path.getsize(rp)/2**20:.0f} MiB',flush=True)
             if str(L) in idx['layers']:del RL;torch.cuda.empty_cache();continue
             lay=PR.layout(next(iter(RL.ex.values())),RL.H,RL.I)
-            if 'rec_bytes' not in idx:idx['rec_bytes']=int(sys.argv[5]) if len(sys.argv)>5 else lay['rec_bytes'];idx['seg']=lay['seg']
+            if 'rec_bytes' not in idx:idx['rec_bytes']=int(sys.argv[5]) if len(sys.argv)>5 else lay['rec_bytes'];idx['seg']=json.loads(json.dumps(lay['seg']))
             assert json.loads(json.dumps(lay['seg']))==idx['seg'] and lay['rec_bytes']<=idx['rec_bytes'],('layout changed',L,lay,idx['seg'])
             lay['rec_bytes']=idx['rec_bytes'];rb=lay['rec_bytes']
             fd=os.open(f'{out}/rank{r}.bin',os.O_WRONLY|os.O_CREAT,0o644)

@@ -88,13 +88,25 @@ def p4_bytes(ex):
     b=sum(p.p4.numel()*4+p.d4.numel()*4 for p in (ex.gu,ex.dn))
     return b+(0 if ex.lr4 is None else ex.lr4.numel()*2)
 
+def layer_dir(root,L):
+    """fit output root/L{L} or the HF layout root/layers/L{L}"""
+    d=f'{root}/L{L}'
+    return d if os.path.exists(f'{d}/manifest.json') else f'{root}/layers/L{L}'
+
+def load_part(d,i):
+    """tp{i}.pt, else the thread-25 safetensors container tp{i}.safetensors (same dict)"""
+    if os.path.exists(f'{d}/tp{i}.pt'):return torch.load(f'{d}/tp{i}.pt',weights_only=False)
+    T25=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','threads','25-campaign')
+    if T25 not in sys.path:sys.path.append(T25)
+    import nq25_st;return nq25_st.load_shard(f'{d}/tp{i}.safetensors')
+
 class RankLayer:
-    """One MoE layer for rank `rank` of a TP=tp run, from root/L{L}/tp{s}.pt."""
+    """One MoE layer for rank `rank` of a TP=tp run, from root/L{L}/tp{s}.pt (or root/layers/L{L}/tp{s}.safetensors)."""
     def __init__(s,root,L,rank,tp=4,experts=None,dev='cuda'):
         assert NSH%tp==0 and 0<=rank<tp
-        d=f'{root}/L{L}';s.man=json.load(open(f'{d}/manifest.json'));assert s.man['format']=='nestquant-v1'
+        d=layer_dir(root,L);s.man=json.load(open(f'{d}/manifest.json'));assert s.man['format']=='nestquant-v1'
         g=NSH//tp;s.ss=list(range(rank*g,(rank+1)*g));s.L,s.rank,s.tp=L,rank,tp
-        s.parts={i:torch.load(f'{d}/tp{i}.pt',weights_only=False) for i in s.ss}
+        s.parts={i:load_part(d,i) for i in s.ss}
         s.experts=[E for E in s.man['experts'] if experts is None or E in experts];s.dev=dev
         s.ex={E:kernel_expert(group_art(s.parts,s.man,E,s.ss),dev)[0] for E in s.experts}
         s.H,s.I=s.man['proj_meta']['down']['n'],s.man['proj_meta']['down']['k']*g//NSH

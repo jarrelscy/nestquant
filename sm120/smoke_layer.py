@@ -12,6 +12,9 @@ root,L=sys.argv[1],int(sys.argv[2]);tp=int(sys.argv[3]) if len(sys.argv)>3 else 
 dev='cuda';torch.backends.cuda.matmul.allow_tf32=False
 t=time.time();ranks=[NQ.RankLayer(root,L,r,tp) for r in range(tp)];print(f'L{L} TP{tp}: loaded {len(ranks[0].experts)} experts x {tp} ranks in {time.time()-t:.1f}s',flush=True)
 man=ranks[0].man;ids=man['experts'];NE_=max(ids)+1;H,I=ranks[0].H,ranks[0].I
+if os.path.exists(f'{root}/L{L}/tp0.pt'):ASM=NL.assemble
+else:                                          # HF layout (thread-25 safetensors): pass ROOT = <repo>/layers
+    sys.path.append(HERE+'/../threads/25-campaign');import nq25_st;ASM=nq25_st.assemble
 fs=[e for e in FS.load(layers=[L])[0][L] if e in ids];rng=random.Random(L)
 l4=set(fs)|set(rng.sample([e for e in ids if e not in fs],max(0,min(len(ids)-len(fs),int(hot*len(ids))-len(fs)))))
 levels=[4 if e in l4 else 2 for e in range(NE_)]
@@ -24,7 +27,7 @@ for r in ranks:
     layers.append(M)
 cache={}
 def dense(E,lv):
-    if (E,lv) not in cache:cache[E,lv]=[w.float() for w in D.decode_expert(NL.assemble(root,L,E),lv,dev)]
+    if (E,lv) not in cache:cache[E,lv]=[w.float() for w in D.decode_expert(ASM(root,L,E),lv,dev)]
     return cache[E,lv]
 ok=True;worst=0;TK=min(8,len(ids))
 for B in (1,2,3,4):
