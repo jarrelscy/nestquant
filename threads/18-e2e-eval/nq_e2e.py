@@ -197,6 +197,9 @@ def moe_multi(layer, li, xs, qs, fp8, dev, stats, local_err):
             supplied = False
             if getattr(q, "is_ref", False):
                 W = ref()
+            elif not getattr(q, "active", lambda _l: True)(li):               # layers= restriction: reference by design, not a fallback
+                W = ref()
+                stats[s]["ref_by_design"] = stats[s].get("ref_by_design", 0) + 1
             else:
                 W = q.expert(li, e, ref)
                 if W is None:
@@ -372,7 +375,8 @@ def cmd_run(a):
     os.makedirs(rdir, exist_ok=True)
     for j, i in enumerate(cand):
         q = qs[i]
-        res[q.name].update({"spec": q.spec, "stats": stats[i], "tokkl_groups": None})
+        res[q.name].update({"spec": q.spec, "stats": stats[i], "tokkl_groups": None,
+                            "extra": {k: getattr(q, k) for k in ("n_hi", "n_lo") if hasattr(q, k)}})
         np.save(f"{rdir}/tokkl_{q.name}_r{RANK}.npy", np.concatenate(tokkl[q.name]))
     json.dump({"rank": RANK, "world": WORLD, "corpora": names, "corpus_sha": shas, "seq": SEQ,
                "n_layers": nl, "groups_per_window": groups, "ref": "cache" if use_cache else "inline",
@@ -446,6 +450,67 @@ def cmd_predecode(a):
         log(f"WARNING: {lossy} fp32 tensors were not fp16-exact -> stored bf16")
 
 
+def cmd_predecode_nq(a):
+    """NestQuant-specific predecode: one rotated_levels() per expert serves both levels.  Writes
+    {out}/nq2/layer_LLL.rRofW.safetensors (every expert, if 2 in --levels) and {out}/nq4/... (experts in --l4-set,
+    or all).  fp16 always (the fp32 decode incl. the low-rank term, rounded once; |w| << 65504 is asserted)."""
+    from safetensors.torch import save_file
+    dev = os.environ.get("NQ_DEV", "cuda:0")
+    if os.environ.get("NQ_VRAM_GB") and dev != "cpu":
+        tot = torch.cuda.get_device_properties(0).total_memory / 2**30
+        torch.cuda.set_per_process_memory_fraction(min(1.0, float(os.environ["NQ_VRAM_GB"]) / tot))
+    sys.path.insert(0, quantisers.NQ12)
+    import nq_decode as D
+    cfg = load_config()
+    E = cfg.n_routed_experts
+    levels = [int(x) for x in a.levels.split(",")]
+    l4 = quantisers.load_level4_set(a.l4_set) if a.l4_set != "all" else None
+    lo, _, hi = a.layers.partition("-")
+    layers = [li for li in range(int(lo), int(hi or lo) + 1) if li >= cfg.first_k_dense_replace]
+    for lv in levels:
+        os.makedirs(f"{a.out}/nq{lv}", exist_ok=True)
+    nexp = {lv: 0 for lv in levels}
+    for li in layers:
+        want = {}
+        for lv in levels:
+            f = f"{a.out}/nq{lv}/layer_{li:03d}.r{RANK}of{WORLD}.safetensors"
+            ex = [e for e in range(E) if (li * E + e) % WORLD == RANK
+                  and (lv != 4 or l4 is None or e in l4.get(li, ()))]
+            if ex and not os.path.exists(f):
+                want[lv] = (f, set(ex))
+        if not want:
+            continue
+        t0 = time.time()
+        todo = sorted(set().union(*[v[1] for v in want.values()]))
+        tens = {lv: {} for lv in want}
+        for e in todo:
+            f = quantisers.nq_artifact_path(a.root, li, e)
+            if f is None:
+                raise SystemExit(f"missing artifact L{li} E{e} under {a.root}")
+            art = torch.load(f, map_location="cpu", weights_only=False)
+            rot = {p: D.rotated_levels(art[p], dev) for p in ("gate", "up", "down")}
+            perm = art.get("meta", {}).get("inter_perm")
+            for lv in want:
+                if e not in want[lv][1]:
+                    continue
+                W = [D.decode_matrix(art[p], lv, dev, rot=rot[p]) for p in ("gate", "up", "down")]
+                if perm is not None:
+                    inv = torch.argsort(torch.as_tensor(perm, device=dev))
+                    W = [W[0][inv], W[1][inv], W[2][:, inv]]
+                for pn, w in zip(quantisers.PROJ, W):
+                    assert torch.isfinite(w).all() and float(w.abs().max()) < 6e4, (li, e, pn)
+                    tens[lv][f"model.layers.{li}.mlp.experts.{e}.{pn}.weight"] = w.half().contiguous().cpu()
+                nexp[lv] += 1
+            del rot, art
+        for lv, (f, ex) in want.items():
+            save_file(tens[lv], f + ".part", metadata={"root": a.root, "level": str(lv)})
+            os.rename(f + ".part", f)
+        log(f"L{li}: decoded {len(todo)} experts, wrote " +
+            " ".join(f"nq{lv}:{len(tens[lv]) // 3}" for lv in want) + f" in {time.time() - t0:.1f}s")
+        del tens
+    log(f"done: experts written {nexp}")
+
+
 def cmd_merge(a):
     rdir = f"{OUT}/results/{a.tag}"
     parts = [json.load(open(p)) for p in sorted(glob.glob(f"{rdir}/r*.json"))]
@@ -483,14 +548,34 @@ def cmd_merge(a):
             out["table"].setdefault(cand, {})[n] = row
             print(f"{cand:14} {n:10} {row['ntok']:8d} {row['ppl_ref']:8.4f} {row['ppl']:8.4f} "
                   f"{row['kld']:9.5f} {row['kld_se']:8.5f} {row['kld_p99']:7.3f} {row['top1']:7.3f} {fb:7d}")
-        st = parts[0]["results"][cand]["stats"]
-        if st["rel_div"]:
-            ls = sorted(st["rel_div"], key=int)
-            out.setdefault("per_layer_r0", {})[cand] = {
-                "rel_div": st["rel_div"], "route_agree": st["route_agree"],
-                "local_rel_l2": st["local_rel_l2"]}
-            print(f"   {cand} rank0 residual divergence by layer: " +
-                  " ".join(f"L{l}:{st['rel_div'][l]:.3f}" for l in ls[:: max(1, len(ls) // 12)]))
+        # per-layer stats, averaged over ranks (each rank holds ~1/WORLD of every corpus)
+        per = {}
+        for key in ("rel_div", "route_agree", "local_rel_l2"):
+            acc = {}
+            for p in parts:
+                for l, v in p["results"][cand]["stats"][key].items():
+                    acc.setdefault(int(l), []).append(v)
+            per[key] = {l: float(np.mean(v)) for l, v in sorted(acc.items())}
+        if per["rel_div"] or per["route_agree"]:
+            rd = per["rel_div"]
+            inc = {l: rd[l] - rd.get(l - 1, 0.0) for l in rd}
+            bands = {"L3-6": range(3, 7), "L7-40": range(7, 41), "L41-77": range(41, 78)}
+            bs = {}
+            for b, rg in bands.items():
+                ra = [per["route_agree"][l] for l in rg if l in per["route_agree"]]
+                le = [per["local_rel_l2"][l] for l in rg if l in per["local_rel_l2"]]
+                bs[b] = {"route_top8_agree": float(np.mean(ra)) if ra else None,
+                         "local_rel_l2_mean": float(np.mean(le)) if le else None,
+                         "rel_div_increment_sum": float(sum(inc[l] for l in rg if l in inc))}
+            top = sorted(inc, key=lambda l: -inc[l])[:10]
+            out.setdefault("per_layer", {})[cand] = dict(per, rel_div_increment=inc, bands=bs,
+                                                         top_increment_layers=top,
+                                                         extra=[p["results"][cand].get("extra") for p in parts])
+            print(f"   {cand} bands: " + " | ".join(
+                f"{b} route {v['route_top8_agree'] if v['route_top8_agree'] is None else round(100 * v['route_top8_agree'], 2)}% "
+                f"lerr {v['local_rel_l2_mean'] if v['local_rel_l2_mean'] is None else round(v['local_rel_l2_mean'], 4)} "
+                f"dDiv {v['rel_div_increment_sum']:.3f}" for b, v in bs.items()))
+            print(f"   {cand} largest divergence increments: " + " ".join(f"L{l}:+{inc[l]:.3f}" for l in top))
     json.dump(out, open(f"{OUT}/results/{a.tag}.json", "w"), indent=1)
     print(f"-> {OUT}/results/{a.tag}.json")
 
@@ -520,8 +605,15 @@ def main():
     d.add_argument("--cand", required=True, help="NAME=SPEC")
     d.add_argument("--layers", default="3-77")
     d.add_argument("--out", default=f"{OUT}/predecoded")
+    n = sub.add_parser("predecode-nq")
+    n.add_argument("--root", default="/tmp/nestquant/nq-encode-v1")
+    n.add_argument("--levels", default="2,4")
+    n.add_argument("--l4-set", default="all", help="nq_defset.py JSON (level-4 subset) or 'all'")
+    n.add_argument("--layers", default="3-77")
+    n.add_argument("--out", default=f"{OUT}/predecoded")
     a = ap.parse_args()
-    {"prep": cmd_prep, "run": cmd_run, "merge": cmd_merge, "predecode": cmd_predecode}[a.cmd](a)
+    {"prep": cmd_prep, "run": cmd_run, "merge": cmd_merge, "predecode": cmd_predecode,
+     "predecode-nq": cmd_predecode_nq}[a.cmd](a)
 
 
 if __name__ == "__main__":

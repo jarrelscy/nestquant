@@ -18,7 +18,9 @@ Spec strings (``--cand NAME=SPEC``):
     dir:/path                         dequantised safetensors: any *.safetensors under /path with keys
                                       model.layers.{L}.mlp.experts.{E}.{gate,up,down}_proj.weight  or
                                       layer{L}.expert{E}.{gate,up,down}_proj ; missing -> reference
-    nestquant:root=/path,level=4      thread-12 artefacts {root}/layer_{L:03d}/expert_{E:03d}.pt
+    mix:lo=DIR,hi=DIR,set=F.json[,hi_layers=3-6]   per-expert choice between two dequantised dirs (nqdef)
+    nestquant:root=/path,level=4      artefacts {root}/L{L}/experts/E{E}.pt (thread-25 campaign) or
+                                      thread-12 {root}/layer_{L:03d}/expert_{E:03d}.pt
                                       decoded with threads/12-reference-encoder/nq_decode.decode_expert
     exl3:root=/path,bits=4            {root}/layer_{L:03d}/expert_{E:03d}/expert_{bits}.bin (orbit-duet
                                       legacy .bin; decoded by exllamav3 via orbit_duet.exl3_adapter)
@@ -111,13 +113,79 @@ class Dir(Base):
                 return k
         return None
 
+    # Shared across Dir instances (and Mix's inner Dirs) for the current (layer, expert): several streams that
+    # read the same predecoded dir (nq2, nqdef, nq2_early, ...) transfer each expert once.
+    _cur = {"le": None, "w": {}}
+
     def expert(self, layer, expert, ref):
         if not self.active(layer):
             return None
+        c = Dir._cur
+        if c["le"] != (layer, expert, str(self.dev)):
+            c["le"], c["w"] = (layer, expert, str(self.dev)), {}
+        root = os.path.realpath(self.idx.root)
+        if root in c["w"]:
+            return c["w"][root]
         keys = [self._key(layer, expert, p) for p in PROJ]
         if any(k is None for k in keys):
+            W = None
+        else:
+            W = {p: self.idx.get(k, self.dev) for p, k in zip(PROJ, keys)}
+        c["w"][root] = W
+        return W
+
+    def end_layer(self, layer):
+        Dir._cur.update(le=None, w={})
+
+
+def nq_artifact_path(root, layer, expert):
+    """Thread-25 campaign layout {root}/L{L}/experts/E{E}.pt, else thread-12 {root}/layer_LLL/expert_EEE.pt."""
+    for f in (f"{root}/L{layer}/experts/E{expert}.pt", f"{root}/layer_{layer:03d}/expert_{expert:03d}.pt"):
+        if os.path.exists(f):
+            return f
+    return None
+
+
+def load_level4_set(path):
+    """{"layers": {"L": [experts at level 4]}, ...} (written by nq_defset.py) -> {int L: set(int e)}."""
+    d = json.load(open(path))
+    return {int(L): set(map(int, v)) for L, v in d["layers"].items()}
+
+
+class Mix(Base):
+    """Per-expert mix of two dequantised dirs: hi (level-4) for experts in set[L] or any expert of a layer in
+    hi_layers, lo (level-2) otherwise.  mix:lo=DIR,hi=DIR,set=FILE.json[,hi_layers=3-6][,layers=a-b]"""
+
+    def __init__(self, lo, hi, set=None, hi_layers=None):
+        self.lo, self.hi = Dir(lo), Dir(hi)
+        self.l4 = load_level4_set(set) if set else {}
+        self.hi_layers = set_from_range(hi_layers) if hi_layers else set_from_range("")
+        self.n_hi = self.n_lo = 0
+
+    def begin_layer(self, layer, device):
+        self.dev = self.lo.dev = self.hi.dev = device
+
+    def end_layer(self, layer):
+        Dir._cur.update(le=None, w={})
+
+    def expert(self, layer, expert, ref):
+        if not self.active(layer):
             return None
-        return {p: self.idx.get(k, self.dev) for p, k in zip(PROJ, keys)}
+        use_hi = layer in self.hi_layers or expert in self.l4.get(layer, ())
+        W = (self.hi if use_hi else self.lo).expert(layer, expert, ref)
+        if W is not None:
+            if use_hi:
+                self.n_hi += 1
+            else:
+                self.n_lo += 1
+        return W
+
+
+def set_from_range(s):
+    if not s:
+        return set()
+    a, _, b = s.partition("-")
+    return set(range(int(a), int(b or a) + 1))
 
 
 class NestQuant(Base):
@@ -135,8 +203,8 @@ class NestQuant(Base):
     def expert(self, layer, expert, ref):
         if not self.active(layer):
             return None
-        f = f"{self.root}/layer_{layer:03d}/expert_{expert:03d}.pt"
-        if not os.path.exists(f):
+        f = nq_artifact_path(self.root, layer, expert)
+        if f is None:
             return None
         c = NestQuant._shared
         if c.get("key") != (f, str(self.dev)):
@@ -224,6 +292,8 @@ def make(name, spec):
             q = RTN(**kv)
         elif kind == "dir":
             q = Dir(path)
+        elif kind == "mix":
+            q = Mix(**kv)
         elif kind == "nestquant":
             q = NestQuant(**kv)
         elif kind == "exl3":
