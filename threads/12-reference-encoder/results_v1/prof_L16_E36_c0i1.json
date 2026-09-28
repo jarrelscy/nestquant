@@ -1,0 +1,32 @@
+{
+ "total": 55.79964542388916,
+ "time": {
+  "g_scale_search": 9.012832164764404,
+  "ldl_blocks": 0.19182515144348145,
+  "prep": 9.798555850982666,
+  "viterbi K2": 12.850497961044312,
+  "base_quant": 13.786039352416992,
+  "viterbi K1.9375": 10.606199502944946,
+  "encode_rotated": 42.06475758552551,
+  "pack": 0.1104269027709961,
+  "viterbi K2.3125": 4.735952854156494
+ },
+ "eval": {
+  "L4": {
+   "all/forced": 9.089,
+   "all/routed": 8.767,
+   "control/forced": 8.747,
+   "control/routed": 8.315,
+   "ood/forced": 9.615,
+   "ood/routed": 9.772
+  },
+  "L2": {
+   "all/forced": 35.327,
+   "all/routed": 34.58,
+   "control/forced": 34.251,
+   "control/routed": 33.327,
+   "ood/forced": 37.001,
+   "ood/routed": 37.413
+  }
+ }
+}

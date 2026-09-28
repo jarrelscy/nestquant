@@ -19,7 +19,7 @@ def parse(s):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("ref", "batch", "cmp"))
+    ap.add_argument("cmd", choices=("ref", "batch", "cmp", "pair"))
     ap.add_argument("--experts")
     ap.add_argument("--tag", default="batch", help="output subdir for the batch arm")
     ap.add_argument("--group", type=int, default=8, help="experts per batch (nq_encode_batch)")
@@ -60,6 +60,30 @@ def main():
         print(f"batch total {time.time()-t:.1f}s for {len(ex)} experts = {(time.time()-t)/len(ex):.2f} s/expert, "
               f"max mem {torch.cuda.max_memory_allocated()/2**30:.2f} GB", flush=True)
         print(json.dumps({k: (round(v, 2) if isinstance(v, float) else v) for k, v in tm.items()}, indent=1), flush=True)
+    elif a.cmd == "pair":                                   # same process, back to back: ref then batch, then compare
+        C.setup()
+        import nq_encode_batch as NB
+        import collections
+        refs, tr = {}, []
+        for L, E in ex:
+            torch.cuda.synchronize(); t = time.time()
+            refs[L, E] = C.ref_encode(L, E)
+            torch.cuda.synchronize(); tr.append(time.time() - t)
+            print(f"ref L{L} E{E} {tr[-1]:.1f}s", flush=True)
+        tm = collections.defaultdict(float)
+        torch.cuda.reset_peak_memory_stats()
+        t = time.time(); bad_all = 0
+        for L, E, art in NB.encode_experts(ex, group=a.group, stats=tm):
+            nt, nb, bad = C.compare(refs.pop((L, E)), art)
+            bad_all += len(bad)
+            print(f"L{L:<2} E{E:<3} tensors {nt} {'IDENTICAL' if not bad else 'MISMATCH ' + str(bad[:6])}", flush=True)
+        tb = time.time() - t
+        tr_s = sorted(tr)
+        print(f"PAIR ref median {tr_s[len(tr_s)//2]:.2f} s/expert (mean {sum(tr)/len(tr):.2f}) | batch group {a.group}: "
+              f"{tb/len(ex):.2f} s/expert amortised, max mem {torch.cuda.max_memory_allocated()/2**30:.2f} GB | "
+              f"speedup {sum(tr)/tb:.2f}x | {'ALL BIT-IDENTICAL' if not bad_all else 'FAIL'} | T12 {C.IMPORT_SHAS}", flush=True)
+        print(json.dumps({k: (round(v, 2) if isinstance(v, float) else v) for k, v in tm.items()}), flush=True)
+        sys.exit(0 if not bad_all else 1)
     else:
         live = C.ref_shas(C.T12_LIVE)
         ok_all = True

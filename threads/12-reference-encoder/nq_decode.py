@@ -23,6 +23,19 @@ Geometry (rotated basis, kernel orientation W[N=out, K=in]; the encoder works on
 Planes (per projection, per shard):
   base  ring streams of every unit (K 2), [sg4: 3-bit variant id per ring], + su2/sv2 fp16      <- identical for all rates
   p4    residual ring streams (K_u per unit), block words u16 (Mb | N<<8) per unit, [mask], + su4/sv4 fp16
+  ocol  (optional, "outlier-channel plane") n_c <= 4 input channels idx (u16, ORIGINAL un-rotated input index: the
+        hidden-state channel for gate/up, the SwiGLU output channel act(g)*u for down) with exact fp16 column
+        corrections: base.ocol = c2 [n_c, out] fp16, p4.ocol = d4 [n_c, out] fp16.  Dense decode (fp32, this order):
+            level 2:  W[:, idx] = W2[:, idx] + f32(c2)
+            level 4:  W[:, idx] = (W4[:, idx] + f32(c2)) + f32(d4)
+        i.e. a kernel adds y += x[idx] * (c2 [+ d4]) (rank-n_c, un-rotated input) after the trellis GEMM.
+        Sharding: down (k-axis) = the shard owning input channel idx carries the full-out column; gate/up (n-axis) =
+        every shard carries its output slice of the column.
+  lr    (optional, "low-rank plane", generalises ocol) r <= 4 input directions V [r, in] fp16 (un-rotated input basis,
+        stored once in base) with output corrections base.lr.U2 [r, out] fp16 and p4.lr.U4 [r, out] fp16:
+            level 2:  W = W2 + lr_term(U2, V)             level 4:  W = (W4 + lr_term(U2, V)) + lr_term(U4, V)
+        lr_term(U, V) = f32(U)^T @ f32(V) (fp32 GEMM).  Kernel: z = x @ V^T (r dots / token), y += z @ U (U2 [+ U4]).
+        gate/up share V (same input Gram); V is the unrotated hidden state basis for gate/up, SwiGLU output for down.
 Level 2 reads base; level 4 reads base + p4.
 
 CLI:  python nq_decode.py ARTIFACT.pt --level 4 [--out dense.pt] [--check-against internal.pt] [--xcheck-ref15 N]
@@ -260,7 +273,32 @@ SCALE_PLANE = {2: "base", 4: "p4"}
 def decode_matrix(P, level, device="cuda", rot=None):
     rot = rot if rot is not None else rotated_levels(P, device)
     pl = P[SCALE_PLANE[level]]
-    return dense_from_rotated(rot[level], pl["suh"].to(device), pl["svh"].to(device))
+    W = dense_from_rotated(rot[level], pl["suh"].to(device), pl["svh"].to(device))
+    return apply_ocol(P, W, level)
+
+
+def lr_term(U, V):
+    return U.float().T @ V.float()
+
+
+def apply_ocol(P, W, level):
+    """Outlier-channel / low-rank planes (see module doc): fp16 corrections on the un-rotated input side."""
+    lr = P["base"].get("lr")
+    if lr is not None:
+        V = lr["V"].to(W.device)
+        W = W + lr_term(lr["U2"].to(W.device), V)
+        if level == 4:
+            W = W + lr_term(P["p4"]["lr"]["U4"].to(W.device), V)
+        return W
+    oc = P["base"].get("ocol")
+    if oc is None or oc["idx"].numel() == 0:
+        return W
+    idx = oc["idx"].long().to(W.device)
+    X = W[:, idx] + oc["c2"].to(W.device).float().T
+    if level == 4:
+        X = X + P["p4"]["ocol"]["d4"].to(W.device).float().T
+    W[:, idx] = X
+    return W
 
 
 @torch.no_grad()
@@ -288,6 +326,22 @@ def plane_bytes(P):
                 b += 2 * pl["word"][s].numel()
                 if pl.get("mask"):
                     b += (pl["mask"][s].numel() + 7) // 8
+            lr = pl.get("lr")
+            if lr is not None:
+                cor = lr["U2" if name == "base" else "U4"]
+                if m["shard_axis"] == "n":    # V replicated (input side), U sliced by output
+                    b += 2 * cor.numel() // nsh + (2 * lr["V"].numel() if name == "base" else 0)
+                else:                         # V sliced by input shard, U replicated (row-parallel partial sums)
+                    b += 2 * cor.numel() + (2 * lr["V"].numel() // nsh if name == "base" else 0)
+            oc = pl.get("ocol")
+            if oc is not None and oc["idx"].numel():
+                oidx = P["base"]["ocol"]["idx"].long()
+                cor = oc["c2" if name == "base" else "d4"]
+                if m["shard_axis"] == "n":    # every shard: its output slice of each column (+ the u16 index)
+                    b += 2 * cor.numel() // nsh + (2 * oidx.numel() if name == "base" else 0)
+                else:                         # k-axis: whole columns live in the shard owning input channel idx
+                    own = int((oidx // (m["k"] // nsh) == s).sum())
+                    b += own * (2 * m["n"] + (2 if name == "base" else 0))
             per.append(b)
         sc = 2 * ((m["k"] + m["n"] // nsh) if m["shard_axis"] == "n" else (m["k"] // nsh + m["n"]))
         out[name] = dict(min=min(per), max=max(per), scales=sc)
@@ -302,6 +356,14 @@ def bits_per_level(P):
     p4 = 8 * sum(t.numel() for t in P["p4"]["shards"]) + 16 * sum(t.numel() for t in P["p4"]["word"])
     if P["p4"].get("mask"):
         p4 += sum(t.numel() for t in P["p4"]["mask"])
+    lr = P["base"].get("lr")
+    if lr is not None:
+        base += 16 * (lr["V"].numel() + lr["U2"].numel())
+        p4 += 16 * P["p4"]["lr"]["U4"].numel()
+    oc = P["base"].get("ocol")
+    if oc is not None and oc["idx"].numel():
+        base += 16 * oc["c2"].numel() + 16 * oc["idx"].numel()
+        p4 += 16 * P["p4"]["ocol"]["d4"].numel()
     sc = 16 * (m["k"] + m["n"])
     return {2: (base + sc) / nw, 4: (base + p4 + sc) / nw, "p4_only": (p4 + sc) / nw, "artifact": (base + p4 + 2 * sc) / nw}
 

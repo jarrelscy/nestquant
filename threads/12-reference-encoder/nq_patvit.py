@@ -80,8 +80,64 @@ def _run(w, Dst):
     return V[idx], idx
 
 
+def step_mask(kmask):
+    """kernel ring-position mask -> EXL3 Viterbi-step mask (step i shifts KA + bit(i mod 16))."""
+    return sum(1 << j for j in range(16) if (kmask >> ((16 - j) % 16)) & 1)
+
+
+_EXT, _TMP = None, {}
+TMP_TILES = 64                          # scratch: 64 tiles x 256 x 2^(16-KA) shorts = 1 GB at KA 1
+EXT_DIR = "/tmp/nestquant/12-reference-encoder/ext"
+
+
+def ext():
+    """exllamav3 quantize_tiles_frac_kernel<KA, MASK> instantiated for the production patterns (csrc/nq_fracvit.cu)."""
+    global _EXT
+    if _EXT is None:
+        import os
+        import exllamav3
+        import torch.utils.cpp_extension as CE
+        from torch.utils.cpp_extension import load
+        os.makedirs(EXT_DIR, exist_ok=True)
+        os.environ.setdefault("CUDA_HOME", "/home/coder/git/glm52/.venv/lib/python3.12/site-packages/nvidia/cu13")
+        os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "8.0")
+        if CE.CUDA_HOME is None:
+            CE.CUDA_HOME = os.environ["CUDA_HOME"]
+        nb = "/tmp/nestquant/12-reference-encoder/bin"                      # ninja (static binary symlink)
+        if os.path.isdir(nb) and nb not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = nb + ":" + os.environ.get("PATH", "")
+        inc = os.path.join(os.path.dirname(exllamav3.__file__), "exllamav3_ext")
+        _EXT = load(name="nq_fracvit", sources=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc", "nq_fracvit.cu")],
+                    extra_include_paths=[inc], build_directory=EXT_DIR, extra_cuda_cflags=["-O3", "-lineinfo"],
+                    verbose=False)
+    return _EXT
+
+
+def patq_cuda(tiles, K):
+    KA, MASK = D.PATTERNS[float(K)]
+    tiles = tiles.float().contiguous()
+    key = (tiles.device, KA)
+    if key not in _TMP:
+        e = 65536 >> KA
+        _TMP[key] = (torch.zeros((TMP_TILES, 2, e), dtype=torch.half, device=tiles.device),
+                     torch.zeros((TMP_TILES, 256, e), dtype=torch.short, device=tiles.device))
+    q = torch.zeros_like(tiles); idx = torch.zeros_like(tiles, dtype=torch.short)
+    ext().quantize_tiles_frac(tiles, q, idx, *_TMP[key], KA, step_mask(MASK))
+    return q, idx.long() & 0xFFFF
+
+
+def free_tmp():
+    _TMP.clear()
+    torch.cuda.empty_cache()
+
+
+USE_CUDA = True
+
+
 def patq(tiles, K, chunk=128):
     """quantizer(tiles [R,256], K) -> (values, states) in Viterbi order (ExtTileQuantizer signature)."""
+    if USE_CUDA:
+        return patq_cuda(tiles, K)
     St = vsteps(K)
     q, idx = [], []
     for a in range(0, tiles.shape[0], chunk):

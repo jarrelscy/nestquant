@@ -1,0 +1,157 @@
+{
+ "layer": 49,
+ "expert": 92,
+ "v1": {
+  "EXL3-2@s91426": {
+   "all/forced": 38.427,
+   "all/routed": 37.183,
+   "control/forced": 37.259,
+   "control/routed": 37.173,
+   "ood/forced": 40.722,
+   "ood/routed": 40.26
+  },
+  "EXL3-4@s91426": {
+   "all/forced": 10.041,
+   "all/routed": 9.456,
+   "control/forced": 9.722,
+   "control/routed": 9.453,
+   "ood/forced": 10.667,
+   "ood/routed": 10.351
+  },
+  "nq_lam0.3/L2@s91426": {
+   "all/forced": 38.24,
+   "all/routed": 36.781,
+   "control/forced": 37.293,
+   "control/routed": 36.769,
+   "ood/forced": 40.117,
+   "ood/routed": 40.186
+  },
+  "nq_lam0.3/L4@s91426": {
+   "all/forced": 9.783,
+   "all/routed": 9.143,
+   "control/forced": 9.454,
+   "control/routed": 9.139,
+   "ood/forced": 10.426,
+   "ood/routed": 10.197
+  },
+  "nq_lam0/L2@s91426": {
+   "all/forced": 38.346,
+   "all/routed": 37.021,
+   "control/forced": 37.266,
+   "control/routed": 37.008,
+   "ood/forced": 40.474,
+   "ood/routed": 40.876
+  },
+  "nq_lam0/L4@s91426": {
+   "all/forced": 9.99,
+   "all/routed": 9.251,
+   "control/forced": 9.644,
+   "control/routed": 9.247,
+   "ood/forced": 10.666,
+   "ood/routed": 10.489
+  },
+  "EXL3-2@s7": {
+   "all/forced": 38.433,
+   "all/routed": 37.222,
+   "control/forced": 37.292,
+   "control/routed": 37.217,
+   "ood/forced": 40.679,
+   "ood/routed": 38.846
+  },
+  "EXL3-4@s7": {
+   "all/forced": 10.037,
+   "all/routed": 9.517,
+   "control/forced": 9.715,
+   "control/routed": 9.514,
+   "ood/forced": 10.669,
+   "ood/routed": 10.356
+  },
+  "nq_lam0.3/L2@s7": {
+   "all/forced": 38.223,
+   "all/routed": 36.371,
+   "control/forced": 37.229,
+   "control/routed": 36.362,
+   "ood/forced": 40.191,
+   "ood/routed": 38.99
+  },
+  "nq_lam0.3/L4@s7": {
+   "all/forced": 9.777,
+   "all/routed": 9.119,
+   "control/forced": 9.443,
+   "control/routed": 9.116,
+   "ood/forced": 10.428,
+   "ood/routed": 10.158
+  },
+  "nq_lam0/L2@s7": {
+   "all/forced": 38.412,
+   "all/routed": 36.951,
+   "control/forced": 37.305,
+   "control/routed": 36.941,
+   "ood/forced": 40.594,
+   "ood/routed": 40.15
+  },
+  "nq_lam0/L4@s7": {
+   "all/forced": 9.99,
+   "all/routed": 9.247,
+   "control/forced": 9.642,
+   "control/routed": 9.243,
+   "ood/forced": 10.67,
+   "ood/routed": 10.434
+  }
+ },
+ "val": {
+  "EXL3-2@s91426": {
+   "all/forced": 35.623,
+   "all/routed": 37.399
+  },
+  "EXL3-4@s91426": {
+   "all/forced": 9.268,
+   "all/routed": 9.73
+  },
+  "nq_lam0.3/L2@s91426": {
+   "all/forced": 35.964,
+   "all/routed": 37.402
+  },
+  "nq_lam0.3/L4@s91426": {
+   "all/forced": 9.016,
+   "all/routed": 9.434
+  },
+  "nq_lam0/L2@s91426": {
+   "all/forced": 35.809,
+   "all/routed": 37.392
+  },
+  "nq_lam0/L4@s91426": {
+   "all/forced": 9.212,
+   "all/routed": 9.623
+  },
+  "EXL3-2@s7": {
+   "all/forced": 35.617,
+   "all/routed": 37.338
+  },
+  "EXL3-4@s7": {
+   "all/forced": 9.268,
+   "all/routed": 9.728
+  },
+  "nq_lam0.3/L2@s7": {
+   "all/forced": 35.967,
+   "all/routed": 37.313
+  },
+  "nq_lam0.3/L4@s7": {
+   "all/forced": 9.02,
+   "all/routed": 9.413
+  },
+  "nq_lam0/L2@s7": {
+   "all/forced": 35.822,
+   "all/routed": 37.373
+  },
+  "nq_lam0/L4@s7": {
+   "all/forced": 9.211,
+   "all/routed": 9.613
+  }
+ },
+ "time": {
+  "nq_lam0@s91426": 84.32658219337463,
+  "nq_lam0.3@s7": 79.66732263565063,
+  "nq_lam0@s7": 90.6930742263794
+ }
+}

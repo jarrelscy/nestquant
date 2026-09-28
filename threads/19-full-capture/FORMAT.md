@@ -219,7 +219,7 @@ that kind in the same segment, 0 = none. They are exclusive under the same rule 
 
 | root | S3 prefix | content |
 |---|---|---|
-| `19-capture-glmfmt` | `s3://annalise-shared-prod/jarrel/nestquant/19-capture-glmfmt/` | full, ≈ 46.5 GB/layer, ≈ 3.5 TB |
+| `19-capture-glmfmt` | `s3://annalise-shared-prod/jarrel/nestquant/19-capture-glmfmt/` | stats0 + stats1 small-only; final stats full grams (≈ 44.5 GB/layer, ≈ 3.35 TB) |
 | `19-capture` | `s3://annalise-shared-prod/jarrel/nestquant/19-capture/` | `--small-only` (no A0/A2/D0/D2/Dc grams), 1.83 GB/layer, 137 GB |
 
 - **Sets:** `--set stats0` (default; markers `done/`, `latest.json`), `--set stats1 --small-only` (`done_stats1/`,
@@ -233,6 +233,12 @@ that kind in the same segment, 0 = none. They are exclusive under the same rule 
   - Global small files (plan, corpus shas, shard protocol/progress, markers, boundary flags) go to `global/`.
   - It does not upload raw x or stage-1 hidden-state checkpoints; those are recomputable (chunk 0: ≈ 30 min
     stage 1 on 6 GPUs).
+- **Budget (user rule): flashblade under 5 TB at all times.** `fb_backup19.py` lists `--budget-scope`
+  (default all of `s3://annalise-shared-prod/jarrel/`) before each pass and aborts if total + still-to-upload
+  bytes ≥ `--budget-tb` (4.8). The final set is uploaded with `--bnd-max-shard 11`: boundary rows only of
+  chunk 0 + traces; those of shards 12-24 (≈ 14 GB/layer) are not backed up (not used by the weight-1 encode;
+  recomputable by stage 1). `components_bnd` on a restored root therefore covers shards 0-11 only. The stats0
+  gram objects are deleted from S3 once the final full set is verified (the local /tmp copy stays).
 - **Environment:** `AWS_PROFILE=flashblade`, `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
   `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` (the scripts set these themselves). The endpoint is
   https://fb.harrisonai.io.

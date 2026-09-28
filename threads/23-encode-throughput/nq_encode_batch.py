@@ -34,7 +34,7 @@ import nq_patvit as PV
 import harness as h
 
 DEFAULT_OPTS = dict(qt_opt=True, frac_tiles=216, gdedup=True, gbatch=True, ldl_share=True, unrot_cache=True,
-                    batched=True, cand_chunk_units=6144, seg_check=True, k2vit=False)
+                    batched=True, cand_chunk_units=6144, seg_check=True, k2vit=True)
 
 
 # ================================================================================================ exact patches

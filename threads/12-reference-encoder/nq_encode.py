@@ -32,6 +32,7 @@ import harness as h
 CB_RMS = 1.24371088
 INNER_BETA = float(os.environ.get("NQ_INNER_BETA", "1.0"))
 RES_KS = (1.5, 2, 2.5, 3)
+CHECK_STREAMS = os.environ.get("NQ_CHECK_STREAMS", "0") == "1"     # per-step pack/re-derive check (slow; debug)
 
 
 def _Qm():
@@ -91,9 +92,13 @@ def base_quant(R, tgt, var=None):
     tk = R.to_kring(tgt).double()
     tab = D.variant_table(var, tgt.device) if var else torch.ones(1, device=tgt.device, dtype=torch.float64)
     best = None
+    nr = rings.shape[0]
+    st_all = viterbi(torch.cat([rings / float(a) for a in tab]), 2)      # all variants in one launch (ring-independent)
     for vi in range(len(tab)):
         a = tab[vi]
-        sk, _ = roundtrip(R.kstates(viterbi(rings / float(a), 2)), 2)
+        sk = R.kstates(st_all[vi * nr:(vi + 1) * nr])
+        if CHECK_STREAMS:
+            sk, _ = roundtrip(sk, 2)
         q = D.q2_values(D.hsum(sk), a if var else None)                   # [T,8,256] exact fp16 values
         m = (q - tk).square().sum(-1)                                     # [T, 8]
         if best is None:
@@ -127,7 +132,7 @@ def ldl_blocks(Hr, b, sigma):
 
 
 @torch.no_grad()
-def prep(W, H, count, sigma, seed=91426, G=None, sigma_out=0.03, dev="cuda", extra_ks=()):
+def prep(W, H, count, sigma, seed=91426, G=None, sigma_out=0.03, dev="cuda", extra_ks=(), ks=None):
     """Mirror of harness.quantize_exl3_like preprocessing (same RNG order, same numerics)."""
     Qm = _Qm()
     weight = W.to(dev, torch.float32).T.contiguous()
@@ -162,7 +167,7 @@ def prep(W, H, count, sigma, seed=91426, G=None, sigma_out=0.03, dev="cuda", ext
     samp = Qm.sample_scale_tiles(weight, 3)
     gs, _ = h._g_scale_search(samp * Qm.ldlq_drift(2), 2, q)
     gsr = {K: h._g_scale_search(samp * Qm.ldlq_drift(_k(K)), _k(K), PV.patq if PV.is_pat(K) else q)[0]
-           for K in tuple(RES_KS) + tuple(K for K in extra_ks if K not in RES_KS)}
+           for K in (tuple(ks) if ks else tuple(RES_KS) + tuple(K for K in extra_ks if K not in RES_KS))}
     weight *= gs
     su /= gs
     Lk, Din = ldl_blocks(Hm, 128, sigma)
@@ -289,8 +294,10 @@ def encode_rotated(P, meta, lam=0.3, base=None, base_var=None, inner=0):
                     sel = (Ku == K).nonzero().flatten()
                     s0 = (rms[sel] / (CB_RMS * P["gsr"][_k(K)])).view(-1, 1, 1)
                     st = viterbi(R.to_rings(rt[sel] / (amap[sel] * s0)), K)
-                    sk, mm = roundtrip(R.kstates(st), K)
-                    mism += mm
+                    sk = R.kstates(st)
+                    if CHECK_STREAMS:                                  # decoder re-derivation (always 0 so far);
+                        sk, mm = roundtrip(sk, K)                      # the final bit-exact decode check covers it
+                        mism += mm
                     sr[sel] = sk
                 Sr = D.hsum(sr)
                 ag = amap * R.to_unit(A_K0(Sr))                                    # unrounded a * mul1(sr)
@@ -447,9 +454,103 @@ def free(P):
 
 # ================================================================================================ production API
 PROJ = ("gate", "up", "down")
-PROD = dict(base_var="sign", lam=0.3, inner=2, K_hi=2.5, sigma={"gate": 0.5, "up": 0.5, "down": 1.0},
+PROD = dict(base_var="sign", lam=0.3, inner=0, canonical_base=False, K_hi=2.5, sigma={"gate": 0.5, "up": 0.5, "down": 1.0},
             axis={"gate": "n", "up": "n", "down": "k"}, units_per_shard=768,
-            res_K={"gate": 1.9375, "up": 1.9375, "down": 2.3125})   # PRODUCTION DEFAULT (T14 down-heavy pattern, 4.0846 bpw)
+            res_K={"gate": 2.0, "up": 2.0, "down": 2.3125})   # PRODUCTION DEFAULT 4.1263 bpw, single joint pass, inner 0
+# (9-expert rule: 2/2/2.3125 single-pass passes, worst -1.43/-1.75/-0.83 %; 1.9375/1.9375/2.3125 = 4.0846 FAILS OOD)
+OCOL = dict(tau=0.01, nmax=4)   # outlier-channel plane rule (H only): input channels with H_cc / tr(H) >= tau, <= nmax
+
+
+def ocol_detect(H, tau=OCOL["tau"], nmax=OCOL["nmax"]):
+    """Outlier input channels of one projection from its input Gram alone (sorted ascending, long)."""
+    d = H.diagonal().double()
+    v, i = torch.sort(d / d.sum(), descending=True)
+    return i[:nmax][v[:nmax] >= tau].sort().values
+
+
+def ocol_H(H, idx):
+    """Metric for the trellis when idx columns are corrected exactly afterwards: drop their rows/cols from H
+    (keep PD: diagonal = mean diagonal of the remaining channels)."""
+    if idx.numel() == 0:
+        return H
+    H = H.clone()
+    keep = torch.ones(H.shape[0], dtype=torch.bool, device=H.device); keep[idx.to(H.device)] = False
+    m = H.diagonal()[keep].mean()
+    ii = idx.to(H.device)
+    H[ii, :] = 0; H[:, ii] = 0; H[ii, ii] = m
+    return H
+
+
+@torch.no_grad()
+def ocol_apply(planes, dn, W, idx):
+    """Fit the outlier-channel plane on the decoded levels dn {2, 4: [out, in] fp32} (in place) -> planes['base'/'p4']
+    ['ocol'].  Same fp32 op order as nq_decode.apply_ocol."""
+    dev = dn[2].device
+    ii = idx.to(dev)
+    Wc = W.to(dev, torch.float32)[:, ii]
+    c2 = (Wc - dn[2][:, ii]).half()
+    dn[2][:, ii] = dn[2][:, ii] + c2.float()
+    b4 = dn[4][:, ii] + c2.float()
+    d4 = (Wc - b4).half()
+    dn[4][:, ii] = b4 + d4.float()
+    planes["base"]["ocol"] = dict(idx=idx.to(torch.int16).cpu(), c2=c2.T.contiguous().cpu())
+    planes["p4"]["ocol"] = dict(d4=d4.T.contiguous().cpu())
+
+
+LR = dict(tau=0.05, rmax=4, sparse_m=8, sparse_mass=0.999)
+# low-rank plane rule (H only): top eigen-directions of H with eigenvalue share >= tau, at most rmax; a direction whose
+# top sparse_m channels carry >= sparse_mass of |v|^2 is truncated to them (sparse column case: gather, no dot)
+
+
+def lr_detect(H, tau=LR["tau"], rmax=LR["rmax"], sparse_m=LR["sparse_m"], sparse_mass=LR["sparse_mass"]):
+    """-> V [r, in] fp16 (unit top eigenvectors of H with eigenvalue / tr(H) >= tau), r in 0..rmax."""
+    Hd = H.double()
+    w, Q = torch.linalg.eigh(Hd)
+    share = w.flip(0) / w.clamp_min(0).sum()
+    r = int((share[:rmax] >= tau).sum())
+    V = Q.flip(1)[:, :r].T.contiguous()
+    for j in range(r):
+        v2, ix = torch.sort(V[j].square(), descending=True)
+        m = int((v2.cumsum(0) < sparse_mass).sum()) + 1
+        if m <= sparse_m:
+            keep = torch.zeros_like(V[j]); keep[ix[:m]] = V[j, ix[:m]]
+            V[j] = keep / keep.norm()
+    return V.half()
+
+
+def lr_nnz(V):
+    return [int((v != 0).sum()) for v in V]
+
+
+def lr_H(H, V):
+    """Trellis metric when the V-span of the error is corrected afterwards: (I-P) H (I-P) + m P, m = mean diag."""
+    if V.shape[0] == 0:
+        return H
+    Vf = V.to(H.device).double()
+    P = Vf.T @ torch.linalg.solve(Vf @ Vf.T, Vf)
+    I = torch.eye(H.shape[0], device=H.device, dtype=torch.float64)
+    Hd = (I - P) @ H.double() @ (I - P)
+    m = Hd.diagonal().mean()
+    return (Hd + m * P).to(H.dtype)
+
+
+@torch.no_grad()
+def lr_apply(planes, dn, W, V):
+    """Fit the low-rank plane on decoded levels dn (in place): U = LS fit of the error on span(V), fp16."""
+    dev = dn[2].device
+    Vh = V.to(dev); Vf = Vh.float()
+    Gi = torch.linalg.inv((Vf.double() @ Vf.double().T)).float()
+    Wf = W.to(dev, torch.float32)
+    fit = lambda E: ((E @ Vf.T) @ Gi).T.contiguous().half()          # [r, out]
+    U2 = fit(Wf - dn[2])
+    dn[2] = dn[2] + D.lr_term(U2, Vh)
+    b4 = dn[4] + D.lr_term(U2, Vh)
+    U4 = fit(Wf - b4)
+    dn[4] = b4 + D.lr_term(U4, Vh)
+    planes["base"]["lr"] = dict(V=Vh.cpu(), U2=U2.cpu())
+    planes["p4"]["lr"] = dict(U4=U4.cpu())
+
+
 DEFAULT_RATE = 4.15625          # positional-K2.5 fallback (--rate): smallest rate passing the 9-expert rule
 
 
@@ -464,7 +565,8 @@ def rate_rule(ref_bits, rate, K_hi=PROD["K_hi"]):
 
 @torch.no_grad()
 def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PROD["lam"],
-                  base_var=PROD["base_var"], inner=PROD["inner"], check=True, canonical_base=True, res_K=None):
+                  base_var=PROD["base_var"], inner=PROD["inner"], check=True, canonical_base=PROD["canonical_base"], res_K=None,
+                  seed=91426, ocol=None, lr=None):
     """One expert -> (artifact {gate, up, down: planes, meta}, dense {2, 4: [g, u, d] fp32 [out, in]}).
     Ws: [Wg, Wu, Wd] teacher [out, in]; HG: thread-12 glm_H format {"H": [Hx, Hx, Ha], "G": [Gg, Gu, None]}
     (e.g. threads/19-full-capture/nq19_load.Capture().glm_H(L, E)).
@@ -477,8 +579,14 @@ def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PR
         res_K = PROD["res_K"]
     art, dense, info = {}, {2: [], 4: []}, {}
     for pi, pn in enumerate(PROJ):
-        P = prep(Ws[pi], HG["H"][pi], count, sigma[pn], G=HG["G"][pi], sigma_out=sigma_out,
-                 extra_ks=(float(res_K[pn]),) if res_K else ())
+        oidx = ocol_detect(HG["H"][pi], **ocol) if ocol else torch.zeros(0, dtype=torch.long)
+        Hq = ocol_H(HG["H"][pi], oidx)
+        if lr:
+            if not (pi == 1 and HG["H"][1] is HG["H"][0]):              # gate/up share the input Gram -> same V
+                Vlr = lr_detect(HG["H"][pi].cuda(), **lr)
+            Hq = lr_H(HG["H"][pi].cuda(), Vlr)
+        P = prep(Ws[pi], Hq, count, sigma[pn], seed=seed, G=HG["G"][pi], sigma_out=sigma_out,
+                 ks=(2, float(res_K[pn])) if res_K else None)
         ax = PROD["axis"][pn]
         nw = P["k"] * P["n"]
         ref_bits = 4 + 16 / 2048 + 16 * (P["k"] + P["n"]) / nw + (D.variant_bits(base_var) / 256 if base_var else 0)
@@ -492,6 +600,16 @@ def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PR
         else:
             planes, dn, inf, enc, _ = encode_projection(P, shard_axis=ax, lam=lam, base_var=base_var, inner=inner,
                                                         res_rule=rule)
+        PV.free_tmp(); h.free_scratch()
+        if lr and Vlr.shape[0]:
+            lr_apply(planes, dn, Ws[pi], Vlr)
+            planes["meta"]["lr"] = dict(lr, r=int(Vlr.shape[0]), shared_V=bool(pi == 1 and HG["H"][1] is HG["H"][0]),
+                                        nnz=lr_nnz(Vlr))
+            inf["bits"] = D.bits_per_level(planes)
+        if oidx.numel():
+            ocol_apply(planes, dn, Ws[pi], oidx)
+            planes["meta"]["ocol"] = dict(ocol, n=int(oidx.numel()))
+            inf["bits"] = D.bits_per_level(planes)
         if check:
             rot = D.rotated_levels(planes)
             inf["bitexact"] = {L: bool(torch.equal(D.decode_matrix(planes, L, rot=rot), dn[L])) for L in (2, 4)}
@@ -506,7 +624,10 @@ def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PR
     if res_K:
         rate = sum(info[p]["bits"][4] for p in PROJ) / len(PROJ)       # equal-size projections
     art["meta"] = dict(format="nestquant-v1", rate=rate, base_var=base_var, lam=lam, inner=inner, sigma=sigma,
-                       canonical_base=canonical_base, res_K=dict(res_K) if res_K else None, info=info)
+                       canonical_base=canonical_base, res_K=dict(res_K) if res_K else None, info=info,
+                       ocol=dict(ocol) if ocol else None, lr=dict(lr) if lr else None,
+                       lr_rank={p: int(art[p]["base"]["lr"]["V"].shape[0]) if "lr" in art[p]["base"] else 0 for p in PROJ},
+                       ocol_idx={p: art[p]["base"]["ocol"]["idx"].tolist() if "ocol" in art[p]["base"] else [] for p in PROJ})
     return art, dense
 
 
@@ -515,14 +636,15 @@ def main():
     ap = argparse.ArgumentParser(description="NestQuant v1: encode one GLM expert into a base + P4 artifact")
     ap.add_argument("--layer", type=int, required=True); ap.add_argument("--expert", type=int, required=True)
     ap.add_argument("--rate", type=float, help="positional-K2.5 level-4 bpw incl. metadata (e.g. 4.15625); default = "
-                                               "PROD res_K pattern (1.9375/1.9375/2.3125 = 4.0846 bpw)")
+                                               "PROD res_K pattern (2/2/2.3125 = 4.1263 bpw)")
     ap.add_argument("--stats", choices=["t19", "t12"], default="t19",
                     help="t19 = threads/19 full-model capture (nq19_load.Capture().glm_H); t12 = thread-08 H from the "
                          "orbit training sample (nq_run.glm_H)")
-    ap.add_argument("--res-k", help="pattern residual per projection 'gate,up,down' (default PROD res_K 1.9375,1.9375,2.3125)")
-    ap.add_argument("--bnd", default="50", help="t19 boundary-window weight (nq_bnd.parse_bnd; '1' = old behaviour)")
+    ap.add_argument("--res-k", help="pattern residual per projection 'gate,up,down' (default PROD res_K 2,2,2.3125)")
+    ap.add_argument("--bnd", default="1", help="t19 boundary-window weight (nq_bnd.parse_bnd); default 1 = off (user decision)")
     ap.add_argument("--out", required=True); ap.add_argument("--dense-out", help="also save internal dense {2,4}")
-    ap.add_argument("--single-pass", action="store_true", help="joint fit at --rate (base not rate-canonical)")
+    ap.add_argument("--canonical", action="store_true", help="2-pass rate-canonical base (K2 reference) + inner 2 "
+                                                              "(slower, ~100 s; production = single joint pass inner 0)")
     a = ap.parse_args()
     torch.cuda.set_per_process_memory_fraction(12 / 80)
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -536,7 +658,7 @@ def main():
         import nq_run
         HG = nq_run.glm_H(data, a.layer, a.expert)
     rk = dict(zip(PROJ, map(float, a.res_k.split(",")))) if a.res_k else None
-    art, dense = encode_expert(data.teacher, HG, rate=a.rate, canonical_base=not a.single_pass, res_K=rk)
+    art, dense = encode_expert(data.teacher, HG, rate=a.rate, canonical_base=a.canonical, inner=2 if a.canonical else PROD["inner"], res_K=rk)
     torch.save(art, a.out)
     if a.dense_out:
         torch.save(dense, a.dense_out)

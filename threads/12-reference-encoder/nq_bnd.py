@@ -18,7 +18,7 @@ import torch
 KINDS = ("think", "end")
 BUCKETS = ("d1", "d2_4", "d5_16", "d17_32")
 BUCKET_RANGE = {"d1": (1, 1), "d2_4": (2, 4), "d5_16": (5, 16), "d17_32": (17, 32)}
-DEFAULT_BND = 50.0
+DEFAULT_BND = 1.0      # user 2026-09-29: no boundary upweighting in calibration (weights only pick fixed_set.json)
 ADD_KEYS = ("A2", "A0", "D2", "D0", "C_ctx", "Dc", "g")
 
 
@@ -35,11 +35,12 @@ def parse_bnd(spec=None):
     kv = dict(x.split("=") for x in spec.split(","))
     dflt = float(kv.pop("*", DEFAULT_BND))
     w = {(k, b): dflt for k in KINDS for b in BUCKETS}
-    for key, v in kv.items():
+    for key, v in kv.items():                   # 'think:*=50' / '*:d1=20' wildcards
         k, b = key.split(":")
         for kk in (KINDS if k == "*" else (k,)):
-            assert (kk, b) in w, f"unknown bucket {key}"
-            w[(kk, b)] = float(v)
+            for bb in (BUCKETS if b == "*" else (b,)):
+                assert (kk, bb) in w, f"unknown bucket {key}"
+                w[(kk, bb)] = float(v)
     return w
 
 
@@ -52,8 +53,25 @@ def bnd_tag(w):
     return f"bnd{vals[0]:g}" if len(vals) == 1 else "bnd" + "_".join(f"{w[(k, b)]:g}" for k in KINDS for b in BUCKETS)
 
 
-def glm_H_bnd(cap, L, E, w=None, device="cuda", **kw):
-    """Capture.glm_H with boundary-bucket weights w {(kind, bucket): weight}. w all-1 -> identical to cap.glm_H."""
+ROUTED_KEYS = ("A2", "A0", "D2", "D0")
+CTX_KEYS = ("C_ctx", "Dc")
+DEFAULT_K = None          # ESS shrink constant (None = no shrink); set from the held-out A/B (nq_bnd_ab.py)
+DEFAULT_CAP = None        # max trace share of the whole boundary increment (None = no cap)
+
+
+def shrink(n, k):
+    """ESS/(ESS+k) (1 if k is None/0)."""
+    return 1.0 if not k else n / (n + k)
+
+
+def glm_H_bnd(cap, L, E, w=None, device="cuda", k=DEFAULT_K, cap_frac=DEFAULT_CAP, cache=None, **kw):
+    """Capture.glm_H with boundary-bucket weights w {(kind, bucket): weight}. w all-1 -> identical to cap.glm_H.
+
+    Damping (lead 2026-09-28, thin per-expert think stats): per group the effective weight is
+        w_eff = 1 + (w - 1) * n / (n + k)
+    with n = the group's routed p-ESS for the routed sums (A2, A0, D2, D0, g[0:4]) and the group's context-row count
+    for the layer-wide context sums (C_ctx, Dc, g[4:6]).  Then, if cap_frac, the whole increment Delta is scaled by
+    s <= 1 so that tr(Delta_key) / tr(base_key + Delta_key) <= cap_frac for every routed key (one s per expert)."""
     w = parse_bnd(w) if not isinstance(w, dict) or len(w) != len(KINDS) * len(BUCKETS) else w
     if is_flat_one(w):
         HG = cap.glm_H(L, E, device=device, **kw)
@@ -62,22 +80,46 @@ def glm_H_bnd(cap, L, E, w=None, device="cuda", **kw):
     if not hasattr(cap, "components_bnd"):
         raise RuntimeError("boundary weights requested but this T19 capture has no components_bnd(); "
                            "pass --bnd 1 for the old behaviour")
-    c = cap.components(L, E, device, keys=("A2", "A0", "D2", "D0", "Dc", "C_ctx"))
-    bnd = cap.components_bnd(L, E, device)
-    used = {}
-    for (k, b), wb in w.items():
-        if wb == 1.0 or (k, b) not in bnd:
+    c = cap.components(L, E, device, keys=ROUTED_KEYS + CTX_KEYS)
+    delta = {key: None for key in ROUTED_KEYS + CTX_KEYS}
+    dg = torch.zeros_like(c["g"], dtype=torch.float64)
+    groups = {}
+    for (kd, b), wb in w.items():
+        if wb == 1.0:
             continue
-        for key in ADD_KEYS:
-            if key in bnd[(k, b)] and key in c:
-                c[key] = c[key].double() + (wb - 1.0) * bnd[(k, b)][key].double()
-                used.setdefault(f"{k}:{b}", []).append(key)
-    for key in ADD_KEYS:
-        if key in c and torch.is_tensor(c[key]) and key != "g":
-            c[key] = c[key].float()
+        if cache is not None and (L, E, kd, b) in cache:          # host-side cache (A/B arms share the sums)
+            cb = {x: (y.to(device) if torch.is_tensor(y) else y) for x, y in cache[(L, E, kd, b)].items()}
+        else:
+            cb = cap.components_bnd(L, E, device, groups=[(kd, b)])[(kd, b)]
+            if cache is not None:
+                cache[(L, E, kd, b)] = {x: (y.cpu() if torch.is_tensor(y) else y) for x, y in cb.items()}
+        nr, nc = float(cb.get("ess", 0.)), float(cb.get("n_ctx_rows", 0))
+        wr, wc = 1 + (wb - 1) * shrink(nr, k), 1 + (wb - 1) * shrink(nc, k)
+        for key in ROUTED_KEYS + CTX_KEYS:
+            if key in cb:
+                inc = (wr if key in ROUTED_KEYS else wc) - 1.0
+                t = inc * cb[key].double()
+                delta[key] = t if delta[key] is None else delta[key] + t
+        g = cb["g"].double()
+        dg[:4] += (wr - 1) * g[:4]; dg[4:] += (wc - 1) * g[4:]
+        groups[f"{kd}:{b}"] = dict(w=wb, ess=nr, n_routed=int(cb.get("n_routed", 0)), n_ctx_rows=int(nc),
+                                   w_eff_routed=wr, w_eff_ctx=wc)
+        del cb
+    s, share = 1.0, {}
+    for key in ROUTED_KEYS:
+        if delta[key] is not None:
+            tb, td = float(c[key].double().trace()), float(delta[key].trace())
+            share[key] = td / (tb + td) if tb + td > 0 else 0.
+            if cap_frac and share[key] > cap_frac:
+                s = min(s, cap_frac * tb / ((1 - cap_frac) * td))
+    for key, d in delta.items():
+        if d is not None:
+            c[key] = (c[key].double() + s * d).float()
+    c["g"] = (c["g"].double() + s * dg).to(c["g"].dtype)
+    del delta, dg
     HG = cap.glm_H(L, E, device=device, c=c, **kw)
-    HG["meta"]["bnd"] = {f"{k}:{b}": v for (k, b), v in w.items()}
-    HG["meta"]["bnd_used"] = used
+    HG["meta"]["bnd"] = {f"{kd}:{b}": v for (kd, b), v in w.items()}
+    HG["meta"]["bnd_damp"] = dict(k=k, cap_frac=cap_frac, scale=s, trace_share_undamped_by_cap=share, groups=groups)
     return HG
 
 

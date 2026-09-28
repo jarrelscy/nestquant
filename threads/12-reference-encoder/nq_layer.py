@@ -1,13 +1,13 @@
 """NestQuant v1 production entry point: encode every routed expert of one GLM layer -> per-TP8-shard planes + manifest.
 
   python nq_layer.py --layer L --stats /tmp/nestquant/19-capture --out /tmp/nestquant/nq-encode [--experts 0:256]
-                     [--res-k 1.9375,1.9375,2.3125 | --rate R] [--bnd 50] [--source $NQ19_SRC] [--check-decode] [--no-finalize]
+                     [--res-k 2,2,2.3125 | --rate R] [--bnd 50] [--source $NQ19_SRC] [--check-decode] [--no-finalize]
 
 Per expert (nq_encode.encode_expert): H/G from the thread-19 capture (nq19_load.Capture(root).glm_H, thread-08 recipe),
-base = K2 mul1 + per-ring sign + two-sided G + blend 0.3 (rate-canonical: fit against the uniform-K2 residual), then the
-P4 plane re-fit on the frozen base with the production residual: pattern K per projection (default gate/up 1.9375
-= (1, 0xFFFE), down 2.3125 = (2, 0x9248) -> 4.0846 bpw; --res-k), or --rate R = positional K2.5 on the last-processed
-units of every shard. H/G boundary-weighted per --bnd (nq_bnd; default flat 50, 1 = old recipe).
+base = K2 mul1 + per-ring sign + two-sided G + blend 0.3 (production: ONE joint pass, inner 0; --canonical in nq_encode = 2-pass K2-reference base), then the
+P4 plane re-fit on the frozen base with the production residual: pattern K per projection (default gate/up 2
+(uniform K2), down 2.3125 = (2, 0x9248) -> 4.1263 bpw; --res-k; 1.9375 = (1, 0xFFFE) available), or --rate R = positional K2.5 on the last-processed
+units of every shard. H/G boundary weighting per --bnd is OFF by default (weight 1 = thread-08 recipe; user decision 2026-09-29).
 Resumable: finished experts are kept in OUT/L{L}/experts/E{E}.pt; the final step splits them into
   OUT/L{L}/tp{s}.pt   s = 0..7   {E: {proj: {base, var, p4, word, suh, svh}}}  (only the bytes shard s reads)
   OUT/L{L}/manifest.json         format, config, per-shard sha256 + bytes, per-expert bits / proxies / checks
@@ -28,6 +28,27 @@ import harness as h
 
 T19 = "/home/coder/git/nestquant/threads/19-full-capture"
 NSH = 8
+
+
+FIXED_RULE = dict(rule="top 26 experts per layer by token-weighted REAP = always level 4 (default allocation); "
+                       "the rest level 2 until a runtime allocation overrides",
+                  n=26, reap_token_weights={"d1": 50, "d2_4": 20, "d5_16": 5, "d17_32": 2, "other": 1},
+                  window="32 tokens before a non-empty </think> or <|im_end|>; row -> nearer boundary, ties -> end")
+
+
+def default_allocation(a, L):
+    """Manifest default allocation from T19's fixed_set.json (schema reserved even when the file is not there yet)."""
+    path = a.fixed_set or f"{a.stats}/fixed_set.json"
+    out = dict(FIXED_RULE, source=path, level4_experts=None, status="pending (fixed_set.json not found)")
+    if os.path.exists(path):
+        fs = json.load(open(path))           # T19 fixed_set19.py schema nestquant-19-fixed-set-v1
+        ent = fs.get("fixed_set", {}).get(str(L))
+        out.update(level4_experts=sorted(int(e) for e in ent) if ent is not None else None, sha256=sha(path),
+                   schema=fs.get("schema"), K=fs.get("K"), reap_token_weights_file=fs.get("weights"),
+                   other_tokens_weight=fs.get("other_tokens_weight"), definition=fs.get("definition"),
+                   stats_version=fs.get("stats_version", {}).get(str(L)),
+                   status="ok" if ent is not None else f"layer {L} missing in {path}")
+    return out
 
 
 def teacher(source, L, E):
@@ -96,11 +117,14 @@ def main():
     ap.add_argument("--experts", default="0:256")
     ap.add_argument("--rate", type=float, help="positional-K2.5 rate instead of the pattern default (e.g. 4.15625)")
     ap.add_argument("--source", default=os.environ.get("NQ19_SRC", "/tmp/nestquant/src/glm53-fp8"), help="full FP8 checkpoint or per-expert dir")
-    ap.add_argument("--res-k", help="pattern residual 'gate,up,down' K; default nq_encode.PROD res_K = 1.9375,1.9375,2.3125 "
-                                    "(4.0846 bpw); 2,2,2.3125 = 4.1263")
+    ap.add_argument("--res-k", help="pattern residual 'gate,up,down' K; default nq_encode.PROD res_K = 2,2,2.3125 "
+                                    "(4.1263 bpw); 1.9375,1.9375,2.3125 = 4.0846 (fails the 9-expert rule)")
     ap.add_argument("--bnd", default=str(NB.DEFAULT_BND),
-                    help="boundary-window weight: flat ('50' default, '1' = old behaviour) or per bucket "
+                    help="boundary-window weight, default 1 = OFF (user 2026-09-29); flat ('50') or per bucket "
                          "'think:d1=50,end:d17_32=4,*=10' (kinds think/end, buckets d1,d2_4,d5_16,d17_32)")
+    ap.add_argument("--bnd-k", type=float, default=NB.DEFAULT_K, help="ESS shrink: w_eff = 1+(w-1)ESS/(ESS+k)")
+    ap.add_argument("--bnd-cap", type=float, default=NB.DEFAULT_CAP, help="max trace share of the boundary increment")
+    ap.add_argument("--fixed-set", help="T19 fixed_set.json (default STATS/fixed_set.json): the always-4-bit default allocation")
     ap.add_argument("--check-decode", action="store_true", help="decode every expert back from the shard files")
     ap.add_argument("--no-finalize", action="store_true", help="only encode (e.g. several workers on disjoint ranges)")
     a = ap.parse_args()
@@ -119,7 +143,7 @@ def main():
         if os.path.exists(path):
             continue
         t0 = time.time()
-        HG = NB.glm_H_bnd(cap, L, E, bw)
+        HG = NB.glm_H_bnd(cap, L, E, bw, k=a.bnd_k, cap_frac=a.bnd_cap)
         flags = []
         for i, Hm in enumerate(HG["H"]):
             if not torch.isfinite(Hm).all() or float(Hm.diagonal().mean()) <= 0:      # unrouted expert: no stats
@@ -129,7 +153,7 @@ def main():
                 HG["G"][i] = None; flags.append(f"G{i}=none")
         rk = dict(zip(NE.PROJ, map(float, a.res_k.split(",")))) if a.res_k else None
         art, _ = NE.encode_expert(teacher(a.source, L, E), HG, rate=a.rate, res_K=rk)
-        art["meta"].update(layer=L, expert=E, flags=flags, bnd=NB.bnd_tag(bw), hg_meta={k: (float(v) if torch.is_tensor(v) else v)
+        art["meta"].update(layer=L, expert=E, flags=flags, bnd=NB.bnd_tag(bw), bnd_k=a.bnd_k, bnd_cap=a.bnd_cap, hg_meta={k: (float(v) if torch.is_tensor(v) else v)
                                                                    for k, v in HG.get("meta", {}).items()})
         torch.save(art, path + ".tmp"); os.replace(path + ".tmp", path)
         print(f"[L{L} E{E}] {time.time()-t0:.0f}s {flags} "
@@ -152,7 +176,7 @@ def main():
         if proj_meta is None:
             proj_meta = {p: {k: v for k, v in art[p]["meta"].items()} for p in NE.PROJ}
             cfg = {k: m[k] for k in ("format", "rate", "base_var", "lam", "inner", "sigma", "canonical_base", "res_K") if k in m}
-            cfg["bnd"] = m.get("bnd")
+            cfg.update(bnd=m.get("bnd"), bnd_k=m.get("bnd_k"), bnd_cap=m.get("bnd_cap"))
     files = {}
     for s in range(NSH):
         f = f"{d}/tp{s}.pt"
@@ -165,7 +189,7 @@ def main():
                          for k, v in pr.items()}
         if "var" in pr:
             exp_bytes[pn]["var"] = (pr["var"].numel() * D.variant_bits(cfg["base_var"]) + 7) // 8
-    man = dict(format="nestquant-v1", layer=L, n_experts=len(have), experts=have, config=cfg, tp=NSH,
+    man = dict(format="nestquant-v1", layer=L, default_allocation=default_allocation(a, L), n_experts=len(have), experts=have, config=cfg, tp=NSH,
                proj_meta=proj_meta, files=files,
                packed_bytes_per_expert_per_shard=exp_bytes,
                note="word = u16 Mb | N<<8 per 16x128 unit (stored int32 here); var = 1-bit per-ring sign "

@@ -11,7 +11,8 @@ after upload, then PREFIX/done/L{L}.json (file list with sha256/size/key) and PR
 Global small files (plan.json, corpus shas, shard protocol/progress, flags, markers) go to PREFIX/global/.
 Raw x activations and stage-1 hidden-state checkpoints are not uploaded (recomputable from corpus + model).
 --set stats1 (chunk 0 + traces snapshot) / full (every planned shard): markers done_<set>/, latest_<set>.json.
-Restore: fb_restore.py.
+--bnd-max-shard N skips boundary rows of later shards; --budget-tb (default 4.8, scope s3://.../jarrel/) aborts a
+pass whose listed total + still-to-upload bytes would reach the budget.  Restore: fb_restore.py.
 """
 import argparse
 import concurrent.futures as cf
@@ -88,7 +89,7 @@ def final_ids(root):
     return {int(k) for k in json.load(open(f"{root}/plan.json"))["shards"]}
 
 
-def layer_files(root, L, small_only, which="stats0"):
+def layer_files(root, L, small_only, which="stats0", bnd_max_shard=None):
     """[(local path, relative key)] of final layer L, or None if not final yet.
     which = stats0 (frozen chunk-0 version) or full (current stats once every planned shard is merged)."""
     s0 = f"{root}/stats/L{L}" if which == "full" else f"{root}/{which}/L{L}"
@@ -102,6 +103,8 @@ def layer_files(root, L, small_only, which="stats0"):
            if not (small_only and f in GRAMS) and not f.endswith(".tmp")]
     m = json.load(open(f"{vd}/meta.json"))
     for sh in m["shards"]:
+        if bnd_max_shard is not None and sh["shard"] > bnd_max_shard:
+            continue                               # boundary rows not needed by the encode (weight 1); recomputable
         d = sh.get("bnd_rows") or f"{root}/bnd_rows/s{sh['shard']:02d}/L{L}"
         if not os.path.exists(f"{d}/rows.npz"):
             return None
@@ -132,8 +135,8 @@ def latest_name(which):
     return "latest" if which == "stats0" else f"latest_{which}"
 
 
-def backup_layer(root, prefix, L, small_only, tmpdir, which="stats0"):
-    lf = layer_files(root, L, small_only, which)
+def backup_layer(root, prefix, L, small_only, tmpdir, which="stats0", bnd_max_shard=None):
+    lf = layer_files(root, L, small_only, which, bnd_max_shard)
     if lf is None:
         return None
     files, vname, m = lf
@@ -143,10 +146,38 @@ def backup_layer(root, prefix, L, small_only, tmpdir, which="stats0"):
         r = put(path, f"{prefix}/{key}")
         rec.append(dict(r, rel=key))
     done = dict(layer=L, version=vname, set=which, shards=[s["shard"] for s in m["shards"]], small_only=small_only,
+                bnd_rows_shards=[s["shard"] for s in m["shards"] if bnd_max_shard is None or s["shard"] <= bnd_max_shard],
                 files=rec, bytes=sum(r["size"] for r in rec), uploaded_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 seconds=round(time.time() - t0, 1))
     put_json(done, f"{prefix}/{marker_dir(which)}/L{L}.json", tmpdir)
     return done
+
+
+def s3_listing(scope):
+    """{uri: size} of every object under scope (s3://bucket/prefix/)."""
+    b, k = split(scope)
+    out = {}
+    for line in aws("s3", "ls", scope, "--recursive").splitlines():
+        parts = line.split(None, 3)
+        if len(parts) == 4:
+            out[f"s3://{b}/{parts[3]}"] = int(parts[2])
+    return out
+
+
+def budget_check(a, prefix, todo):
+    """Abort unless (bytes under the budget scope) + (bytes this pass would still upload) < budget."""
+    lst = s3_listing(a.budget_scope)
+    total = sum(lst.values())
+    plan = 0
+    for L in todo:
+        lf = layer_files(a.root, L, a.small_only, a.set, a.bnd_max_shard)
+        if lf:
+            plan += sum(os.path.getsize(p) for p, k in lf[0] if lst.get(f"{prefix}/{k}") != os.path.getsize(p))
+    rec = dict(budget_scope=a.budget_scope, total_tb=round(total / 1e12, 4), planned_tb=round(plan / 1e12, 4),
+               budget_tb=a.budget_tb, utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    print(json.dumps(rec), flush=True)
+    if total + plan >= a.budget_tb * 1e12:
+        raise SystemExit(f"BUDGET: {rec} -- not uploading")
 
 
 def main():
@@ -159,16 +190,22 @@ def main():
     ap.add_argument("--workers", type=int, default=2, help="layers uploaded concurrently")
     ap.add_argument("--set", default="stats0",
                     help="stats0 / stats1 / ...: a frozen snapshot (plan.json); full: stats after every planned shard")
+    ap.add_argument("--bnd-max-shard", type=int, help="upload boundary rows only of shards <= N")
+    ap.add_argument("--budget-tb", type=float, default=4.8, help="abort if scope total + planned upload >= this")
+    ap.add_argument("--budget-scope", default="s3://annalise-shared-prod/jarrel/")
+    ap.add_argument("--state-tag", default="", help="suffix for the local state file (separate passes of one set)")
     a = ap.parse_args()
     prefix = a.prefix.rstrip("/")
     tmpdir = f"{a.root}/logs"
-    state_p = f"{a.root}/logs/fb_backup_state{'' if a.set == 'stats0' else '_' + a.set}.json"
+    state_p = f"{a.root}/logs/fb_backup_state{'' if a.set == 'stats0' else '_' + a.set}{a.state_tag}.json"
     latest = f"{prefix}/{latest_name(a.set)}.json"
     state = json.load(open(state_p)) if os.path.exists(state_p) else {}
     while True:
         todo = [L for L in range(3, 78) if str(L) not in state]
+        budget_check(a, prefix, todo)
         with cf.ThreadPoolExecutor(a.workers) as ex:
-            futs = {ex.submit(backup_layer, a.root, prefix, L, a.small_only, tmpdir, a.set): L for L in todo}
+            futs = {ex.submit(backup_layer, a.root, prefix, L, a.small_only, tmpdir, a.set, a.bnd_max_shard): L
+                    for L in todo}
             for f in cf.as_completed(futs):
                 L = futs[f]
                 d = f.result()

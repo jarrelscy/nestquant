@@ -1,0 +1,114 @@
+{
+ "layer": 16,
+ "expert": 36,
+ "rate": null,
+ "eval": {
+  "matched": {
+   "EXL3-2@bnd1": {
+    "all/forced": 34.363,
+    "all/routed": 33.133,
+    "control/forced": 33.027,
+    "control/routed": 31.425,
+    "ood/forced": 36.421,
+    "ood/routed": 36.902
+   },
+   "EXL3-4@bnd1": {
+    "all/forced": 8.907,
+    "all/routed": 8.551,
+    "control/forced": 8.554,
+    "control/routed": 8.094,
+    "ood/forced": 9.45,
+    "ood/routed": 9.559
+   },
+   "nq/L2@bnd1": {
+    "all/forced": 34.647,
+    "all/routed": 33.556,
+    "control/forced": 33.517,
+    "control/routed": 32.094,
+    "ood/forced": 36.4,
+    "ood/routed": 36.814
+   },
+   "nq/L4@bnd1": {
+    "all/forced": 8.759,
+    "all/routed": 8.368,
+    "control/forced": 8.411,
+    "control/routed": 7.882,
+    "ood/forced": 9.295,
+    "ood/routed": 9.428
+   }
+  },
+  "val": {
+   "EXL3-2@bnd1": {
+    "all/forced": 31.166,
+    "all/routed": 24.812
+   },
+   "EXL3-4@bnd1": {
+    "all/forced": 8.048,
+    "all/routed": 6.261
+   },
+   "nq/L2@bnd1": {
+    "all/forced": 31.829,
+    "all/routed": 26.246
+   },
+   "nq/L4@bnd1": {
+    "all/forced": 7.896,
+    "all/routed": 6.096
+   }
+  }
+ },
+ "info": {
+  "bnd1": {
+   "meta": {
+    "layer": 16,
+    "expert": 36,
+    "n_routed": 29368,
+    "n_ctx": 262144,
+    "ess": 9879.02064008003,
+    "cp2": 0.00285689602570791,
+    "bnd": "none(w=1)"
+   },
+   "nq": {
+    "gate": {
+     "2": 2.0143229166666665,
+     "4": 3.9596354166666665,
+     "p4_only": 1.9557291666666667,
+     "artifact": 3.9700520833333335
+    },
+    "up": {
+     "2": 2.0143229166666665,
+     "4": 3.9596354166666665,
+     "p4_only": 1.9557291666666667,
+     "artifact": 3.9700520833333335
+    },
+    "down": {
+     "2": 2.0143229166666665,
+     "4": 4.334635416666667,
+     "p4_only": 2.3307291666666665,
+     "artifact": 4.345052083333333
+    }
+   }
+  }
+ },
+ "rows": {
+  "matched": {
+   "all": {
+    "forced": 5120,
+    "routed": 139
+   },
+   "control": {
+    "forced": 3072,
+    "routed": 79
+   },
+   "ood": {
+    "forced": 2048,
+    "routed": 60
+   }
+  },
+  "val": {
+   "all": {
+    "forced": 65536,
+    "routed": 1988
+   }
+  }
+ }
+}
