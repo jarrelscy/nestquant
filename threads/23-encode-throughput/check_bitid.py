@@ -24,13 +24,14 @@ def main():
     ap.add_argument("--tag", default="batch", help="output subdir for the batch arm")
     ap.add_argument("--group", type=int, default=8, help="experts per batch (nq_encode_batch)")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--ref-tag", default="ref", help="subdir of the reference arm")
     a = ap.parse_args()
     ex = parse(a.experts)
-    os.makedirs(f"{C.SCR}/ref", exist_ok=True); os.makedirs(f"{C.SCR}/{a.tag}", exist_ok=True)
+    os.makedirs(f"{C.SCR}/{a.ref_tag}", exist_ok=True); os.makedirs(f"{C.SCR}/{a.tag}", exist_ok=True)
     if a.cmd == "ref":
         C.setup()
         for L, E in ex:
-            p = f"{C.SCR}/ref/L{L}_E{E}.pt"
+            p = f"{C.SCR}/{a.ref_tag}/L{L}_E{E}.pt"
             if os.path.exists(p) and not a.force:
                 continue
             torch.cuda.synchronize(); t = time.time()
@@ -88,7 +89,7 @@ def main():
         live = C.ref_shas(C.T12_LIVE)
         ok_all = True
         for L, E in ex:
-            r = torch.load(f"{C.SCR}/ref/L{L}_E{E}.pt", weights_only=False)
+            r = torch.load(f"{C.SCR}/{a.ref_tag}/L{L}_E{E}.pt", weights_only=False)
             b = torch.load(f"{C.SCR}/{a.tag}/L{L}_E{E}.pt", weights_only=False)
             rs = r.pop("_ref")["shas"]; bs = b.pop("_batch", {}).get("shas")
             if bs is not None and bs != rs:

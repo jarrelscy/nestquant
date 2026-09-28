@@ -22,9 +22,11 @@ def ext():
         os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "8.0")
         if CE.CUDA_HOME is None:
             CE.CUDA_HOME = os.environ["CUDA_HOME"]
-        nb = "/tmp/nestquant/12-reference-encoder/bin"                      # ninja (static binary symlink)
-        if os.path.isdir(nb) and nb not in os.environ.get("PATH", ""):
-            os.environ["PATH"] = nb + ":" + os.environ.get("PATH", "")
+        for nb in ("/tmp/nestquant/12-reference-encoder/bin", "/home/coder/git/glm52/.venv/bin"):   # ninja
+            if os.path.exists(os.path.join(nb, "ninja")):
+                if nb not in os.environ.get("PATH", "").split(":"):
+                    os.environ["PATH"] = nb + ":" + os.environ.get("PATH", "")
+                break
         inc = os.path.join(os.path.dirname(exllamav3.__file__), "exllamav3_ext")
         _EXT = load(name="nq_k2vit", sources=[os.path.join(HERE, "csrc", "nq_k2vit.cu")], extra_include_paths=[inc],
                     build_directory=EXT_DIR, extra_cuda_cflags=["-O3", "-lineinfo"], verbose=False)
