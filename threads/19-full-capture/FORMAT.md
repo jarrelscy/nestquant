@@ -233,6 +233,29 @@ that kind in the same segment, 0 = none. They are exclusive under the same rule 
   - Global small files (plan, corpus shas, shard protocol/progress, markers, boundary flags) go to `global/`.
   - It does not upload raw x or stage-1 hidden-state checkpoints; those are recomputable (chunk 0: ≈ 30 min
     stage 1 on 6 GPUs).
+- **Final stats (box-death insurance, user directive 2026-09-28):** `fb_backup19.py --set full --bnd-max-shard 11
+  --loop` uploads each layer's final version (grams + small files) as soon as that layer has all 25 plan shards
+  merged. After all 75, it lists the prefix, checks every object named in `done_full/L{L}.json` (count + bytes),
+  and writes `latest_final.json` and `BACKUP_FINAL_DONE`, both locally in ROOT and on S3. The stats0 grams were
+  deleted from S3 (user-authorised); stats0 and stats1 are small-only there, and the local /tmp copies are kept.
+- **Restore after a box death** (same local layout; tested on one layer into a scratch dir):
+  ```
+  cd /home/coder/git/nestquant/threads/19-full-capture
+  ./run.sh fb_restore.py --prefix s3://annalise-shared-prod/jarrel/nestquant/19-capture-glmfmt \
+      --root /tmp/nestquant/19-capture-glmfmt --set full            # final stats: stats/L{L}, eval/, globals
+  ./run.sh fb_restore.py ... --set stats1 --no-global             # optional: stats1 small files + chunk-0/traces bnd rows
+  ```
+  Then `Capture(root=..., stats="stats")`. The full restore is about 3.4 TB, roughly 1 h at 1 GB/s.
+- **If the box dies before stage 1 finishes:** the per-layer backup holds every layer that was already final.
+  For missing shards, rerun stage 1 with T24's `capture_fwd_fast.py` (commit 278625d, byte-identical output,
+  about 2x faster), then stage 2, which merges into the restored versions:
+  ```
+  CUDA_VISIBLE_DEVICES=g ./run.sh capture_fwd_fast.py --out ROOT/shards/sKK --corpus <plan corpus> --shard-id K \
+      --fit-start <plan> --fit-windows <plan> --val-windows 0 --no-matched --ckpt-every 4 --acts-budget-gb 1500
+  NQ19_OUT=ROOT NQ19_KEEP_X=0,1,2,3,4,5 ./driver.sh stage2 <gpu>
+  ```
+  The arguments come from `ROOT/plan.json["shards"][K]`, the same ones `driver.sh plan` passes. Shards 0-11
+  (stats1) are already merged into every final layer.
 - **Budget (user rule): flashblade under 5 TB at all times.** `fb_backup19.py` lists `--budget-scope`
   (default all of `s3://annalise-shared-prod/jarrel/`) before each pass and aborts if total + still-to-upload
   bytes ≥ `--budget-tb` (4.8). The final set is uploaded with `--bnd-max-shard 11`: boundary rows only of

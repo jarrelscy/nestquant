@@ -20,6 +20,7 @@ import glob
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 
@@ -75,6 +76,16 @@ def put(path, uri, sha=None):
     return dict(size=size, sha256=sha, key=uri)
 
 
+def put_snapshot(path, uri, tmpdir):
+    """Upload a copy (global files such as progress.json may be rewritten while uploading)."""
+    p = f"{tmpdir}/.fb_snap_{os.getpid()}_{os.path.basename(path)}"
+    shutil.copyfile(path, p)
+    try:
+        return put(p, uri)
+    finally:
+        os.remove(p)
+
+
 def put_json(obj, uri, tmpdir):
     p = f"{tmpdir}/.fb_{os.getpid()}_{os.path.basename(uri)}"
     with open(p, "w") as f:
@@ -118,7 +129,7 @@ def layer_files(root, L, small_only, which="stats0", bnd_max_shard=None):
 
 def global_files(root):
     pats = ["plan.json", "corpus_sha256.txt", "SHARD0_READY", "HOLD_SHARDS_ABOVE", "eval/VAL_READY",
-            "bnd/*.npz", "shards/s*/protocol.json", "shards/s*/state/progress.json", "MANIFEST.json",
+            "bnd/*.npz", "shards/s*/protocol.json", "shards/s*/state/progress.json", "MANIFEST.json", "fixed_set_text.json", "latest_final.json", "FINAL_STATS_READY", "BACKUP_FINAL_DONE",
             "fixed_set.json", "eval/VAL_TRACES_READY", "eval/val_traces/layer_*.pt"]
     out = []
     for pat in pats:
@@ -180,6 +191,33 @@ def budget_check(a, prefix, todo):
         raise SystemExit(f"BUDGET: {rec} -- not uploading")
 
 
+def final_verify(a, prefix, tmpdir):
+    """All 75 done_full markers: every listed object present on S3 with its size -> latest_final.json (S3 + local)
+    and ROOT/BACKUP_FINAL_DONE."""
+    lst = s3_listing(prefix + "/")
+    n = nb = 0
+    layers = {}
+    for L in range(3, 78):
+        p = f"{tmpdir}/.fb_verify_L{L}.json"
+        aws("s3", "cp", f"{prefix}/{marker_dir('full')}/L{L}.json", p, "--only-show-errors")
+        d = json.load(open(p)); os.remove(p)
+        bad = [r["key"] for r in d["files"] if lst.get(r["key"]) != r["size"]]
+        if bad or d["small_only"] or not {os.path.basename(r["rel"]) for r in d["files"]} >= GRAMS:
+            raise SystemExit(f"final verify failed at L{L}: {len(bad)} bad, small_only={d['small_only']}")
+        n += len(d["files"]); nb += d["bytes"]
+        layers[L] = dict(version=d["version"], objects=len(d["files"]), bytes=d["bytes"])
+    doc = dict(root=a.root, prefix=prefix, set="full", verified_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               layers=layers, objects=n, bytes=nb, bnd_rows_max_shard=a.bnd_max_shard,
+               restore=f"fb_restore.py --prefix {prefix} --root <root> --set full")
+    with open(f"{a.root}/latest_final.json.tmp", "w") as f:
+        json.dump(doc, f, indent=1)
+    os.replace(f"{a.root}/latest_final.json.tmp", f"{a.root}/latest_final.json")
+    put(f"{a.root}/latest_final.json", f"{prefix}/latest_final.json")
+    open(f"{a.root}/BACKUP_FINAL_DONE", "w").write(json.dumps(dict(objects=n, bytes=nb, utc=doc["verified_utc"])))
+    put(f"{a.root}/BACKUP_FINAL_DONE", f"{prefix}/BACKUP_FINAL_DONE")
+    print(json.dumps(dict(final_verified=True, objects=n, bytes=nb)), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
@@ -216,10 +254,12 @@ def main():
                     json.dump(state, fh)
                 os.replace(state_p + ".tmp", state_p)
                 print(json.dumps(dict(layer=L, bytes=d["bytes"], seconds=d["seconds"])), flush=True)
-        g = [dict(put(p, f"{prefix}/{k}"), rel=k) for p, k in global_files(a.root)]
+        g = [dict(put_snapshot(p, f"{prefix}/{k}", tmpdir), rel=k) for p, k in global_files(a.root)]
         put_json(dict(root=a.root, prefix=prefix, set=a.set, small_only=a.small_only, layers_done=sorted(int(k) for k in state),
                       bytes=sum(v["bytes"] for v in state.values()), global_files=g,
                       updated_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), latest, tmpdir)
+        if len(state) == 75 and a.set == "full" and not a.small_only:
+            final_verify(a, prefix, tmpdir)
         if not a.loop or len(state) == 75:
             break
         time.sleep(a.interval)
