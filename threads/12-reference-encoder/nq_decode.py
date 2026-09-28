@@ -39,8 +39,8 @@ _RI = {}
 A = float(torch.tensor([0x1eee], dtype=torch.int16).view(torch.float16)[0])
 B = float(torch.tensor([0xc931 - 65536], dtype=torch.int16).view(torch.float16)[0])
 K0 = 1024 * A + B                                             # -3.453125
-PATTERNS = {1.5: (1, 0xAAAA), 1.75: (1, 0xEEEE), 2: (2, 0), 2.25: (2, 0x8888), 2.5: (2, 0xAAAA),
-            2.75: (2, 0xEEEE), 3: (3, 0), 4: (4, 0)}
+PATTERNS = {1.5: (1, 0xAAAA), 1.75: (1, 0xEEEE), 1.875: (1, 0xFEFE), 1.9375: (1, 0xFFFE), 2: (2, 0),
+            2.25: (2, 0x8888), 2.3125: (2, 0x9248), 2.5: (2, 0xAAAA), 2.75: (2, 0xEEEE), 3: (3, 0), 4: (4, 0)}
 BASE_VARIANTS = {"sign": [1.0, -1.0], "sg4": [s * g for g in (0.9, 0.97, 1.03, 1.1) for s in (1, -1)]}
 
 

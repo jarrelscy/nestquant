@@ -90,7 +90,7 @@ def evaluate_into(book, data, methods, extra=None):
 
 INNER = 2
 BASE_VAR = os.environ.get("NQ_BASE_VAR", "sign")
-TARGETS = (4.0625, 4.09375, 4.125, 4.25)
+TARGETS = tuple(float(x) for x in os.environ.get("NQ_TARGETS", "4.0625,4.09375,4.125,4.25").split(","))
 UNITS = 768                                            # units per TP shard (all three projections)
 
 
@@ -219,6 +219,8 @@ def run_glm(L, E, variants):
         ref_bits = bits_expert(info, 4)
         for Lv in (2, 4):
             nm = f"{sname}/L{Lv}"
+            if nm in ev:                               # re-run for extra rates: the ref fit is deterministic
+                continue
             methods[nm] = dense[Lv]; extra[nm] = summary_info(info, Lv)
         book.R.setdefault("planes", {})[sname] = {p: info[p]["plane_bytes"] for p in PROJ}
         flush(); log(f"{sname} ref fit L4 {ref_bits:.4f} bitexact {[info[p]['bitexact'] for p in PROJ]} "
@@ -226,7 +228,8 @@ def run_glm(L, E, variants):
         # ---- rate variants on the frozen base (residual only)
         rv = []
         if "rates" in variants:
-            rv.append((f"{sname}_r4.0", dict(kind="pos", K=2, K_hi=1.5, frac=frac_for(ref_bits, 4.0, 1.5)), None))
+            if "no40" not in variants:
+                rv.append((f"{sname}_r4.0", dict(kind="pos", K=2, K_hi=1.5, frac=frac_for(ref_bits, 4.0, 1.5)), None))
             for T in TARGETS:
                 rv.append((f"{sname}_r{T}", dict(kind="pos", K=2, K_hi=2.5, frac=frac_for(ref_bits, T, 2.5)), None))
         if "k3cmp" in variants and sname == "nq":

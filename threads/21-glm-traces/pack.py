@@ -15,10 +15,12 @@ import numpy as np
 sys.path.insert(0, "/home/coder/git/nestquant/threads/21-glm-traces")
 import glmfmt as G
 
-ROOT = "/tmp/nestquant/corpus/glm53_calib_glmfmt_v1"
+ROOT = os.environ.get("PACK_ROOT", "/tmp/nestquant/corpus/glm53_calib_glmfmt_v1")
 CONV = "/tmp/nestquant/21-traces/conv_docs.jsonl"
+DECONTAM = "/tmp/nestquant/21-traces/decontam.json"  # eval_overlap.py
 SEED = 20260928
 VAL_FRAC = 0.015
+SEG_STRIDE = 1 << 20  # segment_id = doc_index + k*SEG_STRIDE for the k-th non-contiguous piece of a doc in a window
 RESERVE_TOKENS = 200_000  # raw filler pool kept out of c512 for the traces group
 
 
@@ -125,10 +127,17 @@ def write_group(name, fit_wins, val_wins, C, meta_extra, rng):
     rows = []; cat_tok = {}; st = dict(think_boundaries=0, end_boundaries=0, think_rows=0, end_rows=0)
     stv = dict(st); docs_fit, docs_val = set(), set()
     for w, pieces in enumerate(wins):
-        o = 0; segs = []
+        o = 0; segs = []; seen = {}; prev = None
         for d, a, b in pieces:
-            n = b - a
-            T[w, o:o + n] = d["ids"][a:b]; S[w, o:o + n] = d["doc_index"]
+            n = b - a; di = d["doc_index"]
+            # one segment per contiguous doc piece: a later non-contiguous piece of a doc already in this window
+            # gets its own id di + k*SEG_STRIDE (so segment_id % SEG_STRIDE == doc_index)
+            if prev is not None and prev[0] == di and prev[1] == a:
+                sid = prev[2]
+            else:
+                k = seen.get(di, -1) + 1; seen[di] = k; sid = di + k * SEG_STRIDE
+            prev = (di, b, sid)
+            T[w, o:o + n] = d["ids"][a:b]; S[w, o:o + n] = sid
             th = [x - a for x in d["th"] if a <= x < b]; en = [x - a for x in d["en"] if a <= x < b]
             bt, be = G.bnd_arrays(n, th, en)
             BT[w, o:o + n] = bt; BE[w, o:o + n] = be
@@ -137,7 +146,7 @@ def write_group(name, fit_wins, val_wins, C, meta_extra, rng):
             s["think_rows"] += int((bt > 0).sum()); s["end_rows"] += int((be > 0).sum())
             (docs_fit if w < len(fit_wins) else docs_val).add(d["doc_index"])
             segs.append(dict(source_id=d["source_id"], text_sha256=d["text_sha256"], category=d["category"],
-                             kind=d["kind"], group=name, doc_index=d["doc_index"], token_offset=a, window_offset=o, tokens=n))
+                             kind=d["kind"], group=name, doc_index=di, segment_id=sid, token_offset=a, window_offset=o, tokens=n))
             cat_tok[d["category"]] = cat_tok.get(d["category"], 0) + n
             o += n
         assert o == C
@@ -163,7 +172,9 @@ def write_group(name, fit_wins, val_wins, C, meta_extra, rng):
                "<|observation|>/<|endoftext|> right after an assistant turn; exclusive, nearer wins, ties -> end",
                packing="docs with boundaries never split (docs > C cut to end right after a boundary, max preceding "
                "context); first-fit-decreasing + exact gap fill with boundary-free filler pieces; no padding; "
-               "attention is document-local per window segment, positions reset per segment", **meta_extra)
+               "attention is local to each window segment and positions reset per segment; segments.npy holds segment_id "
+               "(one per contiguous doc piece; = doc_index, or doc_index + k*2^20 for the k-th further non-contiguous piece "
+               "of the same doc in that window); windows.jsonl carries doc_index and segment_id per piece", **meta_extra)
     json.dump(man, open(f"{out}/manifest.json", "w"), indent=1)
     print(name, json.dumps({k: v for k, v in man.items() if "sha" not in k and k not in ("packing", "boundary_semantics")}))
     return man
@@ -180,8 +191,12 @@ def load_docs(path, start_index=0):
     return docs
 
 
-def split_val(docs, rng):
-    val = set(rng.sample(range(len(docs)), max(1, round(VAL_FRAC * len(docs)))))
+def split_val(docs, rng, force=()):
+    force = set(force)
+    forced = {i for i, d in enumerate(docs) if d["source_id"] in force}
+    rest = [i for i in range(len(docs)) if i not in forced]
+    k = max(0, round(VAL_FRAC * len(docs)) - len(forced))
+    val = forced | set(rng.sample(rest, k))
     return [d for i, d in enumerate(docs) if i not in val], [d for i, d in enumerate(docs) if i in val]
 
 
@@ -195,6 +210,8 @@ def build_group(docs, C, rng, extra_fillers=None):
 def main_corpus():
     rng = random.Random(SEED)
     docs = load_docs(CONV)
+    dc = json.load(open(DECONTAM)); excl = dc["exclude"]; force = dc["force_val"]
+    docs = [d for d in docs if d["source_id"] not in excl]
     long_docs = [d for d in docs if d["th"]]
     short_docs = [d for d in docs if not d["th"]]
     rng.shuffle(short_docs)
@@ -205,8 +222,8 @@ def main_corpus():
             reserve.append(d); n += len(d["ids"])
     rset = {d["doc_index"] for d in reserve}
     short_docs = [d for d in short_docs if d["doc_index"] not in rset]
-    lf, lv = split_val(long_docs, rng)
-    sf, sv = split_val(short_docs, rng)
+    lf, lv = split_val(long_docs, rng, force)
+    sf, sv = split_val(short_docs, rng, force)
     # c2048: its own fillers, then raw docs borrowed (whole) from the c512 pool, taken from the end of the order
     raw_f = [d for d in sf if d["kind"] == "raw"]; raw_v = [d for d in sv if d["kind"] == "raw"]
     groups = {}
@@ -240,7 +257,8 @@ def main_corpus():
     for g, C in (("c2048", 2048), ("c512", 512)):
         (fw, fd), (vw, vd) = groups[(g, "fit")], groups[(g, "val")]
         mans[g] = write_group(g, fw, vw, C, dict(dropped_tail_tokens=dict(fit=fd, val=vd),
-                                                  source_corpus="orbit-duet runs/glm53_training_15m_v2 (converted)"), rng)
+                                                  source_corpus="orbit-duet runs/glm53_training_15m_v2 (converted)",
+                                                  decontamination=dict(excluded_docs=len(excl), rule="docs in orbit windows >= 28784 (thread-18 nq-tail) dropped; >=5% 13-gram overlap with thread-18 eval texts or GPQA-diamond dropped; docs in orbit windows 28656..28783 (thread-19 val) forced into val")), rng)
     json.dump(dict(reserve_doc_indices=sorted(rset), reserve_tokens=n), open(f"{ROOT}/reserve_raw.json", "w"))
     return mans
 

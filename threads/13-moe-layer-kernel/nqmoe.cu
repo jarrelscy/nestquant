@@ -16,7 +16,8 @@
 //   base : uint4 per record: 64 weights x 2 bit (K=2 ring stream, 128 bits)                     [nrec = S*C*32]
 //   P4   : residual records of RBITS = 4*(16*KA + popc(MASK)) bits (K = RBITS/64 per weight), stored as
 //          sub-arrays uint4[n4] | uint2 | uint | ushort (n4 = RBITS/128, then the 64/32/16-bit remainder, each
-//          sub-array present iff that bit of RBITS%128 is set), each sub-array contiguous over all nrec_r records
+//          sub-array present iff that bit of RBITS%128 is set), each sub-array contiguous over all nrec_r records,
+//          then (if RBITS % 16 != 0) a tail sub-array of T = RBITS%16 bits per record, bit-packed (record r at bit r*T)
 //   d4   : uint32 block word Mb | N << 8 per 16x128 unit (1 <= Mb <= 255, Mb + N <= 257; delta = N/Mb) -> strip*C + c
 //   level 2 = base; level 4 = base + P4 (int-fold, see nqdec).  Optional mask mode (flags != null): uint64 per strip,
 //   bit c = chunk c is refined; P4/d4 are then compact over the nm flagged chunks of each strip
@@ -25,7 +26,7 @@
 // Device table: int64 [E][16]
 //   [0] level (0, 2, 4)  [1..4] gate|up: base, p4, d4, flags(0 = dense)  [5..8] down: same
 //   [9] signs: half[H su_in | I sv_g | I sv_u | I su_d | H sv_o]
-//   [10] gate|up residual K code, [11] down residual K code (0: K=2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5; codes
+//   [10] gate|up residual K code, [11] down residual K code (0: K=2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5, 6: 1.9375, 7: 2.3125; codes
 //        outside NQ_RK_CODES fall back to code 0)      [12..15] reserved
 #include <cuda_fp16.h>
 #include <stdint.h>
@@ -34,7 +35,7 @@
 #include <tuple>
 #include <torch/extension.h>
 #ifndef NQ_RK_CODES
-#define NQ_RK_CODES 0x7   // residual K codes compiled in (bit c = code c; code 0 always): default K = 2, 1.75, 2.5
+#define NQ_RK_CODES 0xC7  // residual K codes compiled in (bit c = code c; code 0 always): default K = 2, 1.75, 2.5, 1.9375, 2.3125
 #endif
 #include <ATen/cuda/CUDAContext.h>
 
@@ -44,6 +45,7 @@
 //     F = (Mb S(sb) + N S(sr) + 128) >> 8;  A' = fp16(256A / Mb);  C = fp16((N/Mb) K0 + K0 - 1024 A');  Q4 = fp16(A'(1024+F) + C)
 // Residual window pattern per projection (runtime code in the table, compile-time per instantiation):
 //     code 0: K=2   1: K=1.75 (1,0xEEEE)   2: K=2.5 (2,0xAAAA)   3: K=2.25 (2,0x8888)   4: K=3 (3,0)   5: K=1.5 (1,0xAAAA)
+//     6: K=1.9375 (1,0xFFFE)   7: K=2.3125 (2,0x9248)       (step p has KA + ((MASK >> (p%16)) & 1) bits == nq_decode.PATTERNS)
 // Bit-level spec: ref15_spec.py (copied from thread 15, LSB-first ring streams, tail-biting over G lanes).
 namespace nqdec {
 #define MUL1_A 0x1eee1eeeu
@@ -104,6 +106,8 @@ template <> struct RK<2> { static constexpr int KA = 2, M = 0xAAAA; };
 template <> struct RK<3> { static constexpr int KA = 2, M = 0x8888; };
 template <> struct RK<4> { static constexpr int KA = 3, M = 0x0000; };
 template <> struct RK<5> { static constexpr int KA = 1, M = 0xAAAA; };
+template <> struct RK<6> { static constexpr int KA = 1, M = 0xFFFE; };   // K = 1.9375 (T14 pattern-rate, gate|up)
+template <> struct RK<7> { static constexpr int KA = 2, M = 0x9248; };   // K = 2.3125 (T14 pattern-rate, down)
 template <int RC> struct RKB { static constexpr int BITS = 4 * (16 * RK<RC>::KA + popc16(RK<RC>::M)), NW = (BITS + 31) / 32; };
 
 // Planes of one projection of one expert. p4/d4 are indexed densely (every chunk refined) when flags == nullptr,
@@ -122,14 +126,25 @@ __device__ __forceinline__ void load_plane(uint32_t* w, const uint8_t* __restric
     p += nrec * 16 * n4;
     if constexpr (n2) { uint2 v = __ldg((const uint2*)p + rec); w[k++] = v.x; w[k++] = v.y; p += nrec * 8; }
     if constexpr (n1) { w[k++] = __ldg((const uint32_t*)p + rec); p += nrec * 4; }
-    if constexpr (nh) { w[k++] = __ldg((const unsigned short*)p + rec); }
+    if constexpr (nh) { w[k++] = __ldg((const unsigned short*)p + rec); p += nrec * 2; }
+    // tail: BITS % 16 bits (multiple of 4) per record, bit-packed over records (record rec at bit rec*T)
+    constexpr int T = BITS % 16;
+    if constexpr (T)
+    {
+        const size_t b = rec * T; const uint32_t* q = (const uint32_t*)p + (b >> 5); const int sh = b & 31;
+        uint32_t v = __ldg(q) >> sh;
+        if constexpr (32 % T) { if (sh + T > 32) v |= __ldg(q + 1) << (32 - sh); }
+        v &= (1u << T) - 1u;
+        if constexpr (((BITS - T) & 31) == 16) w[k - 1] |= v << 16; else w[k++] = v;
+    }
 }
 // ring wrap: stream bits [BITS, BITS+32) = ring neighbour's first word
 template <int BITS, int NW>
 __device__ __forceinline__ void ext_words(uint32_t* w, uint32_t nb)
 {
-    if constexpr (BITS % 32 == 0) { w[NW] = nb; w[NW + 1] = 0; }
-    else { w[NW - 1] = (w[NW - 1] & 0xFFFFu) | (nb << 16); w[NW] = nb >> 16; w[NW + 1] = 0; }
+    constexpr int T = BITS % 32;
+    if constexpr (T == 0) { w[NW] = nb; w[NW + 1] = 0; }
+    else { w[NW - 1] = (w[NW - 1] & ((1u << T) - 1u)) | (nb << T); w[NW] = nb >> (32 - T); w[NW + 1] = 0; }
 }
 
 // LV: 2 = base only, 4 = base + P4 on every chunk, 5 = base + P4 on flagged chunks (mask mode)
@@ -461,6 +476,12 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
 #endif
 #if NQ_RK_CODES & 32
         case 5: LV45(5); break;
+#endif
+#if NQ_RK_CODES & 64
+        case 6: LV45(6); break;
+#endif
+#if NQ_RK_CODES & 128
+        case 7: LV45(7); break;
 #endif
         default: LV45(0); break;
     }

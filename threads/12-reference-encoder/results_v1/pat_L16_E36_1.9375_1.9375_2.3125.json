@@ -1,0 +1,71 @@
+{
+ "Ks": [
+  1.9375,
+  1.9375,
+  2.3125
+ ],
+ "rate": 4.084635416666667,
+ "time": 676.9288773536682,
+ "eval": {
+  "pat/L4": {
+   "all/forced": 9.107,
+   "all/routed": 8.801,
+   "control/forced": 8.763,
+   "control/routed": 8.35,
+   "ood/forced": 9.637,
+   "ood/routed": 9.799
+  },
+  "pat/L2": {
+   "all/forced": 35.273,
+   "all/routed": 34.419,
+   "control/forced": 34.184,
+   "control/routed": 33.118,
+   "ood/forced": 36.967,
+   "ood/routed": 37.351
+  }
+ },
+ "info": {
+  "gate": {
+   "bits": {
+    "2": 2.0143229166666665,
+    "4": 3.9596354166666665,
+    "p4_only": 1.9557291666666667,
+    "artifact": 3.9700520833333335
+   },
+   "stream_mismatch": 0,
+   "L2_equal_canonical": true,
+   "bitexact": {
+    "2": true,
+    "4": true
+   }
+  },
+  "up": {
+   "bits": {
+    "2": 2.0143229166666665,
+    "4": 3.9596354166666665,
+    "p4_only": 1.9557291666666667,
+    "artifact": 3.9700520833333335
+   },
+   "stream_mismatch": 0,
+   "L2_equal_canonical": true,
+   "bitexact": {
+    "2": true,
+    "4": true
+   }
+  },
+  "down": {
+   "bits": {
+    "2": 2.0143229166666665,
+    "4": 4.334635416666667,
+    "p4_only": 2.3307291666666665,
+    "artifact": 4.345052083333333
+   },
+   "stream_mismatch": 0,
+   "L2_equal_canonical": true,
+   "bitexact": {
+    "2": true,
+    "4": true
+   }
+  }
+ }
+}

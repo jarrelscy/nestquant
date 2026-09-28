@@ -7,19 +7,19 @@ TBL_W=16
 A_=float(np.array([0x1eee],np.uint16).view(np.float16)[0]);B_=float(np.array([0xc931],np.uint16).view(np.float16)[0])
 
 # residual window patterns (table code -> (KA, MASK)); LSB-first period-16 fractional steps (thread 15)
-RKP={0:(2,0),1:(1,0xEEEE),2:(2,0xAAAA),3:(2,0x8888),4:(3,0),5:(1,0xAAAA)}
-RK_OF={2:0,1.75:1,2.5:2,2.25:3,3:4,1.5:5}
+RKP={0:(2,0),1:(1,0xEEEE),2:(2,0xAAAA),3:(2,0x8888),4:(3,0),5:(1,0xAAAA),6:(1,0xFFFE),7:(2,0x9248)}
+RK_OF={2:0,1.75:1,2.5:2,2.25:3,3:4,1.5:5,1.9375:6,2.3125:7}
 popc=lambda m:bin(m).count('1')
 def rbits(rk):KA,M=RKP[rk];return 4*(16*KA+popc(M))
 def step_off(p,KA,MASK):
     per=[sum(KA+((MASK>>i)&1) for i in range(r)) for r in range(16)]
     p=torch.as_tensor(p);return (p>>4)*(16*KA+popc(MASK))+torch.tensor(per,device=p.device)[p&15]
-def split_bits(bits):n4=bits//128;r=bits%128;return n4,r//64,(r%64)//32,(r%32)//16
+def split_bits(bits):n4=bits//128;r=bits%128;return n4,r//64,(r%64)//32,(r%32)//16,bits%16   # + tail bits T
 
 def proj_sizes(N,K,nm=None,rk=0):
     """bytes per plane (flags: int64 per strip). nm=None: dense P4; else nm flagged chunks per strip."""
     S,C=N//16,K//128;R=C if nm is None else nm
-    return dict(S=S,C=C,nm=nm,rk=rk,base=S*C*32*16,p4=S*R*32*rbits(rk)//8,d4=S*R*4,flags=0 if nm is None else S*8,nrec_r=S*R*32)
+    return dict(S=S,C=C,nm=nm,rk=rk,base=S*C*32*16,p4=S*R*32*rbits(rk)//8+(4 if rbits(rk)%16 else 0),d4=S*R*4,flags=0 if nm is None else S*8,nrec_r=S*R*32)
 
 def make_flags(S,C,nm,gen,grp=8):
     """nm flagged chunks per strip; identical across each group of `grp` strips (128x128 block granularity)."""
@@ -31,13 +31,17 @@ def make_flags(S,C,nm,gen,grp=8):
 
 def pack_words(w,bits):
     """w [nrec, NW] int64 (uint32 values) -> int32 tensor of the sub-array layout (uint4 x n4 | uint2 | uint | ushort)."""
-    n4,n2,n1,nh=split_bits(bits);parts=[];k=0
+    n4,n2,n1,nh,T=split_bits(bits);parts=[];k=0
     def as_bytes(t,nb):                                   # int64 values -> little-endian bytes, nb bytes each
         return torch.stack([(t>>(8*i))&255 for i in range(nb)],-1).to(torch.uint8).reshape(-1)
     if n4:parts.append(as_bytes(w[:,:4*n4],4));k=4*n4
     if n2:parts.append(as_bytes(w[:,k:k+2],4));k+=2
     if n1:parts.append(as_bytes(w[:,k],4));k+=1
     if nh:parts.append(as_bytes(w[:,k]&0xFFFF,2))
+    if T:                                                 # tail: T bits per record, bit-packed over records (+4 B pad)
+        A=bits-T;t=(w[:,A//32]>>(A%32))&((1<<T)-1)
+        b=((t[:,None]>>torch.arange(T))&1).reshape(-1);b=torch.cat([b,torch.zeros(32,dtype=b.dtype)])
+        b=b[:b.numel()//8*8].view(-1,8);parts.append((b<<torch.arange(8)).sum(1).to(torch.uint8))
     return torch.cat(parts).view(torch.int32)
 
 MB_LIST=None
@@ -58,7 +62,7 @@ class Proj:
         ri=lambda n:torch.randint(-2**31,2**31-1,(n,),generator=gen,dtype=torch.int32)
         s.base=ri(S*C*32*4)
         w=torch.randint(0,2**32,(nr,nw),generator=gen,dtype=torch.int64)
-        if bits%32:w[:,-1]&=0xFFFF
+        if bits%32:w[:,-1]&=(1<<(bits%32))-1
         s.p4w=w;s.p4=pack_words(w,bits)
         nb=S*R
         if mbn=='rand':

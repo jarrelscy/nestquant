@@ -23,6 +23,8 @@ import torch
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import nq_decode as D
+import nq_patvit as PV
+PV.install()
 
 H05 = D.H05
 import harness as h
@@ -42,6 +44,8 @@ def _k(K):
 
 def viterbi(rings, K):
     """rings [R, 256] fp32 (Viterbi step order) -> 16-bit states [R, 256] (Viterbi order)."""
+    if PV.is_pat(K):                                    # pattern rates (T14): torch Viterbi, same state convention
+        return PV.patq(rings, K)[1].long() & 0xFFFF
     _, st = _Qm().quantize_tiles(rings.float().contiguous(), {"K": _k(K), "mul1": True})
     return st.long() & 0xFFFF
 
@@ -123,7 +127,7 @@ def ldl_blocks(Hr, b, sigma):
 
 
 @torch.no_grad()
-def prep(W, H, count, sigma, seed=91426, G=None, sigma_out=0.03, dev="cuda"):
+def prep(W, H, count, sigma, seed=91426, G=None, sigma_out=0.03, dev="cuda", extra_ks=()):
     """Mirror of harness.quantize_exl3_like preprocessing (same RNG order, same numerics)."""
     Qm = _Qm()
     weight = W.to(dev, torch.float32).T.contiguous()
@@ -157,7 +161,8 @@ def prep(W, H, count, sigma, seed=91426, G=None, sigma_out=0.03, dev="cuda"):
     q = h.ExtTileQuantizer("mul1")
     samp = Qm.sample_scale_tiles(weight, 3)
     gs, _ = h._g_scale_search(samp * Qm.ldlq_drift(2), 2, q)
-    gsr = {K: h._g_scale_search(samp * Qm.ldlq_drift(_k(K)), _k(K), q)[0] for K in RES_KS}
+    gsr = {K: h._g_scale_search(samp * Qm.ldlq_drift(_k(K)), _k(K), PV.patq if PV.is_pat(K) else q)[0]
+           for K in tuple(RES_KS) + tuple(K for K in extra_ks if K not in RES_KS)}
     weight *= gs
     su /= gs
     Lk, Din = ldl_blocks(Hm, 128, sigma)
@@ -443,8 +448,9 @@ def free(P):
 # ================================================================================================ production API
 PROJ = ("gate", "up", "down")
 PROD = dict(base_var="sign", lam=0.3, inner=2, K_hi=2.5, sigma={"gate": 0.5, "up": 0.5, "down": 1.0},
-            axis={"gate": "n", "up": "n", "down": "k"}, units_per_shard=768)
-DEFAULT_RATE = 4.09375          # L4 bpw incl. all metadata; see REPORT/final message for the selection rule
+            axis={"gate": "n", "up": "n", "down": "k"}, units_per_shard=768,
+            res_K={"gate": 1.9375, "up": 1.9375, "down": 2.3125})   # PRODUCTION DEFAULT (T14 down-heavy pattern, 4.0846 bpw)
+DEFAULT_RATE = 4.15625          # positional-K2.5 fallback (--rate): smallest rate passing the 9-expert rule
 
 
 def rate_rule(ref_bits, rate, K_hi=PROD["K_hi"]):
@@ -457,22 +463,27 @@ def rate_rule(ref_bits, rate, K_hi=PROD["K_hi"]):
 
 
 @torch.no_grad()
-def encode_expert(Ws, HG, rate=DEFAULT_RATE, count=1, sigma=None, sigma_out=0.03, lam=PROD["lam"],
-                  base_var=PROD["base_var"], inner=PROD["inner"], check=True, canonical_base=True):
+def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PROD["lam"],
+                  base_var=PROD["base_var"], inner=PROD["inner"], check=True, canonical_base=True, res_K=None):
     """One expert -> (artifact {gate, up, down: planes, meta}, dense {2, 4: [g, u, d] fp32 [out, in]}).
     Ws: [Wg, Wu, Wd] teacher [out, in]; HG: thread-12 glm_H format {"H": [Hx, Hx, Ha], "G": [Gg, Gu, None]}
     (e.g. threads/19-full-capture/nq19_load.Capture().glm_H(L, E)).
     canonical_base: fit the base once against the uniform-K2 residual (rate-independent base bytes), then re-fit
-    only the P4 plane at `rate` on that frozen base (2 passes). False = single joint pass at `rate`."""
+    only the P4 plane at `rate` on that frozen base (2 passes). False = single joint pass at `rate`.
+    res_K: optional {proj: K} uniform residual pattern rate per projection (T14 down-heavy option, e.g. gate/up 1.9375,
+    down 2.3125 = 4.0846 bpw; gate/up 2, down 2.3125 = 4.1263); overrides `rate` (meta rate = resulting bpw)."""
     sigma = sigma or PROD["sigma"]
+    if rate is None and res_K is None:
+        res_K = PROD["res_K"]
     art, dense, info = {}, {2: [], 4: []}, {}
     for pi, pn in enumerate(PROJ):
-        P = prep(Ws[pi], HG["H"][pi], count, sigma[pn], G=HG["G"][pi], sigma_out=sigma_out)
+        P = prep(Ws[pi], HG["H"][pi], count, sigma[pn], G=HG["G"][pi], sigma_out=sigma_out,
+                 extra_ks=(float(res_K[pn]),) if res_K else ())
         ax = PROD["axis"][pn]
         nw = P["k"] * P["n"]
         ref_bits = 4 + 16 / 2048 + 16 * (P["k"] + P["n"]) / nw + (D.variant_bits(base_var) / 256 if base_var else 0)
-        rule = rate_rule(ref_bits, rate)
-        if canonical_base and rule["kind"] != "uniform":
+        rule = dict(kind="uniform", K=float(res_K[pn])) if res_K else rate_rule(ref_bits, rate)
+        if canonical_base and not (rule["kind"] == "uniform" and float(rule["K"]) == 2.0):
             _, dn0, _, enc0, sc0 = encode_projection(P, shard_axis=ax, lam=lam, base_var=base_var, inner=inner)
             planes, dn, inf, enc, _ = encode_projection(P, shard_axis=ax, lam=lam, base_var=base_var, inner=inner,
                                                         base=frozen_base(enc0), base_scales=sc0[2], res_rule=rule)
@@ -492,8 +503,10 @@ def encode_expert(Ws, HG, rate=DEFAULT_RATE, count=1, sigma=None, sigma_out=0.03
         info[pn] = {k: v for k, v in inf.items() if k in ("bits", "proxy_rot", "time", "bitexact", "L2_equal_canonical",
                                                          "stream_mismatch", "K_frac")}
         del enc; free(P)
+    if res_K:
+        rate = sum(info[p]["bits"][4] for p in PROJ) / len(PROJ)       # equal-size projections
     art["meta"] = dict(format="nestquant-v1", rate=rate, base_var=base_var, lam=lam, inner=inner, sigma=sigma,
-                       canonical_base=canonical_base, info=info)
+                       canonical_base=canonical_base, res_K=dict(res_K) if res_K else None, info=info)
     return art, dense
 
 
@@ -501,10 +514,13 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(description="NestQuant v1: encode one GLM expert into a base + P4 artifact")
     ap.add_argument("--layer", type=int, required=True); ap.add_argument("--expert", type=int, required=True)
-    ap.add_argument("--rate", type=float, default=DEFAULT_RATE, help="level-4 bpw incl. metadata")
+    ap.add_argument("--rate", type=float, help="positional-K2.5 level-4 bpw incl. metadata (e.g. 4.15625); default = "
+                                               "PROD res_K pattern (1.9375/1.9375/2.3125 = 4.0846 bpw)")
     ap.add_argument("--stats", choices=["t19", "t12"], default="t19",
                     help="t19 = threads/19 full-model capture (nq19_load.Capture().glm_H); t12 = thread-08 H from the "
                          "orbit training sample (nq_run.glm_H)")
+    ap.add_argument("--res-k", help="pattern residual per projection 'gate,up,down' (default PROD res_K 1.9375,1.9375,2.3125)")
+    ap.add_argument("--bnd", default="50", help="t19 boundary-window weight (nq_bnd.parse_bnd; '1' = old behaviour)")
     ap.add_argument("--out", required=True); ap.add_argument("--dense-out", help="also save internal dense {2,4}")
     ap.add_argument("--single-pass", action="store_true", help="joint fit at --rate (base not rate-canonical)")
     a = ap.parse_args()
@@ -514,11 +530,13 @@ def main():
     if a.stats == "t19":
         sys.path.insert(0, "/home/coder/git/nestquant/threads/19-full-capture")
         import nq19_load
-        HG = nq19_load.Capture().glm_H(a.layer, a.expert)
+        import nq_bnd
+        HG = nq_bnd.glm_H_bnd(nq19_load.Capture(), a.layer, a.expert, nq_bnd.parse_bnd(a.bnd))
     else:
         import nq_run
         HG = nq_run.glm_H(data, a.layer, a.expert)
-    art, dense = encode_expert(data.teacher, HG, rate=a.rate, canonical_base=not a.single_pass)
+    rk = dict(zip(PROJ, map(float, a.res_k.split(",")))) if a.res_k else None
+    art, dense = encode_expert(data.teacher, HG, rate=a.rate, canonical_base=not a.single_pass, res_K=rk)
     torch.save(art, a.out)
     if a.dense_out:
         torch.save(dense, a.dense_out)

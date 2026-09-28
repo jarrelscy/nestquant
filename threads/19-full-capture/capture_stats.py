@@ -28,6 +28,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+import bnd19
 import nq19
 from nq19 import D, F as FF, NEXP, OUT, npk, pack
 
@@ -89,6 +90,11 @@ class Teacher:
         gu = torch.cat([g, u])                                   # [4096, 6144] fp32 teacher
         self.hi = gu.bfloat16()                                  # = pilot's g.bfloat16() / u.bfloat16()
         self.lo = (gu - self.hi.float()).bfloat16()
+        self.down = d.bfloat16()
+
+    def ynorm(self, h):
+        """||expert output|| per row (bf16 down GEMM of the bf16 h, fp32 norm): REAP salience term."""
+        return torch.mm(h, self.down.T).float().norm(dim=1)
 
     def fwd(self, xb, accurate):
         """xb bf16 [m, 6144] -> h (bf16 SwiGLU with bf16 teacher), cg^2, cu^2 (fp32).
@@ -102,17 +108,42 @@ class Teacher:
         return _ewc(yb, gx, ux)
 
 
-def prefetch(X, rows_list, out_q, stop):
-    """Background gather of routed rows (host) into pinned chunks."""
-    for e, rows in rows_list:
+def prefetch(rows_list, out_q, stop):
+    """Background gather of routed rows (host) into pinned chunks. rows_list: [(e, s, X_s, rows)]."""
+    for e, si, X, rows in rows_list:
         for b in range(0, len(rows), ROWS):
             if stop.is_set():
                 return
             r = rows[b:b + ROWS]
             buf = torch.empty(len(r), D, dtype=torch.bfloat16, pin_memory=True)
             torch.index_select(X, 0, r, out=buf)
-            out_q.put((e, b, buf))
+            out_q.put((e, si, b, buf))
     out_q.put(None)
+
+
+def load_shard(acts, max_rows=None):
+    meta_in = json.load(open(f"{acts}/done.json"))
+    proto = meta_in["protocol"]
+    shard = dict(fit_start=proto.get("fit_start", 0), fit_windows=proto["fit_windows"], acts=acts)
+    k = proto.get("shard_id", shard["fit_start"] // nq19.SHARD_WINDOWS)
+    T = meta_in["rows"] if max_rows is None else max_rows
+    X = torch.empty(T, D, dtype=torch.bfloat16)
+    with open(f"{acts}/x.bf16", "rb") as f:
+        mv = memoryview(X.view(torch.uint8).numpy().reshape(-1))
+        if f.readinto(mv) != T * D * 2:
+            raise ValueError("short x.bf16")
+    ids = torch.from_numpy(np.fromfile(f"{acts}/ids.u8", dtype=np.uint8, count=T * 8).reshape(T, 8)).long()
+    p = torch.from_numpy(np.fromfile(f"{acts}/p.f32", dtype=np.float32, count=T * 8).reshape(T, 8))
+    flat = ids.reshape(-1)
+    order = torch.argsort(flat, stable=True)
+    cnt = torch.bincount(flat, minlength=NEXP)
+    n_ctx = T // nq19.CTX_FRACTION
+    ctx = torch.randperm(T, generator=torch.Generator().manual_seed(nq19.CTX_SEED + k))[:n_ctx].clone()
+    n_dc = min(n_ctx, NDC)
+    shard.update(shard=k, T=T, n_ctx=n_ctx, n_dc=n_dc, dc_scale=n_ctx / n_dc, ctx_seed=nq19.CTX_SEED + k)
+    shard["corpus"] = proto["corpus"]
+    return dict(meta=shard, X=X, rows_all=order // 8, p_all=p.reshape(-1)[order], offs=[0] + cnt.cumsum(0).tolist(), ctx=ctx,
+                ids=ids, p=p)
 
 
 class RowIO:
@@ -225,60 +256,53 @@ def fsync_dir(d):
 
 
 @torch.no_grad()
-def run_job(L, acts, sd, src, cache, max_rows=None):
-    """Add shard `acts` (stage-1 acts/L{L}) into cumulative stats directory sd.  Caller holds the layer lock."""
+def run_job(L, acts_list, sd, src, cache, max_rows=None):
+    """Add the shards `acts_list` (stage-1 acts/L{L} dirs) into cumulative stats directory sd (one read of the
+    previous version, one write of the new one).  Caller holds the layer lock."""
     t0 = time.time()
-    meta_in = json.load(open(f"{acts}/done.json"))
-    proto = meta_in["protocol"]
-    shard = dict(fit_start=proto.get("fit_start", 0), fit_windows=proto["fit_windows"], acts=acts)
-    k = shard["fit_start"] // nq19.SHARD_WINDOWS
-    shard["shard"] = k
+    if isinstance(acts_list, str):
+        acts_list = [acts_list]
     pd = current(sd)
     prev = json.load(open(f"{pd}/meta.json")) if pd else None
-    if prev and any(s["fit_start"] == shard["fit_start"] for s in prev["shards"]):
+    have = {s_["fit_start"] for s_ in prev["shards"]} if prev else set()
+    acts_list = [a_ for a_ in acts_list
+                 if json.load(open(f"{a_}/done.json"))["protocol"].get("fit_start", 0) not in have]
+    if not acts_list:
         return prev                                              # already merged
-    T = meta_in["rows"] if max_rows is None else max_rows
-    nd = f"{sd}.v{len(prev['shards']) + 1 if prev else 1}"
+    nd = f"{sd}.v{len(have) + len(acts_list)}"
     shutil.rmtree(nd, ignore_errors=True); os.makedirs(nd)
     tim = {}
-    # ---- host activations
-    X = torch.empty(T, D, dtype=torch.bfloat16)
-    with open(f"{acts}/x.bf16", "rb") as f:
-        mv = memoryview(X.view(torch.uint8).numpy().reshape(-1))
-        if f.readinto(mv) != T * D * 2:
-            raise ValueError("short x.bf16")
-    ids = torch.from_numpy(np.fromfile(f"{acts}/ids.u8", dtype=np.uint8, count=T * 8).reshape(T, 8)).long()
-    p = torch.from_numpy(np.fromfile(f"{acts}/p.f32", dtype=np.float32, count=T * 8).reshape(T, 8))
-    flat = ids.reshape(-1)
-    order = torch.argsort(flat, stable=True)
-    rows_all = order // 8; p_all = p.reshape(-1)[order]
-    cnt = torch.bincount(flat, minlength=NEXP); offs = [0] + cnt.cumsum(0).tolist()
+    SH = [load_shard(a_, max_rows) for a_ in acts_list]
+    if pd and not os.path.exists(f"{pd}/sal.npy"):
+        raise RuntimeError(f"{pd} has no sal.npy: run capture_bnd.py backfill before merging more shards")
+    for S_ in SH:                                                # boundary rows (immutable per shard, layer)
+        bnd19.shard_rows(S_, S_["meta"]["corpus"])
+        S_["meta"]["bnd_rows"] = bnd19.write_rows(S_, L, os.path.join(os.path.dirname(os.path.dirname(sd)), "bnd_rows"))
+    sal = torch.zeros(len(SH), NEXP, bnd19.NCAT, len(bnd19.SAL_COLS), dtype=torch.float64, device="cuda")
     tim["read"] = time.time() - t0
-    n_ctx = T // nq19.CTX_FRACTION
-    ctx = torch.randperm(T, generator=torch.Generator().manual_seed(nq19.CTX_SEED + k))[:n_ctx].clone()
-    n_dc = min(n_ctx, NDC); dc_scale = n_ctx / n_dc
-    shard.update(T=T, n_ctx=n_ctx, n_dc=n_dc, dc_scale=dc_scale, ctx_seed=nq19.CTX_SEED + k)
     cache.load(L)
     gd = np.zeros((NEXP, 6, FF), np.float64)
     sc = np.zeros((NEXP, 4), np.float64)
     # ---- per-layer grams: context rows and all fit rows
     tc = time.time()
     A = torch.zeros(D, D, device="cuda")
-    for b in range(0, n_ctx, ROWS):
-        gram_(A, X[ctx[b:b + ROWS]].cuda())
+    for S_ in SH:
+        for b in range(0, S_["meta"]["n_ctx"], ROWS):
+            gram_(A, S_["X"][S_["ctx"][b:b + ROWS]].cuda())
     C_ctx = pack(A).cpu().numpy()
     A.zero_()
-    for b in range(0, T, ROWS):
-        gram_(A, X[b:b + ROWS].cuda())
+    for S_ in SH:
+        for b in range(0, S_["meta"]["T"], ROWS):
+            gram_(A, S_["X"][b:b + ROWS].cuda())
     C_all = pack(A).cpu().numpy()
     del A
-    Xc = X[ctx[:n_dc]].cuda()                                    # Dc / ctx-g rows, resident
+    Xc = [S_["X"][S_["ctx"][:S_["meta"]["n_dc"]]].cuda() for S_ in SH]      # Dc / ctx-g rows, resident
     tim["layer_grams"] = time.time() - tc
     # ---- experts
     io = RowIO(nd, pd)
     q = queue.Queue(maxsize=3); stop = threading.Event()
-    rl = [(e, rows_all[offs[e]:offs[e + 1]]) for e in range(NEXP)]
-    th = threading.Thread(target=prefetch, args=(X, rl, q, stop), daemon=True); th.start()
+    rl = [(e, si, S_["X"], S_["rows_all"][S_["offs"][e]:S_["offs"][e + 1]]) for e in range(NEXP) for si, S_ in enumerate(SH)]
+    th = threading.Thread(target=prefetch, args=(rl, q, stop), daemon=True); th.start()
     tr = tctx = 0.
     item = q.get()
     for e in range(NEXP):
@@ -287,29 +311,37 @@ def run_job(L, acts, sd, src, cache, max_rows=None):
         A2 = torch.zeros(D, D, device="cuda"); A0 = torch.zeros(D, D, device="cuda")
         Dm = [torch.zeros(FF, FF, device="cuda") for _ in range(3)]
         g = torch.zeros(6, FF, device="cuda", dtype=torch.float64)
-        pe = p_all[offs[e]:offs[e + 1]].double()
+        pe = torch.cat([S_["p_all"][S_["offs"][e]:S_["offs"][e + 1]] for S_ in SH]).double()
         sc[e] = [len(pe), pe.sum(), pe.square().sum(), pe.pow(4).sum()]
         while item is not None and item[0] == e:
-            _, b, buf = item
+            _, si, b, buf = item
+            S_ = SH[si]
             xb = buf.cuda(non_blocking=True)
-            pp = p_all[offs[e] + b:offs[e] + b + len(xb)].cuda()
+            pp = S_["p_all"][S_["offs"][e] + b:S_["offs"][e] + b + len(xb)].cuda()
             p2 = pp.square()
             gram_(A0, xb); wgram_(A2, xb, p2[:, None])
             h, cg2, cu2 = te.fwd(xb, accurate=True)
             gram_(Dm[1], h); wgram_(Dm[0], h, p2[:, None])
+            rr = S_["rows_all"][S_["offs"][e] + b:S_["offs"][e] + b + len(xb)]
+            bnd19.sal_add(sal[si], e, pp, te.ynorm(h), S_["cat"][rr].long().cuda())
             g[0] += (p2 @ cg2).double(); g[1] += cg2.sum(0).double()
             g[2] += (p2 @ cu2).double(); g[3] += cu2.sum(0).double()
             del xb, h, cg2, cu2
             item = q.get()
         torch.cuda.synchronize(); tb = time.time(); tr += tb - ta
-        for b in range(0, n_dc, ROWS):
-            h, cg2, cu2 = te.fwd(Xc[b:b + ROWS], accurate=False)
-            gram_(Dm[2], h)
-            g[4] += cg2.sum(0).double(); g[5] += cu2.sum(0).double()
-            del h, cg2, cu2
+        for si, S_ in enumerate(SH):
+            Dt = torch.zeros(FF, FF, device="cuda"); gt = torch.zeros(2, FF, device="cuda", dtype=torch.float64)
+            for b in range(0, S_["meta"]["n_dc"], ROWS):
+                h, cg2, cu2 = te.fwd(Xc[si][b:b + ROWS], accurate=False)
+                gram_(Dt, h)
+                gt[0] += cg2.sum(0).double(); gt[1] += cu2.sum(0).double()
+                del h, cg2, cu2
+            sc_ = S_["meta"]["dc_scale"]
+            if sc_ != 1:
+                Dt *= sc_; gt *= sc_
+            Dm[2] += Dt; g[4:] += gt
+            del Dt, gt
         del te
-        if dc_scale != 1:
-            Dm[2] *= dc_scale; g[4:] *= dc_scale
         new = dict(A2=pack(A2), A0=pack(A0), D2=pack(Dm[0]), D0=pack(Dm[1]), Dc=pack(Dm[2]))
         del A2, A0, Dm
         old = io.prev(e)
@@ -322,16 +354,21 @@ def run_job(L, acts, sd, src, cache, max_rows=None):
         gd[e] = g.cpu().numpy()
         tctx += time.time() - tb
         if e % 64 == 0:
-            print(json.dumps(dict(layer=L, shard=k, expert=e, n=int(sc[e, 0]), routed_s=round(tr, 1), ctx_s=round(tctx, 1),
-                                  elapsed=round(time.time() - t0, 1))), flush=True)
+            print(json.dumps(dict(layer=L, shards=[S_["meta"]["shard"] for S_ in SH], expert=e, n=int(sc[e, 0]),
+                                  routed_s=round(tr, 1), ctx_s=round(tctx, 1), elapsed=round(time.time() - t0, 1))), flush=True)
     stop.set(); th.join(timeout=5)
     io.close()
-    shards = (prev["shards"] if prev else []) + [shard]
+    sal = sal.cpu().numpy()
+    for si, S_ in enumerate(SH):
+        np.save(f"{S_['meta']['bnd_rows']}/sal.npy", sal[si])
+    sal = sal.sum(0)
+    shards = (prev["shards"] if prev else []) + [S_["meta"] for S_ in SH]
+    del SH, Xc
     if prev:
         C_ctx += np.load(f"{pd}/C_ctx.npy"); C_all += np.load(f"{pd}/C_all.npy")
-        gd += np.load(f"{pd}/gdiag.npy"); sc += np.load(f"{pd}/scalars.npy")
+        gd += np.load(f"{pd}/gdiag.npy"); sc += np.load(f"{pd}/scalars.npy"); sal += np.load(f"{pd}/sal.npy")
     np.save(f"{nd}/C_ctx.npy", C_ctx); np.save(f"{nd}/C_all.npy", C_all)
-    np.save(f"{nd}/gdiag.npy", gd); np.save(f"{nd}/scalars.npy", sc)
+    np.save(f"{nd}/gdiag.npy", gd); np.save(f"{nd}/scalars.npy", sc); np.save(f"{nd}/sal.npy", sal)
     ess = sc[:, 2] ** 2 / np.maximum(sc[:, 3], 1e-300)
     tim.update(routed=tr, ctx=tctx, total=time.time() - t0)
     meta = dict(schema="nestquant-19-stats-v2", layer=L, shards=shards,
@@ -341,7 +378,9 @@ def run_job(L, acts, sd, src, cache, max_rows=None):
                            A2="sum_routed p^2 x x^T", A0="sum_routed x x^T", D2="sum_routed p^2 h h^T",
                            D0="sum_routed h h^T", Dc="sum_ctx h h^T (per shard: n_dc rows x n_ctx/n_dc)",
                            C_ctx="[npk(6144)] f32: sum_ctx x x^T", C_all="[npk(6144)] f32: sum over all fit rows x x^T",
-                           gdiag="[256, 6, 2048] f64", scalars="[256, 4] f64"),
+                           gdiag="[256, 6, 2048] f64", scalars="[256, 4] f64",
+                           sal=f"[256, {bnd19.NCAT}, {len(bnd19.SAL_COLS)}] f64 salience/usage sums"),
+                sal_categories=bnd19.SAL_CATS, sal_columns=bnd19.SAL_COLS,
                 packing="row-major upper triangle i <= j (nq19.pack / nq19.unpack)",
                 gdiag_rows=["routed sum p^2 cg^2", "routed sum cg^2", "routed sum p^2 cu^2", "routed sum cu^2",
                             "ctx sum cg^2 (bf16 gx/ux)", "ctx sum cu^2 (bf16 gx/ux)"],
@@ -357,13 +396,20 @@ def run_job(L, acts, sd, src, cache, max_rows=None):
     write_json(f"{nd}/meta.json", meta)
     fsync_dir(nd)
     publish(sd, os.path.basename(nd))                                              # readers see old or new, never partial
-    if [s["shard"] for s in shards] == [0]:                      # frozen shard-0 snapshot (never auto-deleted)
+    root = os.path.dirname(os.path.dirname(sd)); c0 = chunk0_ids(root)
+    if {s["shard"] for s in shards} == c0:                       # frozen chunk-0 snapshot (never auto-deleted)
         os.makedirs(os.path.join(os.path.dirname(os.path.dirname(sd)), "stats0"), exist_ok=True)
         publish(os.path.join(os.path.dirname(os.path.dirname(sd)), "stats0", os.path.basename(sd)),
                 os.path.join("..", "stats", os.path.basename(nd)))
-    if pd and not (len(prev["shards"]) == 1 and prev["shards"][0]["shard"] == 0):
+    if pd and {s_["shard"] for s_ in prev["shards"]} != c0:
         shutil.rmtree(pd, ignore_errors=True)                    # superseded (open readers keep their inodes)
     return meta
+
+
+def chunk0_ids(root):
+    """Shards forming the frozen first snapshot (stats0): ROOT/plan.json {"chunk0": [ids]}, default {0}."""
+    p = f"{root}/plan.json"
+    return set(json.load(open(p))["chunk0"]) if os.path.exists(p) else {0}
 
 
 class LayerLock:
@@ -389,8 +435,12 @@ def finish_acts(acts, delete_x):
 def jobs(shards_root, last_layer):
     """(shard, layer, acts dir) ready for merging, in shard-major order (earliest shard first)."""
     out = []
+    hold = f"{os.path.dirname(shards_root)}/HOLD_SHARDS_ABOVE"        # runtime gate: merge only shards <= N
+    top = int(open(hold).read().strip()) if os.path.exists(hold) else 10 ** 9
     for d in sorted(glob.glob(f"{shards_root}/s*")):
         k = int(os.path.basename(d)[1:])
+        if k > top:
+            continue
         for a in glob.glob(f"{d}/acts/L*"):
             L = int(os.path.basename(a)[1:])
             if L <= last_layer and os.path.exists(f"{a}/done.json") and not os.path.exists(f"{a}/merged"):
@@ -405,6 +455,8 @@ def main():
     ap.add_argument("--last-layer", type=int, default=77)
     ap.add_argument("--max-rows", type=int)
     ap.add_argument("--keep-x-shards", default="0", help="shards whose x.bf16 are kept after merging")
+    ap.add_argument("--max-shards", type=int, default=int(os.environ.get("NQ19_MAX_SHARDS_PER_JOB", "2")),
+                    help="shards of one layer merged per job (host RSS ~13 GB each)")
     ap.add_argument("--exit-when-idle", type=int, default=0, help="exit after this many idle seconds (0 = never)")
     a = ap.parse_args()
     nq19.gpu_cap()
@@ -423,17 +475,27 @@ def main():
         did = False
         while free_gb(a.root) < MIN_FREE_GB + 50:
             print(json.dumps(dict(paused="disk", free_gb=round(free_gb(a.root)))), flush=True); time.sleep(120)
-        for k, L, acts in jobs(f"{a.root}/shards", a.last_layer):
+        pending = jobs(f"{a.root}/shards", a.last_layer)
+        for k, L, acts in pending:
             lk = LayerLock(f"{a.root}/stats/L{L}.lock")
             if not lk.try_acquire():
                 os.close(lk.fd); continue
             try:
-                if os.path.exists(f"{acts}/merged"):
+                group = [(k2, a2) for k2, L2, a2 in pending if L2 == L and not os.path.exists(f"{a2}/merged")][:a.max_shards]
+                if not group:
                     continue
-                m = run_job(L, acts, f"{a.root}/stats/L{L}", src, cache)
-                finish_acts(acts, k not in keep)
-                print(json.dumps(dict(layer=L, shard=k, shards=len(m["shards"]), seconds=m["last_job_seconds"],
-                                      ess=m["ess_summary"])), flush=True)
+                c0 = chunk0_ids(a.root)
+                cur = current(f"{a.root}/stats/L{L}")
+                have = {s_["shard"] for s_ in json.load(open(f"{cur}/meta.json"))["shards"]} if cur else set()
+                if not c0 <= have:                           # finish chunk 0 first (frozen stats0 snapshot)
+                    group = [g_ for g_ in group if g_[0] in c0]
+                    if not group:
+                        continue
+                m = run_job(L, [a2 for _, a2 in group], f"{a.root}/stats/L{L}", src, cache)
+                for k2, a2 in group:
+                    finish_acts(a2, k2 not in keep)
+                print(json.dumps(dict(layer=L, merged=[k2 for k2, _ in group], shards=len(m["shards"]),
+                                      seconds=m["last_job_seconds"], ess=m["ess_summary"])), flush=True)
             finally:
                 lk.release()
             did = True

@@ -22,7 +22,7 @@ for w in range(W):
     sp = "fit" if w < split["fit"][1] else "val"
     for s in rows[w]["segments"]:
         o, n = s["window_offset"], s["tokens"]
-        assert (S[w, o:o + n] == s["doc_index"]).all()
+        assert (S[w, o:o + n] == s["segment_id"]).all() and s["segment_id"] % (1 << 20) == s["doc_index"]
         docs[sp].add(s["doc_index"])
         t = T[w, o:o + n]; bt = BT[w, o:o + n]; be = BE[w, o:o + n]
         # d=1 rows must be followed (in-segment) by the boundary token of that kind
@@ -38,6 +38,11 @@ for w in range(W):
         for arr in (bt, be):
             q = np.nonzero(arr > 1)[0]
             assert ((arr[q + 1] == arr[q] - 1) | (arr[q + 1] == 0)).all()
+    # each segment id is one contiguous run in the window
+    ids_here = [s["segment_id"] for s in rows[w]["segments"]]
+    runs = [x for i, x in enumerate(ids_here) if i == 0 or ids_here[i - 1] != x]
+    assert len(runs) == len(set(runs)), w
+    r = S[w]; assert len(np.unique(r)) == 1 + int((r[1:] != r[:-1]).sum()), w
 assert not (docs["fit"] & docs["val"])
 tok = G.tokenizer()
 for w in random.Random(0).sample(range(W), min(200, W)):
