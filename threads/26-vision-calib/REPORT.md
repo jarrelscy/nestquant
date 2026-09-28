@@ -37,3 +37,9 @@ includes the vision salience.
 - The restore procedure is in the README.
 
 Commits: 7a443fa, 904a0ce, and this report.
+
+## Addendum: held-out vision eval loader
+`nq26_eval.expert_data(L, E, rows="valid"|"image"|"text")` returns a harness.ExpertData built on the 33 val windows,
+which hold the 200 held-out samples. The window pad rows are dropped. Documents are split so that harness.evaluate
+reports `all`, `img` and `txt`, plus per-domain results such as `img:mm_ocr`. It was checked on CPU with a stubbed
+error function: L40 has 62,963 rows in total, 51,600 image and 11,363 text.
