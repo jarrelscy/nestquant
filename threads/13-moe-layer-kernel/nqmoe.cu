@@ -27,48 +27,111 @@
 #include <map>
 #include <tuple>
 #include <torch/extension.h>
+#ifndef NQ_RK_CODES
+#define NQ_RK_CODES 0x7   // residual K codes compiled in (bit c = code c; code 0 always): default K = 2, 1.75, 2.5
+#endif
 #include <ATen/cuda/CUDAContext.h>
 
-// ============================== decoder (swappable; from thread 04 nqk2.cu, T2/A4 additive mul1) ==============
+// ============================== decoder (swappable; thread 15 nqk15.cu: greedy-funnel mul1 base + RM_P int-fold residual)
+// Level 2 (base, K=2):   Q2 = fp16(A (1024 + S(sb)) + B)                       (standard mul1, == harness LUT)
+// Level 4 (RM_P, V1):    block word u32 = Mb | N << 8 (1 <= Mb <= 255, Mb + N <= 257), delta = N / Mb
+//     F = (Mb S(sb) + N S(sr) + 128) >> 8;  A' = fp16(256A / Mb);  C = fp16((N/Mb) K0 + K0 - 1024 A');  Q4 = fp16(A'(1024+F) + C)
+// Residual window pattern per projection (runtime code in the table, compile-time per instantiation):
+//     code 0: K=2   1: K=1.75 (1,0xEEEE)   2: K=2.5 (2,0xAAAA)   3: K=2.25 (2,0x8888)   4: K=3 (3,0)   5: K=1.5 (1,0xAAAA)
+// Bit-level spec: ref15_spec.py (copied from thread 15, LSB-first ring streams, tail-biting over G lanes).
 namespace nqdec {
-__device__ __forceinline__ uint32_t wn(const uint32_t* w, int o)
+#define MUL1_A 0x1eee1eeeu
+#define MUL1_B 0xc931c931u
+#define HC 0x83DCD12Du
+__device__ __constant__ float c_rcp[256] = {0.0f, 0x1.0000000000000p+0f, 0x1.0000000000000p-1f, 0x1.5555560000000p-2f, 0x1.0000000000000p-2f, 0x1.99999a0000000p-3f, 0x1.5555560000000p-3f, 0x1.24924a0000000p-3f, 0x1.0000000000000p-3f, 0x1.c71c720000000p-4f, 0x1.99999a0000000p-4f, 0x1.745d180000000p-4f, 0x1.5555560000000p-4f, 0x1.3b13b20000000p-4f, 0x1.24924a0000000p-4f, 0x1.1111120000000p-4f, 0x1.0000000000000p-4f, 0x1.e1e1e20000000p-5f, 0x1.c71c720000000p-5f, 0x1.af286c0000000p-5f, 0x1.99999a0000000p-5f, 0x1.8618620000000p-5f, 0x1.745d180000000p-5f, 0x1.642c860000000p-5f, 0x1.5555560000000p-5f, 0x1.47ae140000000p-5f, 0x1.3b13b20000000p-5f, 0x1.2f684c0000000p-5f, 0x1.24924a0000000p-5f, 0x1.1a7b960000000p-5f, 0x1.1111120000000p-5f, 0x1.0842100000000p-5f, 0x1.0000000000000p-5f, 0x1.f07c200000000p-6f, 0x1.e1e1e20000000p-6f, 0x1.d41d420000000p-6f, 0x1.c71c720000000p-6f, 0x1.bacf920000000p-6f, 0x1.af286c0000000p-6f, 0x1.a41a420000000p-6f, 0x1.99999a0000000p-6f, 0x1.8f9c180000000p-6f, 0x1.8618620000000p-6f, 0x1.7d05f40000000p-6f, 0x1.745d180000000p-6f, 0x1.6c16c20000000p-6f, 0x1.642c860000000p-6f, 0x1.5c98820000000p-6f, 0x1.5555560000000p-6f, 0x1.4e5e0a0000000p-6f, 0x1.47ae140000000p-6f, 0x1.4141420000000p-6f, 0x1.3b13b20000000p-6f, 0x1.3521d00000000p-6f, 0x1.2f684c0000000p-6f, 0x1.29e4120000000p-6f, 0x1.24924a0000000p-6f, 0x1.1f70480000000p-6f, 0x1.1a7b960000000p-6f, 0x1.15b1e60000000p-6f, 0x1.1111120000000p-6f, 0x1.0c97140000000p-6f, 0x1.0842100000000p-6f, 0x1.0410420000000p-6f, 0x1.0000000000000p-6f, 0x1.f81f820000000p-7f, 0x1.f07c200000000p-7f, 0x1.e9131a0000000p-7f, 0x1.e1e1e20000000p-7f, 0x1.dae6080000000p-7f, 0x1.d41d420000000p-7f, 0x1.cd85680000000p-7f, 0x1.c71c720000000p-7f, 0x1.c0e0700000000p-7f, 0x1.bacf920000000p-7f, 0x1.b4e81c0000000p-7f, 0x1.af286c0000000p-7f, 0x1.a98ef60000000p-7f, 0x1.a41a420000000p-7f, 0x1.9ec8ea0000000p-7f, 0x1.99999a0000000p-7f, 0x1.948b100000000p-7f, 0x1.8f9c180000000p-7f, 0x1.8acb900000000p-7f, 0x1.8618620000000p-7f, 0x1.8181820000000p-7f, 0x1.7d05f40000000p-7f, 0x1.78a4c80000000p-7f, 0x1.745d180000000p-7f, 0x1.702e060000000p-7f, 0x1.6c16c20000000p-7f, 0x1.6816820000000p-7f, 0x1.642c860000000p-7f, 0x1.6058160000000p-7f, 0x1.5c98820000000p-7f, 0x1.58ed240000000p-7f, 0x1.5555560000000p-7f, 0x1.51d07e0000000p-7f, 0x1.4e5e0a0000000p-7f, 0x1.4afd6a0000000p-7f, 0x1.47ae140000000p-7f, 0x1.446f860000000p-7f, 0x1.4141420000000p-7f, 0x1.3e22cc0000000p-7f, 0x1.3b13b20000000p-7f, 0x1.3813820000000p-7f, 0x1.3521d00000000p-7f, 0x1.323e340000000p-7f, 0x1.2f684c0000000p-7f, 0x1.2c9fb40000000p-7f, 0x1.29e4120000000p-7f, 0x1.27350c0000000p-7f, 0x1.24924a0000000p-7f, 0x1.21fb780000000p-7f, 0x1.1f70480000000p-7f, 0x1.1cf06a0000000p-7f, 0x1.1a7b960000000p-7f, 0x1.1811820000000p-7f, 0x1.15b1e60000000p-7f, 0x1.135c820000000p-7f, 0x1.1111120000000p-7f, 0x1.0ecf560000000p-7f, 0x1.0c97140000000p-7f, 0x1.0a68100000000p-7f, 0x1.0842100000000p-7f, 0x1.0624de0000000p-7f, 0x1.0410420000000p-7f, 0x1.0204080000000p-7f, 0x1.0000000000000p-7f, 0x1.fc07f00000000p-8f, 0x1.f81f820000000p-8f, 0x1.f4465a0000000p-8f, 0x1.f07c200000000p-8f, 0x1.ecc07c0000000p-8f, 0x1.e9131a0000000p-8f, 0x1.e573ac0000000p-8f, 0x1.e1e1e20000000p-8f, 0x1.de5d6e0000000p-8f, 0x1.dae6080000000p-8f, 0x1.d77b660000000p-8f, 0x1.d41d420000000p-8f, 0x1.d0cb580000000p-8f, 0x1.cd85680000000p-8f, 0x1.ca4b300000000p-8f, 0x1.c71c720000000p-8f, 0x1.c3f8f00000000p-8f, 0x1.c0e0700000000p-8f, 0x1.bdd2b80000000p-8f, 0x1.bacf920000000p-8f, 0x1.b7d6c40000000p-8f, 0x1.b4e81c0000000p-8f, 0x1.b203640000000p-8f, 0x1.af286c0000000p-8f, 0x1.ac57020000000p-8f, 0x1.a98ef60000000p-8f, 0x1.a6d01a0000000p-8f, 0x1.a41a420000000p-8f, 0x1.a16d400000000p-8f, 0x1.9ec8ea0000000p-8f, 0x1.9c2d140000000p-8f, 0x1.99999a0000000p-8f, 0x1.970e500000000p-8f, 0x1.948b100000000p-8f, 0x1.920fb40000000p-8f, 0x1.8f9c180000000p-8f, 0x1.8d30180000000p-8f, 0x1.8acb900000000p-8f, 0x1.886e600000000p-8f, 0x1.8618620000000p-8f, 0x1.83c9780000000p-8f, 0x1.8181820000000p-8f, 0x1.7f40600000000p-8f, 0x1.7d05f40000000p-8f, 0x1.7ad2200000000p-8f, 0x1.78a4c80000000p-8f, 0x1.767dce0000000p-8f, 0x1.745d180000000p-8f, 0x1.7242880000000p-8f, 0x1.702e060000000p-8f, 0x1.6e1f760000000p-8f, 0x1.6c16c20000000p-8f, 0x1.6a13ce0000000p-8f, 0x1.6816820000000p-8f, 0x1.661ec60000000p-8f, 0x1.642c860000000p-8f, 0x1.623fa80000000p-8f, 0x1.6058160000000p-8f, 0x1.5e75bc0000000p-8f, 0x1.5c98820000000p-8f, 0x1.5ac0560000000p-8f, 0x1.58ed240000000p-8f, 0x1.571ed40000000p-8f, 0x1.5555560000000p-8f, 0x1.5390940000000p-8f, 0x1.51d07e0000000p-8f, 0x1.5015020000000p-8f, 0x1.4e5e0a0000000p-8f, 0x1.4cab880000000p-8f, 0x1.4afd6a0000000p-8f, 0x1.49539e0000000p-8f, 0x1.47ae140000000p-8f, 0x1.460cbc0000000p-8f, 0x1.446f860000000p-8f, 0x1.42d6620000000p-8f, 0x1.4141420000000p-8f, 0x1.3fb0140000000p-8f, 0x1.3e22cc0000000p-8f, 0x1.3c995a0000000p-8f, 0x1.3b13b20000000p-8f, 0x1.3991c20000000p-8f, 0x1.3813820000000p-8f, 0x1.3698e00000000p-8f, 0x1.3521d00000000p-8f, 0x1.33ae460000000p-8f, 0x1.323e340000000p-8f, 0x1.30d1900000000p-8f, 0x1.2f684c0000000p-8f, 0x1.2e025c0000000p-8f, 0x1.2c9fb40000000p-8f, 0x1.2b404a0000000p-8f, 0x1.29e4120000000p-8f, 0x1.288b020000000p-8f, 0x1.27350c0000000p-8f, 0x1.25e2280000000p-8f, 0x1.24924a0000000p-8f, 0x1.2345680000000p-8f, 0x1.21fb780000000p-8f, 0x1.20b4700000000p-8f, 0x1.1f70480000000p-8f, 0x1.1e2ef40000000p-8f, 0x1.1cf06a0000000p-8f, 0x1.1bb4a40000000p-8f, 0x1.1a7b960000000p-8f, 0x1.1945380000000p-8f, 0x1.1811820000000p-8f, 0x1.16e0680000000p-8f, 0x1.15b1e60000000p-8f, 0x1.1485f00000000p-8f, 0x1.135c820000000p-8f, 0x1.12358e0000000p-8f, 0x1.1111120000000p-8f, 0x1.0fef020000000p-8f, 0x1.0ecf560000000p-8f, 0x1.0db20a0000000p-8f, 0x1.0c97140000000p-8f, 0x1.0b7e6e0000000p-8f, 0x1.0a68100000000p-8f, 0x1.0953f40000000p-8f, 0x1.0842100000000p-8f, 0x1.0732600000000p-8f, 0x1.0624de0000000p-8f, 0x1.0519800000000p-8f, 0x1.0410420000000p-8f, 0x1.03091c0000000p-8f, 0x1.0204080000000p-8f, 0x1.0101020000000p-8f};   // IEEE 1.0f / i
+
+__host__ __device__ constexpr int popc16(int m) { int c = 0; for (int i = 0; i < 16; ++i) c += (m >> i) & 1; return c; }
+__host__ __device__ constexpr int step_off(int j, int KA, int MASK)
 {
-    const int i = o >> 5, s = o & 31;
-    if (s == 0) return w[i] & 0xFFFFu;
-    if (s == 16) return w[i] >> 16;
-    if (s == 8) return __byte_perm(w[i], 0u, 0x4421);
-    if (s < 16) return (w[i] >> s) & 0xFFFFu;
-    return __funnelshift_r(w[i], w[i + 1], s) & 0xFFFFu;
+    int s = (j >> 4) * (16 * KA + popc16(MASK));
+    for (int i = 0; i < (j & 15); ++i) s += KA + ((MASK >> i) & 1);
+    return s;
 }
-__device__ __forceinline__ uint32_t mul1_raw(uint32_t v0, uint32_t v1)
+__host__ __device__ constexpr bool direct_win(int o) { return (o & 31) == 0 || (o & 31) == 8 || (o & 31) == 16; }
+// greedy funnel grouping per residue class (mod 8) over the plane's window offsets; returns the funnel start serving O
+__host__ __device__ constexpr int funnel_greedy(int O, int KA, int MASK, int NS)
 {
-#ifdef NQ_FAKE_HASH
-    return __byte_perm(v0, v1, 0x5410);   // diagnostic only: no hash
-#endif
-    uint32_t x0 = v0 * 0x83DCD12Du, x1 = v1 * 0x83DCD12Du;
-    uint32_t s0 = __dp4a(x0, 0x01010101u, 0x6400u), s1 = __dp4a(x1, 0x01010101u, 0x6400u);
-    return __byte_perm(s0, s1, 0x5410);
+    int cov = -1, F = O;
+    for (int j = 0; j < NS; ++j)
+    {
+        int o = step_off(j, KA, MASK);
+        if ((o & 7) != (O & 7) || direct_win(o)) continue;
+        if (o > cov) { F = o; cov = o + 16; }
+        if (o == O) return F;
+    }
+    return O;
 }
+template <int O, int KA, int MASK>
+__device__ __forceinline__ uint32_t wv(const uint32_t* w)
+{
+    constexpr int i = O >> 5, s = O & 31;
+    if constexpr (s == 0) return w[i] & 0xFFFFu;
+    else if constexpr (s == 16) return w[i] >> 16;
+    else if constexpr (s == 8) return __byte_perm(w[i], 0u, 0x4421);
+    else
+    {
+        constexpr int F = funnel_greedy(O, KA, MASK, 64), t = (O - F) / 8, fi = F >> 5, fs = F & 31;
+        uint32_t y;
+        if constexpr (fs == 0) y = w[fi]; else y = __funnelshift_r(w[fi], w[fi + 1], fs);
+        if constexpr (t == 0) return y & 0xFFFFu;
+        else if constexpr (t == 1) return __byte_perm(y, 0u, 0x4421);
+        else return y >> 16;
+    }
+}
+__device__ __forceinline__ uint32_t dp4u(uint32_t a, uint32_t b, uint32_t c) { uint32_t d; asm("dp4a.u32.u32 %0, %1, %2, %3;" : "=r"(d) : "r"(a), "r"(b), "r"(c)); return d; }
 __device__ __forceinline__ uint32_t hfma2u(uint32_t a, uint32_t s, uint32_t b)
 {
     half2 r = __hfma2(*(half2*)&a, *(half2*)&s, *(half2*)&b);
     return *(uint32_t*)&r;
 }
-#define MUL1_A 0x1eee1eeeu
-#define MUL1_B 0xc931c931u
+
+// residual code -> window pattern
+template <int RC> struct RK;
+template <> struct RK<0> { static constexpr int KA = 2, M = 0x0000; };
+template <> struct RK<1> { static constexpr int KA = 1, M = 0xEEEE; };
+template <> struct RK<2> { static constexpr int KA = 2, M = 0xAAAA; };
+template <> struct RK<3> { static constexpr int KA = 2, M = 0x8888; };
+template <> struct RK<4> { static constexpr int KA = 3, M = 0x0000; };
+template <> struct RK<5> { static constexpr int KA = 1, M = 0xAAAA; };
+template <int RC> struct RKB { static constexpr int BITS = 4 * (16 * RK<RC>::KA + popc16(RK<RC>::M)), NW = (BITS + 31) / 32; };
 
 // Planes of one projection of one expert. p4/d4 are indexed densely (every chunk refined) when flags == nullptr,
 // otherwise compactly over the flagged chunks of each strip (mask mode, nm flagged chunks per strip).
-struct Planes { const uint4* base; const uint4* p4; const uint32_t* d4; const uint64_t* flags; };
+// base: uint4 per record. p4: sub-arrays (uint4 x n4 | uint2 | uint | ushort) each contiguous over the nrec records.
+struct Planes { const uint4* base; const uint8_t* p4; const uint32_t* d4; const uint64_t* flags; };
+struct Ctx { int strip, C, nm; uint64_t fl; size_t nrec_r; };
 
-struct Ctx { int strip, C, nm; uint64_t fl; };
+template <int BITS>
+__device__ __forceinline__ void load_plane(uint32_t* w, const uint8_t* __restrict__ p, size_t rec, size_t nrec)
+{
+    constexpr int n4 = BITS / 128, r1 = BITS % 128, n2 = r1 / 64, r2 = r1 % 64, n1 = r2 / 32, nh = (r2 % 32) / 16;
+    int k = 0;
+    #pragma unroll
+    for (int i = 0; i < n4; ++i) { uint4 v = __ldg((const uint4*)p + rec * n4 + i); w[k++] = v.x; w[k++] = v.y; w[k++] = v.z; w[k++] = v.w; }
+    p += nrec * 16 * n4;
+    if constexpr (n2) { uint2 v = __ldg((const uint2*)p + rec); w[k++] = v.x; w[k++] = v.y; p += nrec * 8; }
+    if constexpr (n1) { w[k++] = __ldg((const uint32_t*)p + rec); p += nrec * 4; }
+    if constexpr (nh) { w[k++] = __ldg((const unsigned short*)p + rec); }
+}
+// ring wrap: stream bits [BITS, BITS+32) = ring neighbour's first word
+template <int BITS, int NW>
+__device__ __forceinline__ void ext_words(uint32_t* w, uint32_t nb)
+{
+    if constexpr (BITS % 32 == 0) { w[NW] = nb; w[NW + 1] = 0; }
+    else { w[NW - 1] = (w[NW - 1] & 0xFFFFu) | (nb << 16); w[NW] = nb >> 16; w[NW + 1] = 0; }
+}
 
 // LV: 2 = base only, 4 = base + P4 on every chunk, 5 = base + P4 on flagged chunks (mask mode)
-template <int LV, int CPW>
-struct Stage { uint32_t wb[CPW][4]; uint32_t wr[CPW][LV >= 4 ? 4 : 1]; uint32_t dl[CPW]; uint32_t on; };
+template <int LV, int CPW, int RC>
+struct Stage { uint32_t wb[CPW][4]; uint32_t wr[CPW][LV >= 4 ? RKB<RC>::NW : 1]; uint32_t dl[CPW]; uint32_t on; };
 
-template <int LV, int CPW>
-__device__ __forceinline__ void load_stage(Stage<LV, CPW>& S, const Planes& P, const Ctx& X, int ch0, int lane)
+template <int LV, int CPW, int RC>
+__device__ __forceinline__ void load_stage(Stage<LV, CPW, RC>& S, const Planes& P, const Ctx& X, int ch0, int lane)
 {
     S.on = 0;
     #pragma unroll
@@ -76,11 +139,7 @@ __device__ __forceinline__ void load_stage(Stage<LV, CPW>& S, const Planes& P, c
     {
         const int ch = ch0 + c;
         const size_t rec = (size_t)X.strip * X.C + ch;
-#ifdef NQ_FAKE_LOAD
-        uint4 v = make_uint4(rec * 0x9E3779B9u, rec ^ 0x1234567u, rec * 7u, lane * 13u + ch);
-#else
         uint4 v = P.base[rec * 32 + lane];
-#endif
         S.wb[c][0] = v.x; S.wb[c][1] = v.y; S.wb[c][2] = v.z; S.wb[c][3] = v.w;
         if constexpr (LV >= 4)
         {
@@ -92,7 +151,7 @@ __device__ __forceinline__ void load_stage(Stage<LV, CPW>& S, const Planes& P, c
             }
             if (on)
             {
-                uint4 u = P.p4[ri * 32 + lane]; S.wr[c][0] = u.x; S.wr[c][1] = u.y; S.wr[c][2] = u.z; S.wr[c][3] = u.w;
+                load_plane<RKB<RC>::BITS>(S.wr[c], P.p4, ri * 32 + lane, X.nrec_r);
                 S.dl[c] = __ldg(P.d4 + ri);
                 S.on |= 1u << c;
             }
@@ -112,71 +171,105 @@ template <int G> __device__ __forceinline__ int ring_src(int lane)
     else if constexpr (G == 2) return lane ^ 1;
     else return (lane & ~3) | ((lane + 1) & 3);
 }
-template <bool RES>
-__device__ __forceinline__ uint32_t dec_pair(const uint32_t* w, const uint32_t* wr, int p, uint32_t Bp, uint32_t dA)
+struct Consts { uint32_t Mrep, Nrep, Ah, Ch; };
+// lane pair P (lane weights 2P, 2P+1) -> fp16x2 A-fragment register
+template <bool RES, int RC, int P>
+__device__ __forceinline__ uint32_t dec_pair(const uint32_t* w, const uint32_t* r, const Consts& k)
 {
-    uint32_t hb = mul1_raw(wn(w, 4 * p), wn(w, 4 * p + 2));
-    if constexpr (!RES) return hfma2u(hb, MUL1_A, MUL1_B);
+    const uint32_t xb0 = wv<4 * P, 2, 0>(w) * HC, xb1 = wv<4 * P + 2, 2, 0>(w) * HC;
+    if constexpr (!RES)
+        return hfma2u(__byte_perm(dp4u(xb0, 0x01010101u, 0x6400u), dp4u(xb1, 0x01010101u, 0x6400u), 0x5410), MUL1_A, MUL1_B);
     else
     {
-        uint32_t base = hfma2u(hb, MUL1_A, Bp);
-        uint32_t hr = mul1_raw(wn(wr, 4 * p), wn(wr, 4 * p + 2));
-        return hfma2u(hr, dA, base);
+        constexpr int KA = RK<RC>::KA, M = RK<RC>::M;
+        constexpr int o0 = step_off(2 * P, KA, M), o1 = step_off(2 * P + 1, KA, M);
+        uint32_t t0 = dp4u(xb0, k.Mrep, 0x640080u), t1 = dp4u(xb1, k.Mrep, 0x640080u);
+        t0 = dp4u(wv<o0, KA, M>(r) * HC, k.Nrep, t0); t1 = dp4u(wv<o1, KA, M>(r) * HC, k.Nrep, t1);
+        return hfma2u(__byte_perm(t0, t1, 0x6521), k.Ah, k.Ch);
     }
 }
+#ifdef NQ_WDUMP
+struct WDump { half* p; int K; };   // debug: decoded weights of one projection, row-major [N][K]
+#endif
 // one 16x128 chunk: decode into A fragments, 8 MMAs; xs holds ntok rows of kslice halves
-template <bool RES>
-__device__ __forceinline__ void chunk_mma(const uint32_t* w, const uint32_t* wr, uint32_t dl, float* acc, const half* xs,
-                                          int kslice, int kc, int lane, int ntok)
+template <bool RES, int RC>
+__device__ __forceinline__ void chunk_mma(const uint32_t* w, const uint32_t* r, uint32_t dl, float* acc, const half* xs,
+                                          int kslice, int kc, int lane, int ntok
+#ifdef NQ_WDUMP
+                                          , half* wd, int WK
+#endif
+                                          )
 {
     const int g = lane >> 2, t4 = lane & 3;
-    uint32_t Bp = MUL1_B, dA = 0;
+    Consts k{};
     if constexpr (RES)
     {
-        uint32_t aa = MUL1_A, bb = MUL1_B;
-        half2 d = *(half2*)&dl, A = *(half2*)&aa, Bc = *(half2*)&bb;
-        half2 t = __hmul2(d, A); dA = *(uint32_t*)&t;
-        half2 u = __hfma2(d, Bc, Bc); Bp = *(uint32_t*)&u;
+        // exactly ref15_spec.consts (fp32 ops in spec order, no contraction)
+        const uint32_t Mb = dl & 0xFF, N = (dl >> 8) & 0xFF;
+        k.Mrep = Mb * 0x01010101u; k.Nrep = N * 0x01010101u;
+        const float rc = c_rcp[Mb];
+        const half Ah = __float2half_rn(__fmul_rn(1.732421875f, rc));
+        const float C = __fsub_rn(__fadd_rn(__fmul_rn(__fmul_rn((float)N, rc), -3.453125f), -3.453125f), __fmul_rn(1024.f, __half2float(Ah)));
+        half2 a2 = __half2half2(Ah), c2 = __half2half2(__float2half_rn(C));
+        k.Ah = *(uint32_t*)&a2; k.Ch = *(uint32_t*)&c2;
     }
     #pragma unroll
     for (int t = 0; t < 8; ++t)
     {
         uint32_t a[4];
-        #pragma unroll
-        for (int r = 0; r < 4; ++r) a[r] = dec_pair<RES>(w, wr, t * 4 + r, Bp, dA);
+        switch (t)
+        {
+#define KT(T) case T: a[0] = dec_pair<RES, RC, 4 * T>(w, r, k); a[1] = dec_pair<RES, RC, 4 * T + 1>(w, r, k); \
+                      a[2] = dec_pair<RES, RC, 4 * T + 2>(w, r, k); a[3] = dec_pair<RES, RC, 4 * T + 3>(w, r, k); break;
+            KT(0) KT(1) KT(2) KT(3) KT(4) KT(5) KT(6) default: KT(7)
+#undef KT
+        }
+#ifdef NQ_WDUMP
+        if (wd)
+            #pragma unroll
+            for (int q = 0; q < 4; ++q)
+                *(uint32_t*)(wd + (size_t)(g + (q & 1) * 8) * WK + t * 16 + t4 * 2 + (q >> 1) * 8) = a[q];
+#endif
         uint32_t b0 = 0, b1 = 0;
         if (g < ntok) { const half* xr = xs + g * kslice + kc + t * 16 + t4 * 2; b0 = *(const uint32_t*)xr; b1 = *(const uint32_t*)(xr + 8); }
-#ifdef NQ_ACC2
-        mma16816(acc + (t & 1) * 4, a, b0, b1);   // two independent accumulator chains
-#else
         mma16816(acc, a, b0, b1);
-#endif
     }
 }
-template <int LV, int G, int CPW>
-__device__ __forceinline__ void compute_stage(const Stage<LV, CPW>& S, float* acc, const half* xs, int kslice, int kc0, int lane, int ntok)
+template <int LV, int G, int CPW, int RC>
+__device__ __forceinline__ void compute_stage(const Stage<LV, CPW, RC>& S, float* acc, const half* xs, int kslice, int kc0, int lane, int ntok
+#ifdef NQ_WDUMP
+                                              , half* wd, int WK
+#endif
+                                              )
 {
     const int src = ring_src<G>(lane);
+    constexpr int NWR = RKB<RC>::NW;
     #pragma unroll
     for (int c = 0; c < CPW; ++c)
     {
-        uint32_t w[5], wr[5];
+        uint32_t w[6], r[NWR + 2];
         #pragma unroll
         for (int i = 0; i < 4; ++i) w[i] = S.wb[c][i];
-        w[4] = G == 1 ? w[0] : __shfl_sync(0xffffffffu, w[0], src);
+        ext_words<128, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
         const int kc = kc0 + c * 128;
-        if constexpr (LV == 2) chunk_mma<false>(w, wr, 0, acc, xs, kslice, kc, lane, ntok);
+#ifdef NQ_WDUMP
+#define WDA , wd ? wd + kc : nullptr, WK
+#else
+#define WDA
+#endif
+        if constexpr (LV == 2) chunk_mma<false, RC>(w, r, 0, acc, xs, kslice, kc, lane, ntok WDA);
         else
         {
             if (LV == 4 || ((S.on >> c) & 1))
             {
                 #pragma unroll
-                for (int i = 0; i < 4; ++i) wr[i] = S.wr[c][i];
-                wr[4] = G == 1 ? wr[0] : __shfl_sync(0xffffffffu, wr[0], src);
-                chunk_mma<true>(w, wr, S.dl[c], acc, xs, kslice, kc, lane, ntok);
+                for (int i = 0; i < NWR; ++i) r[i] = S.wr[c][i];
+                ext_words<RKB<RC>::BITS, NWR>(r, __shfl_sync(0xffffffffu, r[0], src));
+                chunk_mma<true, RC>(w, r, S.dl[c], acc, xs, kslice, kc, lane, ntok WDA);
             }
-            else chunk_mma<false>(w, wr, 0, acc, xs, kslice, kc, lane, ntok);
+            else chunk_mma<false, RC>(w, r, 0, acc, xs, kslice, kc, lane, ntok WDA);
         }
+#undef WDA
     }
 }
 }  // namespace nqdec
@@ -216,6 +309,7 @@ struct MoeArgs
     float* acc_gu; half* h; float* acc_d; float* out;
     int* cnt_gu; int* cnt_d; int NST;
     int force_level;   // debug: >0 overrides table level
+    half* wdump[2]; int dump_e;   // NQ_WDUMP debug builds only: decoded fp16 weights of expert dump_e (gu [2I][H], dn [H][I])
     int* hits;         // optional [E] int32 pick counters (may be host-mapped pinned memory); nullptr = off
 };
 
@@ -249,23 +343,32 @@ __device__ __forceinline__ void route(const MoeArgs& a, int z, RunInfo* R, int l
     }
 }
 
-template <int LV, int G, int CPW>
-__device__ __forceinline__ void gemv_body(const Planes& P, int strip, int C, int nm, int chunk0, int NST, float* acc,
-                                          const half* xs, int kslice, int lane, int ntok)
+#ifdef NQ_WDUMP
+#define WDP , half* wd, int WK
+#define WDC(kc) , wd ? wd + (size_t)strip * 16 * WK + (kc) : nullptr, WK
+#else
+#define WDP
+#define WDC(kc)
+#endif
+template <int LV, int G, int CPW, int RC>
+__device__ __forceinline__ void gemv_body(const Planes& P, int strip, int C, int nm, int nstrips, int chunk0, int NST, float* acc,
+                                          const half* xs, int kslice, int lane, int ntok WDP)
 {
     Ctx X; X.strip = strip; X.C = C; X.nm = nm; X.fl = 0;
+    X.nrec_r = (size_t)nstrips * (LV == 5 ? nm : C) * 32;
     if constexpr (LV == 5) X.fl = __ldg((const unsigned long long*)P.flags + strip);
-    Stage<LV, CPW> SA, SB_;
-    load_stage<LV, CPW>(SA, P, X, chunk0, lane);
-    if (NST > 1) load_stage<LV, CPW>(SB_, P, X, chunk0 + CPW, lane);
+    Stage<LV, CPW, RC> SA, SB_;
+    load_stage<LV, CPW, RC>(SA, P, X, chunk0, lane);
+    if (NST > 1) load_stage<LV, CPW, RC>(SB_, P, X, chunk0 + CPW, lane);
+    const int kabs = chunk0 * 128;
     for (int s = 0; s < NST; s += 2)
     {
-        compute_stage<LV, G, CPW>(SA, acc, xs, kslice, s * CPW * 128, lane, ntok);
-        if (s + 2 < NST) load_stage<LV, CPW>(SA, P, X, chunk0 + (s + 2) * CPW, lane);
+        compute_stage<LV, G, CPW, RC>(SA, acc, xs, kslice, s * CPW * 128, lane, ntok WDC(kabs));
+        if (s + 2 < NST) load_stage<LV, CPW, RC>(SA, P, X, chunk0 + (s + 2) * CPW, lane);
         if (s + 1 < NST)
         {
-            compute_stage<LV, G, CPW>(SB_, acc, xs, kslice, (s + 1) * CPW * 128, lane, ntok);
-            if (s + 3 < NST) load_stage<LV, CPW>(SB_, P, X, chunk0 + (s + 3) * CPW, lane);
+            compute_stage<LV, G, CPW, RC>(SB_, acc, xs, kslice, (s + 1) * CPW * 128, lane, ntok WDC(kabs));
+            if (s + 3 < NST) load_stage<LV, CPW, RC>(SB_, P, X, chunk0 + (s + 3) * CPW, lane);
         }
     }
 }
@@ -273,7 +376,7 @@ __device__ __forceinline__ void gemv_body(const Planes& P, int strip, int C, int
 __device__ __forceinline__ Planes planes_of(const int64_t* ent, int off)
 {
     Planes P;
-    P.base = (const uint4*)ent[off]; P.p4 = (const uint4*)ent[off + 1];
+    P.base = (const uint4*)ent[off]; P.p4 = (const uint8_t*)ent[off + 1];
     P.d4 = (const uint32_t*)ent[off + 2]; P.flags = (const uint64_t*)ent[off + 3];
     return P;
 }
@@ -322,18 +425,43 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
     const Planes P = planes_of(R.ent, MODE == 0 ? 1 : 5);
     const int nm = MODE == 0 ? a.nm_gu : a.nm_dn;
     const int chunk0 = by * CPW * a.NST;
-#ifndef NQ_SKIP_GEMV
-    if (lv == 2) gemv_body<2, G, CPW>(P, strip, C, nm, chunk0, a.NST, acc, xs, kslice, lane, ntok);
-#ifndef NQ_NO_MASK
-    else if (P.flags) gemv_body<5, G, CPW>(P, strip, C, nm, chunk0, a.NST, acc, xs, kslice, lane, ntok);
+#ifdef NQ_WDUMP
+    half* wd = (a.wdump[MODE] && R.e == a.dump_e) ? a.wdump[MODE] : nullptr; const int WK = K;
+#define WDX , wd, WK
+#else
+#define WDX
 #endif
-    else gemv_body<4, G, CPW>(P, strip, C, nm, chunk0, a.NST, acc, xs, kslice, lane, ntok);
+    const int NS = N / 16, rc = (int)R.ent[10 + MODE];
+#define BODY(LVv, RCv) gemv_body<LVv, G, CPW, RCv>(P, strip, C, nm, NS, chunk0, a.NST, acc, xs, kslice, lane, ntok WDX)
+#ifdef NQ_NO_MASK
+#define LV45(RCv) BODY(4, RCv)
+#else
+#define LV45(RCv) { if (P.flags) BODY(5, RCv); else BODY(4, RCv); }
 #endif
+    if (lv == 2) BODY(2, 0);
+    else switch (rc)
+    {
+#if NQ_RK_CODES & 2
+        case 1: LV45(1); break;
+#endif
+#if NQ_RK_CODES & 4
+        case 2: LV45(2); break;
+#endif
+#if NQ_RK_CODES & 8
+        case 3: LV45(3); break;
+#endif
+#if NQ_RK_CODES & 16
+        case 4: LV45(4); break;
+#endif
+#if NQ_RK_CODES & 32
+        case 5: LV45(5); break;
+#endif
+        default: LV45(0); break;
+    }
+#undef BODY
+#undef LV45
+#undef WDX
 
-#ifdef NQ_ACC2
-    #pragma unroll
-    for (int i = 0; i < 4; ++i) acc[i] += acc[4 + i];
-#endif
     float* accb = MODE == 0 ? a.acc_gu : a.acc_d;
     {
         const int g = lane >> 2, t4 = lane & 3;
@@ -505,6 +633,8 @@ static int resident_blocks(const void* f, int threads, int shm)
     return cache[k] = nb * sms;
 }
 
+static int64_t g_wdump[2] = {0, 0}; static int g_dump_e = -1;
+void set_wdump(int64_t gu, int64_t dn, int64_t e) { g_wdump[0] = gu; g_wdump[1] = dn; g_dump_e = (int)e; }
 // One MoE layer forward (graph-capturable; all routing/level/pointer decisions are read on device).
 // cfg_gu/cfg_dn: (cpw, sb, nst[, persistent]).  ws: acc_gu [S,2I] f32, h [S,I] f16, acc_d [S,H] f32,
 // cnt_gu [S*I/128] i32, cnt_d [H/128] i32, wq [4] i32 (persistent work counters) -- all zero on entry, zero on exit.
@@ -519,6 +649,7 @@ void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Te
     a.nm_gu = nm_gu; a.nm_dn = nm_dn; a.acc_gu = (float*)acc_gu.data_ptr(); a.h = (half*)h.data_ptr();
     a.acc_d = (float*)acc_d.data_ptr(); a.out = (float*)out.data_ptr(); a.cnt_gu = (int*)cnt_gu.data_ptr(); a.cnt_d = (int*)cnt_d.data_ptr();
     a.force_level = force_level; a.hits = (int*)hits_ptr;
+    a.wdump[0] = (half*)g_wdump[0]; a.wdump[1] = (half*)g_wdump[1]; a.dump_e = g_dump_e;
     const int S = a.B * a.topk;
     TORCH_CHECK(S <= 32 && a.B <= 8, "B*topk <= 32");
     TORCH_CHECK(a.H % 128 == 0 && I % 128 == 0 && a.H / 128 <= 64 && I / 128 <= 64);
@@ -580,4 +711,4 @@ int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
     cudaFuncAttributes at; cudaFuncGetAttributes(&at, f);
     return nb * 1000000 + at.numRegs * 1000 + at.localSizeBytes;
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("occ", &occ); m.def("mailbox", &mailbox); }
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump); }
