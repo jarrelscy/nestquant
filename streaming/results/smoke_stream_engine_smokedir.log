@@ -1,0 +1,25 @@
+L3 rank0/TP4: 5 experts, record 2560000 B, slots 4
+  record bytes vs resident: OK (5 experts)
+  engine: 187 upgrades (108 host-LRU hits), 186 posts; op end-to-end p50 0.853 p99 16.397 ms
+  table rows wrong after apply: 0
+  300 replays, 373 ops applied, worst rel err vs reference 0.00e+00 (reference repeat 0.00e+00, 0 steps >1e-5); O_DIRECT read p50 0.751 p99 13.897 ms (79 reads, 3.41 GB/s at qd 1)
+STREAM SMOKE PASS
+L3 rank1/TP4: 5 experts, record 2560000 B, slots 4
+  record bytes vs resident: OK (5 experts)
+  engine: 197 upgrades (127 host-LRU hits), 196 posts; op end-to-end p50 0.352 p99 15.036 ms
+  table rows wrong after apply: 0
+  300 replays, 393 ops applied, worst rel err vs reference 1.17e-05 (reference repeat 1.17e-05, 2 steps >1e-5); O_DIRECT read p50 0.364 p99 13.923 ms (70 reads, 7.04 GB/s at qd 1)
+STREAM SMOKE PASS
+L3 rank2/TP4: 5 experts, record 2560000 B, slots 4
+  record bytes vs resident: OK (5 experts)
+Traceback (most recent call last):
+  File "/data/Jarrel/nestquant/streaming/smoke_stream.py", line 74, in <module>
+    if kind.pop(tag)==4:ehit+=hit;elat.append(te2e);(lat.append(trd) if not hit else None)
+       ^^^^^^^^^^^^^
+KeyError: 4
+L3 rank3/TP4: 5 experts, record 2560000 B, slots 4
+  record bytes vs resident: OK (5 experts)
+  engine: 200 upgrades (107 host-LRU hits), 198 posts; op end-to-end p50 0.788 p99 25.070 ms
+  table rows wrong after apply: 0
+  300 replays, 397 ops applied, worst rel err vs reference 6.89e-08 (reference repeat 6.85e-08, 0 steps >1e-5); O_DIRECT read p50 0.700 p99 24.490 ms (92 reads, 3.66 GB/s at qd 1)
+STREAM SMOKE PASS
