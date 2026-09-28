@@ -60,8 +60,21 @@ def main():
     ap.add_argument("--floating", type=int, default=51)
     ap.add_argument("--estimator", default="rms3", choices=("rms3", "down", "gu_down"))
     ap.add_argument("--allow-partial", action="store_true", help="prep: layers without a manifest get d_e = layer-mean of others")
+    ap.add_argument("--norm", default="layer", choices=("layer", "global"),
+                    help="layer (default, lead 2026-09-29): each side normalized by its own layer total; global: v3-draft absolute units")
+    ap.add_argument("--gamma", help="json {L: gamma_L} = RMS(MoE out)/RMS(residual in); default gamma_L = 1 (no norms in the T19 capture)")
     ap.add_argument("--extra-spot", default="/tmp/nestquant/25-campaign/early-lr/multi", help="val-set spot (base arm) jsons")
+    ap.add_argument("--complete-only", action="store_true",
+                    help="preview: only layers with a full manifest, budget 26 x that many layers (no filled d_e)")
     a = ap.parse_args()
+    global LAYERS
+    if a.complete_only:
+        ok = []
+        for L in LAYERS:
+            mp = f"{a.root}/L{L}/manifest.json"
+            if os.path.exists(mp) and len(json.load(open(mp)).get("per_expert", {})) == 256:
+                ok.append(L)
+        LAYERS = ok; a.budget = 26 * len(ok)
     cur = json.load(open(a.cur))
     cur_sha = hashlib.sha256(open(a.cur, "rb").read()).hexdigest()
     w = {k: float(v) for k, v in cur["weights"].items()}
@@ -91,9 +104,15 @@ def main():
     fill = float(np.mean([D[L].mean() for L in D]))
     for L in missing:
         D[L] = np.full(256, fill)
-    Tt = sum(T[L].sum() for L in LAYERS); Vt = sum(V[L].sum() for L in LAYERS)
-    SB = {L: (1 - a.vision_w) * T[L] / Tt + a.vision_w * V[L] / Vt for L in LAYERS}
-    SC = {L: SB[L] * D[L] for L in LAYERS}
+    if a.norm == "global":
+        Tt = {L: sum(T[l].sum() for l in LAYERS) for L in LAYERS}; Vt = {L: sum(V[l].sum() for l in LAYERS) for L in LAYERS}
+    else:
+        Tt = {L: T[L].sum() for L in LAYERS}; Vt = {L: V[L].sum() for L in LAYERS}
+    G = {L: 1.0 for L in LAYERS}
+    if a.gamma:
+        G.update({int(k): float(v) for k, v in json.load(open(a.gamma)).items()})
+    SB = {L: (1 - a.vision_w) * T[L] / Tt[L] + a.vision_w * V[L] / Vt[L] for L in LAYERS}
+    SC = {L: SB[L] * D[L] * G[L] for L in LAYERS}
 
     # ---- selection
     sel = {}
@@ -136,7 +155,10 @@ def main():
                missing_layers=missing, estimator=a.estimator)
     # per-layer error removed + REAP mass kept
     rep["layer_detail"] = {L: dict(n=len(fixed[L]), err_new=float(SC[L][fixed[L]].sum()), err_cur=float(SC[L][old[L]].sum()),
-                                   S_share=float(SB[L].sum()), d_mean=float(D[L].mean())) for L in LAYERS}
+                                   S_share=float(SB[L].sum()), d_mean=float(D[L].mean()), gamma=G[L],
+                                   frac_new=float(SC[L][fixed[L]].sum() / SC[L].sum()),
+                                   frac_cur=float(SC[L][old[L]].sum() / SC[L].sum())) for L in LAYERS}
+    rep["norm"], rep["gamma"] = a.norm, (a.gamma or "1 (T19 capture has no residual-stream norms)")
 
     # ---- d_e cross-check vs spot numbers (production spot: matched eval; early-lr multi: val eval, base arm)
     xs = []
