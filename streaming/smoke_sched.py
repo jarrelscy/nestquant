@@ -84,6 +84,6 @@ X.close();lat=np.array(X.lat)*1e3
 ok=nerr==0 and nbad_lv==0 and X.n_failed==0
 r=dict(layers=[LAYERS[0],LAYERS[-1]],rank=rank,tokens=len(e),nslot=NSLOT,checks=nchk,worst_rel=float(f'{worst:.3e}'),ref_floor=float(f'{floor:.3e}'),over_bound=int(nerr),level_mismatch_after_settle=nbad_lv,
        route_share=round(float(np.mean(hot)),4),ups=S.stats['ups'],downs=S.stats['downs'],deferred_steps=S.stats['deferred_steps'],
-       refused=X.n_refused,failed=X.n_failed,op_p50_ms=round(float(np.percentile(lat,50)),3),op_p99_ms=round(float(np.percentile(lat,99)),3),
+       refused=X.n_refused,waited_for_slot=X.n_waited,failed=X.n_failed,op_p50_ms=round(float(np.percentile(lat,50)),3),op_p99_ms=round(float(np.percentile(lat,99)),3),
        host_step_ms_p50=round(float(np.percentile(tstep,50))*1e3,2),ok=ok)
 print(json.dumps(r));print('SCHED SMOKE','PASS' if ok else 'FAIL')
