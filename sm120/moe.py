@@ -3,7 +3,7 @@ Plane layout: see nqmoe.cu header."""
 import torch,numpy as np
 from build import get
 M=get()
-TBL_W=16
+TBL_W=20
 A_=float(np.array([0x1eee],np.uint16).view(np.float16)[0]);B_=float(np.array([0xc931],np.uint16).view(np.float16)[0])
 
 # residual window patterns (table code -> (KA, MASK)); LSB-first period-16 fractional steps (thread 15)
@@ -148,7 +148,13 @@ class Expert:
         s.gu=Proj(2*I,H,gen,nm_gu,rk_gu,mbn,var).to(dev);s.dn=Proj(H,I,gen,nm_dn,rk_dn,mbn if mbn=='rand' else ('exh',mbn[1]+(2*I//16)*(H//128)),var).to(dev)
         sg=torch.randint(0,2,(2*H+3*I,),generator=gen)*2-1;su_u=torch.randint(0,2,(H,),generator=gen)*2-1
         s.signs=torch.cat([sg,su_u]).half().to(dev)      # [H su_g | I sv_g | I sv_u | I su_d | H sv_o | H su_u]
-        s.H,s.I=H,I
+        s.H,s.I=H,I;s.lr=s.lr4=None;s.rg=s.rd=0
+    def set_lr(s,Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d):
+        """T12 low-rank plane (fp16): Vg [rg,H], U*g/U*u [rg,I], Vd [rd,I], U*d [rd,H] -> table [14]/[15] buffers."""
+        f=lambda *t:torch.cat([x.reshape(-1) for x in t]).half().contiguous()
+        s.rg,s.rd=Vg.shape[0],Vd.shape[0];s.lrT=(Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d)
+        if s.rg+s.rd==0:s.lr=s.lr4=None;return s
+        s.lr=f(Vg,U2g,U2u,Vd,U2d).to(s.signs.device);s.lr4=f(U4g,U4u,U4d).to(s.signs.device);return s
     def bytes(s,level):
         b=0
         for p in (s.gu,s.dn):
@@ -162,8 +168,13 @@ class Expert:
         Wg=dense_W(s.gu,level,G);Wd=dense_W(s.dn,level,G)
         xg=wht(x*su).half().float();xu=wht(x*suu).half().float();a=torch.cat([xg@Wg[:I].T,xu@Wg[I:].T],1)
         g=wht(a[:,:I])*svg;u=wht(a[:,I:])*svu
-        h=wht(torch.nn.functional.silu(g)*u*sud).half().float()
-        return wht(h@Wd.T)*svo
+        if s.lr is not None:
+            Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d=[t.float() for t in s.lrT];z=x@Vg.T
+            g=g+z@U2g+(z@U4g if level==4 else 0);u=u+z@U2u+(z@U4u if level==4 else 0)
+        sw=torch.nn.functional.silu(g)*u
+        h=wht(sw*sud).half().float();y=wht(h@Wd.T)*svo
+        if s.lr is not None:z=sw@Vd.T;y=y+z@U2d+(z@U4d if level==4 else 0)
+        return y
 
 def entry(ex,level):
     e=torch.zeros(TBL_W,dtype=torch.int64)
@@ -174,10 +185,12 @@ def entry(ex,level):
     e[9]=ex.signs.data_ptr();e[10]=ex.gu.rk;e[11]=ex.dn.rk
     for i,p in ((12,ex.gu),(13,ex.dn)):
         v=getattr(p,'var',None);e[i]=0 if v is None else v.data_ptr()
+    lr=getattr(ex,'lr',None)
+    if lr is not None:e[14]=lr.data_ptr();e[15]=ex.lr4.data_ptr();e[16]=ex.rg;e[17]=ex.rd
     return e
 
 class MoELayer:
-    """Device table [E,16] + workspace for up to Bmax tokens. Table entries are flipped in place (graph-safe)."""
+    """Device table [E,TBL_W] + workspace for up to Bmax tokens. Table entries are flipped in place (graph-safe)."""
     def __init__(s,E,H,I,nm_gu=0,nm_dn=0,Bmax=4,topk=8,G=4,dev='cuda',mod=None):
         """nm_*: flagged chunks per strip for experts in mask mode (ignored for dense experts)."""
         s.M=mod or M;s.E,s.H,s.I,s.nm_gu,s.nm_dn,s.G=E,H,I,nm_gu,nm_dn,G
@@ -185,9 +198,11 @@ class MoELayer:
         S=Bmax*topk
         s.acc_gu=torch.zeros(S,2*I,device=dev);s.h=torch.zeros(S,I,device=dev).half();s.acc_d=torch.zeros(S,H,device=dev)
         s.cnt_gu=torch.zeros(S*(I//128),dtype=torch.int32,device=dev);s.cnt_d=torch.zeros(H//128,dtype=torch.int32,device=dev);s.wq=torch.zeros(4,dtype=torch.int32,device=dev)
+        s.zd=torch.zeros(S*(I//128)*4,device=dev)
         s.out=torch.zeros(Bmax,H,device=dev)
         s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2];s.hits_ptr=0   # set to a (host-mapped) int32 [E] pointer to export routing hits
     def set(s,e,ex,level):
+        if getattr(ex,'lr',None) is not None:assert ex.rg<=4 and ex.rd<=4 and ex.lr.dtype==torch.float16
         if level==4:
             if not hasattr(s,'rkm'):s.rkm=s.M.rk_codes() if hasattr(s.M,'rk_codes') else [255,255]
             assert s.rkm[0]>>ex.gu.rk&1 and s.rkm[1]>>ex.dn.rk&1,f'residual K code gu {ex.gu.rk} / dn {ex.dn.rk} not compiled (rk_codes {s.rkm})'
@@ -195,7 +210,7 @@ class MoELayer:
     def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None):
         out=s.out[:x.shape[0]] if out is None else out
         s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
-                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr)
+                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr,s.zd)
         return out
 
 class Mailbox:

@@ -7,7 +7,10 @@ way a loader would and run them through the sm120 kernel:
      nq_decode of the group == rows/cols slice of the full-expert decode (bitwise);
      kernel decode (NQ_WDUMP) == nq_decode of the group, bitwise, levels 2/4, all 3 projections;
  (4) kernel forward, sum of per-rank partial outputs vs x through the full dense expert (TP8, TP4, TP1).
-usage: smoke_prod.py [L] [E0:E1]"""
+The low-rank plane (f128e41) is included everywhere: fit_prod gives each expert a deterministic rank 0..4 per gate|up /
+down, the group artifacts rebuild base.lr / p4.lr from the shard keys like nq_layer.assemble, the kernel adds the lr
+term (table [14..17]) and D.decode_expert (reference) adds lr_term to the dense weights.
+usage: smoke_prod.py [L] [E0:E1]   (default L3 E0:5 covers r_gu = 0 and r_dn = 0)"""
 import os,sys,types,json,torch;torch.cuda.set_per_process_memory_fraction(16/96)
 HERE=os.path.dirname(os.path.abspath(__file__));sys.path[:0]=[HERE,HERE+'/quickfit']
 import fit_prod as FP
@@ -16,7 +19,7 @@ import moe;from moe import *
 from build import get
 dev='cuda';torch.backends.cuda.matmul.allow_tf32=False
 L=int(sys.argv[1]) if len(sys.argv)>1 else 3
-e0,e1=map(int,(sys.argv[2] if len(sys.argv)>2 else '0:3').split(':'))
+e0,e1=map(int,(sys.argv[2] if len(sys.argv)>2 else '0:5').split(':'))
 ROOT='/data/Jarrel/nq-glm53-prod/smoke';ok=True
 def chk(c,msg):
     global ok;ok&=bool(c);print(('  ok  ' if c else '  FAIL')+' '+msg,flush=True)
@@ -31,6 +34,9 @@ chk(pb['gate']['base']+pb['up']['base']==786432 and pb['down']['base']==393216,'
 chk(pb['gate']['p4']+pb['up']['p4']==786432 and pb['down']['p4']==454656,'P4 786,432 gu / 454,656 down (4.1263 row)')
 chk(pb['gate']['word']+pb['up']['word']==3072 and pb['down']['word']==1536,'block words u16 (d4 u32 in the kernel = 6,144 / 3,072)')
 chk(pb['gate']['var']+pb['up']['var']==1536 and pb['down']['var']==768,'sign variant 1 bit/ring = 1,536 gu / 768 down (uint8 per unit)')
+for E in arts:
+    r=man['per_expert'][str(E)]['lr_rank'] if str(E) in man['per_expert'] else man['per_expert'][E]['lr_rank']
+    chk(r=={'gate':FP.lr_rank(L,E,'gu'),'up':FP.lr_rank(L,E,'gu'),'down':FP.lr_rank(L,E,'dn')},f'E{E} manifest lr_rank {r}')
 chk(man['config']['base_var']=='sign' and man['config']['res_K']=={'gate':2.0,'up':2.0,'down':2.3125},'config base_var sign, res_K 2/2/2.3125')
 # ---------------------------------------------------------------- (2) assemble
 parts=[torch.load(f'{ROOT}/L{L}/tp{s}.pt',weights_only=False) for s in range(8)]
@@ -47,6 +53,10 @@ def group_art(E,ss):
         else:m.update(n=m['n']*g//8,tn=m['tn']*g//8);suh2=ps[0]['suh2'];svh2=torch.cat([p['svh2'] for p in ps]);suh4=ps[0]['suh4'];svh4=torch.cat([p['svh4'] for p in ps])
         art[pn]=dict(base=dict(shards=[p['base'] for p in ps],var=[p['var'] for p in ps],suh=suh2,svh=svh2),
                      p4=dict(shards=[p['p4'] for p in ps],word=[p['word'] for p in ps],suh=suh4,svh=svh4),meta=m)
+        if 'lrU2' in ps[0]:                               # as nq_layer.assemble, restricted to the group
+            if pn=='down':V,U2,U4=torch.cat([p['lrV'] for p in ps],1),ps[0]['lrU2'],ps[0]['lrU4']
+            else:V=parts[ss[0]][E][ps[0].get('lrV_from',pn)]['lrV'];U2,U4=torch.cat([p['lrU2'] for p in ps],1),torch.cat([p['lrU4'] for p in ps],1)
+            art[pn]['base']['lr']=dict(V=V,U2=U2);art[pn]['p4']['lr']=dict(U4=U4)
     return art
 def repack(P):
     """(threads/13 verify_t12.repack) T12 planes -> kernel Proj fields + rotated nq_decode Q2/Q4 [N,K] fp16."""
@@ -75,7 +85,16 @@ def cat_proj(a,b):
     p.Mb=torch.cat([a.Mb,b.Mb]);p.Nn=torch.cat([a.Nn,b.Nn]);p.d4=torch.cat([a.d4,b.d4]);p.var=torch.cat([a.var,b.var]);return p
 def kernel_expert(art):
     g,Qg=repack(art['gate']);u,Qu=repack(art['up']);d,Qd=repack(art['down'])
-    ex=types.SimpleNamespace(gu=cat_proj(g,u),dn=d,H=d.N,I=d.K)
+    ex=types.SimpleNamespace(gu=cat_proj(g,u),dn=d,H=d.N,I=d.K,lr=None,lr4=None,rg=0,rd=0)
+    def lrp(pn):                                          # the encoder omits 'lr' for a projection with r = 0
+        P=art[pn];n,k=P['meta']['n'],P['meta']['k'];z=lambda c:torch.zeros(0,c,dtype=torch.float16)
+        if 'lr' not in P['base']:return z(k),z(n),z(n)
+        return P['base']['lr']['V'].cpu(),P['base']['lr']['U2'].cpu(),P['p4']['lr']['U4'].cpu()
+    (Vg,U2g,U4g),(Vu,U2u,U4u),(Vd,U2d,U4d)=(lrp(p) for p in NE.PROJ)
+    assert torch.equal(Vg,Vu),'kernel needs gate/up to share V'
+    ex.rg,ex.rd=Vg.shape[0],Vd.shape[0]
+    f=lambda *t:torch.cat([x.reshape(-1) for x in t]).half().contiguous().to(dev)
+    if ex.rg+ex.rd:ex.lr=f(Vg,U2g,U2u,Vd,U2d);ex.lr4=f(U4g,U4u,U4d)
     def scales(lv):
         pl=D.SCALE_PLANE[lv];s=lambda n,k:art[n][pl][k].half().to(dev)
         return torch.cat([s('gate','suh'),s('gate','svh'),s('up','svh'),s('down','suh'),s('down','svh'),s('up','suh')])
