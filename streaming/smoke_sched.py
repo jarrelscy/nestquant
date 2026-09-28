@@ -4,7 +4,9 @@ Each step, for every layer: captured graph [mailbox.apply, MoE layer] with that 
 then executor.poll -> scheduler.step(counts) -> executor.apply. Every check_every steps each layer's output is
 compared with a reference layer (pass: rel err <= max(1e-4, 2 x ref-vs-ref)) set to the levels the table actually held (level column of the table, resident
 level-4 planes). Also reports the measured level-4 route share and op latencies. The fixed set is resident at level 4
-(never streamed); the floating_default start is loaded through the executor before the first token."""
+(never streamed); the floating_default start is loaded through the executor before the first token.
+Failure tests: NQ_FAULT_FILE=<truncated copy of rankN.bin> (reads past its end fail -> those experts must stay at level 2),
+small nslot (pool full -> upgrades wait). Both must still match the reference."""
 import os,sys,json,glob,time,collections,random,torch,numpy as np
 HERE=os.path.dirname(os.path.abspath(__file__));sys.path[:0]=[HERE,HERE+'/../sm120']
 torch.cuda.set_per_process_memory_fraction(40/96)
@@ -13,7 +15,9 @@ from moe import MoELayer,Mailbox,entry
 root,rp=sys.argv[1],sys.argv[2];a0,b0=(sys.argv[3].split('-')+[sys.argv[3]])[:2];LAYERS=list(range(int(a0),int(b0)+1))
 a=[int(x) for x in sys.argv[4:]]+[None]*5;rank=a[0] or 0;NTOK=a[1] or 512;NSLOT=a[2] or 60*len(LAYERS);CK=a[3] or 8;tp=a[4] or 4
 dev='cuda';NE=256;NF=51;L0=3
-rf=SE.RankFile(rp,rank);fx,_,_=FS.load(layers=LAYERS)
+rf=SE.RankFile(rp,rank);FAULT=os.environ.get('NQ_FAULT_FILE')   # failure test: engine reads this (truncated) file instead
+if FAULT:rf.path=FAULT
+fx,_,_=FS.load(layers=LAYERS)
 fj=json.load(open(HERE+'/../threads/22-boundary-experts/fixed_set.json'))
 dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in LAYERS}
 t=time.time();RL={L:NQ.RankLayer(root,L,rank,tp) for L in LAYERS};H,I=RL[LAYERS[0]].H,RL[LAYERS[0]].I
@@ -34,7 +38,7 @@ for f in sorted(glob.glob(D+'/seg-*.npz'))[:6]:
 best=max(reqs.values(),key=lambda v:sum(len(p) for p,_ in v))
 p=np.concatenate([x for x,_ in best]);e=np.concatenate([y for _,y in best]);o=np.argsort(p,kind='stable');p,e=p[o],e[o];e=e[np.r_[p[1:]!=p[:-1],True]]
 e=e[:NTOK];print(f'routing: {len(e)} decode tokens',flush=True)
-S=SC.Scheduler(LAYERS,fx,dflt,rf.rb*tp,NE=NE,n_float=NF)
+S=SC.Scheduler(LAYERS,fx,dflt,rf.rb*tp,NE=NE,n_float=NF,slots=NSLOT)
 X=EX.RankExecutor(rf,lays,NSLOT,n_host=64,qd=8)
 rng=torch.Generator(device=dev).manual_seed(rank)
 xs={L:(torch.randn(1,H,device=dev,generator=rng)*0.05).half() for L in LAYERS}
@@ -52,7 +56,7 @@ torch.cuda.synchronize()
 def replay_all():
     for L in LAYERS:graphs[L].replay()
 # floating_default start through the executor (not counted against the cap)
-init=[(L,E) for L in LAYERS for E in dflt[L] if E not in fx[L]]
+init=[(L,E) for L in LAYERS for E in dflt[L] if E not in fx[L]][:NSLOT]
 for L,E in init:S.state[S.li[L],E]=1
 X.apply(init,[],S);t=time.time()
 while X.busy() and time.time()-t<60:replay_all();torch.cuda.synchronize();X.poll(S)
@@ -81,9 +85,9 @@ lv=S.level()
 for L in LAYERS:
     tbl=lays[L][0].table[:,0].cpu().numpy();nbad_lv+=int((tbl!=lv[S.li[L]]).sum())
 X.close();lat=np.array(X.lat)*1e3
-ok=nerr==0 and nbad_lv==0 and X.n_failed==0
+ok=nerr==0 and nbad_lv==0 and (X.n_failed==0 or bool(FAULT))
 r=dict(layers=[LAYERS[0],LAYERS[-1]],rank=rank,tokens=len(e),nslot=NSLOT,checks=nchk,worst_rel=float(f'{worst:.3e}'),ref_floor=float(f'{floor:.3e}'),over_bound=int(nerr),level_mismatch_after_settle=nbad_lv,
-       route_share=round(float(np.mean(hot)),4),ups=S.stats['ups'],downs=S.stats['downs'],deferred_steps=S.stats['deferred_steps'],
+       route_share=round(float(np.mean(hot)),4),ups=S.stats['ups'],downs=S.stats['downs'],deferred_steps=S.stats['deferred_steps'],read_errors=S.stats.get('read_errors',0),
        refused=X.n_refused,waited_for_slot=X.n_waited,failed=X.n_failed,op_p50_ms=round(float(np.percentile(lat,50)),3),op_p99_ms=round(float(np.percentile(lat,99)),3),
-       host_step_ms_p50=round(float(np.percentile(tstep,50))*1e3,2),ok=ok)
+       fault=bool(FAULT),host_step_ms_p50=round(float(np.percentile(tstep,50))*1e3,2),ok=ok)
 print(json.dumps(r));print('SCHED SMOKE','PASS' if ok else 'FAIL')

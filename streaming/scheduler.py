@@ -11,12 +11,14 @@ Defaults follow the lead (floating-set defaults 2026-09-28) and select_sweep.jso
   Scheduler(layers, fixed, floating_default, rec_bytes, ...)
   step(counts[len(layers), NE], ntok) -> (ups [(L, E)], downs [(L, E)])   call once per model step
   landed(L, E) / released(L, E) / failed(L, E)   executor feedback: upgrade applied / downgrade applied (slot free) /
-                                   upgrade refused or read failed (expert stays at level 2, retried later)"""
+                                   upgrade refused or read failed (expert stays at level 2, retried later;
+                                   after a read error not before retry_tokens)
+  slots=N caps experts in flight + landed + draining at the executor's slot pool size."""
 import numpy as np
 
 class Scheduler:
     def __init__(s,layers,fixed,floating_default,rec_bytes,NE=256,n_float=51,half_life=512,refresh=64,
-                 cap_GBps=6.0,tok_per_s=111.0,big_frac=0.5,burst_tokens=64):
+                 cap_GBps=6.0,tok_per_s=111.0,big_frac=0.5,burst_tokens=64,slots=None,retry_tokens=None):
         s.layers=list(layers);s.li={L:i for i,L in enumerate(s.layers)};s.NE=NE;s.nf=n_float;s.R=refresh
         s.a=0.5**(1/half_life);s.big=big_frac;s.rb=rec_bytes
         s.fixed=np.zeros((len(s.layers),NE),bool)
@@ -27,6 +29,8 @@ class Scheduler:
             d=[e for e in floating_default[L] if not s.fixed[s.li[L],e]][:n_float];s.want[s.li[L],d]=True
         s.state=np.zeros((len(s.layers),NE),np.int8)       # floating: 0 level 2, 1 upgrade in flight, 2 level 4, 3 downgrade in flight
         s.per_tok=cap_GBps*1e9/tok_per_s;s.budget=0.0;s.cap=s.per_tok*burst_tokens
+        s.slots=slots                                      # slot pool size (streamed experts per rank); None = unbounded
+        s.retry=refresh if retry_tokens is None else retry_tokens;s.hold=np.zeros((len(s.layers),NE))   # failed read -> no retry before hold
         s.tok=0;s.next_refresh=refresh;s.stats=dict(ups=0,downs=0,deferred_steps=0,big_steps=0,bytes=0)
     def step(s,counts,ntok=1):
         c=np.asarray(counts,np.float64)
@@ -41,11 +45,13 @@ class Scheduler:
         for L,e in downs:s.state[s.li[L],e]=3
         ups=[]
         big=((c>0).sum(1)>s.big*s.NE).any()
-        cand=(s.state==0)&s.want
+        cand=(s.state==0)&s.want&(s.hold<=s.tok)
         if big:s.stats['big_steps']+=1
         elif cand.any():
             i,e=np.nonzero(cand);o=np.argsort(-s.score[i,e],kind='stable')
-            n=int(s.budget//s.rb);take=o[:n]
+            n=int(s.budget//s.rb)
+            if s.slots is not None:n=max(0,min(n,s.slots-int((s.state>0).sum())))   # slots held by in-flight, landed and draining
+            take=o[:n]
             if len(o)>n:s.stats['deferred_steps']+=1
             for k in take:ups.append((s.layers[i[k]],int(e[k])));s.state[i[k],e[k]]=1
             s.budget-=len(take)*s.rb;s.stats['bytes']+=len(take)*s.rb
@@ -57,9 +63,11 @@ class Scheduler:
     def released(s,L,e):
         i=s.li[L]
         if s.state[i,e]==3:s.state[i,e]=0
-    def failed(s,L,e):
+    def failed(s,L,e,read_error=False):
         i=s.li[L]
-        if s.state[i,e]==1:s.state[i,e]=0
+        if s.state[i,e]==1:
+            s.state[i,e]=0
+            if read_error:s.hold[i,e]=s.tok+s.retry;s.stats['read_errors']=s.stats.get('read_errors',0)+1
     def kv_pressure(s,n):
         """drop the n lowest-score level-4 floating experts now (returns downs); they are not re-upgraded until the
         next refresh re-selects them."""

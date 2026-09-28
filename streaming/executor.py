@@ -42,7 +42,7 @@ class RankExecutor:
             L,E,kind,q=s.ops.pop(tag)
             if trd<0:                                             # read failed: row never posted
                 s.n_failed+=1;s.free.append(s.slot_of.pop((L,E)))
-                if sched is not None:sched.failed(L,E)
+                if sched is not None:sched.failed(L,E,read_error=True)
                 continue
             s.layers[L][1].hseq[E]=q;s.wait_apply[L,E]=(kind,q)
             if kind==4:s.lat.append(te2e)
