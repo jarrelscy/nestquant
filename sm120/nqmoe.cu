@@ -822,6 +822,9 @@ void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Te
     a.wdump[0] = (half*)g_wdump[0]; a.wdump[1] = (half*)g_wdump[1]; a.dump_e = g_dump_e;
     const int S = a.B * a.topk;
     TORCH_CHECK(S <= 64 && a.B <= 8, "B*topk <= 64, B <= 8");
+    TORCH_CHECK(x.scalar_type() == at::kHalf && rw.scalar_type() == at::kHalf && sel.scalar_type() == at::kLong && table.scalar_type() == at::kLong, "x/rw fp16, sel/table int64");
+    TORCH_CHECK(out.scalar_type() == at::kFloat && acc_gu.scalar_type() == at::kFloat && acc_d.scalar_type() == at::kFloat && zd.scalar_type() == at::kFloat && h.scalar_type() == at::kHalf, "workspace dtypes: out/acc_gu/acc_d/zd fp32, h fp16");
+    TORCH_CHECK(acc_gu.numel() >= (int64_t)S * 2 * I && acc_d.numel() >= (int64_t)S * a.H && h.numel() >= (int64_t)S * I && out.numel() >= (int64_t)a.B * a.H, "workspace too small");
     TORCH_CHECK(a.H % 128 == 0 && I % 128 == 0 && a.H / 128 <= 64 && I / 128 <= 64);
     auto st = at::cuda::getCurrentCUDAStream();
     for (int mode = 0; mode < 2; ++mode)

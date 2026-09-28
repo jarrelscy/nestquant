@@ -1,0 +1,39 @@
+# NestQuant experts on the GLM-5.3 ARVQ serving stack. Layered on the homeassistant compose files:
+#   COMPOSE_FILE=docker-compose.yaml:docker-compose.glm53-arvq.yaml:<this file>   (serve_nq.sh sets it)
+# Same image and non-expert weights as production; MoE layers present in NQ_REPACK run the NestQuant kernel with SSD
+# P4 streaming, the others keep ARVQ. LMCache is off (its cache holds KV computed with the ARVQ experts).
+services:
+  vllm-glm5.3-hybrid-1m:
+    container_name: glm53-nestquant
+    security_opt:
+    - seccomp=unconfined          # io_uring (the default docker profile blocks io_uring_setup)
+    environment:
+      ENABLE_LMCACHE: '0'
+      SERVED_NAME: ${NQ_SERVED_NAME:-glm-5.3-nq}
+      MAXLEN: ${NQ_MAXLEN:-131072}
+      UTIL: ${NQ_UTIL:-0.88}
+      MAX_NUM_SEQS: ${NQ_MAX_NUM_SEQS:-4}
+      NUM_SPEC: ${NUM_SPEC:-3}
+      PYTHONPATH: /nq/sm120/serve
+      NQ_HOME: /nq
+      NQ_REPACK: /nqrepack
+      NQ_BUILD: /nqbuild
+      NQ_LAYERS: ${NQ_LAYERS:-}
+      NQ_STREAM: ${NQ_STREAM:-1}
+      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-56}
+      NQ_CAP_GBPS: ${NQ_CAP_GBPS:-6}
+      NQ_CHECK: ${NQ_CHECK:-0}
+      CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
+      NQ_DUMP: ${NQ_DUMP:-}
+      NQ_HITS: ${NQ_HITS:-1}
+      LIBURING: /data/Jarrel/liburing
+      CUDA_HOME: /opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13
+      VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
+    volumes:
+    - ${NQ_REPO:-/data/Jarrel/nestquant}:/nq:ro
+    - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/prod}:/nqrepack:ro
+    - /data/Jarrel/nq-build-container:/nqbuild
+    - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
+    - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
+    - /data/Jarrel/nq-serve/dbg:/dbg
+    - ${NQ_REPO:-/data/Jarrel/nestquant}/sm120/serve/overlay/nvfp4_arvq_hybrid.py:/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro

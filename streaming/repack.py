@@ -2,11 +2,11 @@
   repack.py ROOT OUT [tp=4] [layers=3-77] [rec_bytes]
 OUT/rank{r}.bin: record of (L, E) at ((L - L0) * 256 + E) * rec_bytes, rec_bytes the same for every layer (4 KiB
 aligned, = the slot size), so layers can be written in any order as the fit lands them. OUT/rank{r}.json: layout,
-per-layer written flag and per-expert lr ranks. The base planes are not in the file (they load at startup).
-Layers already in the index are skipped; rerun to pick up new ones."""
+per-layer written flag and per-expert lr ranks. The resident planes (base, scales, lr) go to OUT/res/rank{r}/L{L}.pt
+(resident.py, loaded at serve startup). Layers already written are skipped; rerun to pick up new ones."""
 import os,sys,json,time,torch
 HERE=os.path.dirname(os.path.abspath(__file__));sys.path[:0]=[HERE,HERE+'/../sm120']
-import nqload as NQ,p4rec as PR
+import nqload as NQ,p4rec as PR,resident as RS
 NE=256;L0=3
 
 def parse_layers(s):
@@ -20,8 +20,11 @@ def main():
         if not os.path.exists(f'{root}/L{L}/manifest.json'):print(f'L{L}: not fitted yet');continue
         for r in range(tp):
             ip=f'{out}/rank{r}.json';idx=json.load(open(ip)) if os.path.exists(ip) else dict(format='nq-p4rec-v1',tp=tp,rank=r,L0=L0,NE=NE,layers={})
-            if str(L) in idx['layers']:continue
+            rp=f'{out}/res/rank{r}/L{L}.pt';os.makedirs(os.path.dirname(rp),exist_ok=True)
+            if str(L) in idx['layers'] and os.path.exists(rp):continue
             t=time.time();RL=NQ.RankLayer(root,L,r,tp)
+            if not os.path.exists(rp):RS.save(RL,rp);print(f'L{L} rank{r}: resident planes {os.path.getsize(rp)/2**20:.0f} MiB',flush=True)
+            if str(L) in idx['layers']:del RL;torch.cuda.empty_cache();continue
             lay=PR.layout(next(iter(RL.ex.values())),RL.H,RL.I)
             if 'rec_bytes' not in idx:idx['rec_bytes']=int(sys.argv[5]) if len(sys.argv)>5 else lay['rec_bytes'];idx['seg']=lay['seg']
             assert json.loads(json.dumps(lay['seg']))==idx['seg'] and lay['rec_bytes']<=idx['rec_bytes'],('layout changed',L,lay,idx['seg'])

@@ -8,6 +8,6 @@ def get(defs=None):
     """defs: extra -D macros (diagnostic variants get their own module name / build dir)."""
     defs=defs if defs is not None else [d for d in os.environ.get('NQ_DEFS','').split(',') if d]
     tag=('_'+'_'.join(d.replace('=','') for d in defs)) if defs else ''
-    b='/data/Jarrel/nq-build/sm120'+tag;os.makedirs(b,exist_ok=True)
+    b=os.environ.get('NQ_BUILD','/data/Jarrel/nq-build')+'/sm120'+tag;os.makedirs(b,exist_ok=True)
     return load('nqmoe120'+tag,[os.path.join(D,'nqmoe.cu')],extra_cuda_cflags=['-O3','--use_fast_math','-lineinfo']+['-D'+d for d in defs],build_directory=b,verbose=False)
 if __name__=='__main__':get();print('built')
