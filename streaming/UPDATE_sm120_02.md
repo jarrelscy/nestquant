@@ -1,14 +1,16 @@
-# Update 02 for the SM120 agent: boundary experts are always hot (2026-09-28)
+# Update 02 for the SM120 agent: fixed set chosen by boundary-weighted REAP (2026-09-28, revised)
 
-The user wants experts that fire consistently just before boundary tokens (`</think>`, and end of turn `<|user|>` / `<|observation|>`) to always be at 4 bit. Overthinking and failing to stop are known failure modes, and the tokens leading up to a boundary are where the stop decision is made.
+The user wants experts used just before boundary tokens (`</think>`, and end of turn `<|user|>` / `<|observation|>`) to be at 4 bit, because overthinking and failing to stop are known failure modes.
 
 ## What changes for you
-1. **Fixed set.** The fixed ~10% always-4-bit set (~26 experts per layer) must include every expert listed in the artifact's `boundary_hot.json`. Fill the rest of the fixed set by usage, as before. Boundary experts are never downgraded by the floating policy. Under KV pressure, drop floating experts first, and drop boundary experts only as the very last step.
-2. **Size.** Partial run on the new corpus: 342 experts across 75 layers (median 5 per layer, max 12). The final list comes out when the full capture finishes, and should be similar in size. Budget up to 12 per layer; no per-layer list is published yet.
-3. **Format.** `boundary_hot.json` is `{layer: [{e, kind, bucket, hit, lift}]}`, shipped in the HF repo next to the manifest. The manifest also flags `boundary_hot: true` per (layer, expert). Load it at startup, together with the fixed set.
-4. **Report.** In the tb4 runs, report the 4-bit share of routed slots in the 32 tokens before each boundary separately from the overall share. It should be close to 100% for the boundary experts.
+1. **How the fixed set is chosen.** It is the top 26 experts per layer (10%) by token-weighted REAP salience, Σ_t w_t·p·‖y‖. Weights depend on the token's distance before a boundary: 50 at 1 token, 20 at 2–4, 5 at 5–16, 2 at 17–32, and 1 everywhere else. The artifact ships this as `fixed_set.json` (`{layer: [experts]}`). Load it at startup in place of your own usage-based fixed set.
+2. **Scheduler.** No other change. The floating policy works as before.
+3. **Report.** In the tb4 runs, report the 4-bit share of routed slots at 1 and 2–4 tokens before boundaries separately from the overall share.
 
-## How the set is chosen
-Take rows 1 and 2–4 tokens before each boundary. Split them into two halves by document. An expert counts if it is picked on ≥30% of those rows AND at ≥3x its usual rate, in both halves. Code and data are in `threads/22-boundary-experts/`.
+## Expected effect (chunk 0, share of routes that land in the fixed set)
+| | all tokens | end, 1 before | end, 2–4 before | think, 1 before |
+|---|---|---|---|---|
+| unweighted REAP | 0.207 | 0.330 | 0.193 | 0.249 |
+| weighted REAP | 0.207 | 0.447 | 0.224 | 0.281 |
 
-End-of-turn preference is very reproducible (split-half rank correlation 0.84–0.95 per layer). The `</think>` data is still thin (219 events per layer) until the reasoning-trace capture lands.
+Code: `threads/22-boundary-experts/reap_weighted.py`.
