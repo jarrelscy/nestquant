@@ -1,0 +1,7 @@
+(a) torch ref vs ref15_spec: 144 units x 2 levels, codes 0..8 (odd codes signed), mismatching units 0
+(b) (Mb,N) coverage over the 8 experts: 33149/33149 valid block words
+  G=4 level 2: done (16 projections so far, 0 mismatching)
+  G=4 level 4: done (32 projections so far, 0 mismatching)
+  G=2 level 2: done (48 projections so far, 0 mismatching)
+  G=2 level 4: done (64 projections so far, 0 mismatching)
+(b) kernel vs torch ref: 64 projections, 0 mismatching (bitwise fp16, +0/-0 treated equal: 1582 signed-zero diffs)

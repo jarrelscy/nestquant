@@ -1,0 +1,82 @@
+{
+ "seeding": {
+  "default_source": "n_routed top51 non-fixed",
+  "requests": 149,
+  "requests_without_prefill_rows": 0,
+  "prefill_rows_median": 1024.0,
+  "prefill_ge_1024": 137,
+  "seed_share_first1024": 0.5448454868393456,
+  "default_share_first1024": 0.6074306902789429,
+  "seed_by_window": [
+   0.4345,
+   0.4246,
+   0.4556,
+   0.4812,
+   0.5072,
+   0.5241,
+   0.5418,
+   0.561,
+   0.576,
+   0.5817,
+   0.5892,
+   0.6018,
+   0.6011,
+   0.6088,
+   0.6111,
+   0.6179
+  ],
+  "default_by_window": [
+   0.5761,
+   0.5365,
+   0.5641,
+   0.5826,
+   0.6057,
+   0.6171,
+   0.6233,
+   0.6312,
+   0.6338,
+   0.6255,
+   0.6209,
+   0.6269,
+   0.6182,
+   0.6204,
+   0.6165,
+   0.6201
+  ],
+  "seed_better_frac": 0.0
+ },
+ "streams": {
+  "1": {
+   "groups": 24,
+   "mean_share": 0.6227,
+   "lowest_stream_mean": 0.6227,
+   "lowest_stream_min": 0.4951,
+   "GBps": 3.28,
+   "agg_tps": 111
+  },
+  "2": {
+   "groups": 24,
+   "mean_share": 0.6182,
+   "lowest_stream_mean": 0.5975,
+   "lowest_stream_min": 0.5451,
+   "GBps": 1.88,
+   "agg_tps": 148
+  },
+  "4": {
+   "groups": 24,
+   "mean_share": 0.6234,
+   "lowest_stream_mean": 0.5853,
+   "lowest_stream_min": 0.4261,
+   "GBps": 0.94,
+   "agg_tps": 185
+  },
+  "8": {
+   "groups": 13,
+   "mean_share": 0.6217,
+   "lowest_stream_mean": 0.5473,
+   "lowest_stream_min": 0.3991,
+   "GBps": 0.44,
+   "agg_tps": 214
+  }
+ }
+}

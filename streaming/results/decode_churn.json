@@ -1,0 +1,42 @@
+{
+ "reap": {
+  "decode_tokens": 747712,
+  "requests": 141,
+  "fixed_route_share": 0.09569493780136382,
+  "fixed_activated_share": 0.0961867455143193,
+  "route_share_lag0": 0.6206400191517589,
+  "route_share_lag1": 0.6099254782352856,
+  "route_share_lag2": 0.6034024336315528,
+  "activated_hot_lag0": 0.4150298023395313,
+  "activated_hot_lag1": 0.41155138165821303,
+  "activated_hot_lag2": 0.40931702657582886,
+  "new_per_refresh": 195.375584820655,
+  "new_p95": 258.0,
+  "GB_per_refresh": 1.9478945806619303,
+  "GBps_at_60tps": 1.83,
+  "GBps_at_111tps": 3.38,
+  "GBps_at_148tps": 4.5,
+  "GBps_at_185tps": 5.63,
+  "GBps_at_214tps": 6.51
+ },
+ "usage": {
+  "decode_tokens": 747712,
+  "requests": 141,
+  "fixed_route_share": 0.36867647793089675,
+  "fixed_activated_share": 0.16881693435947467,
+  "route_share_lag0": 0.6708379540964079,
+  "route_share_lag1": 0.6600320320171259,
+  "route_share_lag2": 0.6535567740768353,
+  "activated_hot_lag0": 0.45885817750924257,
+  "activated_hot_lag1": 0.4544563180921071,
+  "activated_hot_lag2": 0.4516924913490589,
+  "new_per_refresh": 238.53015075376885,
+  "new_p95": 313.0,
+  "GB_per_refresh": 2.378145603015075,
+  "GBps_at_60tps": 2.23,
+  "GBps_at_111tps": 4.12,
+  "GBps_at_148tps": 5.5,
+  "GBps_at_185tps": 6.87,
+  "GBps_at_214tps": 7.95
+ }
+}
