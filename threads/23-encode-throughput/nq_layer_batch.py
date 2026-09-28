@@ -34,22 +34,19 @@ def parse():
     ap.add_argument("--bnd-k", type=float, default=NBND.DEFAULT_K)
     ap.add_argument("--bnd-cap", type=float, default=NBND.DEFAULT_CAP)
     ap.add_argument("--no-finalize", action="store_true")
+    ap.add_argument("--stats-mm"); ap.add_argument("--mm-w", type=float, default=getattr(NL, "MM_W", 0.25))
+    ap.add_argument("--lr-tau", type=float, default=NE.LR["tau"] if hasattr(NE, "LR") else None)
+    ap.add_argument("--lr-rmax", type=int, default=NE.LR["rmax"] if hasattr(NE, "LR") else None)
+    ap.add_argument("--no-lr", action="store_true")
     ap.add_argument("--group", type=int, default=4)
     ap.add_argument("--prefetch", action="store_true", help="load next group in a thread (off by default)")
     a, _ = ap.parse_known_args()
     return a
 
 
-def load_one(cap, a, bw, L, E):
-    """nq_layer.main loop body up to the encode call."""
-    HG = NBND.glm_H_bnd(cap, L, E, bw, k=a.bnd_k, cap_frac=a.bnd_cap)
-    flags = []
-    for i, Hm in enumerate(HG["H"]):
-        if not torch.isfinite(Hm).all() or float(Hm.diagonal().mean()) <= 0:      # unrouted expert: no stats
-            HG["H"][i] = torch.eye(Hm.shape[0], device=Hm.device); flags.append(f"H{i}=I")
-    for i, G in enumerate(HG["G"][:2]):
-        if not torch.isfinite(G).all():
-            HG["G"][i] = None; flags.append(f"G{i}=none")
+def load_one(cap, a, L, E):
+    """nq_layer.main loop body up to the encode call (thread 12's own expert_HG)."""
+    HG, flags = NL.expert_HG(cap, L, E, a.bnd, a.bnd_k, a.bnd_cap)
     return NL.teacher(a.source, L, E), HG, flags
 
 
@@ -58,9 +55,8 @@ def main():
     C.setup()
     torch.cuda.set_per_process_memory_fraction(12 / 80)
     torch.backends.cuda.matmul.allow_tf32 = False
-    sys.path.insert(0, NL.T19)
-    import nq19_load
-    cap = nq19_load.Capture(root=a.stats)
+    cap = NL.open_stats(a.stats, a.stats_mm, a.mm_w)
+    lrc = None if a.no_lr else dict(NE.LR, tau=a.lr_tau, rmax=a.lr_rmax)
     L = a.layer
     bw = NBND.parse_bnd(a.bnd)
     d = f"{a.out}/L{L}"; ed = f"{d}/experts"
@@ -73,7 +69,7 @@ def main():
 
     def load_group(g):
         with torch.cuda.stream(stream):
-            out = [load_one(cap, a, bw, L, E) for E in g]
+            out = [load_one(cap, a, L, E) for E in g]
         stream.synchronize()
         return out
     q = queue.Queue(maxsize=1)
@@ -94,10 +90,12 @@ def main():
             else:
                 g, data = q.get()
             torch.cuda.current_stream().wait_stream(stream)
-            arts = NBAT.encode_group([(W, HG) for W, HG, _ in data], rate=a.rate, res_K=rk, seg=seg)
+            arts = NBAT.encode_group([(W, HG) for W, HG, _ in data], rate=a.rate, res_K=rk, seg=seg, lr=lrc)
             for E, (_, HG, flags), art in zip(g, data, arts):
                 art["meta"].update(layer=L, expert=E, flags=flags, bnd=NBND.bnd_tag(bw), bnd_k=a.bnd_k, bnd_cap=a.bnd_cap,
-                                   hg_meta={k: (float(v) if torch.is_tensor(v) else v) for k, v in HG.get("meta", {}).items()})
+                                   stats=a.stats, stats_mm=a.stats_mm, mm_w=a.mm_w if a.stats_mm else 0.0,
+                                   hg_meta={k: (float(v) if torch.is_tensor(v) else v) for k, v in HG.get("meta", {}).items()
+                                            if not isinstance(v, dict)})
                 path = f"{ed}/E{E}.pt"
                 torch.save(art, path + ".tmp"); os.replace(path + ".tmp", path)
             n_done += len(g)

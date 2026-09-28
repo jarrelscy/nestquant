@@ -29,9 +29,8 @@ CHECK_EXPERTS = [(3, 0), (16, 36), (16, 92), (16, 165), (40, 7), (49, 36), (66, 
 
 
 def setup(cap_gb=12):
-    if T12 != T12_LIVE:                     # pinned copy: build its CUDA ext in our scratch, never in thread 12's
-        import nq_patvit as PV
-        PV.EXT_DIR = f"{SCR}/ext_pin"
+    import nq_patvit as PV                  # build thread 12's CUDA ext in our scratch, never in thread 12's dir
+    PV.EXT_DIR = f"{T12}/ext" if T12 != T12_LIVE else f"{SCR}/ext_live"
     torch.cuda.set_per_process_memory_fraction(cap_gb / 80)
     torch.backends.cuda.matmul.allow_tf32 = False
 

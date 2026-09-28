@@ -438,19 +438,31 @@ def _precomputed_encode_rotated(table):
         NE.encode_rotated = orig
 
 
-def _proj_setup(W, HG, pn, *, count, sigma, seed, sigma_out, res_K):
-    """NE.encode_expert's per-projection prep call + rule (production branch: res_K given, single joint pass)."""
+def _proj_setup(W, HG, pn, *, count, sigma, seed, sigma_out, res_K, ocol=None, lr=None, Vprev=None):
+    """NE.encode_expert's per-projection prep call + rule (production branch: res_K given, single joint pass),
+    incl. thread 12's outlier-column / low-rank planes' trellis metric (Hq). -> (P, rule, oidx, Vlr)."""
     pi = NE.PROJ.index(pn)
-    P = NE.prep(W[pi], HG["H"][pi], count, sigma[pn], seed=seed, G=HG["G"][pi], sigma_out=sigma_out,
+    Hq, oidx, Vlr = HG["H"][pi], None, None
+    if hasattr(NE, "ocol_detect"):
+        oidx = NE.ocol_detect(HG["H"][pi], **ocol) if ocol else torch.zeros(0, dtype=torch.long)
+        Hq = NE.ocol_H(HG["H"][pi], oidx)
+    if lr:
+        shareH = HG["H"][1] is HG["H"][0] or torch.equal(HG["H"][1], HG["H"][0])
+        if not (pi == 1 and shareH):
+            Vlr = NE.lr_detect(HG["H"][pi].cuda(), **lr)
+        else:
+            Vlr = Vprev
+        Hq = NE.lr_H(HG["H"][pi].cuda(), Vlr)
+    P = NE.prep(W[pi], Hq, count, sigma[pn], seed=seed, G=HG["G"][pi], sigma_out=sigma_out,
                 ks=(2, float(res_K[pn])) if res_K else None)
     rule = dict(kind="uniform", K=float(res_K[pn]))
-    return P, rule
+    return P, rule, oidx, Vlr
 
 
 @torch.no_grad()
 def encode_group(items, *, rate=None, count=1, sigma=None, sigma_out=0.03, lam=NE.PROD["lam"], base_var=NE.PROD["base_var"],
                  inner=NE.PROD["inner"], check=True, canonical_base=NE.PROD["canonical_base"], res_K=None, seed=91426,
-                 opts=None, seg=None, timings=None):
+                 opts=None, seg=None, timings=None, ocol=None, lr="PROD"):
     """[NE.encode_expert(W, HG, ...)[0] for (W, HG) in items], batched. Production branch only (res_K, single pass,
     inner 0); anything else -> per-expert NE.encode_expert."""
     opts = dict(DEFAULT_OPTS, **(opts or {}))
@@ -458,13 +470,18 @@ def encode_group(items, *, rate=None, count=1, sigma=None, sigma_out=0.03, lam=N
     if rate is None and res_K is None:
         res_K = NE.PROD["res_K"]
     tm = timings if timings is not None else collections.defaultdict(float)
+    has_lr = "lr" in NE.PROD                                     # thread-12 low-rank plane era (2026-09-28+)
+    if lr == "PROD":
+        lr = NE.PROD.get("lr")
+    xkw = dict(ocol=ocol, lr=lr) if has_lr else {}
+    assert has_lr or (not lr and not ocol), "this thread-12 code has no lr/ocol planes"
     if not opts["batched"] or canonical_base or inner or not res_K:
         outs = []
         for W, HG in items:
             t = time.time()
             outs.append(NE.encode_expert(W, HG, rate=rate, count=count, sigma=sigma, sigma_out=sigma_out, lam=lam,
                                          base_var=base_var, inner=inner, check=check, canonical_base=canonical_base,
-                                         res_K=res_K, seed=seed)[0])
+                                         res_K=res_K, seed=seed, **xkw)[0])
             tm["encode_expert"] += time.time() - t
             LDL_MEMO.clear()
         return outs
@@ -473,11 +490,15 @@ def encode_group(items, *, rate=None, count=1, sigma=None, sigma_out=0.03, lam=N
     arts = [dict() for _ in items]; infos = [dict() for _ in items]
     for projs in (("gate", "up"), ("down",)):
         t = time.time()
-        Ps, rules = {}, {}
+        Ps, rules, extra = {}, {}, {}
         for b, (W, HG) in enumerate(items):
+            Vprev = None
             for pn in projs:
-                Ps[b, pn], rules[b, pn] = _proj_setup(W, HG, pn, count=count, sigma=sigma, seed=seed,
-                                                      sigma_out=sigma_out, res_K=res_K)
+                Ps[b, pn], rules[b, pn], oidx, Vprev = _proj_setup(W, HG, pn, count=count, sigma=sigma, seed=seed,
+                                                                   sigma_out=sigma_out, res_K=res_K, ocol=ocol, lr=lr,
+                                                                   Vprev=Vprev)
+                shareH = HG["H"][1] is HG["H"][0] or torch.equal(HG["H"][1], HG["H"][0])
+                extra[b, pn] = (oidx, Vprev, bool(NE.PROJ.index(pn) == 1 and shareH))
             LDL_MEMO.clear()
         keys = [(b, pn) for pn in projs for b in range(G)]
         metas = []
@@ -498,6 +519,16 @@ def encode_group(items, *, rate=None, count=1, sigma=None, sigma_out=0.03, lam=N
                 t1 = time.time()
                 planes, dn, inf, enc, _ = NE.encode_projection(P, shard_axis=mt["shard_axis"], lam=lam, base_var=base_var,
                                                                inner=inner, res_rule=mt["res_rule"])
+                oidx, Vlr, sharedV = extra.pop(key)
+                W = items[b][0]; pi = NE.PROJ.index(pn)
+                if lr and Vlr.shape[0]:
+                    NE.lr_apply(planes, dn, W[pi], Vlr)
+                    planes["meta"]["lr"] = dict(lr, r=int(Vlr.shape[0]), shared_V=sharedV, nnz=NE.lr_nnz(Vlr))
+                    inf["bits"] = D.bits_per_level(planes)
+                if oidx is not None and oidx.numel():
+                    NE.ocol_apply(planes, dn, W[pi], oidx)
+                    planes["meta"]["ocol"] = dict(ocol, n=int(oidx.numel()))
+                    inf["bits"] = D.bits_per_level(planes)
                 if check:
                     rot = D.rotated_levels(planes)
                     inf["bitexact"] = {L: bool(torch.equal(D.decode_matrix(planes, L, rot=rot), dn[L])) for L in (2, 4)}
@@ -518,6 +549,12 @@ def encode_group(items, *, rate=None, count=1, sigma=None, sigma_out=0.03, lam=N
         r = sum(info[p]["bits"][4] for p in NE.PROJ) / len(NE.PROJ) if res_K else rate
         arts[b]["meta"] = dict(format="nestquant-v1", rate=r, base_var=base_var, lam=lam, inner=inner, sigma=sigma,
                                canonical_base=canonical_base, res_K=dict(res_K) if res_K else None, info=info)
+        if has_lr:
+            A = arts[b]
+            arts[b]["meta"].update(
+                ocol=dict(ocol) if ocol else None, lr=dict(lr) if lr else None,
+                lr_rank={p: int(A[p]["base"]["lr"]["V"].shape[0]) if "lr" in A[p]["base"] else 0 for p in NE.PROJ},
+                ocol_idx={p: A[p]["base"]["ocol"]["idx"].tolist() if "ocol" in A[p]["base"] else [] for p in NE.PROJ})
     return arts
 
 
