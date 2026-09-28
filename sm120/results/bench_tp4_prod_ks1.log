@@ -1,0 +1,12 @@
+{'B': 1, 'level': 2, 'nq_us': 27.5, 'exl3_us': 79.6, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 2.89, 'exl3_ksplit': '1'}
+{'B': 1, 'level': 4, 'nq_us': 50.8, 'exl3_us': 81.2, 'cfg': ((1, 8, 6), (1, 4, 4)), 'speedup': 1.6, 'exl3_ksplit': '1'}
+{'B': 1, 'level': 'mix', 'nq_us': 44.3, 'exl3_us': 147.2, 'cfg': ((1, 8, 4), (1, 8, 2)), 'speedup': 3.32, 'exl3_ksplit': '1'}
+{'B': 2, 'level': 2, 'nq_us': 38.0, 'exl3_us': 95.7, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 2.52, 'exl3_ksplit': '1'}
+{'B': 2, 'level': 4, 'nq_us': 70.4, 'exl3_us': 99.8, 'cfg': ((1, 8, 3), (1, 8, 2)), 'speedup': 1.42, 'exl3_ksplit': '1'}
+{'B': 2, 'level': 'mix', 'nq_us': 56.2, 'exl3_us': 163.3, 'cfg': ((1, 8, 4), (1, 8, 2)), 'speedup': 2.91, 'exl3_ksplit': '1'}
+{'B': 3, 'level': 2, 'nq_us': 52.5, 'exl3_us': 117.8, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 2.24, 'exl3_ksplit': '1'}
+{'B': 3, 'level': 4, 'nq_us': 100.2, 'exl3_us': 125.8, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 1.26, 'exl3_ksplit': '1'}
+{'B': 3, 'level': 'mix', 'nq_us': 80.0, 'exl3_us': 184.6, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 2.31, 'exl3_ksplit': '1'}
+{'B': 4, 'level': 2, 'nq_us': 69.6, 'exl3_us': 150.4, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 2.16, 'exl3_ksplit': '1'}
+{'B': 4, 'level': 4, 'nq_us': 128.9, 'exl3_us': 161.9, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 1.26, 'exl3_ksplit': '1'}
+{'B': 4, 'level': 'mix', 'nq_us': 100.6, 'exl3_us': 206.3, 'cfg': ((1, 8, 6), (1, 8, 4)), 'speedup': 2.05, 'exl3_ksplit': '1'}

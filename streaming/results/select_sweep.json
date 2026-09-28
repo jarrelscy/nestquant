@@ -1,0 +1,106 @@
+[
+ {
+  "score": "box",
+  "param": 256,
+  "refresh": 64,
+  "route_share": 0.6125,
+  "activated_hot": 0.4108,
+  "GBps_111": 10.55
+ },
+ {
+  "score": "box",
+  "param": 512,
+  "refresh": 64,
+  "route_share": 0.6162,
+  "activated_hot": 0.4114,
+  "GBps_111": 6.04
+ },
+ {
+  "score": "box",
+  "param": 1024,
+  "refresh": 64,
+  "route_share": 0.6158,
+  "activated_hot": 0.4107,
+  "GBps_111": 3.43
+ },
+ {
+  "score": "box",
+  "param": 2048,
+  "refresh": 64,
+  "route_share": 0.6129,
+  "activated_hot": 0.4091,
+  "GBps_111": 1.93
+ },
+ {
+  "score": "box",
+  "param": 4096,
+  "refresh": 64,
+  "route_share": 0.6091,
+  "activated_hot": 0.4074,
+  "GBps_111": 1.08
+ },
+ {
+  "score": "ema",
+  "param": 128,
+  "refresh": 64,
+  "route_share": 0.623,
+  "activated_hot": 0.4148,
+  "GBps_111": 10.03
+ },
+ {
+  "score": "ema",
+  "param": 256,
+  "refresh": 64,
+  "route_share": 0.6256,
+  "activated_hot": 0.4151,
+  "GBps_111": 5.93
+ },
+ {
+  "score": "ema",
+  "param": 512,
+  "refresh": 64,
+  "route_share": 0.6243,
+  "activated_hot": 0.414,
+  "GBps_111": 3.4
+ },
+ {
+  "score": "ema",
+  "param": 1024,
+  "refresh": 64,
+  "route_share": 0.6204,
+  "activated_hot": 0.412,
+  "GBps_111": 1.92
+ },
+ {
+  "score": "box",
+  "param": 1024,
+  "refresh": 32,
+  "route_share": 0.6217,
+  "activated_hot": 0.4571,
+  "GBps_111": 4.37
+ },
+ {
+  "score": "box",
+  "param": 1024,
+  "refresh": 16,
+  "route_share": 0.626,
+  "activated_hot": 0.5032,
+  "GBps_111": 5.69
+ },
+ {
+  "score": "ema",
+  "param": 256,
+  "refresh": 32,
+  "route_share": 0.6359,
+  "activated_hot": 0.4659,
+  "GBps_111": 7.69
+ },
+ {
+  "score": "ema",
+  "param": 256,
+  "refresh": 16,
+  "route_share": 0.6437,
+  "activated_hot": 0.5167,
+  "GBps_111": 9.96
+ }
+]

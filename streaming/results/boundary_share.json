@@ -1,0 +1,29 @@
+{
+ "fixed_set_source": "thread22",
+ "requests": 263,
+ "all": {
+  "rows": 1656086,
+  "fixed": 0.1315,
+  "fixed_plus_floating": 0.6091
+ },
+ "think_d1": {
+  "rows": 257,
+  "fixed": 0.3433,
+  "fixed_plus_floating": 0.704
+ },
+ "think_d2_4": {
+  "rows": 769,
+  "fixed": 0.2037,
+  "fixed_plus_floating": 0.6208
+ },
+ "end_d1": {
+  "rows": 263,
+  "fixed": 0.289,
+  "fixed_plus_floating": 0.4949
+ },
+ "end_d2_4": {
+  "rows": 789,
+  "fixed": 0.3041,
+  "fixed_plus_floating": 0.5022
+ }
+}

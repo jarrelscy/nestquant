@@ -1,0 +1,122 @@
+[
+ {
+  "B": 1,
+  "level": 2,
+  "nq_us": 27.1,
+  "exl3_best_us": 66.3,
+  "exl3_best_ksplit": 2,
+  "exl3_ks1_us": 79.6,
+  "exl3_ks2_us": 66.3,
+  "speedup": 2.45
+ },
+ {
+  "B": 1,
+  "level": 4,
+  "nq_us": 49.7,
+  "exl3_best_us": 69.9,
+  "exl3_best_ksplit": 2,
+  "exl3_ks1_us": 81.2,
+  "exl3_ks2_us": 69.9,
+  "speedup": 1.41
+ },
+ {
+  "B": 1,
+  "level": "mix",
+  "nq_us": 43.5,
+  "exl3_best_us": 110.7,
+  "exl3_best_ksplit": 2,
+  "exl3_ks1_us": 147.2,
+  "exl3_ks2_us": 110.7,
+  "speedup": 2.54
+ },
+ {
+  "B": 2,
+  "level": 2,
+  "nq_us": 37.4,
+  "exl3_best_us": 95.7,
+  "exl3_best_ksplit": 1,
+  "exl3_ks1_us": 95.7,
+  "exl3_ks2_us": 98.3,
+  "speedup": 2.56
+ },
+ {
+  "B": 2,
+  "level": 4,
+  "nq_us": 68.2,
+  "exl3_best_us": 99.8,
+  "exl3_best_ksplit": 1,
+  "exl3_ks1_us": 99.8,
+  "exl3_ks2_us": 103.4,
+  "speedup": 1.46
+ },
+ {
+  "B": 2,
+  "level": "mix",
+  "nq_us": 55.0,
+  "exl3_best_us": 136.4,
+  "exl3_best_ksplit": 2,
+  "exl3_ks1_us": 163.3,
+  "exl3_ks2_us": 136.4,
+  "speedup": 2.48
+ },
+ {
+  "B": 3,
+  "level": 2,
+  "nq_us": 51.5,
+  "exl3_best_us": 117.8,
+  "exl3_best_ksplit": 1,
+  "exl3_ks1_us": 117.8,
+  "exl3_ks2_us": 134.4,
+  "speedup": 2.29
+ },
+ {
+  "B": 3,
+  "level": 4,
+  "nq_us": 96.9,
+  "exl3_best_us": 125.8,
+  "exl3_best_ksplit": 1,
+  "exl3_ks1_us": 125.8,
+  "exl3_ks2_us": 143.0,
+  "speedup": 1.3
+ },
+ {
+  "B": 3,
+  "level": "mix",
+  "nq_us": 77.6,
+  "exl3_best_us": 173.2,
+  "exl3_best_ksplit": 2,
+  "exl3_ks1_us": 184.6,
+  "exl3_ks2_us": 173.2,
+  "speedup": 2.23
+ },
+ {
+  "B": 4,
+  "level": 2,
+  "nq_us": 68.9,
+  "exl3_best_us": 150.4,
+  "exl3_best_ksplit": 1,
+  "exl3_ks1_us": 150.4,
+  "exl3_ks2_us": 179.8,
+  "speedup": 2.18
+ },
+ {
+  "B": 4,
+  "level": 4,
+  "nq_us": 128.9,
+  "exl3_best_us": 161.9,
+  "exl3_best_ksplit": 1,
+  "exl3_ks1_us": 161.9,
+  "exl3_ks2_us": 194.9,
+  "speedup": 1.26
+ },
+ {
+  "B": 4,
+  "level": "mix",
+  "nq_us": 100.6,
+  "exl3_best_us": 206.3,
+  "exl3_best_ksplit": 1,
+  "exl3_ks1_us": 206.3,
+  "exl3_ks2_us": 219.4,
+  "speedup": 2.05
+ }
+]
