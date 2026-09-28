@@ -1,6 +1,6 @@
 {
  "_doc": "T25 production campaign definition (B3). nq25_resume.py reads this; the driver's ROOT/campaign.json and every layer manifest's campaign block carry the same config_id / code ids. status=draft until the launch gates pass; 'nq25_resume.py pin' fills code + fixed_set_sha16 at launch.",
- "status": "draft",
+ "status": "launched",
  "root": "/tmp/nestquant/nq-encode-v1",
  "repo": "jarrelscy/GLM-5.3-NestQuant-2-4bit",
  "frozen": {
@@ -9,7 +9,6 @@
   "layers": "3:78",
   "experts": "0:256",
   "encoder": "t23b",
-  "encoder_fallback": "nq_layer",
   "encoder_cmd": "",
   "enc_args": "",
   "fixed_set": "/tmp/nestquant/19-capture-glmfmt/fixed_set.json",
@@ -86,10 +85,35 @@
  },
  "code": {
   "nestquant_commit": "f128e41",
-  "files": null,
-  "code_id": null,
-  "t23_id": null,
-  "t25_id": null
+  "files": {
+   "threads/12-reference-encoder/nq_encode.py": "ff150c25c60f06d2",
+   "threads/12-reference-encoder/nq_decode.py": "ea9344aa318e67b5",
+   "threads/12-reference-encoder/nq_patvit.py": "27fd5dbce0b475f5",
+   "threads/12-reference-encoder/nq_layer.py": "2a2f90af0ac0cf50",
+   "threads/12-reference-encoder/nq_bnd.py": "0be9e617b61c4dc7",
+   "threads/12-reference-encoder/csrc/nq_fracvit.cu": "3e07a07e0dfa354f",
+   "threads/19-full-capture/nq19_load.py": "dc51809b5e3a603b",
+   "threads/26-vision-calib/nq26_blend.py": "c870bdd63b223a6b",
+   "threads/05-exl3-harness/harness.py": "7e3b2480184549da",
+   "threads/23-encode-throughput/nq_encode_batch.py": "7c2821dc6c683aac",
+   "threads/23-encode-throughput/nq_layer_batch.py": "add46dfb7c63b8bf",
+   "threads/23-encode-throughput/common.py": "26bb518fa4307dff",
+   "threads/23-encode-throughput/k2vit.py": "d0e5ef02ab9dc539",
+   "threads/23-encode-throughput/csrc/nq_k2vit.cu": "eaf93cb78aff6d41",
+   "threads/25-campaign/nq25_t23.py": "a35bc7574306e34b",
+   "threads/25-campaign/nq25_campaign.py": "64ec083780dee5f8",
+   "threads/25-campaign/nq25_finalize.py": "ff0e81d83c3dda65",
+   "threads/25-campaign/nq25_st.py": "332cd322760d1773",
+   "threads/25-campaign/nq25_spot.py": "bdbba643d28eb5a3",
+   "threads/25-campaign/nq25_upload.py": "d1050abaaaf3e2df"
+  },
+  "code_id": "2d29edea6b00349d",
+  "t23_id": "c149a800ed4e17c9",
+  "t25_id": "416fcd598d64c720",
+  "git_head": "97ae61f",
+  "dirty": [],
+  "pinned": "2026-09-29 01:56:03"
  },
- "_gates": "Per-layer (coordinator 2026-09-29): layer L encodes once (a) T19 final text stats for L = all plan shards merged + done_full backup marker, (b) T26 vision stats for L merged, (c) T23 gate passed = T23_GO file committed next to this (t23b layers only; nq_layer fallback needs no T23 gate). fixed_set only feeds manifest default_allocation: not in config_id; manifests are refreshed + re-uploaded when fixed_set.json changes."
+ "_gates": "Per-layer (coordinator 2026-09-29): layer L encodes once (a) T19 final text stats for L = all plan shards merged + done_full backup marker, (b) T26 vision stats for L merged, (c) T23 gate passed = T23_GO file committed next to this (t23b layers only; nq_layer fallback needs no T23 gate). fixed_set only feeds manifest default_allocation: not in config_id; manifests are refreshed + re-uploaded when fixed_set.json changes.",
+ "config_id": "0f996ec4b4f8d4dd"
 }

@@ -174,7 +174,9 @@ def step_stats(c, fix, r):
             r.add("stats", True, f"{kind} {root}: stats/L{lo}..L{hi - 1} present"); continue
         lt = _fb_latest(b["prefix"], b["set"])
         if lt is None:
-            ok = r.add("stats", False, f"{kind}: {len(miss)} layers missing and no {b['set']} backup at {b['prefix']}"); continue
+            r.add("stats", None, f"{kind}: {len(miss)} layers missing and no {b['set']} backup at {b['prefix']} (still being "
+                  f"produced? the driver's per-layer gate waits for them)")
+            ok = None if ok else ok; continue
         have = set(lt.get("layers_done", []))
         nb = lt.get("bytes") or b.get("bytes_approx", 0)
         est = nb * len(miss) / max(1, len(have)) / 1e6 / b.get("measured_MBps", 290)
@@ -185,7 +187,10 @@ def step_stats(c, fix, r):
         rc = subprocess.run([sys.executable, f"{T19}/fb_restore.py", "--prefix", b["prefix"], "--root", root,
                              "--set", b["set"], "--layers", f"{lo}-{hi - 1}"], cwd=T19).returncode
         miss = _stats_missing(root, layers)
-        ok = r.add("stats", rc == 0 and not miss, f"{kind}: fb_restore rc {rc}, still missing {miss}") and ok
+        res = True if rc == 0 and not miss else None if rc == 0 and not set(miss) & have else False
+        r.add("stats", res, f"{kind}: fb_restore rc {rc}, still missing {miss}"
+              + (" (not in the backup yet: the driver's per-layer gate waits)" if res is None else ""))
+        ok = res if ok is True else (ok if res is not False else False)
     return ok
 
 
@@ -304,7 +309,7 @@ def main():
             res = f()
         except Exception as e:
             res = r.add(n, False, f"{type(e).__name__}: {str(e)[:300]}")
-        ok = ok and res is True
+        ok = ok and res is not False          # TODO (None) does not block: the driver gates per layer
     step_driver(c, fix and c["status"] == "launched", r, a.accept_code, ready=ok or a.check)
     est = sum(x["est_s"] for x in r.rows)
     print(f"summary: {sum(x['ok'] is True for x in r.rows)}/{len(r.rows)} ok"
