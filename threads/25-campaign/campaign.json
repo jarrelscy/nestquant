@@ -102,7 +102,7 @@
    "threads/23-encode-throughput/k2vit.py": "d0e5ef02ab9dc539",
    "threads/23-encode-throughput/csrc/nq_k2vit.cu": "eaf93cb78aff6d41",
    "threads/25-campaign/nq25_t23.py": "a35bc7574306e34b",
-   "threads/25-campaign/nq25_campaign.py": "150b7bbaad8539a4",
+   "threads/25-campaign/nq25_campaign.py": "9d3fa802b20dff6c",
    "threads/25-campaign/nq25_finalize.py": "ff0e81d83c3dda65",
    "threads/25-campaign/nq25_st.py": "25e0b8dc9309891e",
    "threads/25-campaign/nq25_spot.py": "9210681daa5b5cc9",
@@ -110,12 +110,12 @@
   },
   "code_id": "2d29edea6b00349d",
   "t23_id": "c149a800ed4e17c9",
-  "t25_id": "6e98391ed56ab62c",
-  "git_head": "ad9bec9",
+  "t25_id": "134d0cfbb243e30e",
+  "git_head": "95e5e4d",
   "dirty": [
    "threads/25-campaign/nq25_campaign.py"
   ],
-  "pinned": "2026-09-29 07:03:17"
+  "pinned": "2026-09-29 07:06:32"
  },
  "_gates": "Per-layer (coordinator 2026-09-29): layer L encodes once (a) T19's LOCAL final marker 19-capture-glmfmt/final/L{L}.json exists (atomic, all 25 plan shards, fit_tokens 15363584) -> stats pinned to its immutable version_dir (flashblade done_full is restart insurance, not a gate: gate_backup=false), (b) T26 vision stats for L merged, (c) MMW_GO file (lead-written, holds mm_w) exists; if it differs from frozen vision_weight and nothing is encoded yet, the driver adopts it (config_id changes), else alerts mmw_mismatch and holds, (d) T23 gate passed = T23_GO file committed next to this (t23b layers only). fixed_set only feeds manifest default_allocation: not in config_id; manifests are refreshed + re-uploaded when fixed_set.json changes.",
  "config_id": "0f996ec4b4f8d4dd"

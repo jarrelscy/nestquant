@@ -48,4 +48,4 @@ End-to-end model evaluations will be added when encoding is complete.
 
 ## Default 4-bit set
 
-`manifest.json` lists 26 experts per layer that are kept at 4 bit by default. They were chosen by usage on the calibration data, weighted towards tokens just before the end of reasoning and the end of each turn. The rest can be upgraded to 4 bit at runtime.
+Each layer's `manifest.json` lists the experts that are kept at 4 bit by default: 1950 experts across the model (the same total as 26 per layer), 16 to 128 per layer. They were chosen across the whole model by boundary-weighted REAP × the 2→4-bit error drop: usage on the calibration data, weighted towards tokens just before the end of reasoning and the end of each turn (with a 25% vision share), multiplied by how much the expert's output error falls when it goes from 2 to 4 bit. Every layer keeps at least its 16 most-used experts. The rest can be upgraded to 4 bit at runtime.

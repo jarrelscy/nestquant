@@ -1154,6 +1154,8 @@ def cmd_run(a):
     c.log(f"campaign {c.root}: layers {c.cfg['layers']} experts {c.cfg['experts']} stats {c.cfg['stats_root']}/"
           f"{c.cfg['stats_version']} sched {c.sched}")
     c.reconcile(); c.save()
+    if os.path.exists(f"{c.root}/COMPLETE"):          # a restart (e.g. fixed_set change -> remanifest) reopens the campaign
+        os.remove(f"{c.root}/COMPLETE")
     stop = {"flag": False}
     def on_sig(*_):
         stop["flag"] = True
@@ -1165,7 +1167,9 @@ def cmd_run(a):
             st = c.status(); last_st = now()
             c.log(f"status {json.dumps(st)}")
         if c.all_done():
-            c.log("all layers done"); break
+            c.log("all layers done")
+            open(f"{c.root}/COMPLETE", "w").write(mel() + "\n")   # the watchdog leaves a complete campaign alone
+            break
         if c.blocked():
             c.log("blocked: remaining work failed max_attempts; stopping"); break
         time.sleep(c.sched["tick"])

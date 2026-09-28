@@ -31,7 +31,8 @@ def main():
     age = time.time() - os.path.getmtime(f"{R}/status.json") if os.path.exists(f"{R}/status.json") else None
     print(f"T25 campaign {R}  now {time.strftime('%a %d %b %H:%M %Z')}  status.json age {age and round(age)}s")
     print(f"driver {'pid ' + str(drv) if drv else 'NOT RUNNING'}   watchdog {'pid ' + str(wd) if wd else 'NOT RUNNING'}"
-          f"{'   STOPPED (manual stop; ./resume.sh to restart)' if os.path.exists(f'{R}/STOPPED') else ''}")
+          f"{'   STOPPED (manual stop; ./resume.sh to restart)' if os.path.exists(f'{R}/STOPPED') else ''}"
+          f"{'   COMPLETE (all layers done)' if os.path.exists(f'{R}/COMPLETE') else ''}")
     f = cj.get("frozen", {})
     print(f"config_id {cj.get('config_id')}  encoder {f.get('encoder')}  vision_weight {f.get('vision_weight')}  "
           f"code {cj.get('code', {}).get('git_head')}")

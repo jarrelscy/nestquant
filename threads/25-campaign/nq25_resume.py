@@ -255,6 +255,8 @@ def step_driver(c, fix, r, accept_code=False, ready=True):
     if not fix or not ready:
         return r.add("driver", None, ("would run: " if ready else "blocked by the steps above; would run: ") + " ".join(cmd))
     os.makedirs(c["root"], exist_ok=True)
+    if os.path.exists(f"{c['root']}/COMPLETE") and os.environ.get("NQ25_WATCHDOG"):
+        return r.add("driver", True, "campaign COMPLETE (all layers done); watchdog does not restart it")
     if os.path.exists(f"{c['root']}/STOPPED"):
         if os.environ.get("NQ25_WATCHDOG"):
             return r.add("driver", None, "STOPPED (nq25_campaign.py stop); watchdog does not restart it")

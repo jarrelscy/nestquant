@@ -1,7 +1,8 @@
 #!/bin/bash
 # T25 driver watchdog: every 60 s, if the campaign driver (ROOT/driver.pid) is not alive, rerun resume.sh (which fixes
 # whatever is missing and restarts the driver; running workers are adopted). Single instance (flock ROOT/watchdog.lock).
-# Leaves the campaign alone while ROOT/STOPPED exists (written by `nq25_campaign.py stop`; a manual resume.sh clears it).
+# Leaves the campaign alone while ROOT/STOPPED exists (written by `nq25_campaign.py stop`; a manual resume.sh clears it)
+# or ROOT/COMPLETE exists (written by the driver when all layers are done; any driver start removes it).
 # > 5 restarts within an hour -> backs off 30 min and appends a watchdog alert to ROOT/ALERTS.jsonl.
 # Started detached by resume.sh; manual: setsid nohup ./watchdog.sh >/dev/null 2>&1 </dev/null &
 HERE=$(dirname "$(readlink -f "$0")")
@@ -17,7 +18,7 @@ restarts=()
 alive() { $PY -c "import sys;sys.path.insert(0,'$HERE');import nq25_resume as R;sys.exit(0 if R.driver_running('$ROOT') else 1)" 2>/dev/null; }
 echo "[$(date '+%a %d %b %H:%M:%S')] watchdog start pid $$" >> "$LOG"
 while true; do
-  if [ ! -e "$ROOT/STOPPED" ] && ! alive; then
+  if [ ! -e "$ROOT/STOPPED" ] && [ ! -e "$ROOT/COMPLETE" ] && ! alive; then
     t=$(date +%s); restarts=($(for x in "${restarts[@]}"; do [ $((t - x)) -lt 3600 ] && echo $x; done) $t)
     if [ ${#restarts[@]} -gt 5 ]; then
       echo "{\"time\": \"$(date '+%a %d %b %H:%M %Z')\", \"kind\": \"watchdog\", \"layer\": null, \"msg\": \"driver died ${#restarts[@]}x within 1 h; backing off 30 min (see $LOG, $ROOT/driver.out)\"}" >> "$ROOT/ALERTS.jsonl"
