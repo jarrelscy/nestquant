@@ -710,6 +710,11 @@ class Campaign:
             import nq_layer as NL
             old = (man.get("default_allocation") or {}).get("sha256")
             man["default_allocation"] = NL.default_allocation(types.SimpleNamespace(fixed_set=fs, stats=f"{self.root}/_stats"), L)
+            fsd = jload(fs) or {}
+            if str(fsd.get("schema", "")).endswith("-v3"):         # T25 global rescore: variable count per layer
+                da = man["default_allocation"]                     # (T12's FIXED_RULE text says "top 26 per layer")
+                da.update(rule=fsd.get("rule"), n=len(da.get("level4_experts") or []), budget=fsd.get("budget"),
+                          floor=fsd.get("floor"), cap=fsd.get("cap"), estimator=fsd.get("estimator"))
             man.setdefault("campaign", {})["fixed_set"] = dict(path=fs, sha16=cur[:16], refreshed=mel())
             jdump(man, mp)
             ly.pop("upload", None); ly.pop("remote_verified", None); ly["up_attempts"] = {}
