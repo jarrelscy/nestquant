@@ -1,0 +1,433 @@
+{
+ "layer": 10,
+ "expert": 70,
+ "role": "low_vision",
+ "n_v": 18,
+ "eval": {
+  "text_matched": {
+   "w0/L2": {
+    "all/forced": 31.444,
+    "all/routed": 28.866,
+    "control/forced": 30.314,
+    "control/routed": 24.922,
+    "ood/forced": 32.568,
+    "ood/routed": 29.738,
+    "control:agentic/forced": 26.485,
+    "control:agentic/routed": 19.053,
+    "control:code/forced": 29.111,
+    "control:code/routed": 26.112,
+    "control:instruction/forced": 32.353,
+    "control:instruction/routed": 35.099,
+    "control:medical/forced": 33.005,
+    "control:medical/routed": 29.994,
+    "control:prose/forced": 31.619,
+    "control:prose/routed": 29.874,
+    "control:reasoning/forced": 31.4,
+    "ood:encoded_bytes/forced": 33.292,
+    "ood:encoded_bytes/routed": 35.012,
+    "ood:fasta/forced": 33.772,
+    "ood:scientific_telemetry/forced": 32.435,
+    "ood:scientific_telemetry/routed": 32.115,
+    "ood:smt_bitvectors/forced": 30.981,
+    "ood:smt_bitvectors/routed": 29.726
+   },
+   "w0/L4": {
+    "all/forced": 7.496,
+    "all/routed": 6.661,
+    "control/forced": 7.14,
+    "control/routed": 5.684,
+    "ood/forced": 7.847,
+    "ood/routed": 6.875,
+    "control:agentic/forced": 5.886,
+    "control:agentic/routed": 3.957,
+    "control:code/forced": 6.752,
+    "control:code/routed": 5.775,
+    "control:instruction/forced": 7.794,
+    "control:instruction/routed": 8.647,
+    "control:medical/forced": 7.998,
+    "control:medical/routed": 7.107,
+    "control:prose/forced": 7.546,
+    "control:prose/routed": 7.047,
+    "control:reasoning/forced": 7.471,
+    "ood:encoded_bytes/forced": 8.072,
+    "ood:encoded_bytes/routed": 8.532,
+    "ood:fasta/forced": 8.294,
+    "ood:scientific_telemetry/forced": 7.755,
+    "ood:scientific_telemetry/routed": 7.801,
+    "ood:smt_bitvectors/forced": 7.304,
+    "ood:smt_bitvectors/routed": 6.871
+   },
+   "w0.1/L2": {
+    "all/forced": 31.498,
+    "all/routed": 29.084,
+    "control/forced": 30.386,
+    "control/routed": 25.104,
+    "ood/forced": 32.603,
+    "ood/routed": 29.964,
+    "control:agentic/forced": 26.516,
+    "control:agentic/routed": 19.05,
+    "control:code/forced": 29.24,
+    "control:code/routed": 26.025,
+    "control:instruction/forced": 32.452,
+    "control:instruction/routed": 34.987,
+    "control:medical/forced": 33.064,
+    "control:medical/routed": 30.41,
+    "control:prose/forced": 31.663,
+    "control:prose/routed": 29.645,
+    "control:reasoning/forced": 31.503,
+    "ood:encoded_bytes/forced": 33.266,
+    "ood:encoded_bytes/routed": 35.498,
+    "ood:fasta/forced": 33.823,
+    "ood:scientific_telemetry/forced": 32.476,
+    "ood:scientific_telemetry/routed": 33.402,
+    "ood:smt_bitvectors/forced": 31.048,
+    "ood:smt_bitvectors/routed": 29.951
+   },
+   "w0.1/L4": {
+    "all/forced": 7.505,
+    "all/routed": 6.689,
+    "control/forced": 7.142,
+    "control/routed": 5.664,
+    "ood/forced": 7.861,
+    "ood/routed": 6.913,
+    "control:agentic/forced": 5.885,
+    "control:agentic/routed": 3.943,
+    "control:code/forced": 6.749,
+    "control:code/routed": 5.761,
+    "control:instruction/forced": 7.816,
+    "control:instruction/routed": 8.374,
+    "control:medical/forced": 8.008,
+    "control:medical/routed": 7.099,
+    "control:prose/forced": 7.514,
+    "control:prose/routed": 6.95,
+    "control:reasoning/forced": 7.501,
+    "ood:encoded_bytes/forced": 8.08,
+    "ood:encoded_bytes/routed": 8.506,
+    "ood:fasta/forced": 8.321,
+    "ood:scientific_telemetry/forced": 7.752,
+    "ood:scientific_telemetry/routed": 7.943,
+    "ood:smt_bitvectors/forced": 7.322,
+    "ood:smt_bitvectors/routed": 6.909
+   },
+   "w0.25/L2": {
+    "all/forced": 31.568,
+    "all/routed": 29.085,
+    "control/forced": 30.434,
+    "control/routed": 25.198,
+    "ood/forced": 32.696,
+    "ood/routed": 29.945,
+    "control:agentic/forced": 26.583,
+    "control:agentic/routed": 19.16,
+    "control:code/forced": 29.301,
+    "control:code/routed": 26.019,
+    "control:instruction/forced": 32.534,
+    "control:instruction/routed": 35.15,
+    "control:medical/forced": 33.11,
+    "control:medical/routed": 30.479,
+    "control:prose/forced": 31.668,
+    "control:prose/routed": 29.96,
+    "control:reasoning/forced": 31.53,
+    "ood:encoded_bytes/forced": 33.319,
+    "ood:encoded_bytes/routed": 35.59,
+    "ood:fasta/forced": 33.926,
+    "ood:scientific_telemetry/forced": 32.606,
+    "ood:scientific_telemetry/routed": 33.238,
+    "ood:smt_bitvectors/forced": 31.14,
+    "ood:smt_bitvectors/routed": 29.932
+   },
+   "w0.25/L4": {
+    "all/forced": 7.512,
+    "all/routed": 6.674,
+    "control/forced": 7.156,
+    "control/routed": 5.698,
+    "ood/forced": 7.862,
+    "ood/routed": 6.889,
+    "control:agentic/forced": 5.919,
+    "control:agentic/routed": 3.994,
+    "control:code/forced": 6.762,
+    "control:code/routed": 5.793,
+    "control:instruction/forced": 7.828,
+    "control:instruction/routed": 8.405,
+    "control:medical/forced": 8.017,
+    "control:medical/routed": 7.123,
+    "control:prose/forced": 7.532,
+    "control:prose/routed": 6.982,
+    "control:reasoning/forced": 7.493,
+    "ood:encoded_bytes/forced": 8.087,
+    "ood:encoded_bytes/routed": 8.73,
+    "ood:fasta/forced": 8.303,
+    "ood:scientific_telemetry/forced": 7.787,
+    "ood:scientific_telemetry/routed": 7.839,
+    "ood:smt_bitvectors/forced": 7.317,
+    "ood:smt_bitvectors/routed": 6.884
+   }
+  },
+  "text_val": {
+   "w0/L2": {
+    "all/forced": 28.817,
+    "all/routed": 24.095,
+    "val:agentic/forced": 26.682,
+    "val:agentic/routed": 20.333,
+    "val:code/forced": 29.388,
+    "val:code/routed": 26.944,
+    "val:instruction/forced": 26.944,
+    "val:instruction/routed": 29.312,
+    "val:prose/forced": 33.402,
+    "val:prose/routed": 33.495,
+    "val:reasoning/forced": 30.901,
+    "val:reasoning/routed": 29.853
+   },
+   "w0/L4": {
+    "all/forced": 6.704,
+    "all/routed": 5.28,
+    "val:agentic/forced": 6.005,
+    "val:agentic/routed": 4.286,
+    "val:code/forced": 6.803,
+    "val:code/routed": 5.958,
+    "val:instruction/forced": 6.289,
+    "val:instruction/routed": 6.464,
+    "val:prose/forced": 8.125,
+    "val:prose/routed": 8.148,
+    "val:reasoning/forced": 7.309,
+    "val:reasoning/routed": 6.918
+   },
+   "w0.1/L2": {
+    "all/forced": 28.843,
+    "all/routed": 24.115,
+    "val:agentic/forced": 26.711,
+    "val:agentic/routed": 20.36,
+    "val:code/forced": 29.412,
+    "val:code/routed": 26.953,
+    "val:instruction/forced": 26.974,
+    "val:instruction/routed": 29.238,
+    "val:prose/forced": 33.415,
+    "val:prose/routed": 33.542,
+    "val:reasoning/forced": 30.929,
+    "val:reasoning/routed": 29.932
+   },
+   "w0.1/L4": {
+    "all/forced": 6.712,
+    "all/routed": 5.303,
+    "val:agentic/forced": 6.021,
+    "val:agentic/routed": 4.318,
+    "val:code/forced": 6.809,
+    "val:code/routed": 5.973,
+    "val:instruction/forced": 6.291,
+    "val:instruction/routed": 6.504,
+    "val:prose/forced": 8.132,
+    "val:prose/routed": 8.137,
+    "val:reasoning/forced": 7.317,
+    "val:reasoning/routed": 6.943
+   },
+   "w0.25/L2": {
+    "all/forced": 28.893,
+    "all/routed": 24.206,
+    "val:agentic/forced": 26.774,
+    "val:agentic/routed": 20.461,
+    "val:code/forced": 29.482,
+    "val:code/routed": 27.057,
+    "val:instruction/forced": 27.008,
+    "val:instruction/routed": 29.231,
+    "val:prose/forced": 33.459,
+    "val:prose/routed": 33.622,
+    "val:reasoning/forced": 30.956,
+    "val:reasoning/routed": 29.944
+   },
+   "w0.25/L4": {
+    "all/forced": 6.726,
+    "all/routed": 5.307,
+    "val:agentic/forced": 6.037,
+    "val:agentic/routed": 4.322,
+    "val:code/forced": 6.824,
+    "val:code/routed": 5.973,
+    "val:instruction/forced": 6.306,
+    "val:instruction/routed": 6.622,
+    "val:prose/forced": 8.14,
+    "val:prose/routed": 8.137,
+    "val:reasoning/forced": 7.329,
+    "val:reasoning/routed": 6.929
+   }
+  },
+  "vision_val": {
+   "w0/L2": {
+    "all/forced": 39.393,
+    "all/routed": 39.976,
+    "img/forced": 40.099,
+    "img/routed": 39.976,
+    "txt/forced": 31.596,
+    "img:mm_medical/forced": 39.528,
+    "img:mm_natural/forced": 40.169,
+    "img:mm_natural/routed": 39.419,
+    "img:mm_ocr/forced": 40.391,
+    "img:mm_screenshots/forced": 40.317,
+    "img:mm_screenshots/routed": 40.492,
+    "txt:mm_medical/forced": 31.197,
+    "txt:mm_natural/forced": 28.763,
+    "txt:mm_ocr/forced": 33.223,
+    "txt:mm_screenshots/forced": 31.083
+   },
+   "w0/L4": {
+    "all/forced": 10.252,
+    "all/routed": 10.319,
+    "img/forced": 10.481,
+    "img/routed": 10.319,
+    "txt/forced": 7.632,
+    "img:mm_medical/forced": 10.343,
+    "img:mm_natural/forced": 10.571,
+    "img:mm_natural/routed": 10.223,
+    "img:mm_ocr/forced": 10.522,
+    "img:mm_screenshots/forced": 10.49,
+    "img:mm_screenshots/routed": 10.409,
+    "txt:mm_medical/forced": 7.458,
+    "txt:mm_natural/forced": 6.828,
+    "txt:mm_ocr/forced": 8.155,
+    "txt:mm_screenshots/forced": 7.453
+   },
+   "w0.1/L2": {
+    "all/forced": 29.556,
+    "all/routed": 30.585,
+    "img/forced": 29.417,
+    "img/routed": 30.585,
+    "txt/forced": 30.895,
+    "img:mm_medical/forced": 27.229,
+    "img:mm_natural/forced": 29.669,
+    "img:mm_natural/routed": 32.897,
+    "img:mm_ocr/forced": 30.518,
+    "img:mm_screenshots/forced": 30.194,
+    "img:mm_screenshots/routed": 28.225,
+    "txt:mm_medical/forced": 30.789,
+    "txt:mm_natural/forced": 27.978,
+    "txt:mm_ocr/forced": 32.311,
+    "txt:mm_screenshots/forced": 30.392
+   },
+   "w0.1/L4": {
+    "all/forced": 6.892,
+    "all/routed": 7.214,
+    "img/forced": 6.841,
+    "img/routed": 7.214,
+    "txt/forced": 7.371,
+    "img:mm_medical/forced": 6.188,
+    "img:mm_natural/forced": 6.903,
+    "img:mm_natural/routed": 7.903,
+    "img:mm_ocr/forced": 7.173,
+    "img:mm_screenshots/forced": 7.075,
+    "img:mm_screenshots/routed": 6.491,
+    "txt:mm_medical/forced": 7.327,
+    "txt:mm_natural/forced": 6.518,
+    "txt:mm_ocr/forced": 7.815,
+    "txt:mm_screenshots/forced": 7.184
+   },
+   "w0.25/L2": {
+    "all/forced": 27.048,
+    "all/routed": 28.015,
+    "img/forced": 26.689,
+    "img/routed": 28.015,
+    "txt/forced": 30.373,
+    "img:mm_medical/forced": 24.166,
+    "img:mm_natural/forced": 26.859,
+    "img:mm_natural/routed": 30.473,
+    "img:mm_ocr/forced": 28.018,
+    "img:mm_screenshots/forced": 27.611,
+    "img:mm_screenshots/routed": 25.467,
+    "txt:mm_medical/forced": 30.372,
+    "txt:mm_natural/forced": 27.403,
+    "txt:mm_ocr/forced": 31.755,
+    "txt:mm_screenshots/forced": 29.815
+   },
+   "w0.25/L4": {
+    "all/forced": 6.185,
+    "all/routed": 6.316,
+    "img/forced": 6.072,
+    "img/routed": 6.316,
+    "txt/forced": 7.203,
+    "img:mm_medical/forced": 5.4,
+    "img:mm_natural/forced": 6.144,
+    "img:mm_natural/routed": 7.066,
+    "img:mm_ocr/forced": 6.405,
+    "img:mm_screenshots/forced": 6.307,
+    "img:mm_screenshots/routed": 5.513,
+    "txt:mm_medical/forced": 7.187,
+    "txt:mm_natural/forced": 6.32,
+    "txt:mm_ocr/forced": 7.627,
+    "txt:mm_screenshots/forced": 7.026
+   }
+  }
+ },
+ "meta": {
+  "w0": {
+   "flags": [],
+   "w_eff": 0.0,
+   "rate": 4.141059027777778,
+   "lr_rank": {
+    "gate": 1,
+    "up": 1,
+    "down": 1
+   },
+   "encode_s": 33.18341565132141,
+   "bitexact": {
+    "gate": {
+     "2": true,
+     "4": true
+    },
+    "up": {
+     "2": true,
+     "4": true
+    },
+    "down": {
+     "2": true,
+     "4": true
+    }
+   }
+  },
+  "w0.1": {
+   "flags": [],
+   "w_eff": 0.0140625,
+   "rate": 4.141059027777778,
+   "lr_rank": {
+    "gate": 1,
+    "up": 1,
+    "down": 1
+   },
+   "encode_s": 25.203088760375977,
+   "bitexact": {
+    "gate": {
+     "2": true,
+     "4": true
+    },
+    "up": {
+     "2": true,
+     "4": true
+    },
+    "down": {
+     "2": true,
+     "4": true
+    }
+   }
+  },
+  "w0.25": {
+   "flags": [],
+   "w_eff": 0.03515625,
+   "rate": 4.141059027777778,
+   "lr_rank": {
+    "gate": 1,
+    "up": 1,
+    "down": 1
+   },
+   "encode_s": 46.240193367004395,
+   "bitexact": {
+    "gate": {
+     "2": true,
+     "4": true
+    },
+    "up": {
+     "2": true,
+     "4": true
+    },
+    "down": {
+     "2": true,
+     "4": true
+    }
+   }
+  }
+ }
+}

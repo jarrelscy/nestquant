@@ -1,0 +1,427 @@
+{
+ "layer": 50,
+ "expert": 150,
+ "role": "low_vision",
+ "n_v": 73,
+ "eval": {
+  "text_matched": {
+   "w0/L2": {
+    "all/forced": 38.562,
+    "all/routed": 28.458,
+    "control/forced": 37.433,
+    "control/routed": 28.458,
+    "ood/forced": 41.168,
+    "control:agentic/forced": 35.552,
+    "control:agentic/routed": 33.499,
+    "control:code/forced": 33.567,
+    "control:code/routed": 28.421,
+    "control:instruction/forced": 39.477,
+    "control:instruction/routed": 35.528,
+    "control:medical/forced": 40.956,
+    "control:prose/forced": 40.251,
+    "control:prose/routed": 39.145,
+    "control:reasoning/forced": 38.153,
+    "ood:encoded_bytes/forced": 42.973,
+    "ood:fasta/forced": 42.642,
+    "ood:scientific_telemetry/forced": 40.63,
+    "ood:smt_bitvectors/forced": 39.495
+   },
+   "w0/L4": {
+    "all/forced": 9.699,
+    "all/routed": 6.525,
+    "control/forced": 9.312,
+    "control/routed": 6.525,
+    "ood/forced": 10.578,
+    "control:agentic/forced": 8.628,
+    "control:agentic/routed": 8.019,
+    "control:code/forced": 8.103,
+    "control:code/routed": 6.514,
+    "control:instruction/forced": 10.005,
+    "control:instruction/routed": 8.556,
+    "control:medical/forced": 10.428,
+    "control:prose/forced": 10.285,
+    "control:prose/routed": 9.935,
+    "control:reasoning/forced": 9.44,
+    "ood:encoded_bytes/forced": 11.196,
+    "ood:fasta/forced": 11.061,
+    "ood:scientific_telemetry/forced": 10.382,
+    "ood:smt_bitvectors/forced": 10.022
+   },
+   "w0.1/L2": {
+    "all/forced": 38.587,
+    "all/routed": 28.412,
+    "control/forced": 37.457,
+    "control/routed": 28.412,
+    "ood/forced": 41.199,
+    "control:agentic/forced": 35.558,
+    "control:agentic/routed": 33.177,
+    "control:code/forced": 33.612,
+    "control:code/routed": 28.378,
+    "control:instruction/forced": 39.516,
+    "control:instruction/routed": 34.522,
+    "control:medical/forced": 40.972,
+    "control:prose/forced": 40.394,
+    "control:prose/routed": 39.58,
+    "control:reasoning/forced": 38.057,
+    "ood:encoded_bytes/forced": 43.025,
+    "ood:fasta/forced": 42.575,
+    "ood:scientific_telemetry/forced": 40.705,
+    "ood:smt_bitvectors/forced": 39.557
+   },
+   "w0.1/L4": {
+    "all/forced": 9.702,
+    "all/routed": 6.539,
+    "control/forced": 9.319,
+    "control/routed": 6.539,
+    "ood/forced": 10.571,
+    "control:agentic/forced": 8.631,
+    "control:agentic/routed": 7.747,
+    "control:code/forced": 8.106,
+    "control:code/routed": 6.53,
+    "control:instruction/forced": 9.997,
+    "control:instruction/routed": 8.241,
+    "control:medical/forced": 10.471,
+    "control:prose/forced": 10.258,
+    "control:prose/routed": 9.95,
+    "control:reasoning/forced": 9.462,
+    "ood:encoded_bytes/forced": 11.189,
+    "ood:fasta/forced": 11.052,
+    "ood:scientific_telemetry/forced": 10.312,
+    "ood:smt_bitvectors/forced": 10.069
+   },
+   "w0.25/L2": {
+    "all/forced": 38.617,
+    "all/routed": 28.471,
+    "control/forced": 37.512,
+    "control/routed": 28.471,
+    "ood/forced": 41.171,
+    "control:agentic/forced": 35.674,
+    "control:agentic/routed": 34.135,
+    "control:code/forced": 33.718,
+    "control:code/routed": 28.434,
+    "control:instruction/forced": 39.554,
+    "control:instruction/routed": 35.245,
+    "control:medical/forced": 40.937,
+    "control:prose/forced": 40.445,
+    "control:prose/routed": 38.919,
+    "control:reasoning/forced": 38.086,
+    "ood:encoded_bytes/forced": 42.967,
+    "ood:fasta/forced": 42.509,
+    "ood:scientific_telemetry/forced": 40.558,
+    "ood:smt_bitvectors/forced": 39.671
+   },
+   "w0.25/L4": {
+    "all/forced": 9.71,
+    "all/routed": 6.566,
+    "control/forced": 9.333,
+    "control/routed": 6.566,
+    "ood/forced": 10.566,
+    "control:agentic/forced": 8.65,
+    "control:agentic/routed": 8.222,
+    "control:code/forced": 8.145,
+    "control:code/routed": 6.555,
+    "control:instruction/forced": 9.974,
+    "control:instruction/routed": 8.463,
+    "control:medical/forced": 10.446,
+    "control:prose/forced": 10.303,
+    "control:prose/routed": 10.025,
+    "control:reasoning/forced": 9.474,
+    "ood:encoded_bytes/forced": 11.17,
+    "ood:fasta/forced": 11.032,
+    "ood:scientific_telemetry/forced": 10.364,
+    "ood:smt_bitvectors/forced": 10.037
+   }
+  },
+  "text_val": {
+   "w0/L2": {
+    "all/forced": 35.677,
+    "all/routed": 28.973,
+    "val:agentic/forced": 35.354,
+    "val:agentic/routed": 32.58,
+    "val:code/forced": 33.93,
+    "val:code/routed": 28.609,
+    "val:instruction/forced": 36.177,
+    "val:instruction/routed": 29.493,
+    "val:prose/forced": 41.064,
+    "val:prose/routed": 37.885,
+    "val:reasoning/forced": 36.816,
+    "val:reasoning/routed": 30.419
+   },
+   "w0/L4": {
+    "all/forced": 8.725,
+    "all/routed": 6.678,
+    "val:agentic/forced": 8.59,
+    "val:agentic/routed": 7.707,
+    "val:code/forced": 8.193,
+    "val:code/routed": 6.574,
+    "val:instruction/forced": 8.877,
+    "val:instruction/routed": 6.779,
+    "val:prose/forced": 10.517,
+    "val:prose/routed": 9.521,
+    "val:reasoning/forced": 9.052,
+    "val:reasoning/routed": 7.064
+   },
+   "w0.1/L2": {
+    "all/forced": 35.735,
+    "all/routed": 29.058,
+    "val:agentic/forced": 35.431,
+    "val:agentic/routed": 32.562,
+    "val:code/forced": 34.008,
+    "val:code/routed": 28.71,
+    "val:instruction/forced": 36.183,
+    "val:instruction/routed": 29.552,
+    "val:prose/forced": 41.026,
+    "val:prose/routed": 37.848,
+    "val:reasoning/forced": 36.874,
+    "val:reasoning/routed": 30.402
+   },
+   "w0.1/L4": {
+    "all/forced": 8.749,
+    "all/routed": 6.71,
+    "val:agentic/forced": 8.615,
+    "val:agentic/routed": 7.726,
+    "val:code/forced": 8.219,
+    "val:code/routed": 6.608,
+    "val:instruction/forced": 8.888,
+    "val:instruction/routed": 6.802,
+    "val:prose/forced": 10.517,
+    "val:prose/routed": 9.469,
+    "val:reasoning/forced": 9.08,
+    "val:reasoning/routed": 7.09
+   },
+   "w0.25/L2": {
+    "all/forced": 35.849,
+    "all/routed": 29.263,
+    "val:agentic/forced": 35.546,
+    "val:agentic/routed": 32.762,
+    "val:code/forced": 34.133,
+    "val:code/routed": 28.901,
+    "val:instruction/forced": 36.271,
+    "val:instruction/routed": 29.926,
+    "val:prose/forced": 41.081,
+    "val:prose/routed": 37.916,
+    "val:reasoning/forced": 36.991,
+    "val:reasoning/routed": 30.736
+   },
+   "w0.25/L4": {
+    "all/forced": 8.783,
+    "all/routed": 6.751,
+    "val:agentic/forced": 8.66,
+    "val:agentic/routed": 7.803,
+    "val:code/forced": 8.256,
+    "val:code/routed": 6.647,
+    "val:instruction/forced": 8.919,
+    "val:instruction/routed": 6.862,
+    "val:prose/forced": 10.521,
+    "val:prose/routed": 9.508,
+    "val:reasoning/forced": 9.113,
+    "val:reasoning/routed": 7.124
+   }
+  },
+  "vision_val": {
+   "w0/L2": {
+    "all/forced": 40.28,
+    "all/routed": 37.657,
+    "img/forced": 40.529,
+    "img/routed": 37.326,
+    "txt/forced": 39.226,
+    "txt/routed": 38.056,
+    "img:mm_medical/forced": 39.829,
+    "img:mm_natural/forced": 40.851,
+    "img:mm_natural/routed": 40.764,
+    "img:mm_ocr/forced": 40.928,
+    "img:mm_ocr/routed": 37.099,
+    "img:mm_screenshots/forced": 40.684,
+    "img:mm_screenshots/routed": 34.364,
+    "txt:mm_medical/forced": 38.959,
+    "txt:mm_natural/forced": 38.302,
+    "txt:mm_ocr/forced": 40.646,
+    "txt:mm_ocr/routed": 38.03,
+    "txt:mm_screenshots/forced": 38.068,
+    "txt:mm_screenshots/routed": 39.063
+   },
+   "w0/L4": {
+    "all/forced": 10.204,
+    "all/routed": 9.39,
+    "img/forced": 10.285,
+    "img/routed": 9.272,
+    "txt/forced": 9.858,
+    "txt/routed": 9.508,
+    "img:mm_medical/forced": 10.038,
+    "img:mm_natural/forced": 10.396,
+    "img:mm_natural/routed": 10.62,
+    "img:mm_ocr/forced": 10.415,
+    "img:mm_ocr/routed": 9.133,
+    "img:mm_screenshots/forced": 10.35,
+    "img:mm_screenshots/routed": 8.434,
+    "txt:mm_medical/forced": 9.775,
+    "txt:mm_natural/forced": 9.562,
+    "txt:mm_ocr/forced": 10.307,
+    "txt:mm_ocr/routed": 9.5,
+    "txt:mm_screenshots/forced": 9.488,
+    "txt:mm_screenshots/routed": 9.801
+   },
+   "w0.1/L2": {
+    "all/forced": 36.412,
+    "all/routed": 36.232,
+    "img/forced": 36.147,
+    "img/routed": 35.863,
+    "txt/forced": 37.494,
+    "txt/routed": 36.69,
+    "img:mm_medical/forced": 34.751,
+    "img:mm_natural/forced": 35.461,
+    "img:mm_natural/routed": 39.173,
+    "img:mm_ocr/forced": 37.502,
+    "img:mm_ocr/routed": 35.634,
+    "img:mm_screenshots/forced": 37.317,
+    "img:mm_screenshots/routed": 32.984,
+    "txt:mm_medical/forced": 37.782,
+    "txt:mm_natural/forced": 35.39,
+    "txt:mm_ocr/forced": 38.951,
+    "txt:mm_ocr/routed": 36.676,
+    "txt:mm_screenshots/forced": 36.162,
+    "txt:mm_screenshots/routed": 37.222
+   },
+   "w0.1/L4": {
+    "all/forced": 8.954,
+    "all/routed": 8.983,
+    "img/forced": 8.873,
+    "img/routed": 8.767,
+    "txt/forced": 9.284,
+    "txt/routed": 9.234,
+    "img:mm_medical/forced": 8.443,
+    "img:mm_natural/forced": 8.649,
+    "img:mm_natural/routed": 9.532,
+    "img:mm_ocr/forced": 9.298,
+    "img:mm_ocr/routed": 8.728,
+    "img:mm_screenshots/forced": 9.231,
+    "img:mm_screenshots/routed": 7.892,
+    "txt:mm_medical/forced": 9.385,
+    "txt:mm_natural/forced": 8.653,
+    "txt:mm_ocr/forced": 9.736,
+    "txt:mm_ocr/routed": 9.239,
+    "txt:mm_screenshots/forced": 8.845,
+    "txt:mm_screenshots/routed": 8.998
+   },
+   "w0.25/L2": {
+    "all/forced": 35.147,
+    "all/routed": 36.034,
+    "img/forced": 34.766,
+    "img/routed": 35.529,
+    "txt/forced": 36.692,
+    "txt/routed": 36.654,
+    "img:mm_medical/forced": 33.156,
+    "img:mm_natural/forced": 33.857,
+    "img:mm_natural/routed": 37.297,
+    "img:mm_ocr/forced": 36.38,
+    "img:mm_ocr/routed": 35.572,
+    "img:mm_screenshots/forced": 36.17,
+    "img:mm_screenshots/routed": 32.455,
+    "txt:mm_medical/forced": 37.234,
+    "txt:mm_natural/forced": 34.248,
+    "txt:mm_ocr/forced": 38.141,
+    "txt:mm_ocr/routed": 36.666,
+    "txt:mm_screenshots/forced": 35.24,
+    "txt:mm_screenshots/routed": 36.147
+   },
+   "w0.25/L4": {
+    "all/forced": 8.585,
+    "all/routed": 8.808,
+    "img/forced": 8.475,
+    "img/routed": 8.581,
+    "txt/forced": 9.031,
+    "txt/routed": 9.063,
+    "img:mm_medical/forced": 7.979,
+    "img:mm_natural/forced": 8.204,
+    "img:mm_natural/routed": 9.421,
+    "img:mm_ocr/forced": 8.961,
+    "img:mm_ocr/routed": 8.542,
+    "img:mm_screenshots/forced": 8.899,
+    "img:mm_screenshots/routed": 7.777,
+    "txt:mm_medical/forced": 9.221,
+    "txt:mm_natural/forced": 8.227,
+    "txt:mm_ocr/forced": 9.498,
+    "txt:mm_ocr/routed": 9.061,
+    "txt:mm_screenshots/forced": 8.541,
+    "txt:mm_screenshots/routed": 9.13
+   }
+  }
+ },
+ "meta": {
+  "w0": {
+   "flags": [],
+   "w_eff": 0.0,
+   "rate": 4.134982638888889,
+   "lr_rank": {
+    "gate": 1,
+    "up": 1,
+    "down": 0
+   },
+   "encode_s": 36.69801092147827,
+   "bitexact": {
+    "gate": {
+     "2": true,
+     "4": true
+    },
+    "up": {
+     "2": true,
+     "4": true
+    },
+    "down": {
+     "2": true,
+     "4": true
+    }
+   }
+  },
+  "w0.1": {
+   "flags": [],
+   "w_eff": 0.057031250000000006,
+   "rate": 4.134982638888889,
+   "lr_rank": {
+    "gate": 1,
+    "up": 1,
+    "down": 0
+   },
+   "encode_s": 43.53527355194092,
+   "bitexact": {
+    "gate": {
+     "2": true,
+     "4": true
+    },
+    "up": {
+     "2": true,
+     "4": true
+    },
+    "down": {
+     "2": true,
+     "4": true
+    }
+   }
+  },
+  "w0.25": {
+   "flags": [],
+   "w_eff": 0.142578125,
+   "rate": 4.134982638888889,
+   "lr_rank": {
+    "gate": 1,
+    "up": 1,
+    "down": 0
+   },
+   "encode_s": 27.364521741867065,
+   "bitexact": {
+    "gate": {
+     "2": true,
+     "4": true
+    },
+    "up": {
+     "2": true,
+     "4": true
+    },
+    "down": {
+     "2": true,
+     "4": true
+    }
+   }
+  }
+ }
+}

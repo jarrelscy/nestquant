@@ -1,0 +1,58 @@
+{
+ "10": {
+  "hi_vision": {
+   "expert": 169,
+   "n_v": 200359
+  },
+  "ordinary": {
+   "expert": 8,
+   "n_v": 12762
+  },
+  "low_vision": {
+   "expert": 70,
+   "n_v": 18
+  }
+ },
+ "30": {
+  "hi_vision": {
+   "expert": 230,
+   "n_v": 159177
+  },
+  "ordinary": {
+   "expert": 60,
+   "n_v": 11480
+  },
+  "low_vision": {
+   "expert": 74,
+   "n_v": 3858
+  }
+ },
+ "50": {
+  "hi_vision": {
+   "expert": 86,
+   "n_v": 122977
+  },
+  "ordinary": {
+   "expert": 118,
+   "n_v": 14176
+  },
+  "low_vision": {
+   "expert": 150,
+   "n_v": 73
+  }
+ },
+ "70": {
+  "hi_vision": {
+   "expert": 98,
+   "n_v": 193072
+  },
+  "ordinary": {
+   "expert": 203,
+   "n_v": 11265
+  },
+  "low_vision": {
+   "expert": 245,
+   "n_v": 55
+  }
+ }
+}
