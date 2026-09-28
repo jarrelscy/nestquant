@@ -44,3 +44,5 @@ Repo: `/home/coder/git/orbit-duet` (READ ONLY, another agent is actively working
 Some subagents found REPORT.md writes blocked. If that happens, put the full report in your final message; the lead will write the file.
 
 UPDATE 2026-09-28 (user): a 1-2% margin over EXL3-2 at 2 bit is sufficient. Level-2 encoder frozen at per-tile sign + two-sided G + blend 0.3 (thread 17). Only levels 2 and 4 are required (no level 3). One joint fit must yield both levels; promotion streams only the P4 plane + δ onto a byte-identical base.
+
+UPDATE 2026-09-28 (user): acceptance bar is parity with EXL3 at 2 and 4 bit (routed and OOD) across many experts. Level 2 already meets it (−1 to −2%). Level 4 needs the smallest P4 rate that reaches parity (currently +3.2% at 4.02 bpw).
