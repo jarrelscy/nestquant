@@ -25,7 +25,7 @@
   "chunk": 16,
   "upload": "go",
   "max_up": 2,
-  "nq_check": "first",
+  "nq_check": "off",
   "n_decode": 8,
   "refcheck": true,
   "hf_reconcile": true,
