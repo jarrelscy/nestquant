@@ -42,3 +42,5 @@ Repo: `/home/coder/git/orbit-duet` (READ ONLY, another agent is actively working
 
 ## Note on reports
 Some subagents found REPORT.md writes blocked. If that happens, put the full report in your final message; the lead will write the file.
+
+UPDATE 2026-09-28 (user): a 1-2% margin over EXL3-2 at 2 bit is sufficient. Level-2 encoder frozen at per-tile sign + two-sided G + blend 0.3 (thread 17). Only levels 2 and 4 are required (no level 3). One joint fit must yield both levels; promotion streams only the P4 plane + δ onto a byte-identical base.

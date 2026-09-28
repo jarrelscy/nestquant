@@ -308,8 +308,9 @@ def bits_per_level(P):
 
 @torch.no_grad()
 def xcheck_ref15(P, nunits=16, seed=0):
-    """Decode `nunits` random units with thread 15's numpy ref15_spec.decode_unit and compare with ring_levels
-    (only meaningful without base variants: ref15 has no per-ring a)."""
+    """Decode `nunits` random units with thread 15's numpy ref15_spec.decode_unit and compare with ring_levels.
+    Per-ring sign variants (a = +-1) are checked as a * ref15 (fp16 negation is exact: the sign folds into the
+    per-lane A'/C HFMA2 constants); other gain variants are not ref15 values and are skipped."""
     sys.path.insert(0, "/home/coder/git/nestquant/threads/15-level4-decode")
     import numpy as np, ref15_spec as R15
     m = P["meta"]
@@ -326,6 +327,11 @@ def xcheck_ref15(P, nunits=16, seed=0):
         bs = base[boff[u]:boff[u] + bper[u]].view(8, -1).numpy()
         rs = res[roff[u]:roff[u] + rper[u]].view(8, -1).numpy()
         q2, q4 = R15.decode_unit(bs, rs, int(rl["Mb"][u]), int(rl["N"][u]), Kb=2, Kr=float(Ks[u]) if float(Ks[u]) % 1 else int(Ks[u]))
+        if rl["a"] is not None:
+            if m["base_var"] != "sign":
+                return None
+            a = rl["a"][u].numpy()
+            q2, q4 = a * q2, a * q4
         bad += int((q2 != rl["Q2"][u].numpy()).sum() + (q4 != rl["Q4"][u].numpy()).sum())
     return bad
 

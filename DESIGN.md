@@ -7,6 +7,9 @@ Status: frozen enough to build. Open items are marked OPEN; the owning thread de
 - MiMo 2.6: beat EXL3 at 2 bit only.
 - Speed: beat EXL3 at batch 1–4 at 2 and 4 bit on A100.
 
+## Level 2: FROZEN (user accepted 1-2% margin)
+Per-tile sign (1 bit/256-weight tile, folded into mul1 hfma constants) + two-sided G β=0.5 on gate/up + blend λ=0.3. 9-expert: −1.1/−1.3/−1.8% vs EXL3-2 routed/forced/OOD at 2.0143 bpw. Remaining work is level 4 only.
+
 ## Fair anchors (GLM, relative expert-output L2 %, routed)
 - EXL3 with thread 08's H: 2 bit E36 34.39 / E92 33.01 / E165 28.63; 4 bit mean over E36/92/165: all 9.16, OOD 9.87, routed 8.22 (E36 8.92 / E92 8.46 / E165 7.29).
 - NVFP4 4 bit: E36 12.29, E92 11.60, E165 10.65 routed.
