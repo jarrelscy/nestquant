@@ -3,7 +3,7 @@
 # Fixed set = top 26 (10%) by S_e. Report coverage (share of routes landing in the set) on all tokens vs boundary tokens.
 import numpy as np, json, os, sys
 root=sys.argv[1] if len(sys.argv)>1 else '/tmp/nestquant/19-capture-glmfmt'
-Ws=[1,3,10,50]; K=26; out={}
+Ws=[1,50,100,200]; K=26; out={}
 for L in range(3,78):
     p=f'{root}/stats0/L{L}/sal.npy'
     if not os.path.exists(p): continue
