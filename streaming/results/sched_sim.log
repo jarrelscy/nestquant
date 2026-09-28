@@ -1,0 +1,4 @@
+{"lag": 1, "cap_GBps": 6.0, "half_life": 512.0, "seqs": 69, "tokens": 716106, "route_share_from4096": 0.6344, "route_share_all": 0.6381, "GBps_111": 3.65, "ups": 2359859, "downs": 2359859, "deferred_steps": 51474, "big_steps": 0, "secs": 63}
+{"lag": 1, "cap_GBps": 1000.0, "half_life": 512.0, "seqs": 69, "tokens": 716106, "route_share_from4096": 0.6344, "route_share_all": 0.6426, "GBps_111": 3.97, "ups": 2566916, "downs": 2566916, "deferred_steps": 0, "big_steps": 0, "secs": 60}
+{"lag": 1, "cap_GBps": 6.0, "half_life": 256.0, "seqs": 69, "tokens": 716106, "route_share_from4096": 0.6349, "route_share_all": 0.6381, "GBps_111": 5.76, "ups": 3730262, "downs": 3745238, "deferred_steps": 349290, "big_steps": 0, "secs": 73}
+{"lag": 8, "cap_GBps": 6.0, "half_life": 512.0, "seqs": 69, "tokens": 716106, "route_share_from4096": 0.6317, "route_share_all": 0.635, "GBps_111": 3.65, "ups": 2359859, "downs": 2359859, "deferred_steps": 51474, "big_steps": 0, "secs": 63}
