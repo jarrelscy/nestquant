@@ -49,3 +49,6 @@ UPDATE 2026-09-28 (user): acceptance bar is parity with EXL3 at 2 and 4 bit (rou
 
 ## Production target (user, 2026-09-28)
 GLM-5.3 from the FP8 base, 2/4-bit quant using the ~18M-token calibration corpus. Upload each layer as it finishes to the PUBLIC HF repo jarrelscy/GLM-5.3-NestQuant-2-4bit (user changed to public). Spot-check every layer against EXL3-2/4 as it goes. In parallel: SM120 (RTX PRO 6000) kernels in sm120/, pushed to jarrelscy/nestquant. MiMo holds ~44 GB on every A100; our processes stay within 12 GB and never touch its jobs.
+
+## Boundary weighting (user, 2026-09-28)
+Upweight positions just before boundary tokens (the next token is </think> 154842 or <|endoftext|> 154820) in calibration H and in REAP-style salience/usage. Default 50x (same as ARVQ v2). Stored as a separate additive H_bnd so the weight can be retuned; the eval gets a boundary split.
