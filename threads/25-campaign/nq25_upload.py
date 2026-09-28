@@ -195,7 +195,10 @@ def run_top(top, names, go=False, repo=REPO, rec_dir=None):
     rec["status"] = ("uploaded" if not bad else f"verify failed {bad}") if go else "dry-run"
     if rec_dir:
         os.makedirs(rec_dir, exist_ok=True)
-        json.dump(rec, open(f"{rec_dir}/top.json", "w"), indent=1)
+        json.dump(rec, open(f"{rec_dir}/{'top' if go else 'top.dry'}.json", "w"), indent=1)   # a dry plan never hides the last real upload
+        if go:
+            with open(f"{rec_dir}/top_history.jsonl", "a") as fh:
+                fh.write(json.dumps({k: rec.get(k) for k in ("time", "commit", "status", "MBps")} | dict(files=[x["path"] for x in rec.get("files", []) if x.get("action") == "send"])) + "\n")
     print(f"top: {rec['status']} commit {rec.get('commit')} {rec.get('MBps')} MB/s", flush=True)
     return rec
 

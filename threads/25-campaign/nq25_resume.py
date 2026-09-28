@@ -255,6 +255,10 @@ def step_driver(c, fix, r, accept_code=False, ready=True):
     if not fix or not ready:
         return r.add("driver", None, ("would run: " if ready else "blocked by the steps above; would run: ") + " ".join(cmd))
     os.makedirs(c["root"], exist_ok=True)
+    if os.path.exists(f"{c['root']}/STOPPED"):
+        if os.environ.get("NQ25_WATCHDOG"):
+            return r.add("driver", None, "STOPPED (nq25_campaign.py stop); watchdog does not restart it")
+        os.remove(f"{c['root']}/STOPPED")                          # a manual resume.sh clears a manual stop
     env = dict(os.environ, LD_LIBRARY_PATH=c["env"]["LD_LIBRARY_PATH"] + ":" + os.environ.get("LD_LIBRARY_PATH", ""))
     log = open(f"{c['root']}/driver.out", "a")
     p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, start_new_session=True, cwd=HERE)

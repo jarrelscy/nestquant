@@ -261,7 +261,8 @@ class Campaign:
         self.experts = list(range(e0, e1))
         self.st = jload(f"{self.root}/state.json") or dict(layers={}, workers={}, created=mel(), events=[])
         self.procs = {}                                # wid -> psutil.Process / Popen
-        self._final = {}                               # L -> {"_stats": T19 final version_dir} (gate a pin)
+        self._final = {}
+        self._holds = {}                               # L -> current gate hold reason (status.json "holding")                               # L -> {"_stats": T19 final version_dir} (gate a pin)
         self.gpus_allowed = [int(x) for x in str(self.sched["gpus"]).split(",") if x != ""]
         self.last_du = (0, 0)
         self.log_f = open(f"{self.root}/campaign.log", "a")
@@ -601,8 +602,11 @@ class Campaign:
                     continue
                 why = self.layer_gate(L)
                 if why:
-                    self._note(f"L{L}: holding ({why})")
+                    if self._holds.get(L) != why:              # log each layer's hold reason once per change
+                        self.log(f"L{L}: holding ({why})")
+                    self._holds[L] = why
                     break
+                self._holds.pop(L, None)
                 if pin_layer(self.root, self.cfg, L, self.sched["min_shards"], force=self._final.get(L)) is None:
                     self._note(f"L{L}: stats not ready (< {self.sched['min_shards']} shards); holding layer")
                     break
@@ -1079,6 +1083,17 @@ class Campaign:
                   disk_out_gb=round(self.last_du[1] / 2 ** 30, 2), disk_free_tb=round(free / 2 ** 40, 2),
                   flags=[L for L in self.layers if (self.lay(L).get("spot") or {}).get("flag")],
                   failed_chunks=[f"L{L}:{k}" for L in self.layers for k, c in self.lay(L)["chunks"].items() if c["status"] == "failed"])
+        ts = [self.lay(L).get("t_start") for L in self.layers if self.lay(L).get("t_start")]
+        te = sorted(self.lay(L)["t_encoded"] for L in self.layers if self.lay(L).get("t_encoded"))
+        st["first_layer_start"] = mel(min(ts)) if ts else None
+        win = [x for x in te if x > t - 6 * 3600]                   # layers fully encoded, last 6 h (or since start)
+        hspan = min(6 * 3600.0, max(1.0, t - min(ts))) / 3600 if ts else None
+        st["layers_encoded"] = len(te)
+        st["layers_per_hour"] = round(len(win) / hspan, 2) if hspan else None
+        holding = collections.defaultdict(list)
+        for L, why in sorted(getattr(self, "_holds", {}).items()):
+            holding[why].append(L)
+        st["holding"] = {w: ",".join(map(str, v)) if len(v) < 6 else f"{len(v)} layers L{v[0]}..L{v[-1]}" for w, v in holding.items()}
         if write:
             jdump(st, f"{self.root}/status.json")
             with open(f"{self.root}/throughput.jsonl", "a") as f:
@@ -1146,6 +1161,7 @@ def cmd_run(a):
 
 def cmd_stop(a):
     """SIGTERM the driver of ROOT (workers keep running and are adopted by the next run)."""
+    open(f"{a.out}/STOPPED", "w").write(mel() + "\n")     # the watchdog leaves a STOPPED campaign alone
     d = jload(f"{a.out}/driver.pid")
     try:
         p = psutil.Process(d["pid"])

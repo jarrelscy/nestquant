@@ -60,15 +60,41 @@ Steps:
 
 ## Watching the campaign
 
-- `nq25_campaign.py status --out /tmp/nestquant/nq-encode-v1`
-- `ROOT/campaign.log`
-- `ROOT/ALERTS.jsonl` records:
-  - spot flags
-  - refcheck mismatch (the driver falls back to nq_layer for that layer)
-  - check-decode failure
-  - upload failure
-  - code drift (new launches are held)
-- `nq25_campaign.py stop --out ROOT` sends SIGTERM to the driver only. Workers keep running and the next run adopts them.
+One command, read-only:
+
+    /home/coder/git/nestquant/threads/25-campaign/status.sh [--alerts N] [--all]
+
+It prints:
+- driver and watchdog liveness;
+- the MMW_GO / T23_GO gate files and the count of T19 final markers;
+- which layers are holding, and why;
+- throughput: layers/h, experts/h, worker s/expert, ETA, and the first-layer start time;
+- running workers per GPU;
+- one row per started layer: state, done/256, encoder, finalize/check/spot, upload;
+- the last top-level HF upload;
+- the last N alerts.
+
+The raw data is in `ROOT/status.json`, `ROOT/throughput.jsonl`, `ROOT/campaign.log` and `ROOT/ALERTS.jsonl`. `ROOT/ALERTS.jsonl` records:
+- spot flags
+- refcheck mismatch (the driver falls back to nq_layer for that layer)
+- check-decode failure
+- upload failure
+- code drift (new launches are held)
+- `mmw_adopted` / `mmw_mismatch`
+- watchdog back-off
+
+## Running unattended
+
+- The driver runs in its own session (`setsid`), so it survives the shell and the agent that started it.
+- `resume.sh` (not `--check`) also starts `watchdog.sh` detached. Only one instance can run (it holds `flock ROOT/watchdog.lock`).
+- Every 60 s the watchdog checks `ROOT/driver.pid`. If the driver is dead, it reruns `resume.sh`, which fixes whatever is missing and restarts the driver. Running workers are adopted.
+- If the driver dies more than 5 times in an hour, the watchdog writes a `watchdog` alert and waits 30 min.
+- Its log is `ROOT/watchdog.log`.
+
+To stop:
+- `nq25_campaign.py stop --out ROOT` writes `ROOT/STOPPED` and sends SIGTERM to the driver only. Workers keep running and the next run adopts them.
+- The watchdog does not restart a STOPPED campaign.
+- A manual `./resume.sh` clears STOPPED and restarts the driver.
 
 ## Rebuilding the top-level files
 
