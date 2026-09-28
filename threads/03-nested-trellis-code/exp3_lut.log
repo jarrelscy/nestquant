@@ -1,0 +1,55 @@
+   lloyd it0 test mse 0.005772
+   lloyd it1 test mse 0.005697
+   lloyd it2 test mse 0.005650
+   lloyd it3 test mse 0.005617
+   lloyd it4 test mse 0.005594
+   lloyd it5 test mse 0.005574
+   lloyd it6 test mse 0.005560
+   lloyd it7 test mse 0.005547
+res learned-LUT direct K2 L8 (256 halfs)      L4: mse=0.005535 +1.514 dB  
+   lloyd it0 test mse 0.005356
+   lloyd it1 test mse 0.005323
+   lloyd it2 test mse 0.005307
+   lloyd it3 test mse 0.005296
+   lloyd it4 test mse 0.005289
+   lloyd it5 test mse 0.005284
+   lloyd it6 test mse 0.005280
+   lloyd it7 test mse 0.005277
+res learned-LUT direct K2 L10 (1024 halfs)    L4: mse=0.005274 +1.304 dB  
+   lloyd it0 test mse 0.005018
+   lloyd it1 test mse 0.004996
+   lloyd it2 test mse 0.004992
+   lloyd it3 test mse 0.004991
+   lloyd it4 test mse 0.004989
+   lloyd it5 test mse 0.004989
+   lloyd it6 test mse 0.004987
+   lloyd it7 test mse 0.004987
+res learned-LUT direct K2 L12 (4096 halfs)    L4: mse=0.004986 +1.060 dB  
+   lloyd it0 test mse 0.021905
+   lloyd it1 test mse 0.020916
+   lloyd it2 test mse 0.020532
+   lloyd it3 test mse 0.020327
+   lloyd it4 test mse 0.020202
+   lloyd it5 test mse 0.020104
+   lloyd it6 test mse 0.020026
+   lloyd it7 test mse 0.019973
+res learned-LUT direct K1 L8 (256 halfs)      L3: mse=0.019924 +1.055 dB  
+   lloyd it0 test mse 0.020025
+   lloyd it1 test mse 0.019651
+   lloyd it2 test mse 0.019537
+   lloyd it3 test mse 0.019480
+   lloyd it4 test mse 0.019429
+   lloyd it5 test mse 0.019401
+   lloyd it6 test mse 0.019390
+   lloyd it7 test mse 0.019376
+res learned-LUT direct K1 L10 (1024 halfs)    L3: mse=0.019363 +0.932 dB  
+   lloyd it0 test mse 0.019682
+   lloyd it1 test mse 0.019352
+   lloyd it2 test mse 0.019226
+   lloyd it3 test mse 0.019170
+   lloyd it4 test mse 0.019144
+   lloyd it5 test mse 0.019121
+   lloyd it6 test mse 0.019112
+   lloyd it7 test mse 0.019106
+res learned-LUT direct K1 L12 (4096 halfs)    L3: mse=0.019098 +0.872 dB  
+total s 28.49218201637268

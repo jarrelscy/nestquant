@@ -1,0 +1,4 @@
+HYB base (exact decode)                            L2 mse=0.077845 +0.953 dB
+HYB base + HYB ref -> L4                           L4 mse=0.006086 +1.926 dB
+mul1 base + K1 ctx -> L3                           L3 mse=0.018362 +0.701 dB
+mul1 base + K1 ctx + K1 ctx(P3,base) -> L4         L4 mse=0.004934 +1.014 dB

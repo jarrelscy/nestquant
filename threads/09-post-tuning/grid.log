@@ -1,0 +1,342 @@
+glm2_lut_lr3e-4 bpw+0.0000 init {'train': 15.763, 'hold': 17.971} best {'epoch': 30, 'hold': 17.952, 'train': 15.755, 'hold_rounded': 17.952} secs 29
+ eval {'pilot/all/forced': (40.011, 40.04), 'pilot/all/routed': (37.411, 37.428), 'pilot/control/forced': (38.341, 38.37), 'pilot/control/routed': (34.933, 34.945), 'pilot/ood/forced': (42.574, 42.602), 'pilot/ood/routed': (42.757, 42.794)}
+glm2_lut_lr1e-3 bpw+0.0000 init {'train': 15.763, 'hold': 17.971} best {'epoch': 11, 'hold': 17.952, 'train': 15.754, 'hold_rounded': 17.952} secs 15
+ eval {'pilot/all/forced': (40.011, 40.038), 'pilot/all/routed': (37.411, 37.426), 'pilot/control/forced': (38.341, 38.368), 'pilot/control/routed': (34.933, 34.945), 'pilot/ood/forced': (42.574, 42.601), 'pilot/ood/routed': (42.757, 42.791)}
+glm2_lut_lr3e-3 bpw+0.0000 init {'train': 15.763, 'hold': 17.971} best {'epoch': 3, 'hold': 17.954, 'train': 15.755, 'hold_rounded': 17.954} secs 9
+ eval {'pilot/all/forced': (40.011, 40.043), 'pilot/all/routed': (37.411, 37.431), 'pilot/control/forced': (38.341, 38.373), 'pilot/control/routed': (34.933, 34.948), 'pilot/ood/forced': (42.574, 42.606), 'pilot/ood/routed': (42.757, 42.8)}
+glm2_vlut_lr3e-4 bpw+0.0012 init {'train': 15.763, 'hold': 17.971} best {'epoch': 5, 'hold': 17.954, 'train': 15.749, 'hold_rounded': 17.954} secs 12
+ eval {'pilot/all/forced': (40.011, 40.045), 'pilot/all/routed': (37.411, 37.433), 'pilot/control/forced': (38.341, 38.376), 'pilot/control/routed': (34.933, 34.953), 'pilot/ood/forced': (42.574, 42.608), 'pilot/ood/routed': (42.757, 42.8)}
+glm2_vlut_lr1e-3 bpw+0.0012 init {'train': 15.763, 'hold': 17.971} best {'epoch': 4, 'hold': 17.955, 'train': 15.744, 'hold_rounded': 17.955} secs 10
+ eval {'pilot/all/forced': (40.011, 40.051), 'pilot/all/routed': (37.411, 37.44), 'pilot/control/forced': (38.341, 38.382), 'pilot/control/routed': (34.933, 34.949), 'pilot/ood/forced': (42.574, 42.612), 'pilot/ood/routed': (42.757, 42.804)}
+glm2_vlut_lr3e-3 bpw+0.0012 init {'train': 15.763, 'hold': 17.971} best {'epoch': 8, 'hold': 17.953, 'train': 15.742, 'hold_rounded': 17.954} secs 9
+ eval {'pilot/all/forced': (40.011, 40.046), 'pilot/all/routed': (37.411, 37.437), 'pilot/control/forced': (38.341, 38.377), 'pilot/control/routed': (34.933, 34.951), 'pilot/ood/forced': (42.574, 42.607), 'pilot/ood/routed': (42.757, 42.799)}
+glm2_tile_lr3e-4 bpw+0.0312 init {'train': 15.763, 'hold': 17.971} best {'epoch': 13, 'hold': 17.916, 'train': 15.553, 'hold_rounded': 17.917} secs 5
+ eval {'pilot/all/forced': (40.011, 40.025), 'pilot/all/routed': (37.411, 37.419), 'pilot/control/forced': (38.341, 38.35), 'pilot/control/routed': (34.933, 34.924), 'pilot/ood/forced': (42.574, 42.594), 'pilot/ood/routed': (42.757, 42.799)}
+glm2_tile_lr1e-3 bpw+0.0312 init {'train': 15.763, 'hold': 17.971} best {'epoch': 3, 'hold': 17.923, 'train': 15.579, 'hold_rounded': 17.922} secs 4
+ eval {'pilot/all/forced': (40.011, 40.027), 'pilot/all/routed': (37.411, 37.418), 'pilot/control/forced': (38.341, 38.353), 'pilot/control/routed': (34.933, 34.927), 'pilot/ood/forced': (42.574, 42.594), 'pilot/ood/routed': (42.757, 42.801)}
+glm2_tile_lr3e-3 bpw+0.0312 init {'train': 15.763, 'hold': 17.971} best {'epoch': 1, 'hold': 17.945, 'train': 15.633, 'hold_rounded': 17.945} secs 4
+ eval {'pilot/all/forced': (40.011, 40.042), 'pilot/all/routed': (37.411, 37.429), 'pilot/control/forced': (38.341, 38.369), 'pilot/control/routed': (34.933, 34.935), 'pilot/ood/forced': (42.574, 42.608), 'pilot/ood/routed': (42.757, 42.815)}
+glm2_suv+rot+bias+lut_lr3e-4 bpw+0.0148 init {'train': 15.763, 'hold': 17.971} best {'epoch': 4, 'hold': 17.938, 'train': 15.657, 'hold_rounded': 17.938} secs 7
+ eval {'pilot/all/forced': (40.011, 40.029), 'pilot/all/routed': (37.411, 37.416), 'pilot/control/forced': (38.341, 38.359), 'pilot/control/routed': (34.933, 34.923), 'pilot/ood/forced': (42.574, 42.591), 'pilot/ood/routed': (42.757, 42.794)}
+glm2_suv+rot+bias+lut_lr1e-3 bpw+0.0148 init {'train': 15.763, 'hold': 17.971} best {'epoch': 1, 'hold': 17.953, 'train': 15.695, 'hold_rounded': 17.953} secs 6
+ eval {'pilot/all/forced': (40.011, 40.026), 'pilot/all/routed': (37.411, 37.418), 'pilot/control/forced': (38.341, 38.355), 'pilot/control/routed': (34.933, 34.93), 'pilot/ood/forced': (42.574, 42.59), 'pilot/ood/routed': (42.757, 42.797)}
+glm2_suv+rot+bias+lut_lr3e-3 bpw+0.0148 init {'train': 15.763, 'hold': 17.971} best {'epoch': 0, 'train': 15.763, 'hold': 17.971, 'hold_rounded': 17.971} secs 6
+ eval {'pilot/all/forced': (40.011, 40.01), 'pilot/all/routed': (37.411, 37.407), 'pilot/control/forced': (38.341, 38.341), 'pilot/control/routed': (34.933, 34.932), 'pilot/ood/forced': (42.574, 42.572), 'pilot/ood/routed': (42.757, 42.762)}
+glm2_suv+rot+bias+lut+tile_lr3e-4 bpw+0.0460 init {'train': 15.763, 'hold': 17.971} best {'epoch': 10, 'hold': 17.914, 'train': 15.493, 'hold_rounded': 17.915} secs 11
+ eval {'pilot/all/forced': (40.011, 40.01), 'pilot/all/routed': (37.411, 37.395), 'pilot/control/forced': (38.341, 38.338), 'pilot/control/routed': (34.933, 34.898), 'pilot/ood/forced': (42.574, 42.577), 'pilot/ood/routed': (42.757, 42.788)}
+glm2_suv+rot+bias+lut+tile_lr1e-3 bpw+0.0460 init {'train': 15.763, 'hold': 17.971} best {'epoch': 5, 'hold': 17.933, 'train': 15.458, 'hold_rounded': 17.933} secs 8
+ eval {'pilot/all/forced': (40.011, 40.034), 'pilot/all/routed': (37.411, 37.415), 'pilot/control/forced': (38.341, 38.361), 'pilot/control/routed': (34.933, 34.912), 'pilot/ood/forced': (42.574, 42.6), 'pilot/ood/routed': (42.757, 42.821)}
+glm2_suv+rot+bias+lut+tile_lr3e-3 bpw+0.0460 init {'train': 15.763, 'hold': 17.971} best {'epoch': 0, 'train': 15.763, 'hold': 17.971, 'hold_rounded': 17.971} secs 7
+ eval {'pilot/all/forced': (40.011, 40.01), 'pilot/all/routed': (37.411, 37.407), 'pilot/control/forced': (38.341, 38.341), 'pilot/control/routed': (34.933, 34.932), 'pilot/ood/forced': (42.574, 42.572), 'pilot/ood/routed': (42.757, 42.762)}
+glm2_none_r8_lr1e-4 bpw+0.0833 init {'train': 15.531, 'hold': 17.83} best {'epoch': 4, 'hold': 17.825, 'train': 15.502, 'hold_rounded': 17.825} secs 7
+ eval {'pilot/all/forced': (40.011, 39.884), 'pilot/all/routed': (37.411, 37.276), 'pilot/control/forced': (38.341, 38.217), 'pilot/control/routed': (34.933, 34.795), 'pilot/ood/forced': (42.574, 42.441), 'pilot/ood/routed': (42.757, 42.642)}
+glm2_none_r8_lr3e-4 bpw+0.0833 init {'train': 15.531, 'hold': 17.83} best {'epoch': 9, 'hold': 17.827, 'train': 15.46, 'hold_rounded': 17.826} secs 8
+ eval {'pilot/all/forced': (40.011, 39.886), 'pilot/all/routed': (37.411, 37.278), 'pilot/control/forced': (38.341, 38.219), 'pilot/control/routed': (34.933, 34.787), 'pilot/ood/forced': (42.574, 42.443), 'pilot/ood/routed': (42.757, 42.65)}
+glm2_none_r8_lr1e-3 bpw+0.0833 init {'train': 15.531, 'hold': 17.83} best {'epoch': 0, 'train': 15.531, 'hold': 17.83, 'hold_rounded': 17.83} secs 7
+ eval {'pilot/all/forced': (40.011, 39.884), 'pilot/all/routed': (37.411, 37.28), 'pilot/control/forced': (38.341, 38.219), 'pilot/control/routed': (34.933, 34.804), 'pilot/ood/forced': (42.574, 42.44), 'pilot/ood/routed': (42.757, 42.636)}
+glm2_none_r32_lr1e-4 bpw+0.3333 init {'train': 15.12, 'hold': 17.614} best {'epoch': 9, 'hold': 17.602, 'train': 14.98, 'hold_rounded': 17.603} secs 8
+ eval {'pilot/all/forced': (40.011, 39.523), 'pilot/all/routed': (37.411, 36.903), 'pilot/control/forced': (38.341, 37.854), 'pilot/control/routed': (34.933, 34.411), 'pilot/ood/forced': (42.574, 42.082), 'pilot/ood/routed': (42.757, 42.28)}
+glm2_none_r32_lr3e-4 bpw+0.3333 init {'train': 15.12, 'hold': 17.614} best {'epoch': 0, 'train': 15.12, 'hold': 17.614, 'hold_rounded': 17.614} secs 7
+ eval {'pilot/all/forced': (40.011, 39.528), 'pilot/all/routed': (37.411, 36.917), 'pilot/control/forced': (38.341, 37.865), 'pilot/control/routed': (34.933, 34.435), 'pilot/ood/forced': (42.574, 42.079), 'pilot/ood/routed': (42.757, 42.269)}
+glm2_none_r32_lr1e-3 bpw+0.3333 init {'train': 15.12, 'hold': 17.614} best {'epoch': 0, 'train': 15.12, 'hold': 17.614, 'hold_rounded': 17.614} secs 7
+ eval {'pilot/all/forced': (40.011, 39.528), 'pilot/all/routed': (37.411, 36.917), 'pilot/control/forced': (38.341, 37.865), 'pilot/control/routed': (34.933, 34.435), 'pilot/ood/forced': (42.574, 42.079), 'pilot/ood/routed': (42.757, 42.269)}
+glm4_suv_lr3e-4 bpw+0.0000 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 4
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_suv_lr1e-3 bpw+0.0000 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 5
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_suv_lr3e-3 bpw+0.0000 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 5
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_rot_lr3e-4 bpw+0.0104 init {'train': 3.975, 'hold': 4.528} best {'epoch': 1, 'hold': 4.527, 'train': 3.966, 'hold_rounded': 4.527} secs 4
+ eval {'pilot/all/forced': (10.457, 10.458), 'pilot/all/routed': (9.736, 9.737), 'pilot/control/forced': (10.004, 10.005), 'pilot/control/routed': (9.058, 9.064), 'pilot/ood/forced': (11.152, 11.152), 'pilot/ood/routed': (11.181, 11.187)}
+glm4_rot_lr1e-3 bpw+0.0104 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 4
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_rot_lr3e-3 bpw+0.0104 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 4
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_bias_lr3e-4 bpw+0.0043 init {'train': 3.975, 'hold': 4.528} best {'epoch': 3, 'hold': 4.522, 'train': 3.965, 'hold_rounded': 4.522} secs 4
+ eval {'pilot/all/forced': (10.457, 10.454), 'pilot/all/routed': (9.736, 9.728), 'pilot/control/forced': (10.004, 10.0), 'pilot/control/routed': (9.058, 9.058), 'pilot/ood/forced': (11.152, 11.149), 'pilot/ood/routed': (11.181, 11.178)}
+glm4_bias_lr1e-3 bpw+0.0043 init {'train': 3.975, 'hold': 4.528} best {'epoch': 4, 'hold': 4.523, 'train': 3.965, 'hold_rounded': 4.523} secs 4
+ eval {'pilot/all/forced': (10.457, 10.454), 'pilot/all/routed': (9.736, 9.73), 'pilot/control/forced': (10.004, 10.0), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.148), 'pilot/ood/routed': (11.181, 11.178)}
+glm4_bias_lr3e-3 bpw+0.0043 init {'train': 3.975, 'hold': 4.528} best {'epoch': 9, 'hold': 4.525, 'train': 3.967, 'hold_rounded': 4.525} secs 5
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.733), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.06), 'pilot/ood/forced': (11.152, 11.15), 'pilot/ood/routed': (11.181, 11.185)}
+glm4_lut_lr3e-4 bpw+0.0000 init {'train': 3.975, 'hold': 4.528} best {'epoch': 1, 'hold': 4.527, 'train': 3.975, 'hold_rounded': 4.527} secs 7
+ eval {'pilot/all/forced': (10.457, 10.457), 'pilot/all/routed': (9.736, 9.733), 'pilot/control/forced': (10.004, 10.004), 'pilot/control/routed': (9.058, 9.063), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.18)}
+glm4_lut_lr1e-3 bpw+0.0000 init {'train': 3.975, 'hold': 4.528} best {'epoch': 21, 'hold': 4.524, 'train': 3.976, 'hold_rounded': 4.524} secs 14
+ eval {'pilot/all/forced': (10.457, 10.454), 'pilot/all/routed': (9.736, 9.732), 'pilot/control/forced': (10.004, 10.0), 'pilot/control/routed': (9.058, 9.061), 'pilot/ood/forced': (11.152, 11.148), 'pilot/ood/routed': (11.181, 11.177)}
+glm4_lut_lr3e-3 bpw+0.0000 init {'train': 3.975, 'hold': 4.528} best {'epoch': 11, 'hold': 4.524, 'train': 3.975, 'hold_rounded': 4.524} secs 11
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.733), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.06), 'pilot/ood/forced': (11.152, 11.149), 'pilot/ood/routed': (11.181, 11.181)}
+glm4_vlut_lr3e-4 bpw+0.0012 init {'train': 3.975, 'hold': 4.528} best {'epoch': 18, 'hold': 4.526, 'train': 3.97, 'hold_rounded': 4.526} secs 14
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.733), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.062), 'pilot/ood/forced': (11.152, 11.15), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_vlut_lr1e-3 bpw+0.0012 init {'train': 3.975, 'hold': 4.528} best {'epoch': 11, 'hold': 4.526, 'train': 3.971, 'hold_rounded': 4.526} secs 11
+ eval {'pilot/all/forced': (10.457, 10.457), 'pilot/all/routed': (9.736, 9.732), 'pilot/control/forced': (10.004, 10.004), 'pilot/control/routed': (9.058, 9.062), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.178)}
+glm4_vlut_lr3e-3 bpw+0.0012 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 7
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_tile_lr3e-4 bpw+0.0312 init {'train': 3.975, 'hold': 4.528} best {'epoch': 3, 'hold': 4.519, 'train': 3.928, 'hold_rounded': 4.519} secs 5
+ eval {'pilot/all/forced': (10.457, 10.454), 'pilot/all/routed': (9.736, 9.733), 'pilot/control/forced': (10.004, 10.0), 'pilot/control/routed': (9.058, 9.058), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.18)}
+glm4_tile_lr1e-3 bpw+0.0312 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 4
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_tile_lr3e-3 bpw+0.0312 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 5
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.734), 'pilot/control/forced': (10.004, 10.003), 'pilot/control/routed': (9.058, 9.059), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.182)}
+glm4_suv+rot+bias+lut_lr3e-4 bpw+0.0148 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 8
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.73), 'pilot/control/forced': (10.004, 10.002), 'pilot/control/routed': (9.058, 9.062), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.179)}
+glm4_suv+rot+bias+lut_lr1e-3 bpw+0.0148 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 7
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.73), 'pilot/control/forced': (10.004, 10.002), 'pilot/control/routed': (9.058, 9.062), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.179)}
+glm4_suv+rot+bias+lut_lr3e-3 bpw+0.0148 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 8
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.73), 'pilot/control/forced': (10.004, 10.002), 'pilot/control/routed': (9.058, 9.062), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.179)}
+glm4_suv+rot+bias+lut+tile_lr3e-4 bpw+0.0460 init {'train': 3.975, 'hold': 4.528} best {'epoch': 6, 'hold': 4.525, 'train': 3.901, 'hold_rounded': 4.526} secs 9
+ eval {'pilot/all/forced': (10.457, 10.454), 'pilot/all/routed': (9.736, 9.731), 'pilot/control/forced': (10.004, 9.999), 'pilot/control/routed': (9.058, 9.058), 'pilot/ood/forced': (11.152, 11.152), 'pilot/ood/routed': (11.181, 11.188)}
+glm4_suv+rot+bias+lut+tile_lr1e-3 bpw+0.0460 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 7
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.73), 'pilot/control/forced': (10.004, 10.002), 'pilot/control/routed': (9.058, 9.062), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.179)}
+glm4_suv+rot+bias+lut+tile_lr3e-3 bpw+0.0460 init {'train': 3.975, 'hold': 4.528} best {'epoch': 0, 'train': 3.975, 'hold': 4.528, 'hold_rounded': 4.528} secs 8
+ eval {'pilot/all/forced': (10.457, 10.456), 'pilot/all/routed': (9.736, 9.73), 'pilot/control/forced': (10.004, 10.002), 'pilot/control/routed': (9.058, 9.062), 'pilot/ood/forced': (11.152, 11.151), 'pilot/ood/routed': (11.181, 11.179)}
+glm4_none_r8_lr1e-4 bpw+0.0833 init {'train': 3.921, 'hold': 4.489} best {'epoch': 0, 'train': 3.921, 'hold': 4.489, 'hold_rounded': 4.489} secs 7
+ eval {'pilot/all/forced': (10.457, 10.422), 'pilot/all/routed': (9.736, 9.704), 'pilot/control/forced': (10.004, 9.967), 'pilot/control/routed': (9.058, 9.03), 'pilot/ood/forced': (11.152, 11.118), 'pilot/ood/routed': (11.181, 11.156)}
+glm4_none_r8_lr3e-4 bpw+0.0833 init {'train': 3.921, 'hold': 4.489} best {'epoch': 0, 'train': 3.921, 'hold': 4.489, 'hold_rounded': 4.489} secs 7
+ eval {'pilot/all/forced': (10.457, 10.422), 'pilot/all/routed': (9.736, 9.704), 'pilot/control/forced': (10.004, 9.967), 'pilot/control/routed': (9.058, 9.03), 'pilot/ood/forced': (11.152, 11.118), 'pilot/ood/routed': (11.181, 11.156)}
+glm4_none_r8_lr1e-3 bpw+0.0833 init {'train': 3.921, 'hold': 4.489} best {'epoch': 0, 'train': 3.921, 'hold': 4.489, 'hold_rounded': 4.489} secs 7
+ eval {'pilot/all/forced': (10.457, 10.422), 'pilot/all/routed': (9.736, 9.704), 'pilot/control/forced': (10.004, 9.967), 'pilot/control/routed': (9.058, 9.03), 'pilot/ood/forced': (11.152, 11.118), 'pilot/ood/routed': (11.181, 11.156)}
+glm4_none_r32_lr1e-4 bpw+0.3333 init {'train': 3.824, 'hold': 4.434} best {'epoch': 0, 'train': 3.824, 'hold': 4.434, 'hold_rounded': 4.434} secs 7
+ eval {'pilot/all/forced': (10.457, 10.32), 'pilot/all/routed': (9.736, 9.603), 'pilot/control/forced': (10.004, 9.866), 'pilot/control/routed': (9.058, 8.93), 'pilot/ood/forced': (11.152, 11.013), 'pilot/ood/routed': (11.181, 11.045)}
+glm4_none_r32_lr3e-4 bpw+0.3333 init {'train': 3.824, 'hold': 4.434} best {'epoch': 0, 'train': 3.824, 'hold': 4.434, 'hold_rounded': 4.434} secs 7
+ eval {'pilot/all/forced': (10.457, 10.32), 'pilot/all/routed': (9.736, 9.603), 'pilot/control/forced': (10.004, 9.866), 'pilot/control/routed': (9.058, 8.93), 'pilot/ood/forced': (11.152, 11.013), 'pilot/ood/routed': (11.181, 11.045)}
+glm4_none_r32_lr1e-3 bpw+0.3333 init {'train': 3.824, 'hold': 4.434} best {'epoch': 0, 'train': 3.824, 'hold': 4.434, 'hold_rounded': 4.434} secs 7
+ eval {'pilot/all/forced': (10.457, 10.32), 'pilot/all/routed': (9.736, 9.603), 'pilot/control/forced': (10.004, 9.866), 'pilot/control/routed': (9.058, 8.93), 'pilot/ood/forced': (11.152, 11.013), 'pilot/ood/routed': (11.181, 11.045)}
+glm902_suv_lr3e-4 bpw+0.0000 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 4
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_suv_lr1e-3 bpw+0.0000 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 5
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_suv_lr3e-3 bpw+0.0000 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 4
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_rot_lr3e-4 bpw+0.0104 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 5
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_rot_lr1e-3 bpw+0.0104 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 5
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_rot_lr3e-3 bpw+0.0104 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 4
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_bias_lr3e-4 bpw+0.0043 init {'train': 15.505, 'hold': 27.998} best {'epoch': 21, 'hold': 27.975, 'train': 15.461, 'hold_rounded': 27.974} secs 5
+ eval {'pilot/all/forced': (40.105, 40.086), 'pilot/all/routed': (37.479, 37.468), 'pilot/control/forced': (38.474, 38.453), 'pilot/control/routed': (34.898, 34.882), 'pilot/ood/forced': (42.611, 42.594), 'pilot/ood/routed': (43.022, 43.037)}
+glm902_bias_lr1e-3 bpw+0.0043 init {'train': 15.505, 'hold': 27.998} best {'epoch': 5, 'hold': 27.976, 'train': 15.461, 'hold_rounded': 27.976} secs 4
+ eval {'pilot/all/forced': (40.105, 40.087), 'pilot/all/routed': (37.479, 37.469), 'pilot/control/forced': (38.474, 38.454), 'pilot/control/routed': (34.898, 34.882), 'pilot/ood/forced': (42.611, 42.596), 'pilot/ood/routed': (43.022, 43.04)}
+glm902_bias_lr3e-3 bpw+0.0043 init {'train': 15.505, 'hold': 27.998} best {'epoch': 17, 'hold': 27.972, 'train': 15.462, 'hold_rounded': 27.972} secs 5
+ eval {'pilot/all/forced': (40.105, 40.088), 'pilot/all/routed': (37.479, 37.472), 'pilot/control/forced': (38.474, 38.455), 'pilot/control/routed': (34.898, 34.878), 'pilot/ood/forced': (42.611, 42.597), 'pilot/ood/routed': (43.022, 43.047)}
+glm902_lut_lr3e-4 bpw+0.0000 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 6
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_lut_lr1e-3 bpw+0.0000 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 7
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_lut_lr3e-3 bpw+0.0000 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 6
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_vlut_lr3e-4 bpw+0.0012 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 7
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_vlut_lr1e-3 bpw+0.0012 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 7
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_vlut_lr3e-3 bpw+0.0012 init {'train': 15.505, 'hold': 27.998} best {'epoch': 0, 'train': 15.505, 'hold': 27.998, 'hold_rounded': 27.998} secs 7
+ eval {'pilot/all/forced': (40.105, 40.105), 'pilot/all/routed': (37.479, 37.48), 'pilot/control/forced': (38.474, 38.474), 'pilot/control/routed': (34.898, 34.901), 'pilot/ood/forced': (42.611, 42.612), 'pilot/ood/routed': (43.022, 43.025)}
+glm902_tile_lr3e-4 bpw+0.0312 init {'train': 15.505, 'hold': 27.998} best {'epoch': 25, 'hold': 27.944, 'train': 15.248, 'hold_rounded': 27.945} secs 6
+ eval {'pilot/all/forced': (40.105, 40.13), 'pilot/all/routed': (37.479, 37.495), 'pilot/control/forced': (38.474, 38.485), 'pilot/control/routed': (34.898, 34.886), 'pilot/ood/forced': (42.611, 42.656), 'pilot/ood/routed': (43.022, 43.098)}
+glm902_tile_lr1e-3 bpw+0.0312 init {'train': 15.505, 'hold': 27.998} best {'epoch': 8, 'hold': 27.943, 'train': 15.232, 'hold_rounded': 27.943} secs 5
+ eval {'pilot/all/forced': (40.105, 40.138), 'pilot/all/routed': (37.479, 37.504), 'pilot/control/forced': (38.474, 38.492), 'pilot/control/routed': (34.898, 34.892), 'pilot/ood/forced': (42.611, 42.667), 'pilot/ood/routed': (43.022, 43.112)}
+glm902_tile_lr3e-3 bpw+0.0312 init {'train': 15.505, 'hold': 27.998} best {'epoch': 5, 'hold': 27.949, 'train': 15.209, 'hold_rounded': 27.954} secs 5
+ eval {'pilot/all/forced': (40.105, 40.161), 'pilot/all/routed': (37.479, 37.527), 'pilot/control/forced': (38.474, 38.511), 'pilot/control/routed': (34.898, 34.911), 'pilot/ood/forced': (42.611, 42.695), 'pilot/ood/routed': (43.022, 43.146)}
+glm902_suv+rot+bias+lut_lr3e-4 bpw+0.0148 init {'train': 15.505, 'hold': 27.998} best {'epoch': 15, 'hold': 27.976, 'train': 15.349, 'hold_rounded': 27.973} secs 13
+ eval {'pilot/all/forced': (40.105, 40.129), 'pilot/all/routed': (37.479, 37.504), 'pilot/control/forced': (38.474, 38.491), 'pilot/control/routed': (34.898, 34.899), 'pilot/ood/forced': (42.611, 42.645), 'pilot/ood/routed': (43.022, 43.094)}
+glm902_suv+rot+bias+lut_lr1e-3 bpw+0.0148 init {'train': 15.505, 'hold': 27.998} best {'epoch': 5, 'hold': 27.978, 'train': 15.352, 'hold_rounded': 27.978} secs 9
+ eval {'pilot/all/forced': (40.105, 40.126), 'pilot/all/routed': (37.479, 37.503), 'pilot/control/forced': (38.474, 38.49), 'pilot/control/routed': (34.898, 34.899), 'pilot/ood/forced': (42.611, 42.638), 'pilot/ood/routed': (43.022, 43.095)}
+glm902_suv+rot+bias+lut_lr3e-3 bpw+0.0148 init {'train': 15.505, 'hold': 27.998} best {'epoch': 14, 'hold': 27.971, 'train': 15.348, 'hold_rounded': 27.975} secs 13
+ eval {'pilot/all/forced': (40.105, 40.125), 'pilot/all/routed': (37.479, 37.509), 'pilot/control/forced': (38.474, 38.485), 'pilot/control/routed': (34.898, 34.91), 'pilot/ood/forced': (42.611, 42.644), 'pilot/ood/routed': (43.022, 43.102)}
+glm902_suv+rot+bias+lut+tile_lr3e-4 bpw+0.0460 init {'train': 15.505, 'hold': 27.998} best {'epoch': 35, 'hold': 27.906, 'train': 15.137, 'hold_rounded': 27.912} secs 22
+ eval {'pilot/all/forced': (40.105, 40.109), 'pilot/all/routed': (37.479, 37.478), 'pilot/control/forced': (38.474, 38.461), 'pilot/control/routed': (34.898, 34.857), 'pilot/ood/forced': (42.611, 42.639), 'pilot/ood/routed': (43.022, 43.102)}
+glm902_suv+rot+bias+lut+tile_lr1e-3 bpw+0.0460 init {'train': 15.505, 'hold': 27.998} best {'epoch': 10, 'hold': 27.905, 'train': 15.136, 'hold_rounded': 27.906} secs 12
+ eval {'pilot/all/forced': (40.105, 40.112), 'pilot/all/routed': (37.479, 37.482), 'pilot/control/forced': (38.474, 38.464), 'pilot/control/routed': (34.898, 34.863), 'pilot/ood/forced': (42.611, 42.643), 'pilot/ood/routed': (43.022, 43.106)}
+glm902_suv+rot+bias+lut+tile_lr3e-3 bpw+0.0460 init {'train': 15.505, 'hold': 27.998} best {'epoch': 14, 'hold': 27.919, 'train': 15.142, 'hold_rounded': 27.921} secs 13
+ eval {'pilot/all/forced': (40.105, 40.119), 'pilot/all/routed': (37.479, 37.502), 'pilot/control/forced': (38.474, 38.467), 'pilot/control/routed': (34.898, 34.88), 'pilot/ood/forced': (42.611, 42.657), 'pilot/ood/routed': (43.022, 43.13)}
+glm902_none_r8_lr1e-4 bpw+0.0833 init {'train': 15.272, 'hold': 27.851} best {'epoch': 10, 'hold': 27.839, 'train': 15.222, 'hold_rounded': 27.839} secs 8
+ eval {'pilot/all/forced': (40.105, 39.971), 'pilot/all/routed': (37.479, 37.339), 'pilot/control/forced': (38.474, 38.337), 'pilot/control/routed': (34.898, 34.751), 'pilot/ood/forced': (42.611, 42.482), 'pilot/ood/routed': (43.022, 42.886)}
+glm902_none_r8_lr3e-4 bpw+0.0833 init {'train': 15.272, 'hold': 27.851} best {'epoch': 8, 'hold': 27.839, 'train': 15.216, 'hold_rounded': 27.84} secs 8
+ eval {'pilot/all/forced': (40.105, 39.975), 'pilot/all/routed': (37.479, 37.339), 'pilot/control/forced': (38.474, 38.338), 'pilot/control/routed': (34.898, 34.746), 'pilot/ood/forced': (42.611, 42.488), 'pilot/ood/routed': (43.022, 42.896)}
+glm902_none_r8_lr1e-3 bpw+0.0833 init {'train': 15.272, 'hold': 27.851} best {'epoch': 0, 'train': 15.272, 'hold': 27.851, 'hold_rounded': 27.851} secs 7
+ eval {'pilot/all/forced': (40.105, 39.973), 'pilot/all/routed': (37.479, 37.338), 'pilot/control/forced': (38.474, 38.341), 'pilot/control/routed': (34.898, 34.757), 'pilot/ood/forced': (42.611, 42.479), 'pilot/ood/routed': (43.022, 42.882)}
+glm902_none_r32_lr1e-4 bpw+0.3333 init {'train': 14.87, 'hold': 27.539} best {'epoch': 12, 'hold': 27.499, 'train': 14.732, 'hold_rounded': 27.498} secs 8
+ eval {'pilot/all/forced': (40.105, 39.612), 'pilot/all/routed': (37.479, 36.985), 'pilot/control/forced': (38.474, 37.967), 'pilot/control/routed': (34.898, 34.402), 'pilot/ood/forced': (42.611, 42.138), 'pilot/ood/routed': (43.022, 42.527)}
+glm902_none_r32_lr3e-4 bpw+0.3333 init {'train': 14.87, 'hold': 27.539} best {'epoch': 20, 'hold': 27.505, 'train': 14.625, 'hold_rounded': 27.506} secs 9
+ eval {'pilot/all/forced': (40.105, 39.639), 'pilot/all/routed': (37.479, 37.011), 'pilot/control/forced': (38.474, 37.983), 'pilot/control/routed': (34.898, 34.415), 'pilot/ood/forced': (42.611, 42.179), 'pilot/ood/routed': (43.022, 42.582)}
+glm902_none_r32_lr1e-3 bpw+0.3333 init {'train': 14.87, 'hold': 27.539} best {'epoch': 0, 'train': 14.87, 'hold': 27.539, 'hold_rounded': 27.54} secs 7
+ eval {'pilot/all/forced': (40.105, 39.615), 'pilot/all/routed': (37.479, 36.995), 'pilot/control/forced': (38.474, 37.979), 'pilot/control/routed': (34.898, 34.422), 'pilot/ood/forced': (42.611, 42.126), 'pilot/ood/routed': (43.022, 42.511)}
+glm904_suv_lr3e-4 bpw+0.0000 init {'train': 3.906, 'hold': 7.232} best {'epoch': 5, 'hold': 7.229, 'train': 3.893, 'hold_rounded': 7.229} secs 5
+ eval {'pilot/all/forced': (10.471, 10.473), 'pilot/all/routed': (9.765, 9.765), 'pilot/control/forced': (10.029, 10.032), 'pilot/control/routed': (9.06, 9.065), 'pilot/ood/forced': (11.148, 11.15), 'pilot/ood/routed': (11.253, 11.26)}
+glm904_suv_lr1e-3 bpw+0.0000 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 4
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.058), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_suv_lr3e-3 bpw+0.0000 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 4
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.058), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_rot_lr3e-4 bpw+0.0104 init {'train': 3.906, 'hold': 7.232} best {'epoch': 1, 'hold': 7.229, 'train': 3.896, 'hold_rounded': 7.229} secs 5
+ eval {'pilot/all/forced': (10.471, 10.472), 'pilot/all/routed': (9.765, 9.764), 'pilot/control/forced': (10.029, 10.029), 'pilot/control/routed': (9.06, 9.06), 'pilot/ood/forced': (11.148, 11.15), 'pilot/ood/routed': (11.253, 11.259)}
+glm904_rot_lr1e-3 bpw+0.0104 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 5
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.058), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_rot_lr3e-3 bpw+0.0104 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 5
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.058), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_bias_lr3e-4 bpw+0.0043 init {'train': 3.906, 'hold': 7.232} best {'epoch': 2, 'hold': 7.226, 'train': 3.897, 'hold_rounded': 7.226} secs 5
+ eval {'pilot/all/forced': (10.471, 10.466), 'pilot/all/routed': (9.765, 9.756), 'pilot/control/forced': (10.029, 10.024), 'pilot/control/routed': (9.06, 9.06), 'pilot/ood/forced': (11.148, 11.143), 'pilot/ood/routed': (11.253, 11.252)}
+glm904_bias_lr1e-3 bpw+0.0043 init {'train': 3.906, 'hold': 7.232} best {'epoch': 4, 'hold': 7.228, 'train': 3.897, 'hold_rounded': 7.228} secs 4
+ eval {'pilot/all/forced': (10.471, 10.466), 'pilot/all/routed': (9.765, 9.757), 'pilot/control/forced': (10.029, 10.024), 'pilot/control/routed': (9.06, 9.06), 'pilot/ood/forced': (11.148, 11.144), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_bias_lr3e-3 bpw+0.0043 init {'train': 3.906, 'hold': 7.232} best {'epoch': 12, 'hold': 7.23, 'train': 3.898, 'hold_rounded': 7.23} secs 5
+ eval {'pilot/all/forced': (10.471, 10.468), 'pilot/all/routed': (9.765, 9.761), 'pilot/control/forced': (10.029, 10.026), 'pilot/control/routed': (9.06, 9.059), 'pilot/ood/forced': (11.148, 11.145), 'pilot/ood/routed': (11.253, 11.258)}
+glm904_lut_lr3e-4 bpw+0.0000 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 7
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.058), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_lut_lr1e-3 bpw+0.0000 init {'train': 3.906, 'hold': 7.232} best {'epoch': 3, 'hold': 7.232, 'train': 3.906, 'hold_rounded': 7.232} secs 8
+ eval {'pilot/all/forced': (10.471, 10.467), 'pilot/all/routed': (9.765, 9.76), 'pilot/control/forced': (10.029, 10.025), 'pilot/control/routed': (9.06, 9.06), 'pilot/ood/forced': (11.148, 11.145), 'pilot/ood/routed': (11.253, 11.25)}
+glm904_lut_lr3e-3 bpw+0.0000 init {'train': 3.906, 'hold': 7.232} best {'epoch': 7, 'hold': 7.231, 'train': 3.905, 'hold_rounded': 7.232} secs 10
+ eval {'pilot/all/forced': (10.471, 10.467), 'pilot/all/routed': (9.765, 9.757), 'pilot/control/forced': (10.029, 10.026), 'pilot/control/routed': (9.06, 9.059), 'pilot/ood/forced': (11.148, 11.144), 'pilot/ood/routed': (11.253, 11.252)}
+glm904_vlut_lr3e-4 bpw+0.0012 init {'train': 3.906, 'hold': 7.232} best {'epoch': 3, 'hold': 7.232, 'train': 3.902, 'hold_rounded': 7.232} secs 8
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.761), 'pilot/control/forced': (10.029, 10.029), 'pilot/control/routed': (9.06, 9.06), 'pilot/ood/forced': (11.148, 11.146), 'pilot/ood/routed': (11.253, 11.252)}
+glm904_vlut_lr1e-3 bpw+0.0012 init {'train': 3.906, 'hold': 7.232} best {'epoch': 12, 'hold': 7.23, 'train': 3.903, 'hold_rounded': 7.23} secs 12
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.759), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.059), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.257)}
+glm904_vlut_lr3e-3 bpw+0.0012 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 7
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.058), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_tile_lr3e-4 bpw+0.0312 init {'train': 3.906, 'hold': 7.232} best {'epoch': 20, 'hold': 7.215, 'train': 3.828, 'hold_rounded': 7.218} secs 5
+ eval {'pilot/all/forced': (10.471, 10.477), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.033), 'pilot/control/routed': (9.06, 9.062), 'pilot/ood/forced': (11.148, 11.159), 'pilot/ood/routed': (11.253, 11.267)}
+glm904_tile_lr1e-3 bpw+0.0312 init {'train': 3.906, 'hold': 7.232} best {'epoch': 9, 'hold': 7.216, 'train': 3.832, 'hold_rounded': 7.214} secs 5
+ eval {'pilot/all/forced': (10.471, 10.48), 'pilot/all/routed': (9.765, 9.767), 'pilot/control/forced': (10.029, 10.036), 'pilot/control/routed': (9.06, 9.062), 'pilot/ood/forced': (11.148, 11.162), 'pilot/ood/routed': (11.253, 11.272)}
+glm904_tile_lr3e-3 bpw+0.0312 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 4
+ eval {'pilot/all/forced': (10.471, 10.47), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.028), 'pilot/control/routed': (9.06, 9.058), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_suv+rot+bias+lut_lr3e-4 bpw+0.0148 init {'train': 3.906, 'hold': 7.232} best {'epoch': 9, 'hold': 7.225, 'train': 3.868, 'hold_rounded': 7.227} secs 9
+ eval {'pilot/all/forced': (10.471, 10.468), 'pilot/all/routed': (9.765, 9.762), 'pilot/control/forced': (10.029, 10.027), 'pilot/control/routed': (9.06, 9.062), 'pilot/ood/forced': (11.148, 11.145), 'pilot/ood/routed': (11.253, 11.258)}
+glm904_suv+rot+bias+lut_lr1e-3 bpw+0.0148 init {'train': 3.906, 'hold': 7.232} best {'epoch': 19, 'hold': 7.228, 'train': 3.873, 'hold_rounded': 7.229} secs 12
+ eval {'pilot/all/forced': (10.471, 10.472), 'pilot/all/routed': (9.765, 9.763), 'pilot/control/forced': (10.029, 10.03), 'pilot/control/routed': (9.06, 9.06), 'pilot/ood/forced': (11.148, 11.149), 'pilot/ood/routed': (11.253, 11.263)}
+glm904_suv+rot+bias+lut_lr3e-3 bpw+0.0148 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 6
+ eval {'pilot/all/forced': (10.471, 10.469), 'pilot/all/routed': (9.765, 9.761), 'pilot/control/forced': (10.029, 10.027), 'pilot/control/routed': (9.06, 9.063), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_suv+rot+bias+lut+tile_lr3e-4 bpw+0.0460 init {'train': 3.906, 'hold': 7.232} best {'epoch': 18, 'hold': 7.207, 'train': 3.815, 'hold_rounded': 7.209} secs 12
+ eval {'pilot/all/forced': (10.471, 10.469), 'pilot/all/routed': (9.765, 9.762), 'pilot/control/forced': (10.029, 10.024), 'pilot/control/routed': (9.06, 9.057), 'pilot/ood/forced': (11.148, 11.15), 'pilot/ood/routed': (11.253, 11.262)}
+glm904_suv+rot+bias+lut+tile_lr1e-3 bpw+0.0460 init {'train': 3.906, 'hold': 7.232} best {'epoch': 53, 'hold': 7.21, 'train': 3.804, 'hold_rounded': 7.212} secs 23
+ eval {'pilot/all/forced': (10.471, 10.482), 'pilot/all/routed': (9.765, 9.77), 'pilot/control/forced': (10.029, 10.036), 'pilot/control/routed': (9.06, 9.063), 'pilot/ood/forced': (11.148, 11.165), 'pilot/ood/routed': (11.253, 11.28)}
+glm904_suv+rot+bias+lut+tile_lr3e-3 bpw+0.0460 init {'train': 3.906, 'hold': 7.232} best {'epoch': 0, 'train': 3.906, 'hold': 7.232, 'hold_rounded': 7.232} secs 9
+ eval {'pilot/all/forced': (10.471, 10.469), 'pilot/all/routed': (9.765, 9.761), 'pilot/control/forced': (10.029, 10.027), 'pilot/control/routed': (9.06, 9.063), 'pilot/ood/forced': (11.148, 11.147), 'pilot/ood/routed': (11.253, 11.255)}
+glm904_none_r8_lr1e-4 bpw+0.0833 init {'train': 3.853, 'hold': 7.192} best {'epoch': 8, 'hold': 7.189, 'train': 3.846, 'hold_rounded': 7.189} secs 10
+ eval {'pilot/all/forced': (10.471, 10.432), 'pilot/all/routed': (9.765, 9.728), 'pilot/control/forced': (10.029, 9.991), 'pilot/control/routed': (9.06, 9.027), 'pilot/ood/forced': (11.148, 11.11), 'pilot/ood/routed': (11.253, 11.223)}
+glm904_none_r8_lr3e-4 bpw+0.0833 init {'train': 3.853, 'hold': 7.192} best {'epoch': 0, 'train': 3.853, 'hold': 7.192, 'hold_rounded': 7.192} secs 9
+ eval {'pilot/all/forced': (10.471, 10.432), 'pilot/all/routed': (9.765, 9.731), 'pilot/control/forced': (10.029, 9.991), 'pilot/control/routed': (9.06, 9.029), 'pilot/ood/forced': (11.148, 11.11), 'pilot/ood/routed': (11.253, 11.22)}
+glm904_none_r8_lr1e-3 bpw+0.0833 init {'train': 3.853, 'hold': 7.192} best {'epoch': 0, 'train': 3.853, 'hold': 7.192, 'hold_rounded': 7.192} secs 9
+ eval {'pilot/all/forced': (10.471, 10.432), 'pilot/all/routed': (9.765, 9.731), 'pilot/control/forced': (10.029, 9.991), 'pilot/control/routed': (9.06, 9.029), 'pilot/ood/forced': (11.148, 11.11), 'pilot/ood/routed': (11.253, 11.22)}
+glm904_none_r32_lr1e-4 bpw+0.3333 init {'train': 3.759, 'hold': 7.1} best {'epoch': 0, 'train': 3.759, 'hold': 7.1, 'hold_rounded': 7.099} secs 8
+ eval {'pilot/all/forced': (10.471, 10.329), 'pilot/all/routed': (9.765, 9.632), 'pilot/control/forced': (10.029, 9.887), 'pilot/control/routed': (9.06, 8.932), 'pilot/ood/forced': (11.148, 11.005), 'pilot/ood/routed': (11.253, 11.115)}
+glm904_none_r32_lr3e-4 bpw+0.3333 init {'train': 3.759, 'hold': 7.1} best {'epoch': 0, 'train': 3.759, 'hold': 7.1, 'hold_rounded': 7.099} secs 8
+ eval {'pilot/all/forced': (10.471, 10.329), 'pilot/all/routed': (9.765, 9.632), 'pilot/control/forced': (10.029, 9.887), 'pilot/control/routed': (9.06, 8.932), 'pilot/ood/forced': (11.148, 11.005), 'pilot/ood/routed': (11.253, 11.115)}
+glm904_none_r32_lr1e-3 bpw+0.3333 init {'train': 3.759, 'hold': 7.1} best {'epoch': 0, 'train': 3.759, 'hold': 7.1, 'hold_rounded': 7.099} secs 6
+ eval {'pilot/all/forced': (10.471, 10.329), 'pilot/all/routed': (9.765, 9.632), 'pilot/control/forced': (10.029, 9.887), 'pilot/control/routed': (9.06, 8.932), 'pilot/ood/forced': (11.148, 11.005), 'pilot/ood/routed': (11.253, 11.115)}
+mimo2_suv_lr3e-4 bpw+0.0000 init {'train': 19.681, 'hold': 19.643} best {'epoch': 13, 'hold': 19.468, 'train': 19.449, 'hold_rounded': 19.468} secs 8
+ eval {'control/all/forced': (39.47, 39.501), 'control/all/routed': (15.988, 15.862), 'ood/all/forced': (45.765, 45.822), 'ood/all/routed': (49.955, 49.944)}
+mimo2_suv_lr1e-3 bpw+0.0000 init {'train': 19.681, 'hold': 19.643} best {'epoch': 4, 'hold': 19.471, 'train': 19.447, 'hold_rounded': 19.471} secs 6
+ eval {'control/all/forced': (39.47, 39.504), 'control/all/routed': (15.988, 15.864), 'ood/all/forced': (45.765, 45.831), 'ood/all/routed': (49.955, 49.961)}
+mimo2_suv_lr3e-3 bpw+0.0000 init {'train': 19.681, 'hold': 19.643} best {'epoch': 2, 'hold': 19.485, 'train': 19.443, 'hold_rounded': 19.485} secs 5
+ eval {'control/all/forced': (39.47, 39.527), 'control/all/routed': (15.988, 15.847), 'ood/all/forced': (45.765, 45.839), 'ood/all/routed': (49.955, 49.835)}
+mimo2_rot_lr3e-4 bpw+0.0104 init {'train': 19.681, 'hold': 19.643} best {'epoch': 14, 'hold': 19.464, 'train': 19.438, 'hold_rounded': 19.464} secs 9
+ eval {'control/all/forced': (39.47, 39.507), 'control/all/routed': (15.988, 15.85), 'ood/all/forced': (45.765, 45.844), 'ood/all/routed': (49.955, 49.637)}
+mimo2_rot_lr1e-3 bpw+0.0104 init {'train': 19.681, 'hold': 19.643} best {'epoch': 4, 'hold': 19.467, 'train': 19.438, 'hold_rounded': 19.467} secs 7
+ eval {'control/all/forced': (39.47, 39.511), 'control/all/routed': (15.988, 15.84), 'ood/all/forced': (45.765, 45.846), 'ood/all/routed': (49.955, 49.497)}
+mimo2_rot_lr3e-3 bpw+0.0104 init {'train': 19.681, 'hold': 19.643} best {'epoch': 2, 'hold': 19.485, 'train': 19.434, 'hold_rounded': 19.485} secs 6
+ eval {'control/all/forced': (39.47, 39.529), 'control/all/routed': (15.988, 15.844), 'ood/all/forced': (45.765, 45.831), 'ood/all/routed': (49.955, 49.375)}
+mimo2_bias_lr3e-4 bpw+0.0043 init {'train': 19.68, 'hold': 19.643} best {'epoch': 32, 'hold': 19.443, 'train': 19.467, 'hold_rounded': 19.443} secs 6
+ eval {'control/all/forced': (39.47, 39.459), 'control/all/routed': (15.988, 15.81), 'ood/all/forced': (45.765, 45.681), 'ood/all/routed': (49.955, 49.476)}
+mimo2_bias_lr1e-3 bpw+0.0043 init {'train': 19.68, 'hold': 19.643} best {'epoch': 11, 'hold': 19.442, 'train': 19.466, 'hold_rounded': 19.442} secs 4
+ eval {'control/all/forced': (39.47, 39.474), 'control/all/routed': (15.988, 15.817), 'ood/all/forced': (45.765, 45.692), 'ood/all/routed': (49.955, 49.421)}
+mimo2_bias_lr3e-3 bpw+0.0043 init {'train': 19.68, 'hold': 19.643} best {'epoch': 14, 'hold': 19.444, 'train': 19.466, 'hold_rounded': 19.444} secs 5
+ eval {'control/all/forced': (39.47, 39.489), 'control/all/routed': (15.988, 15.803), 'ood/all/forced': (45.765, 45.708), 'ood/all/routed': (49.955, 49.38)}
+mimo2_lut_lr3e-4 bpw+0.0000 init {'train': 19.681, 'hold': 19.643} best {'epoch': 16, 'hold': 19.589, 'train': 19.629, 'hold_rounded': 19.589} secs 15
+ eval {'control/all/forced': (39.47, 39.526), 'control/all/routed': (15.988, 15.992), 'ood/all/forced': (45.765, 45.866), 'ood/all/routed': (49.955, 49.967)}
+mimo2_lut_lr1e-3 bpw+0.0000 init {'train': 19.681, 'hold': 19.643} best {'epoch': 7, 'hold': 19.588, 'train': 19.628, 'hold_rounded': 19.588} secs 11
+ eval {'control/all/forced': (39.47, 39.522), 'control/all/routed': (15.988, 15.997), 'ood/all/forced': (45.765, 45.859), 'ood/all/routed': (49.955, 49.983)}
+mimo2_lut_lr3e-3 bpw+0.0000 init {'train': 19.681, 'hold': 19.643} best {'epoch': 6, 'hold': 19.588, 'train': 19.628, 'hold_rounded': 19.588} secs 11
+ eval {'control/all/forced': (39.47, 39.52), 'control/all/routed': (15.988, 15.989), 'ood/all/forced': (45.765, 45.854), 'ood/all/routed': (49.955, 49.976)}
+mimo2_vlut_lr3e-4 bpw+0.0012 init {'train': 19.681, 'hold': 19.643} best {'epoch': 39, 'hold': 19.564, 'train': 19.595, 'hold_rounded': 19.564} secs 41
+ eval {'control/all/forced': (39.47, 39.548), 'control/all/routed': (15.988, 15.925), 'ood/all/forced': (45.765, 45.874), 'ood/all/routed': (49.955, 50.116)}
+mimo2_vlut_lr1e-3 bpw+0.0012 init {'train': 19.681, 'hold': 19.643} best {'epoch': 29, 'hold': 19.561, 'train': 19.591, 'hold_rounded': 19.561} secs 41
+ eval {'control/all/forced': (39.47, 39.546), 'control/all/routed': (15.988, 15.931), 'ood/all/forced': (45.765, 45.872), 'ood/all/routed': (49.955, 50.165)}
+mimo2_vlut_lr3e-3 bpw+0.0012 init {'train': 19.681, 'hold': 19.643} best {'epoch': 13, 'hold': 19.562, 'train': 19.592, 'hold_rounded': 19.561} secs 20
+ eval {'control/all/forced': (39.47, 39.555), 'control/all/routed': (15.988, 15.942), 'ood/all/forced': (45.765, 45.881), 'ood/all/routed': (49.955, 50.219)}
+mimo2_tile_lr3e-4 bpw+0.0312 init {'train': 19.681, 'hold': 19.643} best {'epoch': 30, 'hold': 19.363, 'train': 19.175, 'hold_rounded': 19.364} secs 8
+ eval {'control/all/forced': (39.47, 39.487), 'control/all/routed': (15.988, 15.752), 'ood/all/forced': (45.765, 45.778), 'ood/all/routed': (49.955, 49.931)}
+mimo2_tile_lr1e-3 bpw+0.0312 init {'train': 19.681, 'hold': 19.643} best {'epoch': 7, 'hold': 19.365, 'train': 19.182, 'hold_rounded': 19.366} secs 5
+ eval {'control/all/forced': (39.47, 39.489), 'control/all/routed': (15.988, 15.757), 'ood/all/forced': (45.765, 45.782), 'ood/all/routed': (49.955, 49.946)}
+mimo2_tile_lr3e-3 bpw+0.0312 init {'train': 19.681, 'hold': 19.643} best {'epoch': 3, 'hold': 19.377, 'train': 19.141, 'hold_rounded': 19.377} secs 5
+ eval {'control/all/forced': (39.47, 39.528), 'control/all/routed': (15.988, 15.773), 'ood/all/forced': (45.765, 45.812), 'ood/all/routed': (49.955, 49.969)}
+mimo2_suv+rot+bias+lut_lr3e-4 bpw+0.0148 init {'train': 19.68, 'hold': 19.643} best {'epoch': 10, 'hold': 19.385, 'train': 19.314, 'hold_rounded': 19.386} secs 14
+ eval {'control/all/forced': (39.47, 39.43), 'control/all/routed': (15.988, 15.79), 'ood/all/forced': (45.765, 45.668), 'ood/all/routed': (49.955, 49.403)}
+mimo2_suv+rot+bias+lut_lr1e-3 bpw+0.0148 init {'train': 19.68, 'hold': 19.643} best {'epoch': 3, 'hold': 19.393, 'train': 19.316, 'hold_rounded': 19.392} secs 9
+ eval {'control/all/forced': (39.47, 39.448), 'control/all/routed': (15.988, 15.804), 'ood/all/forced': (45.765, 45.683), 'ood/all/routed': (49.955, 49.356)}
+mimo2_suv+rot+bias+lut_lr3e-3 bpw+0.0148 init {'train': 19.68, 'hold': 19.643} best {'epoch': 2, 'hold': 19.422, 'train': 19.303, 'hold_rounded': 19.421} secs 9
+ eval {'control/all/forced': (39.47, 39.489), 'control/all/routed': (15.988, 15.781), 'ood/all/forced': (45.765, 45.674), 'ood/all/routed': (49.955, 49.069)}
+mimo2_suv+rot+bias+lut+tile_lr3e-4 bpw+0.0460 init {'train': 19.68, 'hold': 19.643} best {'epoch': 19, 'hold': 19.299, 'train': 19.033, 'hold_rounded': 19.299} secs 18
+ eval {'control/all/forced': (39.47, 39.421), 'control/all/routed': (15.988, 15.708), 'ood/all/forced': (45.765, 45.611), 'ood/all/routed': (49.955, 49.243)}
+mimo2_suv+rot+bias+lut+tile_lr1e-3 bpw+0.0460 init {'train': 19.68, 'hold': 19.643} best {'epoch': 5, 'hold': 19.308, 'train': 19.047, 'hold_rounded': 19.308} secs 10
+ eval {'control/all/forced': (39.47, 39.426), 'control/all/routed': (15.988, 15.714), 'ood/all/forced': (45.765, 45.614), 'ood/all/routed': (49.955, 49.27)}
+mimo2_suv+rot+bias+lut+tile_lr3e-3 bpw+0.0460 init {'train': 19.68, 'hold': 19.643} best {'epoch': 3, 'hold': 19.344, 'train': 19.0, 'hold_rounded': 19.344} secs 10
+ eval {'control/all/forced': (39.47, 39.518), 'control/all/routed': (15.988, 15.768), 'ood/all/forced': (45.765, 45.693), 'ood/all/routed': (49.955, 49.347)}
+mimo2_none_r8_lr1e-4 bpw+0.0833 init {'train': 19.37, 'hold': 19.373} best {'epoch': 26, 'hold': 19.238, 'train': 18.982, 'hold_rounded': 19.238} secs 8
+ eval {'control/all/forced': (39.47, 39.271), 'control/all/routed': (15.988, 15.636), 'ood/all/forced': (45.765, 45.443), 'ood/all/routed': (49.955, 49.389)}
+mimo2_none_r8_lr3e-4 bpw+0.0833 init {'train': 19.37, 'hold': 19.373} best {'epoch': 9, 'hold': 19.241, 'train': 18.962, 'hold_rounded': 19.241} secs 9
+ eval {'control/all/forced': (39.47, 39.288), 'control/all/routed': (15.988, 15.642), 'ood/all/forced': (45.765, 45.458), 'ood/all/routed': (49.955, 49.521)}
+mimo2_none_r8_lr1e-3 bpw+0.0833 init {'train': 19.37, 'hold': 19.373} best {'epoch': 3, 'hold': 19.253, 'train': 19.025, 'hold_rounded': 19.253} secs 10
+ eval {'control/all/forced': (39.47, 39.282), 'control/all/routed': (15.988, 15.615), 'ood/all/forced': (45.765, 45.457), 'ood/all/routed': (49.955, 49.408)}
+mimo2_none_r32_lr1e-4 bpw+0.3333 init {'train': 18.885, 'hold': 18.992} best {'epoch': 21, 'hold': 18.801, 'train': 18.018, 'hold_rounded': 18.801} secs 8
+ eval {'control/all/forced': (39.47, 38.884), 'control/all/routed': (15.988, 15.34), 'ood/all/forced': (45.765, 44.95), 'ood/all/routed': (49.955, 48.306)}
+mimo2_none_r32_lr3e-4 bpw+0.3333 init {'train': 18.885, 'hold': 18.992} best {'epoch': 7, 'hold': 18.816, 'train': 18.026, 'hold_rounded': 18.816} secs 8
+ eval {'control/all/forced': (39.47, 38.898), 'control/all/routed': (15.988, 15.34), 'ood/all/forced': (45.765, 44.962), 'ood/all/routed': (49.955, 48.422)}
+mimo2_none_r32_lr1e-3 bpw+0.3333 init {'train': 18.885, 'hold': 18.992} best {'epoch': 3, 'hold': 18.865, 'train': 18.159, 'hold_rounded': 18.864} secs 8
+ eval {'control/all/forced': (39.47, 38.948), 'control/all/routed': (15.988, 15.334), 'ood/all/forced': (45.765, 45.048), 'ood/all/routed': (49.955, 48.641)}
+mimo4_suv_lr3e-4 bpw+0.0000 init {'train': 4.997, 'hold': 4.983} best {'epoch': 2, 'hold': 4.959, 'train': 4.96, 'hold_rounded': 4.96} secs 5
+ eval {'control/all/forced': (10.434, 10.432), 'control/all/routed': (4.004, 4.012), 'ood/all/forced': (12.042, 12.027), 'ood/all/routed': (13.57, 13.459)}
+mimo4_suv_lr1e-3 bpw+0.0000 init {'train': 4.997, 'hold': 4.983} best {'epoch': 11, 'hold': 4.969, 'train': 4.953, 'hold_rounded': 4.969} secs 6
+ eval {'control/all/forced': (10.434, 10.458), 'control/all/routed': (4.004, 4.013), 'ood/all/forced': (12.042, 12.05), 'ood/all/routed': (13.57, 13.436)}
+mimo4_suv_lr3e-3 bpw+0.0000 init {'train': 4.997, 'hold': 4.983} best {'epoch': 9, 'hold': 4.98, 'train': 4.965, 'hold_rounded': 4.982} secs 5
+ eval {'control/all/forced': (10.434, 10.471), 'control/all/routed': (4.004, 4.018), 'ood/all/forced': (12.042, 12.062), 'ood/all/routed': (13.57, 13.408)}
+mimo4_rot_lr3e-4 bpw+0.0104 init {'train': 4.997, 'hold': 4.983} best {'epoch': 2, 'hold': 4.957, 'train': 4.958, 'hold_rounded': 4.957} secs 5
+ eval {'control/all/forced': (10.434, 10.429), 'control/all/routed': (4.004, 3.997), 'ood/all/forced': (12.042, 12.039), 'ood/all/routed': (13.57, 13.457)}
+mimo4_rot_lr1e-3 bpw+0.0104 init {'train': 4.997, 'hold': 4.983} best {'epoch': 1, 'hold': 4.964, 'train': 4.96, 'hold_rounded': 4.964} secs 5
+ eval {'control/all/forced': (10.434, 10.44), 'control/all/routed': (4.004, 4.006), 'ood/all/forced': (12.042, 12.049), 'ood/all/routed': (13.57, 13.372)}
+mimo4_rot_lr3e-3 bpw+0.0104 init {'train': 4.997, 'hold': 4.983} best {'epoch': 9, 'hold': 4.973, 'train': 4.959, 'hold_rounded': 4.972} secs 6
+ eval {'control/all/forced': (10.434, 10.456), 'control/all/routed': (4.004, 4.011), 'ood/all/forced': (12.042, 12.06), 'ood/all/routed': (13.57, 13.472)}
+mimo4_bias_lr3e-4 bpw+0.0043 init {'train': 4.997, 'hold': 4.983} best {'epoch': 6, 'hold': 4.949, 'train': 4.957, 'hold_rounded': 4.949} secs 5
+ eval {'control/all/forced': (10.434, 10.433), 'control/all/routed': (4.004, 4.007), 'ood/all/forced': (12.042, 12.011), 'ood/all/routed': (13.57, 13.443)}
+mimo4_bias_lr1e-3 bpw+0.0043 init {'train': 4.997, 'hold': 4.983} best {'epoch': 8, 'hold': 4.95, 'train': 4.957, 'hold_rounded': 4.95} secs 5
+ eval {'control/all/forced': (10.434, 10.438), 'control/all/routed': (4.004, 4.007), 'ood/all/forced': (12.042, 12.014), 'ood/all/routed': (13.57, 13.428)}
+mimo4_bias_lr3e-3 bpw+0.0043 init {'train': 4.997, 'hold': 4.983} best {'epoch': 44, 'hold': 4.95, 'train': 4.957, 'hold_rounded': 4.95} secs 12
+ eval {'control/all/forced': (10.434, 10.436), 'control/all/routed': (4.004, 4.009), 'ood/all/forced': (12.042, 12.015), 'ood/all/routed': (13.57, 13.426)}
+mimo4_lut_lr3e-4 bpw+0.0000 init {'train': 4.997, 'hold': 4.983} best {'epoch': 7, 'hold': 4.978, 'train': 4.993, 'hold_rounded': 4.978} secs 22
+ eval {'control/all/forced': (10.434, 10.432), 'control/all/routed': (4.004, 3.998), 'ood/all/forced': (12.042, 12.043), 'ood/all/routed': (13.57, 13.577)}
+mimo4_lut_lr1e-3 bpw+0.0000 init {'train': 4.997, 'hold': 4.983} best {'epoch': 6, 'hold': 4.978, 'train': 4.993, 'hold_rounded': 4.978} secs 20
+ eval {'control/all/forced': (10.434, 10.431), 'control/all/routed': (4.004, 3.998), 'ood/all/forced': (12.042, 12.037), 'ood/all/routed': (13.57, 13.571)}
+mimo4_lut_lr3e-3 bpw+0.0000 init {'train': 4.997, 'hold': 4.983} best {'epoch': 2, 'hold': 4.978, 'train': 4.993, 'hold_rounded': 4.978} secs 15
+ eval {'control/all/forced': (10.434, 10.431), 'control/all/routed': (4.004, 4.005), 'ood/all/forced': (12.042, 12.039), 'ood/all/routed': (13.57, 13.56)}
+mimo4_vlut_lr3e-4 bpw+0.0012 init {'train': 4.997, 'hold': 4.983} best {'epoch': 17, 'hold': 4.973, 'train': 4.985, 'hold_rounded': 4.973} secs 33
+ eval {'control/all/forced': (10.434, 10.437), 'control/all/routed': (4.004, 4.01), 'ood/all/forced': (12.042, 12.048), 'ood/all/routed': (13.57, 13.538)}
+mimo4_vlut_lr1e-3 bpw+0.0012 init {'train': 4.997, 'hold': 4.983} best {'epoch': 16, 'hold': 4.973, 'train': 4.985, 'hold_rounded': 4.973} secs 33
+ eval {'control/all/forced': (10.434, 10.436), 'control/all/routed': (4.004, 4.01), 'ood/all/forced': (12.042, 12.047), 'ood/all/routed': (13.57, 13.556)}
+mimo4_vlut_lr3e-3 bpw+0.0012 init {'train': 4.997, 'hold': 4.983} best {'epoch': 6, 'hold': 4.975, 'train': 4.986, 'hold_rounded': 4.974} secs 20
+ eval {'control/all/forced': (10.434, 10.438), 'control/all/routed': (4.004, 4.022), 'ood/all/forced': (12.042, 12.048), 'ood/all/routed': (13.57, 13.572)}
+mimo4_tile_lr3e-4 bpw+0.0312 init {'train': 4.997, 'hold': 4.983} best {'epoch': 5, 'hold': 4.934, 'train': 4.894, 'hold_rounded': 4.934} secs 7
+ eval {'control/all/forced': (10.434, 10.427), 'control/all/routed': (4.004, 3.977), 'ood/all/forced': (12.042, 12.034), 'ood/all/routed': (13.57, 13.397)}
+mimo4_tile_lr1e-3 bpw+0.0312 init {'train': 4.997, 'hold': 4.983} best {'epoch': 2, 'hold': 4.939, 'train': 4.885, 'hold_rounded': 4.94} secs 6
+ eval {'control/all/forced': (10.434, 10.437), 'control/all/routed': (4.004, 3.977), 'ood/all/forced': (12.042, 12.042), 'ood/all/routed': (13.57, 13.399)}
+mimo4_tile_lr3e-3 bpw+0.0312 init {'train': 4.997, 'hold': 4.983} best {'epoch': 1, 'hold': 4.968, 'train': 4.897, 'hold_rounded': 4.968} secs 6
+ eval {'control/all/forced': (10.434, 10.479), 'control/all/routed': (4.004, 4.023), 'ood/all/forced': (12.042, 12.08), 'ood/all/routed': (13.57, 13.479)}
+mimo4_suv+rot+bias+lut_lr3e-4 bpw+0.0148 init {'train': 4.997, 'hold': 4.983} best {'epoch': 3, 'hold': 4.945, 'train': 4.923, 'hold_rounded': 4.945} secs 17
+ eval {'control/all/forced': (10.434, 10.438), 'control/all/routed': (4.004, 3.986), 'ood/all/forced': (12.042, 12.012), 'ood/all/routed': (13.57, 13.334)}
+mimo4_suv+rot+bias+lut_lr1e-3 bpw+0.0148 init {'train': 4.997, 'hold': 4.983} best {'epoch': 3, 'hold': 4.961, 'train': 4.92, 'hold_rounded': 4.961} secs 18
+ eval {'control/all/forced': (10.434, 10.473), 'control/all/routed': (4.004, 3.996), 'ood/all/forced': (12.042, 12.039), 'ood/all/routed': (13.57, 13.359)}
+mimo4_suv+rot+bias+lut_lr3e-3 bpw+0.0148 init {'train': 4.997, 'hold': 4.983} best {'epoch': 4, 'hold': 4.973, 'train': 4.928, 'hold_rounded': 4.974} secs 20
+ eval {'control/all/forced': (10.434, 10.499), 'control/all/routed': (4.004, 4.02), 'ood/all/forced': (12.042, 12.061), 'ood/all/routed': (13.57, 13.458)}
+mimo4_suv+rot+bias+lut+tile_lr3e-4 bpw+0.0460 init {'train': 4.997, 'hold': 4.983} best {'epoch': 3, 'hold': 4.928, 'train': 4.875, 'hold_rounded': 4.929} secs 14
+ eval {'control/all/forced': (10.434, 10.428), 'control/all/routed': (4.004, 3.973), 'ood/all/forced': (12.042, 12.006), 'ood/all/routed': (13.57, 13.426)}
+mimo4_suv+rot+bias+lut+tile_lr1e-3 bpw+0.0460 init {'train': 4.997, 'hold': 4.983} best {'epoch': 3, 'hold': 4.946, 'train': 4.844, 'hold_rounded': 4.946} secs 19
+ eval {'control/all/forced': (10.434, 10.476), 'control/all/routed': (4.004, 3.973), 'ood/all/forced': (12.042, 12.034), 'ood/all/routed': (13.57, 13.307)}
+mimo4_suv+rot+bias+lut+tile_lr3e-3 bpw+0.0460 init {'train': 4.997, 'hold': 4.983} best {'epoch': 3, 'hold': 4.976, 'train': 4.854, 'hold_rounded': 4.976} secs 19
+ eval {'control/all/forced': (10.434, 10.53), 'control/all/routed': (4.004, 3.997), 'ood/all/forced': (12.042, 12.083), 'ood/all/routed': (13.57, 13.265)}
+mimo4_none_r8_lr1e-4 bpw+0.0833 init {'train': 4.918, 'hold': 4.913} best {'epoch': 5, 'hold': 4.903, 'train': 4.869, 'hold_rounded': 4.903} secs 12
+ eval {'control/all/forced': (10.434, 10.376), 'control/all/routed': (4.004, 3.924), 'ood/all/forced': (12.042, 11.944), 'ood/all/routed': (13.57, 13.189)}
+mimo4_none_r8_lr3e-4 bpw+0.0833 init {'train': 4.918, 'hold': 4.913} best {'epoch': 2, 'hold': 4.907, 'train': 4.877, 'hold_rounded': 4.908} secs 11
+ eval {'control/all/forced': (10.434, 10.377), 'control/all/routed': (4.004, 3.925), 'ood/all/forced': (12.042, 11.947), 'ood/all/routed': (13.57, 13.192)}
+mimo4_none_r8_lr1e-3 bpw+0.0833 init {'train': 4.918, 'hold': 4.913} best {'epoch': 0, 'train': 4.918, 'hold': 4.913, 'hold_rounded': 4.912} secs 12
+ eval {'control/all/forced': (10.434, 10.372), 'control/all/routed': (4.004, 3.924), 'ood/all/forced': (12.042, 11.948), 'ood/all/routed': (13.57, 13.203)}
+mimo4_none_r32_lr1e-4 bpw+0.3333 init {'train': 4.8, 'hold': 4.821} best {'epoch': 4, 'hold': 4.807, 'train': 4.673, 'hold_rounded': 4.807} secs 9
+ eval {'control/all/forced': (10.434, 10.258), 'control/all/routed': (4.004, 3.847), 'ood/all/forced': (12.042, 11.806), 'ood/all/routed': (13.57, 12.717)}
+mimo4_none_r32_lr3e-4 bpw+0.3333 init {'train': 4.8, 'hold': 4.821} best {'epoch': 0, 'train': 4.8, 'hold': 4.821, 'hold_rounded': 4.821} secs 12
+ eval {'control/all/forced': (10.434, 10.247), 'control/all/routed': (4.004, 3.854), 'ood/all/forced': (12.042, 11.799), 'ood/all/routed': (13.57, 12.725)}
+mimo4_none_r32_lr1e-3 bpw+0.3333 init {'train': 4.8, 'hold': 4.821} best {'epoch': 0, 'train': 4.8, 'hold': 4.821, 'hold_rounded': 4.821} secs 11
+ eval {'control/all/forced': (10.434, 10.247), 'control/all/routed': (4.004, 3.854), 'ood/all/forced': (12.042, 11.799), 'ood/all/routed': (13.57, 12.725)}

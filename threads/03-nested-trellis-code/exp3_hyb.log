@@ -1,0 +1,73 @@
+   lloyd it0 test mse 0.071419
+   lloyd it1 test mse 0.070347
+   lloyd it2 test mse 0.069870
+   lloyd it3 test mse 0.069639
+   lloyd it4 test mse 0.069519
+   lloyd it5 test mse 0.069430
+   lloyd it6 test mse 0.069408
+   lloyd it7 test mse 0.069397
+HYB V2 base L16 Q8 (256x half2)               L2: mse=0.069378 +0.453 dB  
+   lloyd it0 test mse 0.070504
+   lloyd it1 test mse 0.069770
+   lloyd it2 test mse 0.069537
+   lloyd it3 test mse 0.069471
+   lloyd it4 test mse 0.069401
+   lloyd it5 test mse 0.069340
+   lloyd it6 test mse 0.069375
+   lloyd it7 test mse 0.069354
+HYB V2 base L16 Q9 (512x half2)               L2: mse=0.069323 +0.450 dB  
+   lloyd it0 test mse 0.069902
+   lloyd it1 test mse 0.069449
+   lloyd it2 test mse 0.069279
+   lloyd it3 test mse 0.069225
+   lloyd it4 test mse 0.069211
+   lloyd it5 test mse 0.069217
+   lloyd it6 test mse 0.069195
+   lloyd it7 test mse 0.069184
+HYB V2 base L16 Q10 (1024x half2)             L2: mse=0.069180 +0.441 dB  
+   lloyd it0 test mse 0.004905
+   lloyd it1 test mse 0.004833
+   lloyd it2 test mse 0.004812
+   lloyd it3 test mse 0.004800
+   lloyd it4 test mse 0.004793
+   lloyd it5 test mse 0.004789
+   lloyd it6 test mse 0.004786
+   lloyd it7 test mse 0.004784
+HYB V2 res L16 Q8 (256x half2)                L4: mse=0.004783 +0.880 dB  
+   lloyd it0 test mse 0.004863
+   lloyd it1 test mse 0.004816
+   lloyd it2 test mse 0.004798
+   lloyd it3 test mse 0.004787
+   lloyd it4 test mse 0.004784
+   lloyd it5 test mse 0.004780
+   lloyd it6 test mse 0.004778
+   lloyd it7 test mse 0.004777
+HYB V2 res L16 Q9 (512x half2)                L4: mse=0.004776 +0.873 dB  
+   lloyd it0 test mse 0.004800
+   lloyd it1 test mse 0.004776
+   lloyd it2 test mse 0.004766
+   lloyd it3 test mse 0.004764
+   lloyd it4 test mse 0.004761
+   lloyd it5 test mse 0.004758
+   lloyd it6 test mse 0.004757
+   lloyd it7 test mse 0.004755
+HYB V2 res L16 Q10 (1024x half2)              L4: mse=0.004755 +0.853 dB  
+   lloyd it0 test mse 0.006618
+   lloyd it1 test mse 0.006293
+   lloyd it2 test mse 0.006128
+   lloyd it3 test mse 0.006021
+   lloyd it4 test mse 0.005950
+   lloyd it5 test mse 0.005897
+   lloyd it6 test mse 0.005852
+   lloyd it7 test mse 0.005817
+res V2 direct-LUT L8 (256x half2)             L4: mse=0.005790 +1.709 dB  
+   lloyd it0 test mse 0.005185
+   lloyd it1 test mse 0.005147
+   lloyd it2 test mse 0.005131
+   lloyd it3 test mse 0.005130
+   lloyd it4 test mse 0.005130
+   lloyd it5 test mse 0.005130
+   lloyd it6 test mse 0.005129
+   lloyd it7 test mse 0.005128
+res V2 direct-LUT L12 (4096x half2)           L4: mse=0.005129 +1.183 dB  
+total s 105.25891304016113

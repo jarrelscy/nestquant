@@ -1,0 +1,46 @@
+[    5.3s] g_b2_pw2_sr0.03_auto_Gid proxy 0.011984
+[    9.2s] u_b2_pw2_sr0.03_auto_Gid proxy 0.017232
+[    9.3s] pw=2,gu=Gid@2 {'val_p2': 19.99, 'val_uniform': 20.67, 'train_fit_p2': 18.82}
+[   13.5s] g_b2_pw2_sr0.03_auto_GOdiag proxy 0.009147
+[   17.7s] u_b2_pw2_sr0.03_auto_GOdiag proxy 0.008656
+[   17.8s] pw=2,gu=GOdiag@2 {'val_p2': 18.37, 'val_uniform': 18.88, 'train_fit_p2': 16.99}
+[   22.0s] g_b2_pw2_sr0.03_auto_GMdiag proxy 0.011639
+[   25.9s] u_b2_pw2_sr0.03_auto_GMdiag proxy 0.016707
+[   26.0s] pw=2,gu=GMdiag@2 {'val_p2': 20.28, 'val_uniform': 20.96, 'train_fit_p2': 19.12}
+[   29.9s] g_b2_pw2_sr0.03_auto_GM proxy 0.009294
+[   34.0s] u_b2_pw2_sr0.03_auto_GM proxy 0.009843
+[   34.1s] pw=2,gu=GM@2 {'val_p2': 21.94, 'val_uniform': 22.7, 'train_fit_p2': 20.77}
+[   36.7s] d_b2_pw2_sr0.03_sample_seqH_H proxy 0.019016
+[   36.8s] pw=2,src=sample,dn=seqH@2 {'val_p2': 20.84, 'val_uniform': 21.44, 'train_fit_p2': 17.84}
+[   39.0s] d_b2_pw2_sr0.03_sample_seqW_H_r1e-3 proxy 0.018919
+[   39.1s] pw=2,src=sample,dn=seq@2 {'val_p2': 21.05, 'val_uniform': 21.65, 'train_fit_p2': 16.97}
+[   41.6s] d_b2_pw2_sr0.03_sample_seqW_H_r0.03 proxy 0.018899
+[   41.7s] pw=2,src=sample,dn=seq,ridge=0.03@2 {'val_p2': 20.85, 'val_uniform': 21.45, 'train_fit_p2': 16.99}
+[   45.6s] g_b2_pw2_sr0.03_sample_Gfull proxy 0.007274
+[   49.7s] u_b2_pw2_sr0.03_sample_Gfull proxy 0.006688
+[   49.8s] pw=2,src=sample,gu=Gfull@2 {'val_p2': 19.24, 'val_uniform': 19.67, 'train_fit_p2': 16.29}
+[   52.3s] d_b2_pw2_sr0.03_sample_seqW_Gfull_r1e-3 proxy 0.018781
+[   52.4s] pw=2,src=sample,gu=Gfull,dn=seq@2 {'val_p2': 19.45, 'val_uniform': 19.88, 'train_fit_p2': 15.62}
+[   56.1s] g_b4_pw2_sr0.03_auto_Gid proxy 0.000757
+[   59.9s] u_b4_pw2_sr0.03_auto_Gid proxy 0.001089
+[   60.0s] pw=2,gu=Gid@4 {'val_p2': 5.07, 'val_uniform': 5.24, 'train_fit_p2': 4.75}
+[   63.7s] g_b4_pw2_sr0.03_auto_GOdiag proxy 0.000565
+[   67.8s] u_b4_pw2_sr0.03_auto_GOdiag proxy 0.000531
+[   68.0s] pw=2,gu=GOdiag@4 {'val_p2': 4.68, 'val_uniform': 4.81, 'train_fit_p2': 4.29}
+[   71.6s] g_b4_pw2_sr0.03_auto_GMdiag proxy 0.000734
+[   76.0s] u_b4_pw2_sr0.03_auto_GMdiag proxy 0.001054
+[   76.1s] pw=2,gu=GMdiag@4 {'val_p2': 5.15, 'val_uniform': 5.32, 'train_fit_p2': 4.83}
+[   79.8s] g_b4_pw2_sr0.03_auto_GM proxy 0.000573
+[   83.4s] u_b4_pw2_sr0.03_auto_GM proxy 0.000605
+[   83.5s] pw=2,gu=GM@4 {'val_p2': 5.59, 'val_uniform': 5.79, 'train_fit_p2': 5.25}
+[   85.9s] d_b4_pw2_sr0.03_sample_seqH_H proxy 0.001197
+[   86.0s] pw=2,src=sample,dn=seqH@4 {'val_p2': 5.32, 'val_uniform': 5.47, 'train_fit_p2': 4.48}
+[   89.1s] d_b4_pw2_sr0.03_sample_seqW_H_r1e-3 proxy 0.001197
+[   89.2s] pw=2,src=sample,dn=seq@4 {'val_p2': 5.4, 'val_uniform': 5.55, 'train_fit_p2': 4.27}
+[   91.4s] d_b4_pw2_sr0.03_sample_seqW_H_r0.03 proxy 0.001197
+[   91.6s] pw=2,src=sample,dn=seq,ridge=0.03@4 {'val_p2': 5.35, 'val_uniform': 5.5, 'train_fit_p2': 4.28}
+[   96.0s] g_b4_pw2_sr0.03_sample_Gfull proxy 0.000440
+[  100.0s] u_b4_pw2_sr0.03_sample_Gfull proxy 0.000402
+[  100.1s] pw=2,src=sample,gu=Gfull@4 {'val_p2': 4.93, 'val_uniform': 5.04, 'train_fit_p2': 4.08}
+[  103.0s] d_b4_pw2_sr0.03_sample_seqW_Gfull_r1e-3 proxy 0.001196
+[  103.1s] pw=2,src=sample,gu=Gfull,dn=seq@4 {'val_p2': 5.01, 'val_uniform': 5.11, 'train_fit_p2': 3.93}

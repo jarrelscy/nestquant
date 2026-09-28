@@ -1,0 +1,698 @@
+{
+ "exl3_2": {
+  "table": {
+   "all/forced": 39.901,
+   "all/routed": 30.013,
+   "control/forced": 37.67,
+   "control/routed": 26.548,
+   "ood/forced": 43.637,
+   "ood/routed": 43.573
+  },
+  "proxy": {
+   "gate": 0.010031746605408875,
+   "up": 0.010497340673285402,
+   "down": 0.01749104405003846
+  },
+  "meta": null
+ },
+ "exl3_4": {
+  "table": {
+   "all/forced": 10.419,
+   "all/routed": 7.787,
+   "control/forced": 9.825,
+   "control/routed": 6.847,
+   "ood/forced": 11.412,
+   "ood/routed": 11.438
+  },
+  "proxy": {
+   "gate": 0.0006032164281207689,
+   "up": 0.0006312556041493594,
+   "down": 0.0010773084589848067
+  },
+  "meta": null
+ },
+ "nvfp4": {
+  "table": {
+   "all/forced": 12.617,
+   "all/routed": 10.648,
+   "control/forced": 12.495,
+   "control/routed": 10.257,
+   "ood/forced": 12.833,
+   "ood/routed": 12.444
+  },
+  "proxy": {
+   "gate": 0.004582722112448359,
+   "up": 0.00477598324299649,
+   "down": 0.00477273490641362
+  },
+  "meta": null
+ },
+ "centre_dual_g128_h1_n2_s0.03@2": {
+  "table": {
+   "all/forced": 51.038,
+   "all/routed": 38.869,
+   "control/forced": 48.357,
+   "control/routed": 34.392,
+   "ood/forced": 55.546,
+   "ood/routed": 56.387
+  },
+  "proxy": {
+   "gate": 0.017784068678888338,
+   "up": 0.0185600149469527,
+   "down": 0.02982242193303115
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 8.3,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n2_s0.03@4": {
+  "table": {
+   "all/forced": 26.292,
+   "all/routed": 19.936,
+   "control/forced": 24.898,
+   "control/routed": 17.593,
+   "ood/forced": 28.636,
+   "ood/routed": 29.065
+  },
+  "proxy": {
+   "gate": 0.00532797182760912,
+   "up": 0.005587765015460346,
+   "down": 0.007747691365772245
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 8.3,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3_s0.03@2": {
+  "table": {
+   "all/forced": 49.517,
+   "all/routed": 38.29,
+   "control/forced": 47.31,
+   "control/routed": 34.443,
+   "ood/forced": 53.266,
+   "ood/routed": 53.753
+  },
+  "proxy": {
+   "gate": 0.023930371259265466,
+   "up": 0.024986779519358526,
+   "down": 0.037543998407376385
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 8.0,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3_s0.03@4": {
+  "table": {
+   "all/forced": 19.527,
+   "all/routed": 14.606,
+   "control/forced": 18.482,
+   "control/routed": 12.957,
+   "ood/forced": 21.282,
+   "ood/routed": 21.079
+  },
+  "proxy": {
+   "gate": 0.0027439910218978944,
+   "up": 0.0028742056631712552,
+   "down": 0.004241330477897153
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 8.0,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4_s0.03@2": {
+  "table": {
+   "all/forced": 58.113,
+   "all/routed": 50.702,
+   "control/forced": 57.644,
+   "control/routed": 49.318,
+   "ood/forced": 58.95,
+   "ood/routed": 57.231
+  },
+  "proxy": {
+   "gate": 0.09955338172645123,
+   "up": 0.10473878930029479,
+   "down": 0.12368272050828927
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 8.1,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4_s0.03@4": {
+  "table": {
+   "all/forced": 14.564,
+   "all/routed": 10.916,
+   "control/forced": 13.734,
+   "control/routed": 9.575,
+   "ood/forced": 15.953,
+   "ood/routed": 16.09
+  },
+  "proxy": {
+   "gate": 0.0011841410055458159,
+   "up": 0.0012394086609255844,
+   "down": 0.0020735973569289794
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 8.1,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n2_s0.3@2": {
+  "table": {
+   "all/forced": 47.312,
+   "all/routed": 36.383,
+   "control/forced": 45.227,
+   "control/routed": 33.046,
+   "ood/forced": 50.857,
+   "ood/routed": 50.017
+  },
+  "proxy": {
+   "gate": 0.021000051891102333,
+   "up": 0.02193923294062425,
+   "down": 0.033494670836915014
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.1,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n2_s0.3@4": {
+  "table": {
+   "all/forced": 21.799,
+   "all/routed": 16.659,
+   "control/forced": 20.749,
+   "control/routed": 14.971,
+   "ood/forced": 23.576,
+   "ood/routed": 23.443
+  },
+  "proxy": {
+   "gate": 0.004169716981695426,
+   "up": 0.004360754421069423,
+   "down": 0.006384846778226887
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.1,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3_s0.3@2": {
+  "table": {
+   "all/forced": 47.953,
+   "all/routed": 37.425,
+   "control/forced": 46.131,
+   "control/routed": 34.083,
+   "ood/forced": 51.073,
+   "ood/routed": 51.142
+  },
+  "proxy": {
+   "gate": 0.028218213234248852,
+   "up": 0.029486329811627403,
+   "down": 0.043210601496026645
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.0,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3_s0.3@4": {
+  "table": {
+   "all/forced": 16.622,
+   "all/routed": 12.748,
+   "control/forced": 15.854,
+   "control/routed": 11.408,
+   "ood/forced": 17.926,
+   "ood/routed": 18.092
+  },
+  "proxy": {
+   "gate": 0.0025250504339866956,
+   "up": 0.00265025295890696,
+   "down": 0.00391278617263531
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.0,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4_s0.3@2": {
+  "table": {
+   "all/forced": 57.751,
+   "all/routed": 50.667,
+   "control/forced": 57.335,
+   "control/routed": 49.361,
+   "ood/forced": 58.495,
+   "ood/routed": 56.833
+  },
+  "proxy": {
+   "gate": 0.10087156163451849,
+   "up": 0.10481635520778183,
+   "down": 0.1237005548622767
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.0,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4_s0.3@4": {
+  "table": {
+   "all/forced": 13.375,
+   "all/routed": 10.13,
+   "control/forced": 12.746,
+   "control/routed": 9.088,
+   "ood/forced": 14.439,
+   "ood/routed": 14.305
+  },
+  "proxy": {
+   "gate": 0.0014427312510864557,
+   "up": 0.0015123715977957794,
+   "down": 0.0023686067599596843
+  },
+  "meta": {
+   "cfg": {
+    "kind": "centre",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.0,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "nu_dual_g128_h1_n2_s0.03@2": {
+  "table": {
+   "all/forced": 50.616,
+   "all/routed": 38.403,
+   "control/forced": 47.997,
+   "control/routed": 34.148,
+   "ood/forced": 55.025,
+   "ood/routed": 55.187
+  },
+  "proxy": {
+   "gate": 0.017582935411375827,
+   "up": 0.018369231190278165,
+   "down": 0.029338691799236146
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 23.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n2_s0.03@4": {
+  "table": {
+   "all/forced": 25.199,
+   "all/routed": 19.325,
+   "control/forced": 24.076,
+   "control/routed": 17.343,
+   "ood/forced": 27.108,
+   "ood/routed": 27.251
+  },
+  "proxy": {
+   "gate": 0.006129501321168633,
+   "up": 0.006418542596307415,
+   "down": 0.008059416197310279
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 23.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r3_s0.03@2": {
+  "table": {
+   "all/forced": 47.522,
+   "all/routed": 37.666,
+   "control/forced": 45.577,
+   "control/routed": 34.336,
+   "ood/forced": 50.841,
+   "ood/routed": 51.37
+  },
+  "proxy": {
+   "gate": 0.02501957970432438,
+   "up": 0.02610293058329676,
+   "down": 0.0380178089011871
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 10.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r3_s0.03@4": {
+  "table": {
+   "all/forced": 18.175,
+   "all/routed": 13.803,
+   "control/forced": 17.266,
+   "control/routed": 12.256,
+   "ood/forced": 19.709,
+   "ood/routed": 19.869
+  },
+  "proxy": {
+   "gate": 0.0026283551545589964,
+   "up": 0.002743013082025113,
+   "down": 0.003873682128800804
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 10.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n4_s0.03@2": {
+  "table": {
+   "all/forced": 52.609,
+   "all/routed": 48.96,
+   "control/forced": 52.299,
+   "control/routed": 48.05,
+   "ood/forced": 53.165,
+   "ood/routed": 53.361
+  },
+  "proxy": {
+   "gate": 0.0910959043425589,
+   "up": 0.09419769957788174,
+   "down": 0.10873853133649049
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 10.4,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n4_s0.03@4": {
+  "table": {
+   "all/forced": 13.817,
+   "all/routed": 10.281,
+   "control/forced": 13.016,
+   "control/routed": 9.048,
+   "ood/forced": 15.155,
+   "ood/routed": 15.056
+  },
+  "proxy": {
+   "gate": 0.0010585006946187423,
+   "up": 0.00110745769435687,
+   "down": 0.0018590521287464993
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.03
+   },
+   "seconds": 10.4,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n2_s0.3@2": {
+  "table": {
+   "all/forced": 46.907,
+   "all/routed": 36.515,
+   "control/forced": 44.887,
+   "control/routed": 32.878,
+   "ood/forced": 50.345,
+   "ood/routed": 51.166
+  },
+  "proxy": {
+   "gate": 0.020642384064030746,
+   "up": 0.021559165710588805,
+   "down": 0.0328359226817072
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 10.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n2_s0.3@4": {
+  "table": {
+   "all/forced": 18.243,
+   "all/routed": 14.102,
+   "control/forced": 17.572,
+   "control/routed": 12.935,
+   "ood/forced": 19.395,
+   "ood/routed": 18.953
+  },
+  "proxy": {
+   "gate": 0.003868260274585146,
+   "up": 0.004025227089493842,
+   "down": 0.005467158424769557
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 10.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r3_s0.3@2": {
+  "table": {
+   "all/forced": 46.599,
+   "all/routed": 37.458,
+   "control/forced": 45.025,
+   "control/routed": 34.612,
+   "ood/forced": 49.311,
+   "ood/routed": 49.474
+  },
+  "proxy": {
+   "gate": 0.02910326381360236,
+   "up": 0.030302977229196806,
+   "down": 0.04336510561438212
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 10.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r3_s0.3@4": {
+  "table": {
+   "all/forced": 14.981,
+   "all/routed": 11.546,
+   "control/forced": 14.358,
+   "control/routed": 10.438,
+   "ood/forced": 16.044,
+   "ood/routed": 16.038
+  },
+  "proxy": {
+   "gate": 0.002284088166428777,
+   "up": 0.00238036601234683,
+   "down": 0.0034203972108535143
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 10.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n4_s0.3@2": {
+  "table": {
+   "all/forced": 52.467,
+   "all/routed": 48.997,
+   "control/forced": 52.209,
+   "control/routed": 48.238,
+   "ood/forced": 52.929,
+   "ood/routed": 52.691
+  },
+  "proxy": {
+   "gate": 0.09136947698414222,
+   "up": 0.09423574045948398,
+   "down": 0.10902506386190577
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 10.8,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n4_s0.3@4": {
+  "table": {
+   "all/forced": 12.675,
+   "all/routed": 9.562,
+   "control/forced": 12.076,
+   "control/routed": 8.602,
+   "ood/forced": 13.687,
+   "ood/routed": 13.419
+  },
+  "proxy": {
+   "gate": 0.001292535566838706,
+   "up": 0.0013524742770059477,
+   "down": 0.002124141364240227
+  },
+  "meta": {
+   "cfg": {
+    "kind": "nu",
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 10.8,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ }
+}

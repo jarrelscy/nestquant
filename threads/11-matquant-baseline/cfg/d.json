@@ -1,0 +1,8 @@
+[{"name":"rtn_g128_h1_n4","l2":1e-4,"l4":1,"had":true,"nofb":true},
+ {"name":"rtn_g128_h1_n2","l2":1,"l4":1e-4,"had":true,"nofb":true},
+ {"name":"centre_dual_g128_h1_n4_s0.3","l2":1e-4,"l4":1,"had":true,"sigma_reg":0.3},
+ {"name":"centre_dual_g128_h1_n2_s0.3","l2":1,"l4":1e-4,"had":true,"sigma_reg":0.3},
+ {"name":"centre_dual_g128_h1_n4_s1","l2":1e-4,"l4":1,"had":true,"sigma_reg":1.0},
+ {"name":"centre_dual_g128_h1_n2_s1","l2":1,"l4":1e-4,"had":true,"sigma_reg":1.0},
+ {"name":"centre_dual_g128_h1_r3_s1","l2":1,"l4":3,"had":true,"sigma_reg":1.0},
+ {"name":"centre_dual_g128_h1_r10_s1","l2":1,"l4":10,"had":true,"sigma_reg":1.0}]

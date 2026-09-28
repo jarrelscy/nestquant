@@ -1,0 +1,18 @@
+{
+ "hadamard_only": {
+  "amgm_full_in": 0.4140317258033773,
+  "amgm_sample_in": 0.464046165705532,
+  "amgm_sample_cv": 0.46973677512697903,
+  "shard_amgm_full_in": 0.35834879253275914,
+  "shard_amgm_sample_cv": 0.42871898692764415,
+  "corr_full_in_vs_cv": 0.9919547257237235
+ },
+ "ashard": {
+  "amgm_full_in": 1.929249373009478,
+  "amgm_sample_in": 1.9842239682616891,
+  "amgm_sample_cv": 2.2243252284310864,
+  "shard_amgm_full_in": 1.908404197520548,
+  "shard_amgm_sample_cv": 2.215238616491457,
+  "corr_full_in_vs_cv": 0.9989639673138125
+ }
+}

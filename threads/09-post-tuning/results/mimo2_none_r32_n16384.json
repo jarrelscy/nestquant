@@ -1,0 +1,171 @@
+{
+ "model": "mimo",
+ "bits": 2,
+ "groups": [],
+ "rank": 32,
+ "rows": 16384,
+ "held_out_rows": 3276,
+ "lr": 0.0001,
+ "extra_bpw": 0.3333333333333333,
+ "init": {
+  "train": 18.85237882248344,
+  "hold": 19.04670085260095
+ },
+ "best": {
+  "epoch": 17,
+  "hold": 18.909807200387135,
+  "train": 18.05474626601465,
+  "hold_rounded": 18.909908946351596
+ },
+ "history": [
+  {
+   "epoch": 1,
+   "hold": 18.991869038247174,
+   "train": null
+  },
+  {
+   "epoch": 2,
+   "hold": 18.97126752964357,
+   "train": null
+  },
+  {
+   "epoch": 3,
+   "hold": 18.9595554125874,
+   "train": null
+  },
+  {
+   "epoch": 4,
+   "hold": 18.950890454924263,
+   "train": null
+  },
+  {
+   "epoch": 5,
+   "hold": 18.94214884876916,
+   "train": null
+  },
+  {
+   "epoch": 6,
+   "hold": 18.933331420247175,
+   "train": null
+  },
+  {
+   "epoch": 7,
+   "hold": 18.92779466116993,
+   "train": null
+  },
+  {
+   "epoch": 8,
+   "hold": 18.92429442240119,
+   "train": null
+  },
+  {
+   "epoch": 9,
+   "hold": 18.921959637323024,
+   "train": null
+  },
+  {
+   "epoch": 10,
+   "hold": 18.918546023109784,
+   "train": null
+  },
+  {
+   "epoch": 11,
+   "hold": 18.915763551217626,
+   "train": null
+  },
+  {
+   "epoch": 12,
+   "hold": 18.915064603117028,
+   "train": null
+  },
+  {
+   "epoch": 13,
+   "hold": 18.912128552347212,
+   "train": null
+  },
+  {
+   "epoch": 14,
+   "hold": 18.912266685741063,
+   "train": null
+  },
+  {
+   "epoch": 15,
+   "hold": 18.911323998609713,
+   "train": null
+  },
+  {
+   "epoch": 16,
+   "hold": 18.910690225103206,
+   "train": null
+  },
+  {
+   "epoch": 17,
+   "hold": 18.909807200387135,
+   "train": null
+  },
+  {
+   "epoch": 18,
+   "hold": 18.91019084515499,
+   "train": null
+  },
+  {
+   "epoch": 19,
+   "hold": 18.91105518416403,
+   "train": null
+  },
+  {
+   "epoch": 20,
+   "hold": 18.911497605908476,
+   "train": null
+  },
+  {
+   "epoch": 21,
+   "hold": 18.911796281402673,
+   "train": null
+  },
+  {
+   "epoch": 22,
+   "hold": 18.912085618789543,
+   "train": null
+  },
+  {
+   "epoch": 23,
+   "hold": 18.913254123456387,
+   "train": null
+  },
+  {
+   "epoch": 24,
+   "hold": 18.9137618218357,
+   "train": null
+  },
+  {
+   "epoch": 25,
+   "hold": 18.91540801475701,
+   "train": null
+  }
+ ],
+ "seconds": 6.83939790725708,
+ "eval": {
+  "control/all/forced": {
+   "rows": 3072,
+   "base": 39.46954459557063,
+   "tuned": 38.84161510065035
+  },
+  "control/all/routed": {
+   "rows": 31,
+   "base": 15.987901579036695,
+   "tuned": 15.452393447496213
+  },
+  "ood/all/forced": {
+   "rows": 512,
+   "base": 45.76462285637609,
+   "tuned": 44.887331156823876
+  },
+  "ood/all/routed": {
+   "rows": 1,
+   "base": 49.95508283470886,
+   "tuned": 48.35152692574714
+  }
+ },
+ "peak_cuda_mib": 2475.32666015625
+}

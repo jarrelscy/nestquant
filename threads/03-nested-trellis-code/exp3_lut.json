@@ -1,0 +1,26 @@
+{
+ "res learned-LUT direct K2 L8 (256 halfs)": {
+  "mse": 0.005535428877919912,
+  "db_rd": 1.513912404088451
+ },
+ "res learned-LUT direct K2 L10 (1024 halfs)": {
+  "mse": 0.005274119786918163,
+  "db_rd": 1.3038995466892032
+ },
+ "res learned-LUT direct K2 L12 (4096 halfs)": {
+  "mse": 0.0049864607863128185,
+  "db_rd": 1.0603237339588103
+ },
+ "res learned-LUT direct K1 L8 (256 halfs)": {
+  "mse": 0.019923534244298935,
+  "db_rd": 1.055463545901485
+ },
+ "res learned-LUT direct K1 L10 (1024 halfs)": {
+  "mse": 0.019363315775990486,
+  "db_rd": 0.9315970195182002
+ },
+ "res learned-LUT direct K1 L12 (4096 halfs)": {
+  "mse": 0.019098006188869476,
+  "db_rd": 0.87168003725335
+ }
+}

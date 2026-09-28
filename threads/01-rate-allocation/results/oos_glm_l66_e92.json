@@ -1,0 +1,46 @@
+{
+ "expert": "glm_l66_e92",
+ "rows": 18096,
+ "gram_rows": 18096,
+ "gate_up": {
+  "sample_vs_gram_relerr": 2.910611662869379e-07,
+  "amgm_in": 0.5357151631522703,
+  "amgm_cv": 0.01846231146024487,
+  "amgm_cv_insample": 0.6124414867002917,
+  "corr_in_cv": 0.9817199335787918,
+  "chunks_in": [
+   2.272,
+   1.377,
+   1.037,
+   0.847,
+   0.728,
+   0.64,
+   0.575,
+   0.524
+  ],
+  "chunks_cv": [
+   1.172,
+   1.095,
+   1.04,
+   0.993,
+   0.962,
+   0.933,
+   0.913,
+   0.893
+  ],
+  "oos_over_in_ratio_mean": 3.5258107822245273,
+  "amgm_eval_glm53_matched_context_pilot_v1_capture": 0.002439736930893058,
+  "chunks_eval_glm53_matched_context_pilot_v1_capture": [
+   0.942,
+   1.018,
+   1.019,
+   1.017,
+   1.011,
+   1.005,
+   0.996,
+   0.993
+  ],
+  "corr_cv_eval_glm53_matched_context_pilot_v1_capture": -0.35307322721455453,
+  "corr_in_eval_glm53_matched_context_pilot_v1_capture": -0.43236455530853646
+ }
+}

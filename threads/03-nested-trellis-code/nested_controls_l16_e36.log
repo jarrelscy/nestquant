@@ -1,0 +1,5 @@
+joint22 proxy [0.0007331545465963985, 0.0007582290558923812, 0.001216874390622896]
+nested(noLDLQ base) proxy [0.0007749983276573228, 0.000801901971389847, 0.0012682507624219655]
+control 2+2 base refit under L4 feedback (not nested) {'all/forced': 10.716, 'all/routed': 10.003, 'control/forced': 10.252, 'control/routed': 9.29, 'ood/forced': 11.427, 'ood/routed': 11.529}
+base no-LDLQ L2                          {'all/forced': 40.067, 'all/routed': 38.882, 'control/forced': 40.278, 'control/routed': 38.303, 'ood/forced': 39.722, 'ood/routed': 40.236}
+nested 2+2 L4 (base no-LDLQ)             {'all/forced': 10.722, 'all/routed': 9.994, 'control/forced': 10.277, 'control/routed': 9.294, 'ood/forced': 11.405, 'ood/routed': 11.495}

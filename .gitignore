@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.so
+*.so.*
+*.o
+*.pt
+*.safetensors
+*.npy
+*.npz
+build/
+build2/
+lib/
+.env

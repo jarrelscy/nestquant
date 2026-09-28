@@ -1,0 +1,72 @@
+== glm_16_92
+2 0.03 bpw 2.011 hold 34.088 {'all/forced': 41.11, 'all/routed': 36.0, 'control/forced': 39.01, 'control/routed': 34.93, 'ood/forced': 45.57, 'ood/routed': 44.68}
+2 0.3 bpw 2.011 hold 32.282 {'all/forced': 37.86, 'all/routed': 33.64, 'control/forced': 36.23, 'control/routed': 32.77, 'ood/forced': 41.37, 'ood/routed': 40.86}
+4 0.03 bpw 4.011 hold 8.800 {'all/forced': 10.72, 'all/routed': 9.3, 'control/forced': 10.15, 'control/routed': 9.0, 'ood/forced': 11.93, 'ood/routed': 11.73}
+4 0.3 bpw 4.011 hold 8.323 {'all/forced': 9.85, 'all/routed': 8.66, 'control/forced': 9.41, 'control/routed': 8.41, 'ood/forced': 10.79, 'ood/routed': 10.71}
+2 0.03 bpw 2.011 hold 23.294 {'all/forced': 40.93, 'all/routed': 35.78, 'control/forced': 38.88, 'control/routed': 34.7, 'ood/forced': 45.3, 'ood/routed': 44.59}
+2 0.3 bpw 2.011 hold 24.444 {'all/forced': 37.79, 'all/routed': 33.5, 'control/forced': 36.18, 'control/routed': 32.62, 'ood/forced': 41.25, 'ood/routed': 40.77}
+4 0.03 bpw 4.011 hold 5.859 {'all/forced': 10.68, 'all/routed': 9.25, 'control/forced': 10.11, 'control/routed': 8.94, 'ood/forced': 11.89, 'ood/routed': 11.68}
+4 0.3 bpw 4.011 hold 6.179 {'all/forced': 9.83, 'all/routed': 8.65, 'control/forced': 9.39, 'control/routed': 8.4, 'ood/forced': 10.79, 'ood/routed': 10.68}
+== glm_16_165
+2 0.03 bpw 2.011 hold 24.605 {'all/forced': 40.07, 'all/routed': 30.31, 'control/forced': 37.87, 'control/routed': 26.91, 'ood/forced': 43.75, 'ood/routed': 43.67}
+2 0.3 bpw 2.011 hold 23.662 {'all/forced': 36.81, 'all/routed': 28.41, 'control/forced': 35.15, 'control/routed': 25.72, 'ood/forced': 39.65, 'ood/routed': 39.34}
+4 0.03 bpw 4.011 hold 6.332 {'all/forced': 10.45, 'all/routed': 7.84, 'control/forced': 9.86, 'control/routed': 6.91, 'ood/forced': 11.44, 'ood/routed': 11.49}
+4 0.3 bpw 4.011 hold 6.093 {'all/forced': 9.58, 'all/routed': 7.33, 'control/forced': 9.13, 'control/routed': 6.58, 'ood/forced': 10.33, 'ood/routed': 10.32}
+2 0.03 bpw 2.011 hold 17.120 {'all/forced': 39.9, 'all/routed': 30.02, 'control/forced': 37.67, 'control/routed': 26.55, 'ood/forced': 43.64, 'ood/routed': 43.58}
+2 0.3 bpw 2.011 hold 18.270 {'all/forced': 36.76, 'all/routed': 28.2, 'control/forced': 35.1, 'control/routed': 25.43, 'ood/forced': 39.57, 'ood/routed': 39.41}
+4 0.03 bpw 4.011 hold 4.313 {'all/forced': 10.42, 'all/routed': 7.79, 'control/forced': 9.82, 'control/routed': 6.85, 'ood/forced': 11.41, 'ood/routed': 11.44}
+4 0.3 bpw 4.011 hold 4.635 {'all/forced': 9.58, 'all/routed': 7.22, 'control/forced': 9.12, 'control/routed': 6.5, 'ood/forced': 10.35, 'ood/routed': 10.12}
+== glm_49_36
+2 0.03 bpw 2.011 hold 32.510 {'all/forced': 45.43, 'all/routed': 44.29, 'control/forced': 44.14, 'control/routed': 37.53, 'ood/forced': 48.21, 'ood/routed': 47.92}
+2 0.3 bpw 2.011 hold 31.037 {'all/forced': 42.1, 'all/routed': 40.6, 'control/forced': 41.11, 'control/routed': 34.32, 'ood/forced': 44.27, 'ood/routed': 43.98}
+4 0.03 bpw 4.011 hold 8.382 {'all/forced': 11.97, 'all/routed': 11.67, 'control/forced': 11.61, 'control/routed': 9.71, 'ood/forced': 12.75, 'ood/routed': 12.71}
+4 0.3 bpw 4.011 hold 7.941 {'all/forced': 11.04, 'all/routed': 10.65, 'control/forced': 10.77, 'control/routed': 8.95, 'ood/forced': 11.64, 'ood/routed': 11.55}
+2 0.03 bpw 2.011 hold 16.992 {'all/forced': 45.36, 'all/routed': 43.88, 'control/forced': 44.05, 'control/routed': 36.71, 'ood/forced': 48.19, 'ood/routed': 47.7}
+2 0.3 bpw 2.011 hold 18.076 {'all/forced': 42.06, 'all/routed': 40.66, 'control/forced': 41.09, 'control/routed': 34.71, 'ood/forced': 44.18, 'ood/routed': 43.89}
+4 0.03 bpw 4.011 hold 4.311 {'all/forced': 11.95, 'all/routed': 11.63, 'control/forced': 11.58, 'control/routed': 9.75, 'ood/forced': 12.72, 'ood/routed': 12.62}
+4 0.3 bpw 4.011 hold 4.619 {'all/forced': 11.04, 'all/routed': 10.68, 'control/forced': 10.77, 'control/routed': 8.99, 'ood/forced': 11.65, 'ood/routed': 11.59}
+== glm_49_92
+2 0.03 bpw 2.011 hold 37.777 {'all/forced': 43.41, 'all/routed': 41.6, 'control/forced': 42.04, 'control/routed': 41.6, 'ood/forced': 46.11, 'ood/routed': 44.32}
+2 0.3 bpw 2.011 hold 36.099 {'all/forced': 40.5, 'all/routed': 38.92, 'control/forced': 39.4, 'control/routed': 38.91, 'ood/forced': 42.66, 'ood/routed': 42.15}
+4 0.03 bpw 4.011 hold 9.858 {'all/forced': 11.41, 'all/routed': 10.92, 'control/forced': 11.02, 'control/routed': 10.92, 'ood/forced': 12.19, 'ood/routed': 11.95}
+4 0.3 bpw 4.011 hold 9.381 {'all/forced': 10.62, 'all/routed': 10.03, 'control/forced': 10.32, 'control/routed': 10.03, 'ood/forced': 11.22, 'ood/routed': 11.03}
+2 0.03 bpw 2.011 hold 23.258 {'all/forced': 43.33, 'all/routed': 42.08, 'control/forced': 41.94, 'control/routed': 42.08, 'ood/forced': 46.05, 'ood/routed': 44.7}
+2 0.3 bpw 2.011 hold 24.325 {'all/forced': 40.47, 'all/routed': 38.97, 'control/forced': 39.39, 'control/routed': 38.96, 'ood/forced': 42.63, 'ood/routed': 42.71}
+4 0.03 bpw 4.011 hold 5.911 {'all/forced': 11.39, 'all/routed': 10.91, 'control/forced': 10.99, 'control/routed': 10.9, 'ood/forced': 12.17, 'ood/routed': 12.01}
+4 0.3 bpw 4.011 hold 6.220 {'all/forced': 10.61, 'all/routed': 10.01, 'control/forced': 10.3, 'control/routed': 10.01, 'ood/forced': 11.23, 'ood/routed': 11.23}
+== glm_49_165
+2 0.03 bpw 2.011 hold 30.704 {'all/forced': 41.76, 'all/routed': 34.2, 'control/forced': 41.31, 'control/routed': 34.06, 'ood/forced': 42.71, 'ood/routed': 48.22}
+2 0.3 bpw 2.011 hold 28.809 {'all/forced': 38.22, 'all/routed': 31.43, 'control/forced': 37.99, 'control/routed': 31.3, 'ood/forced': 38.71, 'ood/routed': 44.16}
+4 0.03 bpw 4.011 hold 7.951 {'all/forced': 10.95, 'all/routed': 8.85, 'control/forced': 10.8, 'control/routed': 8.82, 'ood/forced': 11.25, 'ood/routed': 12.56}
+4 0.3 bpw 4.011 hold 7.441 {'all/forced': 10.0, 'all/routed': 8.08, 'control/forced': 9.91, 'control/routed': 8.04, 'ood/forced': 10.17, 'ood/routed': 11.43}
+2 0.03 bpw 2.011 hold 17.935 {'all/forced': 41.69, 'all/routed': 33.55, 'control/forced': 41.19, 'control/routed': 33.39, 'ood/forced': 42.74, 'ood/routed': 48.44}
+2 0.3 bpw 2.011 hold 19.213 {'all/forced': 38.17, 'all/routed': 30.93, 'control/forced': 37.88, 'control/routed': 30.8, 'ood/forced': 38.79, 'ood/routed': 43.67}
+4 0.03 bpw 4.011 hold 4.490 {'all/forced': 10.94, 'all/routed': 8.69, 'control/forced': 10.79, 'control/routed': 8.65, 'ood/forced': 11.27, 'ood/routed': 12.73}
+4 0.3 bpw 4.011 hold 4.844 {'all/forced': 10.0, 'all/routed': 7.94, 'control/forced': 9.89, 'control/routed': 7.9, 'ood/forced': 10.21, 'ood/routed': 11.58}
+== glm_66_36
+2 0.03 bpw 2.011 hold 31.664 {'all/forced': 47.27, 'all/routed': 44.21, 'control/forced': 45.96, 'control/routed': 44.51, 'ood/forced': 49.24, 'ood/routed': 44.17}
+2 0.3 bpw 2.011 hold 30.451 {'all/forced': 43.62, 'all/routed': 41.09, 'control/forced': 42.64, 'control/routed': 41.11, 'ood/forced': 45.1, 'ood/routed': 41.08}
+4 0.03 bpw 4.011 hold 8.363 {'all/forced': 12.53, 'all/routed': 11.72, 'control/forced': 12.15, 'control/routed': 11.99, 'ood/forced': 13.1, 'ood/routed': 11.68}
+4 0.3 bpw 4.011 hold 7.868 {'all/forced': 11.51, 'all/routed': 10.75, 'control/forced': 11.25, 'control/routed': 10.9, 'ood/forced': 11.89, 'ood/routed': 10.73}
+2 0.03 bpw 2.011 hold 16.499 {'all/forced': 47.17, 'all/routed': 44.03, 'control/forced': 45.86, 'control/routed': 45.56, 'ood/forced': 49.15, 'ood/routed': 43.84}
+2 0.3 bpw 2.011 hold 17.712 {'all/forced': 43.6, 'all/routed': 40.69, 'control/forced': 42.66, 'control/routed': 40.65, 'ood/forced': 45.04, 'ood/routed': 40.69}
+4 0.03 bpw 4.011 hold 4.212 {'all/forced': 12.5, 'all/routed': 11.65, 'control/forced': 12.13, 'control/routed': 11.87, 'ood/forced': 13.07, 'ood/routed': 11.62}
+4 0.3 bpw 4.011 hold 4.519 {'all/forced': 11.51, 'all/routed': 10.66, 'control/forced': 11.24, 'control/routed': 10.98, 'ood/forced': 11.91, 'ood/routed': 10.62}
+== glm_66_92
+2 0.03 bpw 2.011 hold 29.913 {'all/forced': 46.46, 'all/routed': 40.04, 'control/forced': 44.61, 'control/routed': 38.36, 'ood/forced': 49.65, 'ood/routed': 43.07}
+2 0.3 bpw 2.011 hold 28.337 {'all/forced': 42.15, 'all/routed': 36.5, 'control/forced': 40.8, 'control/routed': 35.09, 'ood/forced': 44.5, 'ood/routed': 39.03}
+4 0.03 bpw 4.011 hold 7.788 {'all/forced': 12.27, 'all/routed': 10.55, 'control/forced': 11.74, 'control/routed': 10.05, 'ood/forced': 13.18, 'ood/routed': 11.42}
+4 0.3 bpw 4.011 hold 7.347 {'all/forced': 11.1, 'all/routed': 9.59, 'control/forced': 10.72, 'control/routed': 9.19, 'ood/forced': 11.77, 'ood/routed': 10.37}
+2 0.03 bpw 2.011 hold 18.242 {'all/forced': 46.36, 'all/routed': 40.85, 'control/forced': 44.49, 'control/routed': 38.68, 'ood/forced': 49.61, 'ood/routed': 44.71}
+2 0.3 bpw 2.011 hold 19.705 {'all/forced': 42.15, 'all/routed': 37.15, 'control/forced': 40.77, 'control/routed': 35.29, 'ood/forced': 44.57, 'ood/routed': 40.48}
+4 0.03 bpw 4.011 hold 4.579 {'all/forced': 12.26, 'all/routed': 10.55, 'control/forced': 11.75, 'control/routed': 10.04, 'ood/forced': 13.14, 'ood/routed': 11.47}
+4 0.3 bpw 4.011 hold 4.991 {'all/forced': 11.1, 'all/routed': 9.62, 'control/forced': 10.71, 'control/routed': 9.19, 'ood/forced': 11.76, 'ood/routed': 10.39}
+== glm_66_165
+2 0.03 bpw 2.011 hold 35.744 {'all/forced': 47.55, 'all/routed': 46.54, 'control/forced': 46.01, 'control/routed': 46.97, 'ood/forced': 50.05, 'ood/routed': 46.34}
+2 0.3 bpw 2.011 hold 34.007 {'all/forced': 43.9, 'all/routed': 43.17, 'control/forced': 42.81, 'control/routed': 43.54, 'ood/forced': 45.69, 'ood/routed': 42.98}
+4 0.03 bpw 4.011 hold 9.301 {'all/forced': 12.62, 'all/routed': 12.54, 'control/forced': 12.17, 'control/routed': 12.37, 'ood/forced': 13.34, 'ood/routed': 12.6}
+4 0.3 bpw 4.011 hold 8.728 {'all/forced': 11.58, 'all/routed': 11.27, 'control/forced': 11.27, 'control/routed': 11.29, 'ood/forced': 12.09, 'ood/routed': 11.27}
+2 0.03 bpw 2.011 hold 18.685 {'all/forced': 47.39, 'all/routed': 46.23, 'control/forced': 45.84, 'control/routed': 47.11, 'ood/forced': 49.9, 'ood/routed': 45.81}
+2 0.3 bpw 2.011 hold 19.706 {'all/forced': 43.84, 'all/routed': 43.33, 'control/forced': 42.79, 'control/routed': 43.58, 'ood/forced': 45.57, 'ood/routed': 43.24}
+4 0.03 bpw 4.011 hold 4.785 {'all/forced': 12.55, 'all/routed': 12.27, 'control/forced': 12.11, 'control/routed': 12.21, 'ood/forced': 13.25, 'ood/routed': 12.28}
+4 0.3 bpw 4.011 hold 5.077 {'all/forced': 11.56, 'all/routed': 11.19, 'control/forced': 11.24, 'control/routed': 11.24, 'ood/forced': 12.08, 'ood/routed': 11.18}

@@ -1,0 +1,131 @@
+{
+ "model": "mimo",
+ "bits": 2,
+ "groups": [],
+ "rank": 8,
+ "rows": 29492,
+ "held_out_rows": 3276,
+ "lr": 0.0003,
+ "extra_bpw": 0.08333333333333333,
+ "init": {
+  "train": 19.369681462028026,
+  "hold": 19.373257475281232
+ },
+ "best": {
+  "epoch": 9,
+  "hold": 19.241331627914885,
+  "train": 18.962404468443335,
+  "hold_rounded": 19.24137382682115
+ },
+ "history": [
+  {
+   "epoch": 1,
+   "hold": 19.30230607403029,
+   "train": null
+  },
+  {
+   "epoch": 2,
+   "hold": 19.273907330155208,
+   "train": null
+  },
+  {
+   "epoch": 3,
+   "hold": 19.25643201025019,
+   "train": null
+  },
+  {
+   "epoch": 4,
+   "hold": 19.248707691873467,
+   "train": null
+  },
+  {
+   "epoch": 5,
+   "hold": 19.244555908162937,
+   "train": null
+  },
+  {
+   "epoch": 6,
+   "hold": 19.24178388528686,
+   "train": null
+  },
+  {
+   "epoch": 7,
+   "hold": 19.241596745594595,
+   "train": null
+  },
+  {
+   "epoch": 8,
+   "hold": 19.241649034809484,
+   "train": null
+  },
+  {
+   "epoch": 9,
+   "hold": 19.241331627914885,
+   "train": null
+  },
+  {
+   "epoch": 10,
+   "hold": 19.243926688499435,
+   "train": null
+  },
+  {
+   "epoch": 11,
+   "hold": 19.245658368816716,
+   "train": null
+  },
+  {
+   "epoch": 12,
+   "hold": 19.248106119321225,
+   "train": null
+  },
+  {
+   "epoch": 13,
+   "hold": 19.252593617673686,
+   "train": null
+  },
+  {
+   "epoch": 14,
+   "hold": 19.25439969182293,
+   "train": null
+  },
+  {
+   "epoch": 15,
+   "hold": 19.257967336382737,
+   "train": null
+  },
+  {
+   "epoch": 16,
+   "hold": 19.260715035446736,
+   "train": null
+  },
+  {
+   "epoch": 17,
+   "hold": 19.263545727034774,
+   "train": null
+  }
+ ],
+ "seconds": 8.88494062423706,
+ "eval": {
+  "control/all/forced": {
+   "rows": 3072,
+   "base": 39.46954459557063,
+   "tuned": 39.288373804388684
+  },
+  "control/all/routed": {
+   "rows": 31,
+   "base": 15.987901579036695,
+   "tuned": 15.641746498609695
+  },
+  "ood/all/forced": {
+   "rows": 512,
+   "base": 45.76462285637609,
+   "tuned": 45.45830861866676
+  },
+  "ood/all/routed": {
+   "rows": 1,
+   "base": 49.95508283470886,
+   "tuned": 49.52145680140798
+  }
+ },
+ "peak_cuda_mib": 2780.345703125
+}

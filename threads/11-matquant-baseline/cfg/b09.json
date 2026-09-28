@@ -1,0 +1,1 @@
+[{"name": "msb_dual_g128_h1_r0.1", "l2": 1, "l4": 0.1, "group": 128, "had": true, "kind": "msb"}, {"name": "msb_dual_g128_h1_r1", "l2": 1, "l4": 1, "group": 128, "had": true, "kind": "msb"}, {"name": "msb_dual_g128_h1_r10", "l2": 1, "l4": 10, "group": 128, "had": true, "kind": "msb"}]

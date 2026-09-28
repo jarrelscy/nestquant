@@ -1,0 +1,38 @@
+{
+ "(a) native mul1 K2 tail-biting length 256": [
+  0.0683274045586586,
+  0.38714906857893605
+ ],
+ "(a) native mul1 K2 tail-biting length 64": [
+  0.07305732369422913,
+  0.6778374133229831
+ ],
+ "(a) native mul1 K2 tail-biting length 32": [
+  0.09299493581056595,
+  1.725792816463115
+ ],
+ "(a) native mul1 K4 tail-biting length 256": [
+  0.004456229507923126,
+  0.5720751539892717
+ ],
+ "(a) native mul1 K4 tail-biting length 64": [
+  0.004615969955921173,
+  0.7250293876539304
+ ],
+ "(a) native mul1 K4 tail-biting length 32": [
+  0.005482492968440056,
+  1.4721804865828352
+ ],
+ "base native K2 (256 tile)": [
+  0.0682452991604805,
+  0.3819272453759024
+ ],
+ "(b) J4 frozen native base: 4b = mul1(8b base|4b P3|4b P4)": [
+  0.0867931991815567,
+  13.46725661990246
+ ],
+ "(b) J3 frozen native base: 3b = mul1(8b base|8b P3)": [
+  0.2952003479003906,
+  12.762968389612153
+ ]
+}

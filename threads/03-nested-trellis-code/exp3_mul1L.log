@@ -1,0 +1,7 @@
+res mul1 K2 L12                               L4: mse=0.005005 +1.076 dB  {'scale': 0.9500000000000001, 'fit_s_per_1Mw': 2.9032078600721434}
+res mul1 K1 L12                               L3: mse=0.019422 +0.945 dB  {'scale': 1.1, 'fit_s_per_1Mw': 2.76120008493308}
+res mul1 K2 L16                               L4: mse=0.004729 +0.830 dB  {'scale': 1.0, 'fit_s_per_1Mw': 16.648720338707793}
+res mul1 K1 L16                               L3: mse=0.018747 +0.791 dB  {'scale': 1.1, 'fit_s_per_1Mw': 20.05289679800626}
+res mul1 K2 L20                               L4: mse=0.004678 +0.783 dB  {'scale': 1.0, 'fit_s_per_1Mw': 192.27325356041547}
+res mul1 K1 L20                               L3: mse=0.018756 +0.793 dB  {'scale': 1.1, 'fit_s_per_1Mw': 212.52660990285224}
+total s 293.08975195884705

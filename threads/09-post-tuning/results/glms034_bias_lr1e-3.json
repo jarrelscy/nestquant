@@ -1,0 +1,123 @@
+{
+ "model": "glms03",
+ "bits": 4,
+ "groups": [
+  "bias"
+ ],
+ "rank": 0,
+ "rows": 16385,
+ "held_out_rows": 1820,
+ "lr": 0.001,
+ "extra_bpw": 0.004340277777777778,
+ "init": {
+  "train": 4.307017117707676,
+  "hold": 4.899679236840961
+ },
+ "best": {
+  "epoch": 5,
+  "hold": 4.896299547506965,
+  "train": 4.297086862930625,
+  "hold_rounded": 4.896312943468825
+ },
+ "history": [
+  {
+   "epoch": 1,
+   "hold": 4.897434453758294,
+   "train": null
+  },
+  {
+   "epoch": 2,
+   "hold": 4.899752501559066,
+   "train": null
+  },
+  {
+   "epoch": 3,
+   "hold": 4.8987076973646255,
+   "train": null
+  },
+  {
+   "epoch": 4,
+   "hold": 4.8970156370020845,
+   "train": null
+  },
+  {
+   "epoch": 5,
+   "hold": 4.896299547506965,
+   "train": null
+  },
+  {
+   "epoch": 6,
+   "hold": 4.896373767915723,
+   "train": null
+  },
+  {
+   "epoch": 7,
+   "hold": 4.897266134993436,
+   "train": null
+  },
+  {
+   "epoch": 8,
+   "hold": 4.897053465916111,
+   "train": null
+  },
+  {
+   "epoch": 9,
+   "hold": 4.896699781313683,
+   "train": null
+  },
+  {
+   "epoch": 10,
+   "hold": 4.896363992609143,
+   "train": null
+  },
+  {
+   "epoch": 11,
+   "hold": 4.897429567166013,
+   "train": null
+  },
+  {
+   "epoch": 12,
+   "hold": 4.896940883312682,
+   "train": null
+  },
+  {
+   "epoch": 13,
+   "hold": 4.8971169961142476,
+   "train": null
+  }
+ ],
+ "seconds": 3.6920979022979736,
+ "eval": {
+  "pilot/all/forced": {
+   "rows": 5120,
+   "base": 9.638202922666602,
+   "tuned": 9.634047897621462
+  },
+  "pilot/all/routed": {
+   "rows": 139,
+   "base": 9.114032738988753,
+   "tuned": 9.107346696102283
+  },
+  "pilot/control/forced": {
+   "rows": 3072,
+   "base": 9.338509147501851,
+   "tuned": 9.334834888382229
+  },
+  "pilot/control/routed": {
+   "rows": 79,
+   "base": 8.576721882163065,
+   "tuned": 8.57674037274562
+  },
+  "pilot/ood/forced": {
+   "rows": 2048,
+   "base": 10.104126817785982,
+   "tuned": 10.099245373088115
+  },
+  "pilot/ood/routed": {
+   "rows": 60,
+   "base": 10.2779347575325,
+   "tuned": 10.277110925080079
+  }
+ },
+ "peak_cuda_mib": 1635.1484375
+}

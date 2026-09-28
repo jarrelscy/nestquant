@@ -1,0 +1,4198 @@
+{
+ "exl3_2": {
+  "table": {
+   "all/forced": 40.011,
+   "all/routed": 37.411,
+   "control/forced": 38.341,
+   "control/routed": 34.934,
+   "ood/forced": 42.572,
+   "ood/routed": 42.757
+  },
+  "proxy": {
+   "gate": 0.009385882579437841,
+   "up": 0.009705498694626747,
+   "down": 0.016195089157648182
+  },
+  "meta": null
+ },
+ "exl3_4": {
+  "table": {
+   "all/forced": 10.457,
+   "all/routed": 9.736,
+   "control/forced": 10.004,
+   "control/routed": 9.058,
+   "ood/forced": 11.152,
+   "ood/routed": 11.181
+  },
+  "proxy": {
+   "gate": 0.0005630540245016489,
+   "up": 0.0005817415294742925,
+   "down": 0.0010016500028007665
+  },
+  "meta": null
+ },
+ "nvfp4": {
+  "table": {
+   "all/forced": 12.779,
+   "all/routed": 12.287,
+   "control/forced": 12.818,
+   "control/routed": 12.074,
+   "ood/forced": 12.714,
+   "ood/routed": 12.781
+  },
+  "proxy": {
+   "gate": 0.004657745418212503,
+   "up": 0.004807711021041434,
+   "down": 0.004890611739519054
+  },
+  "meta": null
+ },
+ "centre_dual_g128_h0_n2@2": {
+  "table": {
+   "all/forced": 51.974,
+   "all/routed": 49.202,
+   "control/forced": 49.941,
+   "control/routed": 46.205,
+   "ood/forced": 55.104,
+   "ood/routed": 55.715
+  },
+  "proxy": {
+   "gate": 0.016782844056287882,
+   "up": 0.017333511497728122,
+   "down": 0.029735484240533183
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.8,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_n2@4": {
+  "table": {
+   "all/forced": 26.589,
+   "all/routed": 25.106,
+   "control/forced": 25.512,
+   "control/routed": 23.497,
+   "ood/forced": 28.245,
+   "ood/routed": 28.592
+  },
+  "proxy": {
+   "gate": 0.005118290111627206,
+   "up": 0.0052832271972174496,
+   "down": 0.007781596031218376
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.8,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r0.1@2": {
+  "table": {
+   "all/forced": 51.74,
+   "all/routed": 48.839,
+   "control/forced": 49.711,
+   "control/routed": 45.867,
+   "ood/forced": 54.862,
+   "ood/routed": 55.299
+  },
+  "proxy": {
+   "gate": 0.01688105758575567,
+   "up": 0.017402497833252845,
+   "down": 0.029811025163781715
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.6,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r0.1@4": {
+  "table": {
+   "all/forced": 26.038,
+   "all/routed": 24.59,
+   "control/forced": 24.978,
+   "control/routed": 23.068,
+   "ood/forced": 27.667,
+   "ood/routed": 27.901
+  },
+  "proxy": {
+   "gate": 0.004873331514755451,
+   "up": 0.005033197580282557,
+   "down": 0.007438778745346212
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.6,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r0.3@2": {
+  "table": {
+   "all/forced": 51.383,
+   "all/routed": 48.669,
+   "control/forced": 49.451,
+   "control/routed": 45.841,
+   "ood/forced": 54.364,
+   "ood/routed": 54.84
+  },
+  "proxy": {
+   "gate": 0.017088956565823443,
+   "up": 0.01764525723272586,
+   "down": 0.030127546264231402
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.7,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r0.3@4": {
+  "table": {
+   "all/forced": 25.076,
+   "all/routed": 23.623,
+   "control/forced": 24.064,
+   "control/routed": 22.122,
+   "ood/forced": 26.631,
+   "ood/routed": 26.872
+  },
+  "proxy": {
+   "gate": 0.0044690496888403495,
+   "up": 0.0046010080706349946,
+   "down": 0.006896475424495128
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.7,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r1@2": {
+  "table": {
+   "all/forced": 50.675,
+   "all/routed": 47.914,
+   "control/forced": 48.876,
+   "control/routed": 45.213,
+   "ood/forced": 53.456,
+   "ood/routed": 53.824
+  },
+  "proxy": {
+   "gate": 0.018332053179059143,
+   "up": 0.018924728681669892,
+   "down": 0.03172375961851694
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r1@4": {
+  "table": {
+   "all/forced": 22.824,
+   "all/routed": 21.52,
+   "control/forced": 21.902,
+   "control/routed": 20.188,
+   "ood/forced": 24.241,
+   "ood/routed": 24.412
+  },
+  "proxy": {
+   "gate": 0.0036216597942966317,
+   "up": 0.0037269728817573814,
+   "down": 0.005659751671002546
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r3@2": {
+  "table": {
+   "all/forced": 50.364,
+   "all/routed": 47.913,
+   "control/forced": 48.907,
+   "control/routed": 45.521,
+   "ood/forced": 52.636,
+   "ood/routed": 53.193
+  },
+  "proxy": {
+   "gate": 0.022808940785149834,
+   "up": 0.023539379668869462,
+   "down": 0.03767534239945615
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 8.2,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r3@4": {
+  "table": {
+   "all/forced": 19.71,
+   "all/routed": 18.58,
+   "control/forced": 18.953,
+   "control/routed": 17.399,
+   "ood/forced": 20.877,
+   "ood/routed": 21.141
+  },
+  "proxy": {
+   "gate": 0.0026258468561563358,
+   "up": 0.002708390086958773,
+   "down": 0.0042106206779740606
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 8.2,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r10@2": {
+  "table": {
+   "all/forced": 51.771,
+   "all/routed": 49.3,
+   "control/forced": 50.8,
+   "control/routed": 47.329,
+   "ood/forced": 53.305,
+   "ood/routed": 53.718
+  },
+  "proxy": {
+   "gate": 0.037420495166298993,
+   "up": 0.03851224724493359,
+   "down": 0.0562927096697877
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.7,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r10@4": {
+  "table": {
+   "all/forced": 16.637,
+   "all/routed": 15.632,
+   "control/forced": 15.985,
+   "control/routed": 14.649,
+   "ood/forced": 17.64,
+   "ood/routed": 17.762
+  },
+  "proxy": {
+   "gate": 0.0017301199886173874,
+   "up": 0.001786683075451486,
+   "down": 0.0029007663362641996
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.7,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r30@2": {
+  "table": {
+   "all/forced": 54.481,
+   "all/routed": 52.261,
+   "control/forced": 54.094,
+   "control/routed": 50.778,
+   "ood/forced": 55.102,
+   "ood/routed": 55.641
+  },
+  "proxy": {
+   "gate": 0.06146202952629434,
+   "up": 0.06332362777013438,
+   "down": 0.08433906593281748
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.6,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_r30@4": {
+  "table": {
+   "all/forced": 15.267,
+   "all/routed": 14.304,
+   "control/forced": 14.647,
+   "control/routed": 13.376,
+   "ood/forced": 16.22,
+   "ood/routed": 16.309
+  },
+  "proxy": {
+   "gate": 0.0012866776037824823,
+   "up": 0.0013276399086141596,
+   "down": 0.002290498886739061
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.6,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_n4@2": {
+  "table": {
+   "all/forced": 58.741,
+   "all/routed": 56.615,
+   "control/forced": 58.963,
+   "control/routed": 55.716,
+   "ood/forced": 58.379,
+   "ood/routed": 58.709
+  },
+  "proxy": {
+   "gate": 0.10165501748389927,
+   "up": 0.10455215205732195,
+   "down": 0.12484216784684136
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.6,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g128_h0_n4@4": {
+  "table": {
+   "all/forced": 14.812,
+   "all/routed": 13.972,
+   "control/forced": 14.186,
+   "control/routed": 13.038,
+   "ood/forced": 15.771,
+   "ood/routed": 15.979
+  },
+  "proxy": {
+   "gate": 0.0011149237374599359,
+   "up": 0.0011507286638144543,
+   "down": 0.0020738669873450236
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": false
+   },
+   "seconds": 7.6,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_dual_g64_h0_n2@2": {
+  "table": {
+   "all/forced": 50.288,
+   "all/routed": 47.552,
+   "control/forced": 48.351,
+   "control/routed": 44.653,
+   "ood/forced": 53.272,
+   "ood/routed": 53.848
+  },
+  "proxy": {
+   "gate": 0.015584933300656587,
+   "up": 0.016098562355685065,
+   "down": 0.02770247209694368
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 10.3,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_n2@4": {
+  "table": {
+   "all/forced": 24.722,
+   "all/routed": 23.264,
+   "control/forced": 23.754,
+   "control/routed": 21.776,
+   "ood/forced": 26.213,
+   "ood/routed": 26.487
+  },
+  "proxy": {
+   "gate": 0.004614634521744135,
+   "up": 0.004790506047317135,
+   "down": 0.006891065455798267
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 10.3,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r0.1@2": {
+  "table": {
+   "all/forced": 50.044,
+   "all/routed": 47.148,
+   "control/forced": 48.146,
+   "control/routed": 44.364,
+   "ood/forced": 52.97,
+   "ood/routed": 53.214
+  },
+  "proxy": {
+   "gate": 0.015659190401125914,
+   "up": 0.0161651442443998,
+   "down": 0.0277770917141476
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.7,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r0.1@4": {
+  "table": {
+   "all/forced": 24.163,
+   "all/routed": 22.746,
+   "control/forced": 23.22,
+   "control/routed": 21.351,
+   "ood/forced": 25.614,
+   "ood/routed": 25.776
+  },
+  "proxy": {
+   "gate": 0.004384579913510389,
+   "up": 0.004507937140330134,
+   "down": 0.006558736918481664
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.7,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r0.3@2": {
+  "table": {
+   "all/forced": 49.701,
+   "all/routed": 46.979,
+   "control/forced": 47.823,
+   "control/routed": 44.08,
+   "ood/forced": 52.597,
+   "ood/routed": 53.272
+  },
+  "proxy": {
+   "gate": 0.015876458201562374,
+   "up": 0.016407386947970833,
+   "down": 0.028069899473428438
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.7,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r0.3@4": {
+  "table": {
+   "all/forced": 23.24,
+   "all/routed": 21.86,
+   "control/forced": 22.325,
+   "control/routed": 20.513,
+   "ood/forced": 24.648,
+   "ood/routed": 24.788
+  },
+  "proxy": {
+   "gate": 0.003984197072385443,
+   "up": 0.004125548468149527,
+   "down": 0.006035157667426892
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.7,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r1@2": {
+  "table": {
+   "all/forced": 48.894,
+   "all/routed": 46.212,
+   "control/forced": 47.174,
+   "control/routed": 43.536,
+   "ood/forced": 51.555,
+   "ood/routed": 52.053
+  },
+  "proxy": {
+   "gate": 0.01706960437036517,
+   "up": 0.017617607770309,
+   "down": 0.02956483528693002
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.6,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r1@4": {
+  "table": {
+   "all/forced": 21.024,
+   "all/routed": 19.771,
+   "control/forced": 20.212,
+   "control/routed": 18.567,
+   "ood/forced": 22.275,
+   "ood/routed": 22.388
+  },
+  "proxy": {
+   "gate": 0.0031807631826643243,
+   "up": 0.00328511906594972,
+   "down": 0.004900553238130978
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.6,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r3@2": {
+  "table": {
+   "all/forced": 48.312,
+   "all/routed": 45.644,
+   "control/forced": 46.88,
+   "control/routed": 43.276,
+   "ood/forced": 50.544,
+   "ood/routed": 50.859
+  },
+  "proxy": {
+   "gate": 0.02114068314155131,
+   "up": 0.021845972971902425,
+   "down": 0.03490239900423699
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.8,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r3@4": {
+  "table": {
+   "all/forced": 18.109,
+   "all/routed": 16.983,
+   "control/forced": 17.396,
+   "control/routed": 15.94,
+   "ood/forced": 19.206,
+   "ood/routed": 19.25
+  },
+  "proxy": {
+   "gate": 0.002266319358601978,
+   "up": 0.0023435413757681074,
+   "down": 0.0035946451295617832
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.8,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r10@2": {
+  "table": {
+   "all/forced": 48.809,
+   "all/routed": 46.427,
+   "control/forced": 47.873,
+   "control/routed": 44.597,
+   "ood/forced": 50.286,
+   "ood/routed": 50.528
+  },
+  "proxy": {
+   "gate": 0.03387754988190858,
+   "up": 0.034841186316804953,
+   "down": 0.050820709790122105
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.8,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r10@4": {
+  "table": {
+   "all/forced": 15.317,
+   "all/routed": 14.39,
+   "control/forced": 14.708,
+   "control/routed": 13.49,
+   "ood/forced": 16.253,
+   "ood/routed": 16.341
+  },
+  "proxy": {
+   "gate": 0.0014719190557129869,
+   "up": 0.001519214519918198,
+   "down": 0.002448588916552125
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.8,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r30@2": {
+  "table": {
+   "all/forced": 50.459,
+   "all/routed": 48.425,
+   "control/forced": 50.035,
+   "control/routed": 47.101,
+   "ood/forced": 51.138,
+   "ood/routed": 51.452
+  },
+  "proxy": {
+   "gate": 0.05384927557704908,
+   "up": 0.05578570787035732,
+   "down": 0.07420346521712377
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.8,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_r30@4": {
+  "table": {
+   "all/forced": 14.08,
+   "all/routed": 13.216,
+   "control/forced": 13.497,
+   "control/routed": 12.332,
+   "ood/forced": 14.974,
+   "ood/routed": 15.126
+  },
+  "proxy": {
+   "gate": 0.0010876163733716453,
+   "up": 0.0011234400940818728,
+   "down": 0.0019363097167494877
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.8,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_n4@2": {
+  "table": {
+   "all/forced": 53.504,
+   "all/routed": 51.758,
+   "control/forced": 53.692,
+   "control/routed": 50.885,
+   "ood/forced": 53.198,
+   "ood/routed": 53.79
+  },
+  "proxy": {
+   "gate": 0.08794401855354672,
+   "up": 0.09046861879636028,
+   "down": 0.1075280977502936
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.7,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g64_h0_n4@4": {
+  "table": {
+   "all/forced": 13.658,
+   "all/routed": 12.843,
+   "control/forced": 13.078,
+   "control/routed": 11.971,
+   "ood/forced": 14.547,
+   "ood/routed": 14.714
+  },
+  "proxy": {
+   "gate": 0.0009416471811719066,
+   "up": 0.000972934956252707,
+   "down": 0.0017555135973270138
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 64,
+    "had": false
+   },
+   "seconds": 9.7,
+   "bpw2": 2.5,
+   "bpw4": 4.5
+  }
+ },
+ "centre_dual_g128_h1_n2@2": {
+  "table": {
+   "all/forced": 51.33,
+   "all/routed": 48.229,
+   "control/forced": 49.298,
+   "control/routed": 45.15,
+   "ood/forced": 54.455,
+   "ood/routed": 54.887
+  },
+  "proxy": {
+   "gate": 0.016704471877557775,
+   "up": 0.017232239068605524,
+   "down": 0.027821267332104754
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 8.7,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n2@4": {
+  "table": {
+   "all/forced": 26.198,
+   "all/routed": 24.525,
+   "control/forced": 25.12,
+   "control/routed": 22.878,
+   "ood/forced": 27.854,
+   "ood/routed": 28.075
+  },
+  "proxy": {
+   "gate": 0.005081976176101406,
+   "up": 0.0052433928728125665,
+   "down": 0.0069753250060846615
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 8.7,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r0.1@2": {
+  "table": {
+   "all/forced": 51.161,
+   "all/routed": 48.077,
+   "control/forced": 49.084,
+   "control/routed": 44.978,
+   "ood/forced": 54.353,
+   "ood/routed": 54.778
+  },
+  "proxy": {
+   "gate": 0.016763390983156063,
+   "up": 0.017307702168178216,
+   "down": 0.027875455394969603
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r0.1@4": {
+  "table": {
+   "all/forced": 25.673,
+   "all/routed": 24.089,
+   "control/forced": 24.603,
+   "control/routed": 22.509,
+   "ood/forced": 27.314,
+   "ood/routed": 27.496
+  },
+  "proxy": {
+   "gate": 0.0048232753112593015,
+   "up": 0.004989983286831862,
+   "down": 0.0066889098226241995
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r0.3@2": {
+  "table": {
+   "all/forced": 50.791,
+   "all/routed": 47.758,
+   "control/forced": 48.793,
+   "control/routed": 44.624,
+   "ood/forced": 53.867,
+   "ood/routed": 54.52
+  },
+  "proxy": {
+   "gate": 0.01700009606191655,
+   "up": 0.01754505535071353,
+   "down": 0.028145276469375126
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r0.3@4": {
+  "table": {
+   "all/forced": 24.731,
+   "all/routed": 23.166,
+   "control/forced": 23.7,
+   "control/routed": 21.622,
+   "ood/forced": 26.312,
+   "ood/routed": 26.49
+  },
+  "proxy": {
+   "gate": 0.00444390925188198,
+   "up": 0.0045678650375802965,
+   "down": 0.006194768465323106
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r1@2": {
+  "table": {
+   "all/forced": 50.118,
+   "all/routed": 47.228,
+   "control/forced": 48.312,
+   "control/routed": 44.303,
+   "ood/forced": 52.91,
+   "ood/routed": 53.574
+  },
+  "proxy": {
+   "gate": 0.018232237543860847,
+   "up": 0.018828160521986766,
+   "down": 0.029543022053756397
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r1@4": {
+  "table": {
+   "all/forced": 22.525,
+   "all/routed": 21.157,
+   "control/forced": 21.616,
+   "control/routed": 19.759,
+   "ood/forced": 23.921,
+   "ood/routed": 24.18
+  },
+  "proxy": {
+   "gate": 0.0035865715465538913,
+   "up": 0.0037122655532974102,
+   "down": 0.005161955859647484
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3@2": {
+  "table": {
+   "all/forced": 49.943,
+   "all/routed": 47.116,
+   "control/forced": 48.411,
+   "control/routed": 44.477,
+   "ood/forced": 52.326,
+   "ood/routed": 52.891
+  },
+  "proxy": {
+   "gate": 0.022745175916798848,
+   "up": 0.023471985826836236,
+   "down": 0.03483652402536769
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3@4": {
+  "table": {
+   "all/forced": 19.523,
+   "all/routed": 18.268,
+   "control/forced": 18.721,
+   "control/routed": 17.027,
+   "ood/forced": 20.754,
+   "ood/routed": 20.936
+  },
+  "proxy": {
+   "gate": 0.0026098297346527815,
+   "up": 0.002696882272529471,
+   "down": 0.0038811813392991184
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r10@2": {
+  "table": {
+   "all/forced": 51.482,
+   "all/routed": 48.936,
+   "control/forced": 50.473,
+   "control/routed": 46.824,
+   "ood/forced": 53.073,
+   "ood/routed": 53.648
+  },
+  "proxy": {
+   "gate": 0.03726435080729683,
+   "up": 0.038647691139800815,
+   "down": 0.052373917314866916
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r10@4": {
+  "table": {
+   "all/forced": 16.499,
+   "all/routed": 15.441,
+   "control/forced": 15.83,
+   "control/routed": 14.41,
+   "ood/forced": 17.527,
+   "ood/routed": 17.657
+  },
+  "proxy": {
+   "gate": 0.0017209873622793792,
+   "up": 0.0017770835445524717,
+   "down": 0.00271833160214405
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r30@2": {
+  "table": {
+   "all/forced": 54.361,
+   "all/routed": 52.062,
+   "control/forced": 53.915,
+   "control/routed": 50.582,
+   "ood/forced": 55.076,
+   "ood/routed": 55.441
+  },
+  "proxy": {
+   "gate": 0.061009837470095064,
+   "up": 0.06365591169348603,
+   "down": 0.08068456382092101
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.7,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r30@4": {
+  "table": {
+   "all/forced": 15.089,
+   "all/routed": 14.078,
+   "control/forced": 14.459,
+   "control/routed": 13.122,
+   "ood/forced": 16.057,
+   "ood/routed": 16.133
+  },
+  "proxy": {
+   "gate": 0.0012772538842440865,
+   "up": 0.0013197879944266216,
+   "down": 0.002155449944051996
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.7,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4@2": {
+  "table": {
+   "all/forced": 58.712,
+   "all/routed": 56.707,
+   "control/forced": 58.768,
+   "control/routed": 55.584,
+   "ood/forced": 58.621,
+   "ood/routed": 59.31
+  },
+  "proxy": {
+   "gate": 0.10058119292211463,
+   "up": 0.10454860304440963,
+   "down": 0.12407545628166067
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4@4": {
+  "table": {
+   "all/forced": 14.632,
+   "all/routed": 13.675,
+   "control/forced": 14.011,
+   "control/routed": 12.749,
+   "ood/forced": 15.585,
+   "ood/routed": 15.67
+  },
+  "proxy": {
+   "gate": 0.0011071363626727782,
+   "up": 0.0011430701383785358,
+   "down": 0.0019473721760940599
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": true
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g64_h1_n2@2": {
+  "table": {
+   "all/forced": 49.775,
+   "all/routed": 46.763,
+   "control/forced": 47.769,
+   "control/routed": 43.733,
+   "ood/forced": 52.859,
+   "ood/routed": 53.309
+  },
+  "proxy": {
+   "gate": 0.01551078382314663,
+   "up": 0.01601390959691395,
+   "down": 0.02595207326563962
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 11.1,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_n2@4": {
+  "table": {
+   "all/forced": 24.388,
+   "all/routed": 22.885,
+   "control/forced": 23.412,
+   "control/routed": 21.419,
+   "ood/forced": 25.89,
+   "ood/routed": 26.059
+  },
+  "proxy": {
+   "gate": 0.00460885435710045,
+   "up": 0.004742358812567891,
+   "down": 0.006149325157351351
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 11.1,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r0.1@2": {
+  "table": {
+   "all/forced": 49.547,
+   "all/routed": 46.551,
+   "control/forced": 47.555,
+   "control/routed": 43.534,
+   "ood/forced": 52.61,
+   "ood/routed": 53.07
+  },
+  "proxy": {
+   "gate": 0.015580962515072481,
+   "up": 0.016096335702879848,
+   "down": 0.02602450042711659
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.2,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r0.1@4": {
+  "table": {
+   "all/forced": 23.868,
+   "all/routed": 22.3,
+   "control/forced": 22.88,
+   "control/routed": 20.793,
+   "ood/forced": 25.385,
+   "ood/routed": 25.542
+  },
+  "proxy": {
+   "gate": 0.0043604224473858715,
+   "up": 0.004509136933514694,
+   "down": 0.00587263683459247
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.2,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r0.3@2": {
+  "table": {
+   "all/forced": 49.17,
+   "all/routed": 46.377,
+   "control/forced": 47.263,
+   "control/routed": 43.473,
+   "ood/forced": 52.108,
+   "ood/routed": 52.675
+  },
+  "proxy": {
+   "gate": 0.01581135773800637,
+   "up": 0.016335973725964403,
+   "down": 0.02628592063113529
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.2,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r0.3@4": {
+  "table": {
+   "all/forced": 22.938,
+   "all/routed": 21.596,
+   "control/forced": 22.005,
+   "control/routed": 20.156,
+   "ood/forced": 24.373,
+   "ood/routed": 24.698
+  },
+  "proxy": {
+   "gate": 0.003974346906183336,
+   "up": 0.004086207169785073,
+   "down": 0.005429822455885726
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.2,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r1@2": {
+  "table": {
+   "all/forced": 48.449,
+   "all/routed": 45.699,
+   "control/forced": 46.689,
+   "control/routed": 42.921,
+   "ood/forced": 51.168,
+   "ood/routed": 51.74
+  },
+  "proxy": {
+   "gate": 0.016994354665517603,
+   "up": 0.01754440796235319,
+   "down": 0.027594562042787155
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r1@4": {
+  "table": {
+   "all/forced": 20.769,
+   "all/routed": 19.48,
+   "control/forced": 19.943,
+   "control/routed": 18.176,
+   "ood/forced": 22.039,
+   "ood/routed": 22.291
+  },
+  "proxy": {
+   "gate": 0.0031660095624453,
+   "up": 0.003273129462366211,
+   "down": 0.004451133799489324
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r3@2": {
+  "table": {
+   "all/forced": 47.879,
+   "all/routed": 45.295,
+   "control/forced": 46.438,
+   "control/routed": 42.87,
+   "ood/forced": 50.122,
+   "ood/routed": 50.623
+  },
+  "proxy": {
+   "gate": 0.021041525607877296,
+   "up": 0.021802275392459537,
+   "down": 0.03231521302966119
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 11.0,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r3@4": {
+  "table": {
+   "all/forced": 17.905,
+   "all/routed": 16.754,
+   "control/forced": 17.208,
+   "control/routed": 15.65,
+   "ood/forced": 18.978,
+   "ood/routed": 19.13
+  },
+  "proxy": {
+   "gate": 0.0022582811129000808,
+   "up": 0.0023356343306711004,
+   "down": 0.0033069498951674063
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 11.0,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r10@2": {
+  "table": {
+   "all/forced": 48.495,
+   "all/routed": 46.188,
+   "control/forced": 47.585,
+   "control/routed": 44.246,
+   "ood/forced": 49.931,
+   "ood/routed": 50.522
+  },
+  "proxy": {
+   "gate": 0.03361493471272568,
+   "up": 0.03476170921358345,
+   "down": 0.04721984879562402
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r10@4": {
+  "table": {
+   "all/forced": 15.166,
+   "all/routed": 14.159,
+   "control/forced": 14.548,
+   "control/routed": 13.151,
+   "ood/forced": 16.114,
+   "ood/routed": 16.323
+  },
+  "proxy": {
+   "gate": 0.001465415381143884,
+   "up": 0.0015129054869949142,
+   "down": 0.002295818875011221
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r30@2": {
+  "table": {
+   "all/forced": 50.263,
+   "all/routed": 48.28,
+   "control/forced": 49.834,
+   "control/routed": 46.91,
+   "ood/forced": 50.95,
+   "ood/routed": 51.403
+  },
+  "proxy": {
+   "gate": 0.05387032372088485,
+   "up": 0.05529475565521553,
+   "down": 0.07063190277676075
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_r30@4": {
+  "table": {
+   "all/forced": 13.92,
+   "all/routed": 12.985,
+   "control/forced": 13.328,
+   "control/routed": 12.073,
+   "ood/forced": 14.827,
+   "ood/routed": 14.944
+  },
+  "proxy": {
+   "gate": 0.0010839381314040584,
+   "up": 0.0011180799809626157,
+   "down": 0.0018222376836915838
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_n4@2": {
+  "table": {
+   "all/forced": 53.429,
+   "all/routed": 51.913,
+   "control/forced": 53.53,
+   "control/routed": 51.005,
+   "ood/forced": 53.264,
+   "ood/routed": 54.025
+  },
+  "proxy": {
+   "gate": 0.08740019405893822,
+   "up": 0.08906533748216,
+   "down": 0.10738592406366931
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_dual_g64_h1_n4@4": {
+  "table": {
+   "all/forced": 13.499,
+   "all/routed": 12.61,
+   "control/forced": 12.92,
+   "control/routed": 11.725,
+   "ood/forced": 14.386,
+   "ood/routed": 14.507
+  },
+  "proxy": {
+   "gate": 0.000937093984833139,
+   "up": 0.0009681653954083549,
+   "down": 0.0016483517346389132
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 64,
+    "had": true
+   },
+   "seconds": 10.9,
+   "bpw2": 2.5006510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "centre_shared_g128_h0_r0.1@2": {
+  "table": {
+   "all/forced": 51.44,
+   "all/routed": 48.514,
+   "control/forced": 49.573,
+   "control/routed": 45.725,
+   "ood/forced": 54.324,
+   "ood/routed": 54.605
+  },
+  "proxy": {
+   "gate": 0.01790448287824973,
+   "up": 0.01848531656286103,
+   "down": 0.031084583046471412
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 8.0,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r0.1@4": {
+  "table": {
+   "all/forced": 40.001,
+   "all/routed": 38.782,
+   "control/forced": 40.154,
+   "control/routed": 38.245,
+   "ood/forced": 39.751,
+   "ood/routed": 40.037
+  },
+  "proxy": {
+   "gate": 0.05246624478968104,
+   "up": 0.05406142504890002,
+   "down": 0.057704144336770645
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 8.0,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r0.3@2": {
+  "table": {
+   "all/forced": 50.288,
+   "all/routed": 47.664,
+   "control/forced": 48.577,
+   "control/routed": 45.041,
+   "ood/forced": 52.94,
+   "ood/routed": 53.41
+  },
+  "proxy": {
+   "gate": 0.020961249349070073,
+   "up": 0.021698698882291312,
+   "down": 0.03446020388932621
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r0.3@4": {
+  "table": {
+   "all/forced": 35.226,
+   "all/routed": 34.147,
+   "control/forced": 35.113,
+   "control/routed": 33.343,
+   "ood/forced": 35.41,
+   "ood/routed": 35.995
+  },
+  "proxy": {
+   "gate": 0.03764737155322699,
+   "up": 0.039265634436010395,
+   "down": 0.04254054779879402
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r1@2": {
+  "table": {
+   "all/forced": 49.479,
+   "all/routed": 47.114,
+   "control/forced": 48.288,
+   "control/routed": 45.125,
+   "ood/forced": 51.346,
+   "ood/routed": 51.556
+  },
+  "proxy": {
+   "gate": 0.03373997053747536,
+   "up": 0.034916966428974225,
+   "down": 0.04857889705603575
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r1@4": {
+  "table": {
+   "all/forced": 26.647,
+   "all/routed": 25.579,
+   "control/forced": 26.232,
+   "control/routed": 24.651,
+   "ood/forced": 27.305,
+   "ood/routed": 27.672
+  },
+  "proxy": {
+   "gate": 0.01704198330326716,
+   "up": 0.01765284501738548,
+   "down": 0.0199865025419821
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r3@2": {
+  "table": {
+   "all/forced": 51.123,
+   "all/routed": 49.099,
+   "control/forced": 50.523,
+   "control/routed": 47.658,
+   "ood/forced": 52.08,
+   "ood/routed": 52.379
+  },
+  "proxy": {
+   "gate": 0.0568769638554991,
+   "up": 0.05823911890599899,
+   "down": 0.07377507512160665
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r3@4": {
+  "table": {
+   "all/forced": 19.483,
+   "all/routed": 18.468,
+   "control/forced": 18.909,
+   "control/routed": 17.501,
+   "ood/forced": 20.377,
+   "ood/routed": 20.598
+  },
+  "proxy": {
+   "gate": 0.005545620322369397,
+   "up": 0.005668294940284022,
+   "down": 0.007079437570398988
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r10@2": {
+  "table": {
+   "all/forced": 54.833,
+   "all/routed": 52.745,
+   "control/forced": 54.737,
+   "control/routed": 51.68,
+   "ood/forced": 54.99,
+   "ood/routed": 55.208
+  },
+  "proxy": {
+   "gate": 0.08090418530751896,
+   "up": 0.08338022625889639,
+   "down": 0.10105738183055422
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r10@4": {
+  "table": {
+   "all/forced": 15.837,
+   "all/routed": 14.914,
+   "control/forced": 15.208,
+   "control/routed": 13.984,
+   "ood/forced": 16.803,
+   "ood/routed": 16.925
+  },
+  "proxy": {
+   "gate": 0.0017826852710047423,
+   "up": 0.0018415062346252597,
+   "down": 0.0028596726886290615
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r30@2": {
+  "table": {
+   "all/forced": 57.053,
+   "all/routed": 55.012,
+   "control/forced": 57.146,
+   "control/routed": 54.067,
+   "ood/forced": 56.903,
+   "ood/routed": 57.195
+  },
+  "proxy": {
+   "gate": 0.09295885485997409,
+   "up": 0.09589526334108138,
+   "down": 0.11572423442555829
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "centre_shared_g128_h0_r30@4": {
+  "table": {
+   "all/forced": 15.089,
+   "all/routed": 14.177,
+   "control/forced": 14.459,
+   "control/routed": 13.224,
+   "ood/forced": 16.055,
+   "ood/routed": 16.232
+  },
+  "proxy": {
+   "gate": 0.0012177516864094607,
+   "up": 0.0012579982031894392,
+   "down": 0.002206988325801221
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false,
+    "feedback": "shared"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "msb_dual_g128_h0_r0.1@2": {
+  "table": {
+   "all/forced": 54.484,
+   "all/routed": 51.282,
+   "control/forced": 52.411,
+   "control/routed": 48.265,
+   "ood/forced": 57.681,
+   "ood/routed": 57.86
+  },
+  "proxy": {
+   "gate": 0.019276609688027194,
+   "up": 0.019881414949464812,
+   "down": 0.03395400083421194
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "kind": "msb"
+   },
+   "seconds": 7.3,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "msb_dual_g128_h0_r0.1@4": {
+  "table": {
+   "all/forced": 43.625,
+   "all/routed": 41.38,
+   "control/forced": 41.039,
+   "control/routed": 37.418,
+   "ood/forced": 47.512,
+   "ood/routed": 49.584
+  },
+  "proxy": {
+   "gate": 0.013230128004687314,
+   "up": 0.013647101122295358,
+   "down": 0.020231320721345196
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "kind": "msb"
+   },
+   "seconds": 7.3,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "msb_dual_g128_h0_r1@2": {
+  "table": {
+   "all/forced": 56.047,
+   "all/routed": 51.284,
+   "control/forced": 54.923,
+   "control/routed": 48.686,
+   "ood/forced": 57.82,
+   "ood/routed": 57.019
+  },
+  "proxy": {
+   "gate": 0.023367325005404515,
+   "up": 0.024111905011933634,
+   "down": 0.039493668063157635
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "msb"
+   },
+   "seconds": 7.0,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "msb_dual_g128_h0_r1@4": {
+  "table": {
+   "all/forced": 33.878,
+   "all/routed": 31.688,
+   "control/forced": 32.423,
+   "control/routed": 29.39,
+   "ood/forced": 36.107,
+   "ood/routed": 36.604
+  },
+  "proxy": {
+   "gate": 0.008097838507259801,
+   "up": 0.008377531918311526,
+   "down": 0.012944351695547774
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "msb"
+   },
+   "seconds": 7.0,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "msb_dual_g128_h0_r10@2": {
+  "table": {
+   "all/forced": 180.026,
+   "all/routed": 114.626,
+   "control/forced": 198.136,
+   "control/routed": 97.681,
+   "ood/forced": 146.057,
+   "ood/routed": 147.431
+  },
+  "proxy": {
+   "gate": 0.06784394247115592,
+   "up": 0.06996425717013645,
+   "down": 0.10238429309463447
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "kind": "msb"
+   },
+   "seconds": 7.0,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "msb_dual_g128_h0_r10@4": {
+  "table": {
+   "all/forced": 20.467,
+   "all/routed": 19.148,
+   "control/forced": 19.666,
+   "control/routed": 17.907,
+   "ood/forced": 21.7,
+   "ood/routed": 21.831
+  },
+  "proxy": {
+   "gate": 0.002660277778743899,
+   "up": 0.0027474510728292796,
+   "down": 0.004518207009597325
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "kind": "msb"
+   },
+   "seconds": 7.0,
+   "bpw2": 2.25,
+   "bpw4": 4.25
+  }
+ },
+ "nu_dual_g128_h0_n2@2": {
+  "table": {
+   "all/forced": 51.534,
+   "all/routed": 48.7,
+   "control/forced": 49.5,
+   "control/routed": 45.658,
+   "ood/forced": 54.662,
+   "ood/routed": 55.295
+  },
+  "proxy": {
+   "gate": 0.016572397123162642,
+   "up": 0.017109893335006263,
+   "down": 0.029267262079681187
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 17.6,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_n2@4": {
+  "table": {
+   "all/forced": 25.407,
+   "all/routed": 23.974,
+   "control/forced": 24.626,
+   "control/routed": 22.639,
+   "ood/forced": 26.621,
+   "ood/routed": 26.903
+  },
+  "proxy": {
+   "gate": 0.0059248158801960635,
+   "up": 0.006088814070181017,
+   "down": 0.008201880466286029
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 17.6,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r0.1@2": {
+  "table": {
+   "all/forced": 51.11,
+   "all/routed": 48.295,
+   "control/forced": 49.117,
+   "control/routed": 45.376,
+   "ood/forced": 54.179,
+   "ood/routed": 54.648
+  },
+  "proxy": {
+   "gate": 0.0166862286764498,
+   "up": 0.01725241060760906,
+   "down": 0.02941756447568291
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.3,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r0.1@4": {
+  "table": {
+   "all/forced": 24.708,
+   "all/routed": 23.226,
+   "control/forced": 23.97,
+   "control/routed": 21.89,
+   "ood/forced": 25.856,
+   "ood/routed": 26.14
+  },
+  "proxy": {
+   "gate": 0.0055207345478935545,
+   "up": 0.005677225742957706,
+   "down": 0.007727997258029296
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.3,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r0.3@2": {
+  "table": {
+   "all/forced": 50.549,
+   "all/routed": 47.791,
+   "control/forced": 48.636,
+   "control/routed": 44.903,
+   "ood/forced": 53.498,
+   "ood/routed": 54.076
+  },
+  "proxy": {
+   "gate": 0.01706889881230408,
+   "up": 0.017631876997434588,
+   "down": 0.029821870761459562
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r0.3@4": {
+  "table": {
+   "all/forced": 23.713,
+   "all/routed": 22.313,
+   "control/forced": 22.972,
+   "control/routed": 21.123,
+   "ood/forced": 24.865,
+   "ood/routed": 24.937
+  },
+  "proxy": {
+   "gate": 0.004924755184243071,
+   "up": 0.005069130670694065,
+   "down": 0.0069528773443101495
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r1@2": {
+  "table": {
+   "all/forced": 49.363,
+   "all/routed": 46.893,
+   "control/forced": 47.645,
+   "control/routed": 44.276,
+   "ood/forced": 52.022,
+   "ood/routed": 52.622
+  },
+  "proxy": {
+   "gate": 0.018695271785123948,
+   "up": 0.019307015604519265,
+   "down": 0.03180572293828138
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r1@4": {
+  "table": {
+   "all/forced": 21.329,
+   "all/routed": 20.084,
+   "control/forced": 20.639,
+   "control/routed": 18.968,
+   "ood/forced": 22.4,
+   "ood/routed": 22.528
+  },
+  "proxy": {
+   "gate": 0.0037384875168465274,
+   "up": 0.00386413512667801,
+   "down": 0.005447930132204239
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r3@2": {
+  "table": {
+   "all/forced": 48.312,
+   "all/routed": 46.104,
+   "control/forced": 46.919,
+   "control/routed": 43.767,
+   "ood/forced": 50.484,
+   "ood/routed": 51.263
+  },
+  "proxy": {
+   "gate": 0.023930560790866882,
+   "up": 0.024730450986263874,
+   "down": 0.03822563164165321
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r3@4": {
+  "table": {
+   "all/forced": 18.322,
+   "all/routed": 17.148,
+   "control/forced": 17.688,
+   "control/routed": 16.138,
+   "ood/forced": 19.302,
+   "ood/routed": 19.351
+  },
+  "proxy": {
+   "gate": 0.0025208134053109326,
+   "up": 0.0025927356615736627,
+   "down": 0.0038459008379218567
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r10@2": {
+  "table": {
+   "all/forced": 48.643,
+   "all/routed": 46.835,
+   "control/forced": 47.787,
+   "control/routed": 45.229,
+   "ood/forced": 49.996,
+   "ood/routed": 50.468
+  },
+  "proxy": {
+   "gate": 0.038872868985410404,
+   "up": 0.04007361919567915,
+   "down": 0.05592375415087133
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.3,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r10@4": {
+  "table": {
+   "all/forced": 15.556,
+   "all/routed": 14.604,
+   "control/forced": 14.964,
+   "control/routed": 13.691,
+   "ood/forced": 16.468,
+   "ood/routed": 16.582
+  },
+  "proxy": {
+   "gate": 0.0015503629538386064,
+   "up": 0.0015984235660531064,
+   "down": 0.002560340939651101
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.3,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r30@2": {
+  "table": {
+   "all/forced": 50.379,
+   "all/routed": 48.85,
+   "control/forced": 49.999,
+   "control/routed": 47.854,
+   "ood/forced": 50.988,
+   "ood/routed": 51.155
+  },
+  "proxy": {
+   "gate": 0.06035749561827071,
+   "up": 0.06229341080826313,
+   "down": 0.07939502814935193
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_r30@4": {
+  "table": {
+   "all/forced": 14.382,
+   "all/routed": 13.471,
+   "control/forced": 13.793,
+   "control/routed": 12.597,
+   "ood/forced": 15.288,
+   "ood/routed": 15.357
+  },
+  "proxy": {
+   "gate": 0.0011379685775445522,
+   "up": 0.0011739834185052094,
+   "down": 0.0020251378240557782
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.4,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_n4@2": {
+  "table": {
+   "all/forced": 52.923,
+   "all/routed": 51.692,
+   "control/forced": 53.003,
+   "control/routed": 51.042,
+   "ood/forced": 52.792,
+   "ood/routed": 53.22
+  },
+  "proxy": {
+   "gate": 0.0915951850653037,
+   "up": 0.0940985572567438,
+   "down": 0.11006505353379402
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.3,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "nu_dual_g128_h0_n4@4": {
+  "table": {
+   "all/forced": 14.005,
+   "all/routed": 13.165,
+   "control/forced": 13.42,
+   "control/routed": 12.302,
+   "ood/forced": 14.903,
+   "ood/routed": 15.025
+  },
+  "proxy": {
+   "gate": 0.0009947198124509718,
+   "up": 0.0010278704338454521,
+   "down": 0.0018550265275973483
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "nu"
+   },
+   "seconds": 6.3,
+   "bpw2": 2.125,
+   "bpw4": 4.125
+  }
+ },
+ "sep_dual_g128_h0_r0.1@2": {
+  "table": {
+   "all/forced": 52.075,
+   "all/routed": 49.264,
+   "control/forced": 50.067,
+   "control/routed": 46.353,
+   "ood/forced": 55.169,
+   "ood/routed": 55.604
+  },
+  "proxy": {
+   "gate": 0.017267754035813283,
+   "up": 0.017820776112846364,
+   "down": 0.030435758203744005
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r0.1@4": {
+  "table": {
+   "all/forced": 27.595,
+   "all/routed": 25.948,
+   "control/forced": 26.676,
+   "control/routed": 24.432,
+   "ood/forced": 29.019,
+   "ood/routed": 29.258
+  },
+  "proxy": {
+   "gate": 0.006373286845415369,
+   "up": 0.006589545940513454,
+   "down": 0.009167417605079322
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r0.3@2": {
+  "table": {
+   "all/forced": 51.607,
+   "all/routed": 48.873,
+   "control/forced": 49.677,
+   "control/routed": 46.035,
+   "ood/forced": 54.584,
+   "ood/routed": 55.066
+  },
+  "proxy": {
+   "gate": 0.017619337027608737,
+   "up": 0.01818135133663328,
+   "down": 0.030805272552774918
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.0,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r0.3@4": {
+  "table": {
+   "all/forced": 26.636,
+   "all/routed": 25.102,
+   "control/forced": 25.752,
+   "control/routed": 23.601,
+   "ood/forced": 28.005,
+   "ood/routed": 28.372
+  },
+  "proxy": {
+   "gate": 0.005793213832440241,
+   "up": 0.005991447027993072,
+   "down": 0.008419423459215588
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.0,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r1@2": {
+  "table": {
+   "all/forced": 50.664,
+   "all/routed": 47.928,
+   "control/forced": 48.915,
+   "control/routed": 45.395,
+   "ood/forced": 53.372,
+   "ood/routed": 53.494
+  },
+  "proxy": {
+   "gate": 0.019369833608116446,
+   "up": 0.020011274462489348,
+   "down": 0.03301247359071849
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.1,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r1@4": {
+  "table": {
+   "all/forced": 24.306,
+   "all/routed": 22.765,
+   "control/forced": 23.464,
+   "control/routed": 21.443,
+   "ood/forced": 25.61,
+   "ood/routed": 25.658
+  },
+  "proxy": {
+   "gate": 0.004576752322827894,
+   "up": 0.0047308085241511534,
+   "down": 0.006815275315675922
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.1,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r3@2": {
+  "table": {
+   "all/forced": 50.431,
+   "all/routed": 48.13,
+   "control/forced": 49.01,
+   "control/routed": 45.896,
+   "ood/forced": 52.649,
+   "ood/routed": 53.087
+  },
+  "proxy": {
+   "gate": 0.02582231378469826,
+   "up": 0.026705115386619897,
+   "down": 0.041179071724769735
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.1,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r3@4": {
+  "table": {
+   "all/forced": 20.98,
+   "all/routed": 19.742,
+   "control/forced": 20.225,
+   "control/routed": 18.509,
+   "ood/forced": 22.148,
+   "ood/routed": 22.418
+  },
+  "proxy": {
+   "gate": 0.0032117327985871367,
+   "up": 0.003326794376768035,
+   "down": 0.004915936822608221
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.1,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r10@2": {
+  "table": {
+   "all/forced": 53.453,
+   "all/routed": 51.427,
+   "control/forced": 52.544,
+   "control/routed": 49.833,
+   "ood/forced": 54.892,
+   "ood/routed": 55.05
+  },
+  "proxy": {
+   "gate": 0.04678214800800674,
+   "up": 0.04837482336014764,
+   "down": 0.06720839429482466
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r10@4": {
+  "table": {
+   "all/forced": 17.358,
+   "all/routed": 16.348,
+   "control/forced": 16.698,
+   "control/routed": 15.332,
+   "ood/forced": 18.375,
+   "ood/routed": 18.553
+  },
+  "proxy": {
+   "gate": 0.001999773987266929,
+   "up": 0.002069217299918286,
+   "down": 0.0031955976433062586
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r30@2": {
+  "table": {
+   "all/forced": 58.061,
+   "all/routed": 55.999,
+   "control/forced": 57.66,
+   "control/routed": 54.667,
+   "ood/forced": 58.703,
+   "ood/routed": 59.054
+  },
+  "proxy": {
+   "gate": 0.08041299686873964,
+   "up": 0.08331822987476678,
+   "down": 0.1045690000254035
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "sep_dual_g128_h0_r30@4": {
+  "table": {
+   "all/forced": 15.571,
+   "all/routed": 14.607,
+   "control/forced": 14.944,
+   "control/routed": 13.66,
+   "ood/forced": 16.534,
+   "ood/routed": 16.648
+  },
+  "proxy": {
+   "gate": 0.0014031335141373939,
+   "up": 0.0014487299979506897,
+   "down": 0.0023961470488014355
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": false,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.25,
+   "bpw4": 4.5
+  }
+ },
+ "centre_shared_g128_h1_r0.1@2": {
+  "table": {
+   "all/forced": 50.861,
+   "all/routed": 47.871,
+   "control/forced": 48.909,
+   "control/routed": 44.952,
+   "ood/forced": 53.867,
+   "ood/routed": 54.213
+  },
+  "proxy": {
+   "gate": 0.017809116769257238,
+   "up": 0.018386611398049934,
+   "down": 0.029096090827300452
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 9.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r0.1@4": {
+  "table": {
+   "all/forced": 39.76,
+   "all/routed": 38.784,
+   "control/forced": 39.886,
+   "control/routed": 38.174,
+   "ood/forced": 39.556,
+   "ood/routed": 40.2
+  },
+  "proxy": {
+   "gate": 0.05216591679314579,
+   "up": 0.05419007168908806,
+   "down": 0.05970343096029352
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 9.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r0.3@2": {
+  "table": {
+   "all/forced": 49.79,
+   "all/routed": 46.941,
+   "control/forced": 48.069,
+   "control/routed": 44.199,
+   "ood/forced": 52.455,
+   "ood/routed": 52.924
+  },
+  "proxy": {
+   "gate": 0.02090642858689856,
+   "up": 0.02160814421402449,
+   "down": 0.03251707297215015
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 8.2,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r0.3@4": {
+  "table": {
+   "all/forced": 35.078,
+   "all/routed": 33.676,
+   "control/forced": 35.011,
+   "control/routed": 32.896,
+   "ood/forced": 35.185,
+   "ood/routed": 35.477
+  },
+  "proxy": {
+   "gate": 0.03801030208551329,
+   "up": 0.0393221752323894,
+   "down": 0.04368391241198518
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 8.2,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r1@2": {
+  "table": {
+   "all/forced": 49.061,
+   "all/routed": 46.65,
+   "control/forced": 47.842,
+   "control/routed": 44.573,
+   "ood/forced": 50.97,
+   "ood/routed": 51.268
+  },
+  "proxy": {
+   "gate": 0.03362754438907542,
+   "up": 0.03488512419234039,
+   "down": 0.04709443008042362
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.9,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r1@4": {
+  "table": {
+   "all/forced": 26.368,
+   "all/routed": 25.209,
+   "control/forced": 25.961,
+   "control/routed": 24.29,
+   "ood/forced": 27.012,
+   "ood/routed": 27.283
+  },
+  "proxy": {
+   "gate": 0.01701745914124393,
+   "up": 0.017681966406955473,
+   "down": 0.020362451398098225
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.9,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r3@2": {
+  "table": {
+   "all/forced": 50.889,
+   "all/routed": 48.79,
+   "control/forced": 50.308,
+   "control/routed": 47.235,
+   "ood/forced": 51.814,
+   "ood/routed": 52.317
+  },
+  "proxy": {
+   "gate": 0.0559414718391295,
+   "up": 0.0587522621074735,
+   "down": 0.07269712298029479
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r3@4": {
+  "table": {
+   "all/forced": 19.292,
+   "all/routed": 18.26,
+   "control/forced": 18.688,
+   "control/routed": 17.268,
+   "ood/forced": 20.231,
+   "ood/routed": 20.434
+  },
+  "proxy": {
+   "gate": 0.005448176789953037,
+   "up": 0.005721800264337618,
+   "down": 0.007045007412670283
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r10@2": {
+  "table": {
+   "all/forced": 54.72,
+   "all/routed": 52.83,
+   "control/forced": 54.488,
+   "control/routed": 51.481,
+   "ood/forced": 55.094,
+   "ood/routed": 55.924
+  },
+  "proxy": {
+   "gate": 0.08037017021885055,
+   "up": 0.0833108964117654,
+   "down": 0.10070892073611191
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r10@4": {
+  "table": {
+   "all/forced": 15.667,
+   "all/routed": 14.618,
+   "control/forced": 15.025,
+   "control/routed": 13.634,
+   "ood/forced": 16.652,
+   "ood/routed": 16.739
+  },
+  "proxy": {
+   "gate": 0.001773173500271366,
+   "up": 0.0018328575237941081,
+   "down": 0.002740645110673139
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r30@2": {
+  "table": {
+   "all/forced": 57.002,
+   "all/routed": 55.213,
+   "control/forced": 57.098,
+   "control/routed": 54.097,
+   "ood/forced": 56.846,
+   "ood/routed": 57.789
+  },
+  "proxy": {
+   "gate": 0.0929877132512038,
+   "up": 0.09637830866610106,
+   "down": 0.11527008787387344
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_shared_g128_h1_r30@4": {
+  "table": {
+   "all/forced": 14.907,
+   "all/routed": 13.853,
+   "control/forced": 14.268,
+   "control/routed": 12.879,
+   "ood/forced": 15.886,
+   "ood/routed": 15.942
+  },
+  "proxy": {
+   "gate": 0.0012094412627303979,
+   "up": 0.0012499002762077474,
+   "down": 0.002078829512208424
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true,
+    "feedback": "shared"
+   },
+   "seconds": 7.8,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "msb_dual_g128_h1_r0.1@2": {
+  "table": {
+   "all/forced": 54.077,
+   "all/routed": 51.006,
+   "control/forced": 51.951,
+   "control/routed": 47.681,
+   "ood/forced": 57.348,
+   "ood/routed": 58.179
+  },
+  "proxy": {
+   "gate": 0.01919770915766572,
+   "up": 0.019807325189285276,
+   "down": 0.031746457458587514
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "kind": "msb"
+   },
+   "seconds": 8.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "msb_dual_g128_h1_r0.1@4": {
+  "table": {
+   "all/forced": 49.663,
+   "all/routed": 43.643,
+   "control/forced": 50.492,
+   "control/routed": 40.952,
+   "ood/forced": 48.292,
+   "ood/routed": 49.473
+  },
+  "proxy": {
+   "gate": 0.013609965056190913,
+   "up": 0.014035022523730758,
+   "down": 0.0180650520426524
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "kind": "msb"
+   },
+   "seconds": 8.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "msb_dual_g128_h1_r1@2": {
+  "table": {
+   "all/forced": 61.404,
+   "all/routed": 56.44,
+   "control/forced": 59.166,
+   "control/routed": 51.665,
+   "ood/forced": 64.859,
+   "ood/routed": 66.459
+  },
+  "proxy": {
+   "gate": 0.02343973183338864,
+   "up": 0.024217074761181307,
+   "down": 0.036512527335615684
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "msb"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "msb_dual_g128_h1_r1@4": {
+  "table": {
+   "all/forced": 35.342,
+   "all/routed": 32.242,
+   "control/forced": 34.716,
+   "control/routed": 30.237,
+   "ood/forced": 36.331,
+   "ood/routed": 36.595
+  },
+  "proxy": {
+   "gate": 0.008314393751074869,
+   "up": 0.008583153817917284,
+   "down": 0.01171207283059751
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "msb"
+   },
+   "seconds": 7.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "msb_dual_g128_h1_r10@2": {
+  "table": {
+   "all/forced": 327.786,
+   "all/routed": 252.736,
+   "control/forced": 319.002,
+   "control/routed": 200.914,
+   "ood/forced": 341.516,
+   "ood/routed": 346.489
+  },
+  "proxy": {
+   "gate": 0.0706169635645426,
+   "up": 0.07311412746534134,
+   "down": 0.09245811150973546
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "kind": "msb"
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "msb_dual_g128_h1_r10@4": {
+  "table": {
+   "all/forced": 20.362,
+   "all/routed": 19.043,
+   "control/forced": 19.56,
+   "control/routed": 17.779,
+   "ood/forced": 21.597,
+   "ood/routed": 21.758
+  },
+  "proxy": {
+   "gate": 0.002732595642426303,
+   "up": 0.002816702700553597,
+   "down": 0.0041655041123350904
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "kind": "msb"
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "nu_dual_g128_h1_n2@2": {
+  "table": {
+   "all/forced": 50.955,
+   "all/routed": 47.807,
+   "control/forced": 48.94,
+   "control/routed": 44.646,
+   "ood/forced": 54.055,
+   "ood/routed": 54.622
+  },
+  "proxy": {
+   "gate": 0.016506779898751694,
+   "up": 0.017022314434867167,
+   "down": 0.02736445248105007
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 19.8,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n2@4": {
+  "table": {
+   "all/forced": 25.02,
+   "all/routed": 23.467,
+   "control/forced": 24.261,
+   "control/routed": 22.075,
+   "ood/forced": 26.201,
+   "ood/routed": 26.501
+  },
+  "proxy": {
+   "gate": 0.005902769102136047,
+   "up": 0.006073122868025323,
+   "down": 0.007085385586204668
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 19.8,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r0.1@2": {
+  "table": {
+   "all/forced": 50.589,
+   "all/routed": 47.61,
+   "control/forced": 48.621,
+   "control/routed": 44.608,
+   "ood/forced": 53.619,
+   "ood/routed": 54.114
+  },
+  "proxy": {
+   "gate": 0.016633873170809683,
+   "up": 0.01715779842151205,
+   "down": 0.027486425773269457
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.5,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r0.1@4": {
+  "table": {
+   "all/forced": 24.399,
+   "all/routed": 22.905,
+   "control/forced": 23.655,
+   "control/routed": 21.574,
+   "ood/forced": 25.556,
+   "ood/routed": 25.811
+  },
+  "proxy": {
+   "gate": 0.005501608177536739,
+   "up": 0.005668629734269649,
+   "down": 0.006709477016474481
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.5,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r0.3@2": {
+  "table": {
+   "all/forced": 50.036,
+   "all/routed": 46.933,
+   "control/forced": 48.146,
+   "control/routed": 44.009,
+   "ood/forced": 52.95,
+   "ood/routed": 53.274
+  },
+  "proxy": {
+   "gate": 0.016991683087503488,
+   "up": 0.01751726486682797,
+   "down": 0.027835615512688518
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r0.3@4": {
+  "table": {
+   "all/forced": 23.365,
+   "all/routed": 21.893,
+   "control/forced": 22.645,
+   "control/routed": 20.565,
+   "ood/forced": 24.485,
+   "ood/routed": 24.777
+  },
+  "proxy": {
+   "gate": 0.00491277888847846,
+   "up": 0.005038062687151542,
+   "down": 0.006117319339491361
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r1@2": {
+  "table": {
+   "all/forced": 48.895,
+   "all/routed": 46.068,
+   "control/forced": 47.159,
+   "control/routed": 43.404,
+   "ood/forced": 51.581,
+   "ood/routed": 51.889
+  },
+  "proxy": {
+   "gate": 0.018613644338600667,
+   "up": 0.019230080474587075,
+   "down": 0.029550709916507985
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r1@4": {
+  "table": {
+   "all/forced": 21.084,
+   "all/routed": 19.845,
+   "control/forced": 20.381,
+   "control/routed": 18.652,
+   "ood/forced": 22.174,
+   "ood/routed": 22.441
+  },
+  "proxy": {
+   "gate": 0.003729778320672382,
+   "up": 0.0038454188667556488,
+   "down": 0.004884025391768564
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r3@2": {
+  "table": {
+   "all/forced": 47.933,
+   "all/routed": 45.465,
+   "control/forced": 46.563,
+   "control/routed": 43.231,
+   "ood/forced": 50.07,
+   "ood/routed": 50.404
+  },
+  "proxy": {
+   "gate": 0.02386424842402341,
+   "up": 0.02463809674452754,
+   "down": 0.035232997383553996
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r3@4": {
+  "table": {
+   "all/forced": 18.16,
+   "all/routed": 17.051,
+   "control/forced": 17.503,
+   "control/routed": 15.969,
+   "ood/forced": 19.174,
+   "ood/routed": 19.393
+  },
+  "proxy": {
+   "gate": 0.0025058505494897623,
+   "up": 0.0025916881579340933,
+   "down": 0.0035309502066516326
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r10@2": {
+  "table": {
+   "all/forced": 48.431,
+   "all/routed": 46.636,
+   "control/forced": 47.613,
+   "control/routed": 45.154,
+   "ood/forced": 49.726,
+   "ood/routed": 50.003
+  },
+  "proxy": {
+   "gate": 0.03871485263890008,
+   "up": 0.0400626805273876,
+   "down": 0.05175880483164292
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r10@4": {
+  "table": {
+   "all/forced": 15.389,
+   "all/routed": 14.389,
+   "control/forced": 14.794,
+   "control/routed": 13.432,
+   "ood/forced": 16.305,
+   "ood/routed": 16.451
+  },
+  "proxy": {
+   "gate": 0.001545207045223627,
+   "up": 0.0015974125025295148,
+   "down": 0.0023957936165078715
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.6,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r30@2": {
+  "table": {
+   "all/forced": 50.359,
+   "all/routed": 48.912,
+   "control/forced": 50.055,
+   "control/routed": 47.887,
+   "ood/forced": 50.848,
+   "ood/routed": 51.275
+  },
+  "proxy": {
+   "gate": 0.06024565750346392,
+   "up": 0.06248656951649083,
+   "down": 0.07570252654028614
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_r30@4": {
+  "table": {
+   "all/forced": 14.226,
+   "all/routed": 13.294,
+   "control/forced": 13.633,
+   "control/routed": 12.36,
+   "ood/forced": 15.137,
+   "ood/routed": 15.3
+  },
+  "proxy": {
+   "gate": 0.0011317600494555712,
+   "up": 0.0011690720384687954,
+   "down": 0.001906374159855006
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 6.7,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n4@2": {
+  "table": {
+   "all/forced": 52.932,
+   "all/routed": 51.813,
+   "control/forced": 53.099,
+   "control/routed": 51.323,
+   "ood/forced": 52.661,
+   "ood/routed": 52.967
+  },
+  "proxy": {
+   "gate": 0.09073783598654621,
+   "up": 0.09467357423927947,
+   "down": 0.10872733334393637
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 11.4,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "nu_dual_g128_h1_n4@4": {
+  "table": {
+   "all/forced": 13.886,
+   "all/routed": 12.973,
+   "control/forced": 13.294,
+   "control/routed": 12.086,
+   "ood/forced": 14.794,
+   "ood/routed": 14.882
+  },
+  "proxy": {
+   "gate": 0.000988500563074692,
+   "up": 0.001021601859016654,
+   "down": 0.00174554127504037
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "nu"
+   },
+   "seconds": 11.4,
+   "bpw2": 2.1256510416666665,
+   "bpw4": 4.125651041666667
+  }
+ },
+ "sep_dual_g128_h1_r0.1@2": {
+  "table": {
+   "all/forced": 51.479,
+   "all/routed": 48.522,
+   "control/forced": 49.462,
+   "control/routed": 45.401,
+   "ood/forced": 54.585,
+   "ood/routed": 55.268
+  },
+  "proxy": {
+   "gate": 0.01717748188990746,
+   "up": 0.01773875391961419,
+   "down": 0.02839935827599889
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r0.1@4": {
+  "table": {
+   "all/forced": 27.12,
+   "all/routed": 25.469,
+   "control/forced": 26.204,
+   "control/routed": 23.876,
+   "ood/forced": 28.538,
+   "ood/routed": 28.924
+  },
+  "proxy": {
+   "gate": 0.00635315147597063,
+   "up": 0.006551342210624114,
+   "down": 0.008032565443921436
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.1,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 8.3,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r0.3@2": {
+  "table": {
+   "all/forced": 51.013,
+   "all/routed": 48.118,
+   "control/forced": 49.056,
+   "control/routed": 45.151,
+   "ood/forced": 54.029,
+   "ood/routed": 54.562
+  },
+  "proxy": {
+   "gate": 0.017524527840953878,
+   "up": 0.01808557587296605,
+   "down": 0.02873286373813748
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r0.3@4": {
+  "table": {
+   "all/forced": 26.19,
+   "all/routed": 24.51,
+   "control/forced": 25.299,
+   "control/routed": 22.965,
+   "ood/forced": 27.571,
+   "ood/routed": 27.854
+  },
+  "proxy": {
+   "gate": 0.005810421271774253,
+   "up": 0.005979741197237818,
+   "down": 0.007394381561479351
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.3,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r1@2": {
+  "table": {
+   "all/forced": 50.083,
+   "all/routed": 47.289,
+   "control/forced": 48.298,
+   "control/routed": 44.59,
+   "ood/forced": 52.844,
+   "ood/routed": 53.185
+  },
+  "proxy": {
+   "gate": 0.019275720422332252,
+   "up": 0.01993642959302052,
+   "down": 0.03064340988475846
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.3,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r1@4": {
+  "table": {
+   "all/forced": 23.937,
+   "all/routed": 22.437,
+   "control/forced": 23.083,
+   "control/routed": 21.04,
+   "ood/forced": 25.256,
+   "ood/routed": 25.465
+  },
+  "proxy": {
+   "gate": 0.004578008590622692,
+   "up": 0.004730262521077188,
+   "down": 0.006089154465218051
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.3,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r3@2": {
+  "table": {
+   "all/forced": 49.956,
+   "all/routed": 47.608,
+   "control/forced": 48.517,
+   "control/routed": 45.331,
+   "ood/forced": 52.2,
+   "ood/routed": 52.653
+  },
+  "proxy": {
+   "gate": 0.025763663690443344,
+   "up": 0.026609013138069362,
+   "down": 0.03783394125000833
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r3@4": {
+  "table": {
+   "all/forced": 20.695,
+   "all/routed": 19.426,
+   "control/forced": 19.934,
+   "control/routed": 18.147,
+   "ood/forced": 21.869,
+   "ood/routed": 22.185
+  },
+  "proxy": {
+   "gate": 0.0032101793709212456,
+   "up": 0.0033084820721507053,
+   "down": 0.00446947358271751
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r10@2": {
+  "table": {
+   "all/forced": 53.021,
+   "all/routed": 50.924,
+   "control/forced": 52.155,
+   "control/routed": 49.178,
+   "ood/forced": 54.393,
+   "ood/routed": 54.874
+  },
+  "proxy": {
+   "gate": 0.04685596158555513,
+   "up": 0.04825145552860595,
+   "down": 0.061755322851667786
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r10@4": {
+  "table": {
+   "all/forced": 17.136,
+   "all/routed": 16.066,
+   "control/forced": 16.471,
+   "control/routed": 15.04,
+   "ood/forced": 18.159,
+   "ood/routed": 18.288
+  },
+  "proxy": {
+   "gate": 0.0020000637452460613,
+   "up": 0.002063398615193401,
+   "down": 0.002953108881231798
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r30@2": {
+  "table": {
+   "all/forced": 57.606,
+   "all/routed": 55.574,
+   "control/forced": 57.229,
+   "control/routed": 54.235,
+   "ood/forced": 58.21,
+   "ood/routed": 58.651
+  },
+  "proxy": {
+   "gate": 0.08062361847289702,
+   "up": 0.08280919455289361,
+   "down": 0.0974987955871997
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ },
+ "sep_dual_g128_h1_r30@4": {
+  "table": {
+   "all/forced": 15.389,
+   "all/routed": 14.361,
+   "control/forced": 14.753,
+   "control/routed": 13.403,
+   "ood/forced": 16.365,
+   "ood/routed": 16.422
+  },
+  "proxy": {
+   "gate": 0.0013969392255507337,
+   "up": 0.0014422287443474897,
+   "down": 0.002236628986116581
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "group": 128,
+    "had": true,
+    "kind": "sep"
+   },
+   "seconds": 7.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.500651041666667
+  }
+ }
+}

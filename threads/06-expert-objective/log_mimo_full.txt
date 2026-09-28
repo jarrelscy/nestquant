@@ -1,0 +1,54 @@
+[    4.0s] g_b2_pw2_sr0.03_auto_H proxy 0.012141
+[    7.4s] u_b2_pw2_sr0.03_auto_H proxy 0.017745
+[    9.5s] d_b2_pw2_sr0.03_auto_H proxy 0.020513
+[    9.8s] pw=2@2 {'train_fit_p2': 18.92, 'eval': {'control:forced_id': 39.47, 'control:routed_id': 15.97, 'control:forced_all': 39.47, 'control:routed_all': 15.97, 'ood:forced_ood': 45.77, 'ood:routed_ood': 49.87, 'ood:forced_all': 45.77, 'ood:routed_all': 49.87}}
+[   14.8s] g_b2_pw2_sr0.03_auto_GOdiag proxy 0.009155
+[   19.3s] u_b2_pw2_sr0.03_auto_GOdiag proxy 0.008663
+[   19.4s] pw=2,gu=GOdiag@2 {'train_fit_p2': 17.39, 'eval': {'control:forced_id': 40.23, 'control:routed_id': 14.61, 'control:forced_all': 40.23, 'control:routed_all': 14.61, 'ood:forced_ood': 46.67, 'ood:routed_ood': 48.52, 'ood:forced_all': 46.67, 'ood:routed_all': 48.52}}
+[   23.0s] g_b2_pw2_sr0.03_auto_Gfull proxy 0.008564
+[   26.6s] u_b2_pw2_sr0.03_auto_Gfull proxy 0.007855
+[   26.7s] pw=2,gu=Gfull@2 {'train_fit_p2': 17.3, 'eval': {'control:forced_id': 40.1, 'control:routed_id': 14.73, 'control:forced_all': 40.1, 'control:routed_all': 14.73, 'ood:forced_ood': 46.33, 'ood:routed_ood': 48.0, 'ood:forced_all': 46.33, 'ood:routed_all': 48.0}}
+[   29.7s] g_b2_pw2_sr0.03_sample_H proxy 0.010576
+[   32.2s] u_b2_pw2_sr0.03_sample_H proxy 0.015460
+[   33.9s] d_b2_pw2_sr0.03_sample_H proxy 0.019589
+[   33.9s] pw=2,src=sample@2 {'train_fit_p2': 18.33, 'eval': {'control:forced_id': 41.71, 'control:routed_id': 16.53, 'control:forced_all': 41.71, 'control:routed_all': 16.53, 'ood:forced_ood': 47.57, 'ood:routed_ood': 51.29, 'ood:forced_all': 47.57, 'ood:routed_all': 51.29}}
+[   36.0s] d_b2_pw2_sr0.03_sample_seqW_H_r1e-3 proxy 0.019093
+[   36.0s] pw=2,src=sample,dn=seq@2 {'train_fit_p2': 17.49, 'eval': {'control:forced_id': 43.15, 'control:routed_id': 16.52, 'control:forced_all': 43.15, 'control:routed_all': 16.52, 'ood:forced_ood': 49.04, 'ood:routed_ood': 52.72, 'ood:forced_all': 49.04, 'ood:routed_all': 52.72}}
+[   39.9s] g_b2_pw2_sr0.03_sample_Gfull proxy 0.007507
+[   43.7s] u_b2_pw2_sr0.03_sample_Gfull proxy 0.006906
+[   43.8s] pw=2,src=sample,gu=Gfull@2 {'train_fit_p2': 16.77, 'eval': {'control:forced_id': 42.35, 'control:routed_id': 15.23, 'control:forced_all': 42.35, 'control:routed_all': 15.23, 'ood:forced_ood': 48.7, 'ood:routed_ood': 52.05, 'ood:forced_all': 48.7, 'ood:routed_all': 52.05}}
+[   46.8s] g_b2_pw0_sr0.03_auto_H proxy 0.011180
+[   49.4s] u_b2_pw0_sr0.03_auto_H proxy 0.016454
+[   51.0s] d_b2_pw0_sr0.03_auto_H proxy 0.021253
+[   51.0s] pw=0@2 {'train_fit_p2': 18.49, 'eval': {'control:forced_id': 41.12, 'control:routed_id': 16.2, 'control:forced_all': 41.12, 'control:routed_all': 16.2, 'ood:forced_ood': 46.75, 'ood:routed_ood': 52.49, 'ood:forced_all': 46.75, 'ood:routed_all': 52.49}}
+[   54.5s] g_b2_pw2_sr0.1_auto_Gfull proxy 0.010125
+[   58.1s] u_b2_pw2_sr0.1_auto_Gfull proxy 0.009595
+[   59.6s] d_b2_pw2_sr0.1_auto_H proxy 0.024190
+[   59.7s] pw=2,gu=Gfull,sr=0.1@2 {'train_fit_p2': 17.5, 'eval': {'control:forced_id': 39.28, 'control:routed_id': 14.63, 'control:forced_all': 39.28, 'control:routed_all': 14.63, 'ood:forced_ood': 45.4, 'ood:routed_ood': 52.49, 'ood:forced_all': 45.4, 'ood:routed_all': 52.49}}
+[   62.4s] g_b4_pw2_sr0.03_auto_H proxy 0.000767
+[   64.9s] u_b4_pw2_sr0.03_auto_H proxy 0.001122
+[   66.5s] d_b4_pw2_sr0.03_auto_H proxy 0.001280
+[   66.6s] pw=2@4 {'train_fit_p2': 4.79, 'eval': {'control:forced_id': 10.44, 'control:routed_id': 4.02, 'control:forced_all': 10.44, 'control:routed_all': 4.02, 'ood:forced_ood': 12.04, 'ood:routed_ood': 13.6, 'ood:forced_all': 12.04, 'ood:routed_all': 13.6}}
+[   70.3s] g_b4_pw2_sr0.03_auto_GOdiag proxy 0.000564
+[   73.8s] u_b4_pw2_sr0.03_auto_GOdiag proxy 0.000531
+[   73.9s] pw=2,gu=GOdiag@4 {'train_fit_p2': 4.39, 'eval': {'control:forced_id': 10.82, 'control:routed_id': 3.73, 'control:forced_all': 10.82, 'control:routed_all': 3.73, 'ood:forced_ood': 12.67, 'ood:routed_ood': 14.97, 'ood:forced_all': 12.67, 'ood:routed_all': 14.97}}
+[   77.3s] g_b4_pw2_sr0.03_auto_Gfull proxy 0.000529
+[   80.7s] u_b4_pw2_sr0.03_auto_Gfull proxy 0.000482
+[   80.8s] pw=2,gu=Gfull@4 {'train_fit_p2': 4.38, 'eval': {'control:forced_id': 10.74, 'control:routed_id': 3.77, 'control:forced_all': 10.74, 'control:routed_all': 3.77, 'ood:forced_ood': 12.59, 'ood:routed_ood': 14.16, 'ood:forced_all': 12.59, 'ood:routed_all': 14.16}}
+[   83.2s] g_b4_pw2_sr0.03_sample_H proxy 0.000659
+[   85.6s] u_b4_pw2_sr0.03_sample_H proxy 0.000964
+[   87.2s] d_b4_pw2_sr0.03_sample_H proxy 0.001213
+[   87.3s] pw=2,src=sample@4 {'train_fit_p2': 4.61, 'eval': {'control:forced_id': 11.06, 'control:routed_id': 4.33, 'control:forced_all': 11.06, 'control:routed_all': 4.33, 'ood:forced_ood': 12.7, 'ood:routed_ood': 14.0, 'ood:forced_all': 12.7, 'ood:routed_all': 14.0}}
+[   89.3s] d_b4_pw2_sr0.03_sample_seqW_H_r1e-3 proxy 0.001211
+[   89.4s] pw=2,src=sample,dn=seq@4 {'train_fit_p2': 4.41, 'eval': {'control:forced_id': 11.39, 'control:routed_id': 4.29, 'control:forced_all': 11.39, 'control:routed_all': 4.29, 'ood:forced_ood': 13.06, 'ood:routed_ood': 14.8, 'ood:forced_all': 13.06, 'ood:routed_all': 14.8}}
+[   92.8s] g_b4_pw2_sr0.03_sample_Gfull proxy 0.000456
+[   96.1s] u_b4_pw2_sr0.03_sample_Gfull proxy 0.000416
+[   96.2s] pw=2,src=sample,gu=Gfull@4 {'train_fit_p2': 4.21, 'eval': {'control:forced_id': 11.4, 'control:routed_id': 3.87, 'control:forced_all': 11.4, 'control:routed_all': 3.87, 'ood:forced_ood': 13.31, 'ood:routed_ood': 15.02, 'ood:forced_all': 13.31, 'ood:routed_all': 15.02}}
+[   98.5s] g_b4_pw0_sr0.03_auto_H proxy 0.000701
+[  100.9s] u_b4_pw0_sr0.03_auto_H proxy 0.001032
+[  102.7s] d_b4_pw0_sr0.03_auto_H proxy 0.001321
+[  102.8s] pw=0@4 {'train_fit_p2': 4.65, 'eval': {'control:forced_id': 10.87, 'control:routed_id': 4.19, 'control:forced_all': 10.87, 'control:routed_all': 4.19, 'ood:forced_ood': 12.52, 'ood:routed_ood': 13.84, 'ood:forced_all': 12.52, 'ood:routed_all': 13.84}}
+[  106.1s] g_b4_pw2_sr0.1_auto_Gfull proxy 0.000632
+[  109.4s] u_b4_pw2_sr0.1_auto_Gfull proxy 0.000596
+[  111.0s] d_b4_pw2_sr0.1_auto_H proxy 0.001529
+[  111.1s] pw=2,gu=Gfull,sr=0.1@4 {'train_fit_p2': 4.43, 'eval': {'control:forced_id': 10.48, 'control:routed_id': 3.79, 'control:forced_all': 10.48, 'control:routed_all': 3.79, 'ood:forced_ood': 12.2, 'ood:routed_ood': 14.48, 'ood:forced_all': 12.2, 'ood:routed_all': 14.48}}

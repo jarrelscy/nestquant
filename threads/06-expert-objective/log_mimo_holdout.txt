@@ -1,0 +1,73 @@
+[    4.6s] g_b2_pw2_sr0.03_auto_H proxy 0.012130
+[    7.5s] u_b2_pw2_sr0.03_auto_H proxy 0.017738
+[    9.1s] d_b2_pw2_sr0.03_auto_H proxy 0.020518
+[    9.2s] pw=2@2 {'val_p2': 19.77, 'val_uniform': 20.43, 'train_fit_p2': 18.55}
+[   12.8s] g_b2_pw2_sr0.03_sample_H proxy 0.010244
+[   16.1s] u_b2_pw2_sr0.03_sample_H proxy 0.014982
+[   18.0s] d_b2_pw2_sr0.03_sample_H proxy 0.019397
+[   18.2s] pw=2,src=sample@2 {'val_p2': 20.84, 'val_uniform': 21.43, 'train_fit_p2': 17.85}
+[   21.4s] g_b2_pw1_sr0.03_auto_H proxy 0.010578
+[   24.1s] u_b2_pw1_sr0.03_auto_H proxy 0.015553
+[   26.3s] d_b2_pw1_sr0.03_auto_H proxy 0.019873
+[   26.4s] pw=1@2 {'val_p2': 20.6, 'val_uniform': 21.07, 'train_fit_p2': 17.79}
+[   30.0s] g_b2_pw0_sr0.03_auto_H proxy 0.010986
+[   32.9s] u_b2_pw0_sr0.03_auto_H proxy 0.016189
+[   34.5s] d_b2_pw0_sr0.03_auto_H proxy 0.021197
+[   34.6s] pw=0@2 {'val_p2': 20.53, 'val_uniform': 20.93, 'train_fit_p2': 18.08}
+[   38.0s] g_b2_pw2_sr0.1_auto_H proxy 0.013742
+[   41.2s] u_b2_pw2_sr0.1_auto_H proxy 0.019891
+[   42.9s] d_b2_pw2_sr0.1_auto_H proxy 0.024189
+[   43.1s] pw=2,sr=0.1@2 {'val_p2': 19.94, 'val_uniform': 20.57, 'train_fit_p2': 18.74}
+[   47.7s] g_b2_pw2_sr0.03_auto_Gfull proxy 0.008563
+[   51.9s] u_b2_pw2_sr0.03_auto_Gfull proxy 0.007854
+[   52.0s] pw=2,gu=Gfull@2 {'val_p2': 18.33, 'val_uniform': 18.83, 'train_fit_p2': 16.94}
+[   56.1s] g_b2_pw2_sr0.03_auto_Gdiag proxy 0.009294
+[   60.6s] u_b2_pw2_sr0.03_auto_Gdiag proxy 0.009119
+[   60.8s] pw=2,gu=Gdiag@2 {'val_p2': 18.33, 'val_uniform': 18.86, 'train_fit_p2': 16.95}
+ !! Cholesky decomp. failed, increasing diagonal damping, attempt 1/10
+[   63.3s] d_b2_pw2_sr0.03_auto_seqH_H proxy 0.023140
+[   63.4s] pw=2,dn=seqH@2 {'val_p2': 19.92, 'val_uniform': 20.57, 'train_fit_p2': 18.88}
+ !! Cholesky decomp. failed, increasing diagonal damping, attempt 1/10
+[   65.5s] d_b2_pw2_sr0.03_auto_seqW_H_r1e-3 proxy 0.024784
+[   65.7s] pw=2,dn=seq@2 {'val_p2': 61.0, 'val_uniform': 62.74, 'train_fit_p2': 57.01}
+ !! Cholesky decomp. failed, increasing diagonal damping, attempt 1/10
+[   68.3s] d_b2_pw2_sr0.03_auto_seqW_H_r0.03 proxy 0.023573
+[   68.4s] pw=2,dn=seq,ridge=0.03@2 {'val_p2': 26.6, 'val_uniform': 27.55, 'train_fit_p2': 28.92}
+ !! Cholesky decomp. failed, increasing diagonal damping, attempt 1/10
+ !! Cholesky decomp. failed, increasing diagonal damping, attempt 2/10
+[   70.9s] d_b2_pw2_sr0.03_auto_seqW_Gfull_r1e-3 proxy 0.030511
+[   71.0s] pw=2,gu=Gfull,dn=seq@2 {'val_p2': 194.31, 'val_uniform': 198.32, 'train_fit_p2': 182.15}
+[   73.8s] g_b4_pw2_sr0.03_auto_H proxy 0.000767
+[   76.5s] u_b4_pw2_sr0.03_auto_H proxy 0.001122
+[   78.6s] d_b4_pw2_sr0.03_auto_H proxy 0.001279
+[   78.7s] pw=2@4 {'val_p2': 5.02, 'val_uniform': 5.19, 'train_fit_p2': 4.69}
+[   81.5s] g_b4_pw2_sr0.03_sample_H proxy 0.000636
+[   84.3s] u_b4_pw2_sr0.03_sample_H proxy 0.000931
+[   86.4s] d_b4_pw2_sr0.03_sample_H proxy 0.001199
+[   86.6s] pw=2,src=sample@4 {'val_p2': 5.32, 'val_uniform': 5.47, 'train_fit_p2': 4.48}
+[   89.4s] g_b4_pw1_sr0.03_auto_H proxy 0.000661
+[   92.0s] u_b4_pw1_sr0.03_auto_H proxy 0.000971
+[   94.0s] d_b4_pw1_sr0.03_auto_H proxy 0.001231
+[   94.1s] pw=1@4 {'val_p2': 5.24, 'val_uniform': 5.36, 'train_fit_p2': 4.47}
+[   97.1s] g_b4_pw0_sr0.03_auto_H proxy 0.000688
+[  100.1s] u_b4_pw0_sr0.03_auto_H proxy 0.001013
+[  101.8s] d_b4_pw0_sr0.03_auto_H proxy 0.001315
+[  101.9s] pw=0@4 {'val_p2': 5.24, 'val_uniform': 5.34, 'train_fit_p2': 4.54}
+[  105.1s] g_b4_pw2_sr0.1_auto_H proxy 0.000873
+[  108.4s] u_b4_pw2_sr0.1_auto_H proxy 0.001264
+[  110.5s] d_b4_pw2_sr0.1_auto_H proxy 0.001529
+[  110.6s] pw=2,sr=0.1@4 {'val_p2': 5.05, 'val_uniform': 5.22, 'train_fit_p2': 4.74}
+[  114.7s] g_b4_pw2_sr0.03_auto_Gfull proxy 0.000529
+[  118.6s] u_b4_pw2_sr0.03_auto_Gfull proxy 0.000482
+[  118.7s] pw=2,gu=Gfull@4 {'val_p2': 4.65, 'val_uniform': 4.79, 'train_fit_p2': 4.28}
+[  122.5s] g_b4_pw2_sr0.03_auto_Gdiag proxy 0.000575
+[  126.6s] u_b4_pw2_sr0.03_auto_Gdiag proxy 0.000561
+[  126.7s] pw=2,gu=Gdiag@4 {'val_p2': 4.66, 'val_uniform': 4.8, 'train_fit_p2': 4.28}
+[  129.2s] d_b4_pw2_sr0.03_auto_seqH_H proxy 0.001277
+[  129.3s] pw=2,dn=seqH@4 {'val_p2': 5.02, 'val_uniform': 5.19, 'train_fit_p2': 4.69}
+[  131.9s] d_b4_pw2_sr0.03_auto_seqW_H_r1e-3 proxy 0.001278
+[  132.0s] pw=2,dn=seq@4 {'val_p2': 5.25, 'val_uniform': 5.43, 'train_fit_p2': 4.76}
+[  134.8s] d_b4_pw2_sr0.03_auto_seqW_H_r0.03 proxy 0.001277
+[  134.9s] pw=2,dn=seq,ridge=0.03@4 {'val_p2': 5.15, 'val_uniform': 5.32, 'train_fit_p2': 4.62}
+[  137.4s] d_b4_pw2_sr0.03_auto_seqW_Gfull_r1e-3 proxy 0.001275
+[  137.5s] pw=2,gu=Gfull,dn=seq@4 {'val_p2': 4.98, 'val_uniform': 5.11, 'train_fit_p2': 4.59}

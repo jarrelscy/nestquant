@@ -1,0 +1,84 @@
+{
+ "k_mul1_hyb": {
+  "per_weight": 9.78125,
+  "ops": {
+   "IMAD": 58,
+   "LOP3": 77,
+   "LDS": 22,
+   "SHF": 60,
+   "IDP": 32,
+   "PRMT": 16,
+   "HFMA2": 35,
+   "HADD2": 13
+  }
+ },
+ "k_hyb2": {
+  "per_weight": 4.046875,
+  "ops": {
+   "IMAD": 40,
+   "LOP3": 93,
+   "LDS": 34,
+   "SHF": 60,
+   "HFMA2": 32
+  }
+ },
+ "k_hyb22": {
+  "per_weight": 7.953125,
+  "ops": {
+   "IMAD": 72,
+   "LOP3": 185,
+   "LDS": 68,
+   "SHF": 120,
+   "HFMA2": 47,
+   "HADD2": 17
+  }
+ },
+ "k_res211": {
+  "per_weight": 16.6875,
+  "ops": {
+   "IMAD": 106,
+   "LDS": 8,
+   "SHF": 84,
+   "LOP3": 96,
+   "IDP": 96,
+   "PRMT": 48,
+   "HFMA2": 96
+  }
+ },
+ "k_res22": {
+  "per_weight": 11.3125,
+  "ops": {
+   "IMAD": 73,
+   "LDS": 8,
+   "SHF": 56,
+   "LOP3": 64,
+   "IDP": 64,
+   "PRMT": 33,
+   "HFMA2": 64
+  }
+ },
+ "k_native2": {
+  "per_weight": 5.8125,
+  "ops": {
+   "IMAD": 41,
+   "LDS": 4,
+   "SHF": 28,
+   "LOP3": 32,
+   "IDP": 32,
+   "PRMT": 17,
+   "HFMA2": 32
+  }
+ },
+ "k_native4": {
+  "per_weight": 5.5625,
+  "ops": {
+   "IMAD": 39,
+   "LDS": 2,
+   "SHF": 28,
+   "LOP3": 28,
+   "IDP": 32,
+   "PRMT": 16,
+   "HFMA2": 33
+  }
+ }
+}

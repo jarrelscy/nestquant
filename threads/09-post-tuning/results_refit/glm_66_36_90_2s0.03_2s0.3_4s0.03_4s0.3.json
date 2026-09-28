@@ -1,0 +1,58 @@
+{
+ "2:0.03": {
+  "K": 2,
+  "sigma_reg": 0.03,
+  "bpw": 2.011341518825955,
+  "hold": 31.664333173873555,
+  "eval": {
+   "pilot/all/forced": 47.266947191979405,
+   "pilot/all/routed": 44.21083166349343,
+   "pilot/control/forced": 45.9558002030798,
+   "pilot/control/routed": 44.51058116957305,
+   "pilot/ood/forced": 49.24378056712884,
+   "pilot/ood/routed": 44.16921795642638
+  }
+ },
+ "2:0.3": {
+  "K": 2,
+  "sigma_reg": 0.3,
+  "bpw": 2.011341518825955,
+  "hold": 30.45135025677803,
+  "eval": {
+   "pilot/all/forced": 43.61631261072629,
+   "pilot/all/routed": 41.08616379688594,
+   "pilot/control/forced": 42.640850177257924,
+   "pilot/control/routed": 41.10588724916125,
+   "pilot/ood/forced": 45.096751594726896,
+   "pilot/ood/routed": 41.0818518571688
+  }
+ },
+ "4:0.03": {
+  "K": 4,
+  "sigma_reg": 0.03,
+  "bpw": 4.0113415188259545,
+  "hold": 8.363330174997433,
+  "eval": {
+   "pilot/all/forced": 12.529454864501552,
+   "pilot/all/routed": 11.71729167486945,
+   "pilot/control/forced": 12.152322561891975,
+   "pilot/control/routed": 11.990547817743913,
+   "pilot/ood/forced": 13.096429560186335,
+   "pilot/ood/routed": 11.677915510914778
+  }
+ },
+ "4:0.3": {
+  "K": 4,
+  "sigma_reg": 0.3,
+  "bpw": 4.0113415188259545,
+  "hold": 7.8676953208660345,
+  "eval": {
+   "pilot/all/forced": 11.506097377030077,
+   "pilot/all/routed": 10.750716575389035,
+   "pilot/control/forced": 11.252954091787243,
+   "pilot/control/routed": 10.898523914624857,
+   "pilot/ood/forced": 11.890459858766858,
+   "pilot/ood/routed": 10.734502397858044
+  }
+ }
+}

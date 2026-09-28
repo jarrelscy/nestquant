@@ -1,0 +1,86 @@
+{
+ "model": "mimo",
+ "bits": 4,
+ "groups": [],
+ "rank": 32,
+ "rows": 29492,
+ "held_out_rows": 3276,
+ "lr": 0.001,
+ "extra_bpw": 0.3333333333333333,
+ "init": {
+  "train": 4.799734831224927,
+  "hold": 4.821240436791949
+ },
+ "best": {
+  "epoch": 0,
+  "train": 4.799806714140704,
+  "hold": 4.821240436791949,
+  "hold_rounded": 4.821297642270531
+ },
+ "history": [
+  {
+   "epoch": 1,
+   "hold": 4.980778850971037,
+   "train": null
+  },
+  {
+   "epoch": 2,
+   "hold": 4.906876466859055,
+   "train": null
+  },
+  {
+   "epoch": 3,
+   "hold": 5.01518185153484,
+   "train": null
+  },
+  {
+   "epoch": 4,
+   "hold": 5.063064984176195,
+   "train": null
+  },
+  {
+   "epoch": 5,
+   "hold": 5.136700240262944,
+   "train": null
+  },
+  {
+   "epoch": 6,
+   "hold": 5.320267810379821,
+   "train": null
+  },
+  {
+   "epoch": 7,
+   "hold": 6.209127648982625,
+   "train": null
+  },
+  {
+   "epoch": 8,
+   "hold": 5.94656582656425,
+   "train": null
+  }
+ ],
+ "seconds": 10.779196739196777,
+ "eval": {
+  "control/all/forced": {
+   "rows": 3072,
+   "base": 10.434424271317,
+   "tuned": 10.246629844595695
+  },
+  "control/all/routed": {
+   "rows": 31,
+   "base": 4.004172986146237,
+   "tuned": 3.8536763951175828
+  },
+  "ood/all/forced": {
+   "rows": 512,
+   "base": 12.041582448613909,
+   "tuned": 11.798783848390485
+  },
+  "ood/all/routed": {
+   "rows": 1,
+   "base": 13.569786012730212,
+   "tuned": 12.72499600135008
+  }
+ },
+ "peak_cuda_mib": 2782.595703125
+}

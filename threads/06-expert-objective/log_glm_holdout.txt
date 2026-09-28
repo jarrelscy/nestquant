@@ -1,0 +1,102 @@
+[    5.3s] g_b2_pw2_sr0.03_H proxy 0.010821
+[    9.7s] u_b2_pw2_sr0.03_H proxy 0.011213
+[   12.8s] d_b2_pw2_sr0.03_H proxy 0.017980
+[   12.9s] pw=2@2 {'val_p2': 24.66, 'val_uniform': 34.65, 'train_fit_p2': 14.15}
+[   18.3s] g_b2_pw1_sr0.03_H proxy 0.019901
+[   23.7s] u_b2_pw1_sr0.03_H proxy 0.020851
+[   27.2s] d_b2_pw1_sr0.03_H proxy 0.036719
+[   27.3s] pw=1@2 {'val_p2': 23.92, 'val_uniform': 32.7, 'train_fit_p2': 16.63}
+[   33.0s] g_b2_pw0.5_sr0.03_H proxy 0.022192
+[   38.3s] u_b2_pw0.5_sr0.03_H proxy 0.023317
+[   41.9s] d_b2_pw0.5_sr0.03_H proxy 0.042443
+[   42.1s] pw=0.5@2 {'val_p2': 24.17, 'val_uniform': 32.22, 'train_fit_p2': 19.46}
+[   47.9s] g_b2_pw0_sr0.03_H proxy 0.022900
+[   53.9s] u_b2_pw0_sr0.03_H proxy 0.024085
+[   57.4s] d_b2_pw0_sr0.03_H proxy 0.044309
+[   57.5s] pw=0@2 {'val_p2': 24.82, 'val_uniform': 32.13, 'train_fit_p2': 23.15}
+[   63.0s] g_b2_pw2_sr0.1_H proxy 0.015054
+[   68.5s] u_b2_pw2_sr0.1_H proxy 0.015568
+[   71.8s] d_b2_pw2_sr0.1_H proxy 0.022520
+[   72.0s] pw=2,sr=0.1@2 {'val_p2': 24.06, 'val_uniform': 33.49, 'train_fit_p2': 14.59}
+[   77.6s] g_b2_pw2_sr0.3_H proxy 0.023792
+[   83.3s] u_b2_pw2_sr0.3_H proxy 0.024492
+[   86.6s] d_b2_pw2_sr0.3_H proxy 0.031601
+[   86.8s] pw=2,sr=0.3@2 {'val_p2': 23.7, 'val_uniform': 32.8, 'train_fit_p2': 15.65}
+[   92.3s] g_b2_pw0_sr0.1_H proxy 0.026813
+[   97.7s] u_b2_pw0_sr0.1_H proxy 0.028124
+[  101.3s] d_b2_pw0_sr0.1_H proxy 0.046614
+[  101.5s] pw=0,sr=0.1@2 {'val_p2': 24.78, 'val_uniform': 31.52, 'train_fit_p2': 23.42}
+[  111.6s] g_b2_pw2_sr0.03_Gfull proxy 0.010143
+[  121.1s] u_b2_pw2_sr0.03_Gfull proxy 0.010547
+[  121.4s] pw=2,gu=Gfull@2 {'val_p2': 24.51, 'val_uniform': 34.68, 'train_fit_p2': 14.14}
+[  131.4s] g_b2_pw0_sr0.03_Gfull proxy 0.022404
+[  140.1s] u_b2_pw0_sr0.03_Gfull proxy 0.023516
+[  140.2s] pw=0,gu=Gfull@2 {'val_p2': 24.65, 'val_uniform': 32.03, 'train_fit_p2': 22.99}
+[  149.3s] g_b2_pw0_sr0.03_Gdiag proxy 0.022537
+[  158.6s] u_b2_pw0_sr0.03_Gdiag proxy 0.023664
+[  158.8s] pw=0,gu=Gdiag@2 {'val_p2': 24.76, 'val_uniform': 32.04, 'train_fit_p2': 23.06}
+[  162.9s] d_b2_pw2_sr0.03_seqH_H proxy 0.017576
+[  163.0s] pw=2,dn=seqH@2 {'val_p2': 24.77, 'val_uniform': 34.66, 'train_fit_p2': 14.14}
+[  167.5s] d_b2_pw0_sr0.03_seqH_H proxy 0.043808
+[  167.6s] pw=0,dn=seqH@2 {'val_p2': 24.88, 'val_uniform': 32.12, 'train_fit_p2': 23.16}
+[  171.3s] d_b2_pw2_sr0.03_seq_H_r1e-3 proxy 0.017531
+[  171.4s] pw=2,dn=seq@2 {'val_p2': 25.04, 'val_uniform': 35.58, 'train_fit_p2': 12.58}
+[  175.0s] d_b2_pw2_sr0.03_seq_H_r0.1 proxy 0.009955
+[  175.4s] pw=2,dn=seq,ridge=0.1@2 {'val_p2': 33.58, 'val_uniform': 46.07, 'train_fit_p2': 15.86}
+[  179.4s] d_b2_pw0_sr0.03_seq_H_r1e-3 proxy 0.043857
+[  179.6s] pw=0,dn=seq@2 {'val_p2': 24.63, 'val_uniform': 32.8, 'train_fit_p2': 20.77}
+[  183.6s] d_b2_pw0_sr0.03_seq_H_r0.1 proxy 0.038193
+[  183.7s] pw=0,dn=seq,ridge=0.1@2 {'val_p2': 25.97, 'val_uniform': 34.23, 'train_fit_p2': 22.07}
+[  187.3s] d_b2_pw0_sr0.03_seq_Gfull_r1e-3 proxy 0.043785
+[  187.4s] pw=0,gu=Gfull,dn=seq@2 {'val_p2': 24.47, 'val_uniform': 32.7, 'train_fit_p2': 20.75}
+[  192.0s] g_b4_pw2_sr0.03_H proxy 0.000658
+[  196.5s] u_b4_pw2_sr0.03_H proxy 0.000682
+[  200.0s] d_b4_pw2_sr0.03_H proxy 0.001118
+[  200.1s] pw=2@4 {'val_p2': 6.37, 'val_uniform': 9.0, 'train_fit_p2': 3.55}
+[  205.0s] g_b4_pw1_sr0.03_H proxy 0.001223
+[  209.7s] u_b4_pw1_sr0.03_H proxy 0.001281
+[  213.3s] d_b4_pw1_sr0.03_H proxy 0.002335
+[  213.4s] pw=1@4 {'val_p2': 6.16, 'val_uniform': 8.5, 'train_fit_p2': 4.16}
+[  218.2s] g_b4_pw0.5_sr0.03_H proxy 0.001369
+[  223.1s] u_b4_pw0.5_sr0.03_H proxy 0.001438
+[  226.7s] d_b4_pw0.5_sr0.03_H proxy 0.002713
+[  226.8s] pw=0.5@4 {'val_p2': 6.17, 'val_uniform': 8.37, 'train_fit_p2': 4.86}
+[  231.7s] g_b4_pw0_sr0.03_H proxy 0.001414
+[  236.1s] u_b4_pw0_sr0.03_H proxy 0.001488
+[  239.2s] d_b4_pw0_sr0.03_H proxy 0.002836
+[  239.4s] pw=0@4 {'val_p2': 6.35, 'val_uniform': 8.34, 'train_fit_p2': 5.82}
+[  243.6s] g_b4_pw2_sr0.1_H proxy 0.000942
+[  246.9s] u_b4_pw2_sr0.1_H proxy 0.000974
+[  248.7s] d_b4_pw2_sr0.1_H proxy 0.001423
+[  248.8s] pw=2,sr=0.1@4 {'val_p2': 6.19, 'val_uniform': 8.69, 'train_fit_p2': 3.67}
+[  251.5s] g_b4_pw2_sr0.3_H proxy 0.001518
+[  254.1s] u_b4_pw2_sr0.3_H proxy 0.001562
+[  255.9s] d_b4_pw2_sr0.3_H proxy 0.002025
+[  255.9s] pw=2,sr=0.3@4 {'val_p2': 6.1, 'val_uniform': 8.5, 'train_fit_p2': 3.96}
+[  258.6s] g_b4_pw0_sr0.1_H proxy 0.001685
+[  260.9s] u_b4_pw0_sr0.1_H proxy 0.001767
+[  262.6s] d_b4_pw0_sr0.1_H proxy 0.002992
+[  262.7s] pw=0,sr=0.1@4 {'val_p2': 6.29, 'val_uniform': 8.17, 'train_fit_p2': 5.89}
+[  266.0s] g_b4_pw2_sr0.03_Gfull proxy 0.000615
+[  269.5s] u_b4_pw2_sr0.03_Gfull proxy 0.000639
+[  269.5s] pw=2,gu=Gfull@4 {'val_p2': 6.35, 'val_uniform': 9.01, 'train_fit_p2': 3.54}
+[  272.9s] g_b4_pw0_sr0.03_Gfull proxy 0.001382
+[  276.2s] u_b4_pw0_sr0.03_Gfull proxy 0.001451
+[  276.3s] pw=0,gu=Gfull@4 {'val_p2': 6.33, 'val_uniform': 8.32, 'train_fit_p2': 5.79}
+[  279.5s] g_b4_pw0_sr0.03_Gdiag proxy 0.001390
+[  282.8s] u_b4_pw0_sr0.03_Gdiag proxy 0.001460
+[  282.9s] pw=0,gu=Gdiag@4 {'val_p2': 6.33, 'val_uniform': 8.32, 'train_fit_p2': 5.8}
+[  284.8s] d_b4_pw2_sr0.03_seqH_H proxy 0.001118
+[  284.8s] pw=2,dn=seqH@4 {'val_p2': 6.37, 'val_uniform': 9.0, 'train_fit_p2': 3.55}
+[  286.7s] d_b4_pw0_sr0.03_seqH_H proxy 0.002834
+[  286.7s] pw=0,dn=seqH@4 {'val_p2': 6.34, 'val_uniform': 8.34, 'train_fit_p2': 5.82}
+[  288.6s] d_b4_pw2_sr0.03_seq_H_r1e-3 proxy 0.001103
+[  288.7s] pw=2,dn=seq@4 {'val_p2': 6.52, 'val_uniform': 9.28, 'train_fit_p2': 3.16}
+[  290.5s] d_b4_pw2_sr0.03_seq_H_r0.1 proxy 0.000605
+[  290.6s] pw=2,dn=seq,ridge=0.1@4 {'val_p2': 26.01, 'val_uniform': 35.55, 'train_fit_p2': 11.6}
+[  292.5s] d_b4_pw0_sr0.03_seq_H_r1e-3 proxy 0.002830
+[  292.5s] pw=0,dn=seq@4 {'val_p2': 6.31, 'val_uniform': 8.52, 'train_fit_p2': 5.26}
+[  294.4s] d_b4_pw0_sr0.03_seq_H_r0.1 proxy 0.002455
+[  294.6s] pw=0,dn=seq,ridge=0.1@4 {'val_p2': 11.99, 'val_uniform': 15.91, 'train_fit_p2': 10.03}
+[  296.5s] d_b4_pw0_sr0.03_seq_Gfull_r1e-3 proxy 0.002829
+[  296.6s] pw=0,gu=Gfull,dn=seq@4 {'val_p2': 6.31, 'val_uniform': 8.5, 'train_fit_p2': 5.24}

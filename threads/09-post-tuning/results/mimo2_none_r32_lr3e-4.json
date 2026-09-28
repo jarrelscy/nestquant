@@ -1,0 +1,121 @@
+{
+ "model": "mimo",
+ "bits": 2,
+ "groups": [],
+ "rank": 32,
+ "rows": 29492,
+ "held_out_rows": 3276,
+ "lr": 0.0003,
+ "extra_bpw": 0.3333333333333333,
+ "init": {
+  "train": 18.884750388618773,
+  "hold": 18.992007521081092
+ },
+ "best": {
+  "epoch": 7,
+  "hold": 18.815788644348117,
+  "train": 18.026392299489725,
+  "hold_rounded": 18.81569577063597
+ },
+ "history": [
+  {
+   "epoch": 1,
+   "hold": 18.898945236848526,
+   "train": null
+  },
+  {
+   "epoch": 2,
+   "hold": 18.855715651734148,
+   "train": null
+  },
+  {
+   "epoch": 3,
+   "hold": 18.833542556507428,
+   "train": null
+  },
+  {
+   "epoch": 4,
+   "hold": 18.824767086564968,
+   "train": null
+  },
+  {
+   "epoch": 5,
+   "hold": 18.8211445243761,
+   "train": null
+  },
+  {
+   "epoch": 6,
+   "hold": 18.817213588579378,
+   "train": null
+  },
+  {
+   "epoch": 7,
+   "hold": 18.815788644348117,
+   "train": null
+  },
+  {
+   "epoch": 8,
+   "hold": 18.81934189221079,
+   "train": null
+  },
+  {
+   "epoch": 9,
+   "hold": 18.82008660093515,
+   "train": null
+  },
+  {
+   "epoch": 10,
+   "hold": 18.82413039884823,
+   "train": null
+  },
+  {
+   "epoch": 11,
+   "hold": 18.82830645263571,
+   "train": null
+  },
+  {
+   "epoch": 12,
+   "hold": 18.832760889089617,
+   "train": null
+  },
+  {
+   "epoch": 13,
+   "hold": 18.839567992159097,
+   "train": null
+  },
+  {
+   "epoch": 14,
+   "hold": 18.84545756240564,
+   "train": null
+  },
+  {
+   "epoch": 15,
+   "hold": 18.850140176089194,
+   "train": null
+  }
+ ],
+ "seconds": 7.517019987106323,
+ "eval": {
+  "control/all/forced": {
+   "rows": 3072,
+   "base": 39.46954459557063,
+   "tuned": 38.89783456550257
+  },
+  "control/all/routed": {
+   "rows": 31,
+   "base": 15.987901579036695,
+   "tuned": 15.340199583950989
+  },
+  "ood/all/forced": {
+   "rows": 512,
+   "base": 45.76462285637609,
+   "tuned": 44.96165760498529
+  },
+  "ood/all/routed": {
+   "rows": 1,
+   "base": 49.95508283470886,
+   "tuned": 48.42160487905377
+  }
+ },
+ "peak_cuda_mib": 2782.595703125
+}

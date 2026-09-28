@@ -1,0 +1,169 @@
+{
+ "family": "deq",
+ "train_sample_rel_l2": {
+  "nat2@2": 0.21283469800435562,
+  "nat2@4": 0.1125278771011719,
+  "nat4@2": 0.46793762038860204,
+  "nat4@4": 0.05771485641544449,
+  "blend_0.5@2": 0.2501659546525082,
+  "blend_0.5@4": 0.08196939593130027,
+  "jointcd_0.5@2": 0.20783336254505266,
+  "jointcd_0.5@4": 0.08444905886909446,
+  "jointcd_0.7@2": 0.21618986283437583,
+  "jointcd_0.7@4": 0.07730554735515224,
+  "jointcd_0.85@2": 0.2544975999788772,
+  "jointcd_0.85@4": 0.06797453033527671,
+  "jointcd_0.95@2": 0.3286622810982862,
+  "jointcd_0.95@4": 0.05975018949587221,
+  "innov_exact_Minv@2": 0.21283469800435562,
+  "innov_exact_Minv@4": 0.0636385287320912,
+  "EXL3-2": 0.15944837476974635,
+  "EXL3-4": 0.0403201937360953
+ },
+ "capture": {
+  "nat2@2": {
+   "all/forced": 54.13,
+   "all/routed": 50.885,
+   "control/forced": 51.801,
+   "control/routed": 47.473,
+   "ood/forced": 57.699,
+   "ood/routed": 58.231
+  },
+  "nat2@4": {
+   "all/forced": 26.363,
+   "all/routed": 24.612,
+   "control/forced": 25.341,
+   "control/routed": 23.0,
+   "ood/forced": 27.937,
+   "ood/routed": 28.082
+  },
+  "nat4@2": {
+   "all/forced": 52.506,
+   "all/routed": 51.139,
+   "control/forced": 52.629,
+   "control/routed": 50.493,
+   "ood/forced": 52.305,
+   "ood/routed": 52.654
+  },
+  "nat4@4": {
+   "all/forced": 16.055,
+   "all/routed": 14.91,
+   "control/forced": 15.293,
+   "control/routed": 13.787,
+   "ood/forced": 17.217,
+   "ood/routed": 17.295
+  },
+  "blend_0.5@2": {
+   "all/forced": 49.144,
+   "all/routed": 46.568,
+   "control/forced": 47.699,
+   "control/routed": 44.17,
+   "ood/forced": 51.395,
+   "ood/routed": 51.846
+  },
+  "blend_0.5@4": {
+   "all/forced": 20.057,
+   "all/routed": 18.764,
+   "control/forced": 19.201,
+   "control/routed": 17.459,
+   "ood/forced": 21.368,
+   "ood/routed": 21.562
+  },
+  "jointcd_0.5@2": {
+   "all/forced": 52.561,
+   "all/routed": 49.166,
+   "control/forced": 50.37,
+   "control/routed": 45.917,
+   "ood/forced": 55.924,
+   "ood/routed": 56.172
+  },
+  "jointcd_0.5@4": {
+   "all/forced": 23.93,
+   "all/routed": 22.119,
+   "control/forced": 22.818,
+   "control/routed": 20.445,
+   "ood/forced": 25.626,
+   "ood/routed": 25.68
+  },
+  "jointcd_0.7@2": {
+   "all/forced": 51.211,
+   "all/routed": 48.113,
+   "control/forced": 49.255,
+   "control/routed": 44.989,
+   "ood/forced": 54.225,
+   "ood/routed": 54.86
+  },
+  "jointcd_0.7@4": {
+   "all/forced": 22.078,
+   "all/routed": 20.643,
+   "control/forced": 21.038,
+   "control/routed": 19.084,
+   "ood/forced": 23.663,
+   "ood/routed": 23.959
+  },
+  "jointcd_0.85@2": {
+   "all/forced": 50.06,
+   "all/routed": 47.397,
+   "control/forced": 48.692,
+   "control/routed": 45.023,
+   "ood/forced": 52.197,
+   "ood/routed": 52.637
+  },
+  "jointcd_0.85@4": {
+   "all/forced": 19.702,
+   "all/routed": 18.303,
+   "control/forced": 18.763,
+   "control/routed": 16.889,
+   "ood/forced": 21.133,
+   "ood/routed": 21.313
+  },
+  "jointcd_0.95@2": {
+   "all/forced": 49.501,
+   "all/routed": 47.476,
+   "control/forced": 48.876,
+   "control/routed": 45.97,
+   "ood/forced": 50.497,
+   "ood/routed": 50.89
+  },
+  "jointcd_0.95@4": {
+   "all/forced": 17.2,
+   "all/routed": 16.001,
+   "control/forced": 16.378,
+   "control/routed": 14.733,
+   "ood/forced": 18.453,
+   "ood/routed": 18.684
+  },
+  "innov_exact_Minv@2": {
+   "all/forced": 54.13,
+   "all/routed": 50.885,
+   "control/forced": 51.801,
+   "control/routed": 47.473,
+   "ood/forced": 57.699,
+   "ood/routed": 58.231
+  },
+  "innov_exact_Minv@4": {
+   "all/forced": 17.301,
+   "all/routed": 16.119,
+   "control/forced": 16.495,
+   "control/routed": 14.925,
+   "ood/forced": 18.53,
+   "ood/routed": 18.662
+  },
+  "EXL3-2": {
+   "all/forced": 40.011,
+   "all/routed": 37.411,
+   "control/forced": 38.341,
+   "control/routed": 34.934,
+   "ood/forced": 42.572,
+   "ood/routed": 42.757
+  },
+  "EXL3-4": {
+   "all/forced": 10.457,
+   "all/routed": 9.736,
+   "control/forced": 10.004,
+   "control/routed": 9.058,
+   "ood/forced": 11.152,
+   "ood/routed": 11.181
+  }
+ }
+}

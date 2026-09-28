@@ -1,0 +1,52 @@
+[    4.2s] g_b2_pw2_sr0.03_auto_H proxy 0.011425
+[    7.5s] u_b2_pw2_sr0.03_auto_H proxy 0.011819
+[    9.6s] d_b2_pw2_sr0.03_auto_H proxy 0.018530
+[    9.7s] pw=2@2 {'train_fit_p2': 14.15, 'eval': {'ctx:forced_id': 38.35, 'ctx:forced_ood': 42.63, 'ctx:routed_id': 34.8, 'ctx:routed_ood': 43.07, 'ctx:forced_all': 40.04, 'ctx:routed_all': 37.43}}
+[   15.0s] g_b2_pw2_sr0.03_auto_GOdiag proxy 0.010735
+[   19.9s] u_b2_pw2_sr0.03_auto_GOdiag proxy 0.011170
+[   20.0s] pw=2,gu=GOdiag@2 {'train_fit_p2': 14.13, 'eval': {'ctx:forced_id': 38.4, 'ctx:forced_ood': 42.62, 'ctx:routed_id': 34.87, 'ctx:routed_ood': 42.91, 'ctx:forced_all': 40.06, 'ctx:routed_all': 37.42}}
+[   25.0s] g_b2_pw2_sr0.03_auto_Gfull proxy 0.010571
+[   29.8s] u_b2_pw2_sr0.03_auto_Gfull proxy 0.011004
+[   30.0s] pw=2,gu=Gfull@2 {'train_fit_p2': 14.13, 'eval': {'ctx:forced_id': 38.4, 'ctx:forced_ood': 42.61, 'ctx:routed_id': 34.73, 'ctx:routed_ood': 42.83, 'ctx:forced_all': 40.06, 'ctx:routed_all': 37.3}}
+[   32.8s] d_b2_pw2_sr0.03_auto_seqW_H_r1e-3 proxy 0.018293
+[   33.0s] pw=2,dn=seq@2 {'train_fit_p2': 12.6, 'eval': {'ctx:forced_id': 39.54, 'ctx:forced_ood': 44.27, 'ctx:routed_id': 35.78, 'ctx:routed_ood': 44.74, 'ctx:forced_all': 41.41, 'ctx:routed_all': 38.64}}
+[   36.6s] g_b2_pw1_sr0.3_auto_H proxy 0.032603
+[   39.9s] u_b2_pw1_sr0.3_auto_H proxy 0.033855
+[   42.0s] d_b2_pw1_sr0.3_auto_H proxy 0.046184
+[   42.1s] pw=1,sr=0.3@2 {'train_fit_p2': 18.07, 'eval': {'ctx:forced_id': 34.51, 'ctx:forced_ood': 38.26, 'ctx:routed_id': 32.67, 'ctx:routed_ood': 38.57, 'ctx:forced_all': 35.99, 'ctx:routed_all': 34.51}}
+[   47.1s] g_b2_pw1_sr0.3_auto_GOdiag proxy 0.032115
+[   52.0s] u_b2_pw1_sr0.3_auto_GOdiag proxy 0.033337
+[   52.1s] pw=1,sr=0.3,gu=GOdiag@2 {'train_fit_p2': 18.0, 'eval': {'ctx:forced_id': 34.41, 'ctx:forced_ood': 38.16, 'ctx:routed_id': 32.51, 'ctx:routed_ood': 38.48, 'ctx:forced_all': 35.89, 'ctx:routed_all': 34.38}}
+[   57.2s] g_b2_pw1_sr0.3_auto_Gfull proxy 0.031939
+[   62.3s] u_b2_pw1_sr0.3_auto_Gfull proxy 0.033149
+[   62.5s] pw=1,sr=0.3,gu=Gfull@2 {'train_fit_p2': 18.01, 'eval': {'ctx:forced_id': 34.42, 'ctx:forced_ood': 38.12, 'ctx:routed_id': 32.43, 'ctx:routed_ood': 38.48, 'ctx:forced_all': 35.88, 'ctx:routed_all': 34.33}}
+[   66.2s] g_b2_pw0_sr0.03_auto_H proxy 0.023809
+[   69.7s] u_b2_pw0_sr0.03_auto_H proxy 0.025032
+[   71.9s] d_b2_pw0_sr0.03_auto_H proxy 0.045080
+[   72.0s] pw=0@2 {'train_fit_p2': 22.93, 'eval': {'ctx:forced_id': 35.23, 'ctx:forced_ood': 40.13, 'ctx:routed_id': 33.9, 'ctx:routed_ood': 40.33, 'ctx:forced_all': 37.18, 'ctx:routed_all': 35.92}}
+[   75.1s] g_b4_pw2_sr0.03_auto_H proxy 0.000697
+[   78.2s] u_b4_pw2_sr0.03_auto_H proxy 0.000720
+[   80.4s] d_b4_pw2_sr0.03_auto_H proxy 0.001156
+[   80.6s] pw=2@4 {'train_fit_p2': 3.55, 'eval': {'ctx:forced_id': 10.0, 'ctx:forced_ood': 11.13, 'ctx:routed_id': 9.09, 'ctx:routed_ood': 11.18, 'ctx:forced_all': 10.45, 'ctx:routed_all': 9.76}}
+[   85.3s] g_b4_pw2_sr0.03_auto_GOdiag proxy 0.000653
+[   90.0s] u_b4_pw2_sr0.03_auto_GOdiag proxy 0.000680
+[   90.1s] pw=2,gu=GOdiag@4 {'train_fit_p2': 3.54, 'eval': {'ctx:forced_id': 10.02, 'ctx:forced_ood': 11.16, 'ctx:routed_id': 9.02, 'ctx:routed_ood': 11.24, 'ctx:forced_all': 10.47, 'ctx:routed_all': 9.72}}
+[   94.8s] g_b4_pw2_sr0.03_auto_Gfull proxy 0.000642
+[   99.5s] u_b4_pw2_sr0.03_auto_Gfull proxy 0.000669
+[   99.7s] pw=2,gu=Gfull@4 {'train_fit_p2': 3.54, 'eval': {'ctx:forced_id': 10.01, 'ctx:forced_ood': 11.18, 'ctx:routed_id': 9.05, 'ctx:routed_ood': 11.21, 'ctx:forced_all': 10.47, 'ctx:routed_all': 9.73}}
+[  102.2s] d_b4_pw2_sr0.03_auto_seqW_H_r1e-3 proxy 0.001155
+[  102.3s] pw=2,dn=seq@4 {'train_fit_p2': 3.16, 'eval': {'ctx:forced_id': 10.29, 'ctx:forced_ood': 11.55, 'ctx:routed_id': 9.34, 'ctx:routed_ood': 11.65, 'ctx:forced_all': 10.79, 'ctx:routed_all': 10.08}}
+[  105.3s] g_b4_pw1_sr0.3_auto_H proxy 0.002080
+[  108.4s] u_b4_pw1_sr0.3_auto_H proxy 0.002160
+[  110.6s] d_b4_pw1_sr0.3_auto_H proxy 0.002972
+[  110.8s] pw=1,sr=0.3@4 {'train_fit_p2': 4.54, 'eval': {'ctx:forced_id': 8.96, 'ctx:forced_ood': 9.95, 'ctx:routed_id': 8.4, 'ctx:routed_ood': 10.08, 'ctx:forced_all': 9.35, 'ctx:routed_all': 8.93}}
+[  115.5s] g_b4_pw1_sr0.3_auto_GOdiag proxy 0.002048
+[  120.2s] u_b4_pw1_sr0.3_auto_GOdiag proxy 0.002125
+[  120.3s] pw=1,sr=0.3,gu=GOdiag@4 {'train_fit_p2': 4.53, 'eval': {'ctx:forced_id': 8.95, 'ctx:forced_ood': 9.93, 'ctx:routed_id': 8.38, 'ctx:routed_ood': 10.06, 'ctx:forced_all': 9.34, 'ctx:routed_all': 8.91}}
+[  125.0s] g_b4_pw1_sr0.3_auto_Gfull proxy 0.002037
+[  129.7s] u_b4_pw1_sr0.3_auto_Gfull proxy 0.002114
+[  129.8s] pw=1,sr=0.3,gu=Gfull@4 {'train_fit_p2': 4.53, 'eval': {'ctx:forced_id': 8.95, 'ctx:forced_ood': 9.93, 'ctx:routed_id': 8.39, 'ctx:routed_ood': 10.04, 'ctx:forced_all': 9.34, 'ctx:routed_all': 8.91}}
+[  133.1s] g_b4_pw0_sr0.03_auto_H proxy 0.001479
+[  136.3s] u_b4_pw0_sr0.03_auto_H proxy 0.001555
+[  138.4s] d_b4_pw0_sr0.03_auto_H proxy 0.002892
+[  138.6s] pw=0@4 {'train_fit_p2': 5.77, 'eval': {'ctx:forced_id': 9.19, 'ctx:forced_ood': 10.48, 'ctx:routed_id': 8.79, 'ctx:routed_ood': 10.54, 'ctx:forced_all': 9.7, 'ctx:routed_all': 9.34}}

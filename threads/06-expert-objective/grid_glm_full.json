@@ -1,0 +1,222 @@
+{
+ "pw=2@2": {
+  "train_fit_p2": 0.14147882821628283,
+  "eval": {
+   "ctx:forced_id": 0.38346304564846395,
+   "ctx:forced_ood": 0.4262527963757562,
+   "ctx:routed_id": 0.3480333956168872,
+   "ctx:routed_ood": 0.4306819623775544,
+   "ctx:forced_all": 0.40035152921432254,
+   "ctx:routed_all": 0.37431639893569957
+  }
+ },
+ "pw=2,gu=GOdiag@2": {
+  "train_fit_p2": 0.14126974640255485,
+  "eval": {
+   "ctx:forced_id": 0.38396564988486886,
+   "ctx:forced_ood": 0.42617052180374565,
+   "ctx:routed_id": 0.34865712004079025,
+   "ctx:routed_ood": 0.42906997312932393,
+   "ctx:forced_all": 0.4006156505277855,
+   "ctx:routed_all": 0.3741794920668647
+  }
+ },
+ "pw=2,gu=Gfull@2": {
+  "train_fit_p2": 0.14128087749064627,
+  "eval": {
+   "ctx:forced_id": 0.3839534160346937,
+   "ctx:forced_ood": 0.4260960798939703,
+   "ctx:routed_id": 0.34731016281483695,
+   "ctx:routed_ood": 0.42827828495048836,
+   "ctx:forced_all": 0.400578150419541,
+   "ctx:routed_all": 0.37302702853709596
+  }
+ },
+ "pw=2,dn=seq@2": {
+  "train_fit_p2": 0.12600494812083662,
+  "eval": {
+   "ctx:forced_id": 0.3954465105554865,
+   "ctx:forced_ood": 0.44270338182775176,
+   "ctx:routed_id": 0.35780096341506573,
+   "ctx:routed_ood": 0.4473891019378013,
+   "ctx:forced_all": 0.4141385113780211,
+   "ctx:routed_all": 0.38639465881602364
+  }
+ },
+ "pw=1,sr=0.3@2": {
+  "train_fit_p2": 0.18073782688598958,
+  "eval": {
+   "ctx:forced_id": 0.3450848103697956,
+   "ctx:forced_ood": 0.3826491660501283,
+   "ctx:routed_id": 0.32667515273900855,
+   "ctx:routed_ood": 0.385696227008866,
+   "ctx:forced_all": 0.35989977343794655,
+   "ctx:routed_all": 0.3451369602954418
+  }
+ },
+ "pw=1,sr=0.3,gu=GOdiag@2": {
+  "train_fit_p2": 0.17996454535791567,
+  "eval": {
+   "ctx:forced_id": 0.34412433985220364,
+   "ctx:forced_ood": 0.381571837101406,
+   "ctx:routed_id": 0.3250658472345296,
+   "ctx:routed_ood": 0.38484373078687095,
+   "ctx:forced_all": 0.35889306983060615,
+   "ctx:routed_all": 0.3437823409242325
+  }
+ },
+ "pw=1,sr=0.3,gu=Gfull@2": {
+  "train_fit_p2": 0.18012845730628874,
+  "eval": {
+   "ctx:forced_id": 0.3441773943523961,
+   "ctx:forced_ood": 0.3812385883052151,
+   "ctx:routed_id": 0.32434411244521627,
+   "ctx:routed_ood": 0.3847712172569793,
+   "ctx:forced_all": 0.35878918514848845,
+   "ctx:routed_all": 0.34327743325415905
+  }
+ },
+ "pw=0@2": {
+  "train_fit_p2": 0.2293489287163381,
+  "eval": {
+   "ctx:forced_id": 0.35233305902645573,
+   "ctx:forced_ood": 0.4012997076371932,
+   "ctx:routed_id": 0.33897576341001406,
+   "ctx:routed_ood": 0.4033315003964459,
+   "ctx:forced_all": 0.3718033030770081,
+   "ctx:routed_all": 0.3591612305067559
+  }
+ },
+ "pw=2@4": {
+  "train_fit_p2": 0.035464235097432004,
+  "eval": {
+   "ctx:forced_id": 0.10001735829061151,
+   "ctx:forced_ood": 0.111280073637894,
+   "ctx:routed_id": 0.09094445948382003,
+   "ctx:routed_ood": 0.11179390714594026,
+   "ctx:forced_all": 0.10446383030613601,
+   "ctx:routed_all": 0.09755929382476533
+  }
+ },
+ "pw=2,gu=GOdiag@4": {
+  "train_fit_p2": 0.0353953095101925,
+  "eval": {
+   "ctx:forced_id": 0.10017217716393222,
+   "ctx:forced_ood": 0.11164890536907567,
+   "ctx:routed_id": 0.09016304446039729,
+   "ctx:routed_ood": 0.11236596181858077,
+   "ctx:forced_all": 0.1047055774913202,
+   "ctx:routed_all": 0.09724129778396476
+  }
+ },
+ "pw=2,gu=Gfull@4": {
+  "train_fit_p2": 0.03539156483805397,
+  "eval": {
+   "ctx:forced_id": 0.10014530927064255,
+   "ctx:forced_ood": 0.11175296295171919,
+   "ctx:routed_id": 0.09047130105814026,
+   "ctx:routed_ood": 0.11207281270207389,
+   "ctx:forced_all": 0.10473210470724245,
+   "ctx:routed_all": 0.09734329711009716
+  }
+ },
+ "pw=2,dn=seq@4": {
+  "train_fit_p2": 0.03157290839371423,
+  "eval": {
+   "ctx:forced_id": 0.10292863141761624,
+   "ctx:forced_ood": 0.11550120364315983,
+   "ctx:routed_id": 0.09340406900772562,
+   "ctx:routed_ood": 0.11653136444076859,
+   "ctx:forced_all": 0.10790517089399111,
+   "ctx:routed_all": 0.10077981394697452
+  }
+ },
+ "pw=1,sr=0.3@4": {
+  "train_fit_p2": 0.04544302884490015,
+  "eval": {
+   "ctx:forced_id": 0.08959744095648742,
+   "ctx:forced_ood": 0.09948487798067171,
+   "ctx:routed_id": 0.08395963608752854,
+   "ctx:routed_ood": 0.10084413645595233,
+   "ctx:forced_all": 0.09349854404479022,
+   "ctx:routed_all": 0.08927309789988075
+  }
+ },
+ "pw=1,sr=0.3,gu=GOdiag@4": {
+  "train_fit_p2": 0.045344491451398135,
+  "eval": {
+   "ctx:forced_id": 0.08946970883849528,
+   "ctx:forced_ood": 0.09933287028569103,
+   "ctx:routed_id": 0.0837953694337951,
+   "ctx:routed_ood": 0.1005508894341963,
+   "ctx:forced_all": 0.09336111222645029,
+   "ctx:routed_all": 0.08906647333984281
+  }
+ },
+ "pw=1,sr=0.3,gu=Gfull@4": {
+  "train_fit_p2": 0.045323593697919155,
+  "eval": {
+   "ctx:forced_id": 0.08949868901720265,
+   "ctx:forced_ood": 0.09929141195024929,
+   "ctx:routed_id": 0.0838811356544942,
+   "ctx:routed_ood": 0.10038174094013107,
+   "ctx:forced_all": 0.09336142736940303,
+   "ctx:routed_all": 0.08906710622181131
+  }
+ },
+ "pw=0@4": {
+  "train_fit_p2": 0.057709241730936334,
+  "eval": {
+   "ctx:forced_id": 0.09189882917501493,
+   "ctx:forced_ood": 0.10477837651629725,
+   "ctx:routed_id": 0.08785379448918199,
+   "ctx:routed_ood": 0.10540090115306741,
+   "ctx:forced_all": 0.09702162728414211,
+   "ctx:routed_all": 0.09337355591190188
+  }
+ },
+ "pw=1,sr=0.3,gu=GOdiag,gb=0.5@2": {
+  "train_fit_p2": 0.18034089509667078,
+  "eval": {
+   "ctx:forced_id": 0.3440340777072268,
+   "ctx:forced_ood": 0.38206024430440894,
+   "ctx:routed_id": 0.3239786323316024,
+   "ctx:routed_ood": 0.3855071208985371,
+   "ctx:forced_all": 0.3590380855183934,
+   "ctx:routed_all": 0.343277672783689
+  }
+ },
+ "pw=2,gu=GOdiag,gb=0.5@2": {
+  "train_fit_p2": 0.14123035404456274,
+  "eval": {
+   "ctx:forced_id": 0.38358089331265344,
+   "ctx:forced_ood": 0.42553997913454744,
+   "ctx:routed_id": 0.3487872163190304,
+   "ctx:routed_ood": 0.42952993749876717,
+   "ctx:forced_all": 0.4001315144423634,
+   "ctx:routed_all": 0.3744205664520875
+  }
+ },
+ "pw=1,sr=0.3,gu=GOdiag,gb=0.5@4": {
+  "train_fit_p2": 0.045326651357782126,
+  "eval": {
+   "ctx:forced_id": 0.08951735449874876,
+   "ctx:forced_ood": 0.0994705834718631,
+   "ctx:routed_id": 0.08396320996560401,
+   "ctx:routed_ood": 0.10026846261063481,
+   "ctx:forced_all": 0.09344531570007447,
+   "ctx:routed_all": 0.0890839854966035
+  }
+ },
+ "pw=2,gu=GOdiag,gb=0.5@4": {
+  "train_fit_p2": 0.0353886890621471,
+  "eval": {
+   "ctx:forced_id": 0.09993643212290301,
+   "ctx:forced_ood": 0.1113811523624007,
+   "ctx:routed_id": 0.09069489657962557,
+   "ctx:routed_ood": 0.11257765423070767,
+   "ctx:forced_all": 0.10445712715067962,
+   "ctx:routed_all": 0.09766131131601406
+  }
+ }
+}

@@ -1,0 +1,203 @@
+{
+ "36": {
+  "exl3_2": {
+   "control:agentic": 33.48421131895469,
+   "control:code": 38.201442213273076,
+   "control:instruction": 35.53261762631182,
+   "control:medical": 43.28022081814303,
+   "control:prose": 43.84529579784653,
+   "control:reasoning": 36.08592028694325,
+   "ood:fasta": 44.05638699913349,
+   "ood:encoded_bytes": 43.86782475708908,
+   "ood:smt_bitvectors": 42.77561461437634,
+   "ood:scientific_telemetry": 40.79509005296588,
+   "ID": 38.339042158230605,
+   "OOD": 42.57251695543873,
+   "train_sample_w": 15.944837476974635
+  },
+  "exl3_4": {
+   "control:agentic": 8.667476531617913,
+   "control:code": 9.944838836334121,
+   "control:instruction": 9.262049030304278,
+   "control:medical": 11.336405252203798,
+   "control:prose": 11.500928929997656,
+   "control:reasoning": 9.401476328385442,
+   "ood:fasta": 11.657750525204168,
+   "ood:encoded_bytes": 11.522648985231028,
+   "ood:smt_bitvectors": 11.203165180135557,
+   "ood:scientific_telemetry": 10.59945612579572,
+   "ID": 10.00381246837341,
+   "OOD": 11.15218579930253,
+   "train_sample_w": 4.03201937360953
+  },
+  "nvfp4": {
+   "control:agentic": 12.138643680584952,
+   "control:code": 13.02616675190826,
+   "control:instruction": 12.581890293314837,
+   "control:medical": 13.410210829387614,
+   "control:prose": 13.248685209386743,
+   "control:reasoning": 12.701488008807749,
+   "ood:fasta": 13.166772458723,
+   "ood:encoded_bytes": 13.168004271624975,
+   "ood:smt_bitvectors": 12.679957535254108,
+   "ood:scientific_telemetry": 12.249935231767967,
+   "ID": 12.819127428788885,
+   "OOD": 12.715546043787358,
+   "train_sample_w": 10.433951225442282
+  },
+  "refit4_statsgram": {
+   "control:agentic": 8.668842396648147,
+   "control:code": 9.944738939241947,
+   "control:instruction": 9.26130064368482,
+   "control:medical": 11.33632977814178,
+   "control:prose": 11.500065085241323,
+   "control:reasoning": 9.401225022095536,
+   "ood:fasta": 11.654710748895045,
+   "ood:encoded_bytes": 11.522667988183377,
+   "ood:smt_bitvectors": 11.203047469553558,
+   "ood:scientific_telemetry": 10.5990823020375,
+   "ID": 10.003676302321601,
+   "OOD": 11.151457592231925,
+   "train_sample_w": 4.030933013062216
+  },
+  "refit_vs_artifact_weight_diff": [
+   0.000517886015586555,
+   0.0005233155679889023,
+   0.0005240997998043895
+  ]
+ },
+ "92": {
+  "exl3_2": {
+   "control:agentic": 36.2381879942388,
+   "control:code": 37.24914234091643,
+   "control:instruction": 37.83636838690819,
+   "control:medical": 39.89249430527828,
+   "control:prose": 42.839377155847316,
+   "control:reasoning": 37.65013633926268,
+   "ood:fasta": 46.336329858101045,
+   "ood:encoded_bytes": 45.30012456982344,
+   "ood:smt_bitvectors": 45.864413691928,
+   "ood:scientific_telemetry": 43.91605935152359,
+   "ID": 38.8788187582673,
+   "OOD": 45.2995213992601,
+   "train_sample_w": 22.241695957901143
+  },
+  "exl3_4": {
+   "control:agentic": 9.401611626647107,
+   "control:code": 9.655008650748924,
+   "control:instruction": 9.837420612554357,
+   "control:medical": 10.361182091675559,
+   "control:prose": 11.180738823080926,
+   "control:reasoning": 9.779497636593176,
+   "ood:fasta": 12.158584214959166,
+   "ood:encoded_bytes": 11.890398231000564,
+   "ood:smt_bitvectors": 12.050662350428382,
+   "ood:scientific_telemetry": 11.517392190111401,
+   "ID": 10.10618790525928,
+   "OOD": 11.890425788957323,
+   "train_sample_w": 5.588150309123964
+  },
+  "nvfp4": {
+   "control:agentic": 12.871129814316596,
+   "control:code": 12.32755669153163,
+   "control:instruction": 12.500625240250471,
+   "control:medical": 12.049581074115062,
+   "control:prose": 12.597069472197637,
+   "control:reasoning": 12.298955968441899,
+   "ood:fasta": 13.249776316467521,
+   "ood:encoded_bytes": 13.116551755690026,
+   "ood:smt_bitvectors": 13.328873154927335,
+   "ood:scientific_telemetry": 12.744106086827644,
+   "ID": 12.414013081675641,
+   "OOD": 13.103385052304976,
+   "train_sample_w": 11.653537264454942
+  },
+  "refit4_statsgram": {
+   "control:agentic": 9.401937065649566,
+   "control:code": 9.654352701425168,
+   "control:instruction": 9.838124202251942,
+   "control:medical": 10.361207203831071,
+   "control:prose": 11.180764574720163,
+   "control:reasoning": 9.778381518152225,
+   "ood:fasta": 12.159305544522194,
+   "ood:encoded_bytes": 11.8900910053409,
+   "ood:smt_bitvectors": 12.051910280500502,
+   "ood:scientific_telemetry": 11.515368892463755,
+   "ID": 10.10606157283915,
+   "OOD": 11.890339836326246,
+   "train_sample_w": 5.58724735820698
+  },
+  "refit_vs_artifact_weight_diff": [
+   0.0005139398272149265,
+   0.0005182931199669838,
+   0.0005267382366582751
+  ]
+ },
+ "165": {
+  "exl3_2": {
+   "control:agentic": 34.212520737952275,
+   "control:code": 31.61086869540962,
+   "control:instruction": 37.69422357120807,
+   "control:medical": 43.55051779211701,
+   "control:prose": 42.48110502391344,
+   "control:reasoning": 37.06422186587406,
+   "ood:fasta": 45.050410762756016,
+   "ood:encoded_bytes": 43.67848300675705,
+   "ood:smt_bitvectors": 42.83452807783228,
+   "ood:scientific_telemetry": 43.640591559149954,
+   "ID": 37.67104279764377,
+   "OOD": 43.63585675175722,
+   "train_sample_w": 16.41916658881059
+  },
+  "exl3_4": {
+   "control:agentic": 8.868642437005755,
+   "control:code": 8.1985540576566,
+   "control:instruction": 9.847875651457194,
+   "control:medical": 11.43252314102883,
+   "control:prose": 11.092373457800683,
+   "control:reasoning": 9.670299656717727,
+   "ood:fasta": 11.838806632518196,
+   "ood:encoded_bytes": 11.454314460891865,
+   "ood:smt_bitvectors": 11.186328408318385,
+   "ood:scientific_telemetry": 11.37271516973736,
+   "ID": 9.825137721970641,
+   "OOD": 11.413541905163827,
+   "train_sample_w": 4.138833371631775
+  },
+  "nvfp4": {
+   "control:agentic": 12.017534255919607,
+   "control:code": 11.350683714311515,
+   "control:instruction": 13.246731446751786,
+   "control:medical": 13.385388374720804,
+   "control:prose": 12.697527420980325,
+   "control:reasoning": 12.786162587169125,
+   "ood:fasta": 13.148751323021452,
+   "ood:encoded_bytes": 12.895719977470593,
+   "ood:smt_bitvectors": 12.585635272700538,
+   "ood:scientific_telemetry": 12.905776275200992,
+   "ID": 12.494585263209496,
+   "OOD": 12.834373476498348,
+   "train_sample_w": 10.095627841799539
+  },
+  "refit4_statsgram": {
+   "control:agentic": 8.868902891013859,
+   "control:code": 8.198972819620284,
+   "control:instruction": 9.846955566458249,
+   "control:medical": 11.432333987007635,
+   "control:prose": 11.09246433970788,
+   "control:reasoning": 9.669185724349369,
+   "ood:fasta": 11.83820390149884,
+   "ood:encoded_bytes": 11.451826688801424,
+   "ood:smt_bitvectors": 11.185127115027047,
+   "ood:scientific_telemetry": 11.371015389846702,
+   "ID": 9.82495403549311,
+   "OOD": 11.412115393979384,
+   "train_sample_w": 4.138054898004487
+  },
+  "refit_vs_artifact_weight_diff": [
+   0.0005229443777352571,
+   0.0005235184216871858,
+   0.0005243176710791886
+  ]
+ }
+}

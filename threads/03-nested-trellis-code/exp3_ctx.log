@@ -1,0 +1,3 @@
+res mul1 K2 L16 ctx=base-window hash          L4: mse=0.004725 +0.827 dB  
+res mul1 K1 L16 ctx=base-window hash          L3: mse=0.018409 +0.712 dB  
+total s 11.172062873840332

@@ -1,0 +1,80 @@
+{
+ "glm:matched": {
+  "exl3_2": {
+   "all/forced": 40.011,
+   "all/routed": 37.411,
+   "control/forced": 38.341,
+   "control/routed": 34.934,
+   "ood/forced": 42.572,
+   "ood/routed": 42.757
+  },
+  "rec_2": {
+   "all/forced": 35.904,
+   "all/routed": 34.328,
+   "control/forced": 34.405,
+   "control/routed": 32.399,
+   "ood/forced": 38.205,
+   "ood/routed": 38.551
+  },
+  "exl3_4": {
+   "all/forced": 10.457,
+   "all/routed": 9.736,
+   "control/forced": 10.004,
+   "control/routed": 9.058,
+   "ood/forced": 11.152,
+   "ood/routed": 11.181
+  },
+  "rec_4": {
+   "all/forced": 9.344,
+   "all/routed": 8.904,
+   "control/forced": 8.951,
+   "control/routed": 8.393,
+   "ood/forced": 9.948,
+   "ood/routed": 10.024
+  },
+  "nvfp4": {
+   "all/forced": 12.779,
+   "all/routed": 12.287,
+   "control/forced": 12.818,
+   "control/routed": 12.074,
+   "ood/forced": 12.714,
+   "ood/routed": 12.781
+  }
+ },
+ "mimo:native_id_control_v1_capture/layer_55.pt": {
+  "exl3_2": {
+   "all/forced": 39.469,
+   "all/routed": 15.988
+  },
+  "rec_2": {
+   "all/forced": 39.188,
+   "all/routed": 14.933
+  },
+  "exl3_4": {
+   "all/forced": 10.433,
+   "all/routed": 4.004
+  },
+  "rec_4": {
+   "all/forced": 10.423,
+   "all/routed": 3.851
+  }
+ },
+ "mimo:ns/ood_controlled_v1_capture/layer_55.pt": {
+  "exl3_2": {
+   "all/forced": 45.768,
+   "all/routed": 49.962
+  },
+  "rec_2": {
+   "all/forced": 45.111,
+   "all/routed": 51.317
+  },
+  "exl3_4": {
+   "all/forced": 12.047,
+   "all/routed": 13.564
+  },
+  "rec_4": {
+   "all/forced": 12.115,
+   "all/routed": 13.531
+  }
+ }
+}

@@ -1,0 +1,12 @@
+base g_scale [0.7786062709190876, 0.7805435244982405, 0.7794603783389821] proxy [0.011424040685992882, 0.011816391566885437, 0.018537853823373456]
+exl3_3 proxy [0.002756112676154405, 0.0028508495030470384, 0.00455619128519765]
+exl3_4 proxy [0.000696557513270974, 0.0007201297842131987, 0.0011557391269824803]
+nested 2+2 proxy [0.0013348072521115867, 0.0013805785340406972, 0.0019330232677420688] resid sd [0.31083331497796535, 0.311588686503849, 0.30098598403956156]
+nested 2+1 proxy [0.005287050407923341, 0.005466308516662662, 0.00763718741880174] resid sd [0.3076342597303357, 0.3084207853933241, 0.29797772877018314]
+nested 2+1+1 proxy [0.0022257633571491453, 0.0023043333842583807, 0.002970109238197224]
+exl3_2 (=nested L2)              {'all/forced': 40.011, 'all/routed': 37.411, 'control/forced': 38.341, 'control/routed': 34.934, 'ood/forced': 42.572, 'ood/routed': 42.757}
+exl3_3                           {'all/forced': 20.538, 'all/routed': 19.16, 'control/forced': 19.651, 'control/routed': 17.788, 'ood/forced': 21.898, 'ood/routed': 22.097}
+exl3_4                           {'all/forced': 10.457, 'all/routed': 9.736, 'control/forced': 10.004, 'control/routed': 9.058, 'ood/forced': 11.152, 'ood/routed': 11.181}
+nested 2+2 L4                    {'all/forced': 12.98, 'all/routed': 12.104, 'control/forced': 12.474, 'control/routed': 11.322, 'ood/forced': 13.76, 'ood/routed': 13.793}
+nested 2+1 L3                    {'all/forced': 24.839, 'all/routed': 23.169, 'control/forced': 23.902, 'control/routed': 21.687, 'ood/forced': 26.283, 'ood/routed': 26.374}
+nested 2+1+1 L4                  {'all/forced': 15.297, 'all/routed': 14.293, 'control/forced': 14.776, 'control/routed': 13.416, 'ood/forced': 16.105, 'ood/routed': 16.199}

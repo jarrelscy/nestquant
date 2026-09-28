@@ -1,0 +1,642 @@
+{
+ "glm53_pilot_matched_l16/exl3_e165/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.999997664419154,
+   "symbol_H_given_prev": 1.9999972204182062,
+   "symbol_H_given_prev2": 1.9999860451149578,
+   "symbol_H_given_pos": 1.999997325966632,
+   "word16_H": 15.992966830151214,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999963904559142,
+   "symbol_H_given_prev": 1.999995465719028,
+   "symbol_H_given_prev2": 1.9999826043176867,
+   "symbol_H_given_pos": 1.9999945807699024,
+   "word16_H": 15.992423942133975,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999968329901132,
+   "symbol_H_given_prev": 1.9999962554060815,
+   "symbol_H_given_prev2": 1.999982577494829,
+   "symbol_H_given_pos": 1.9999960152603524,
+   "word16_H": 15.991619268419251,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l16/exl3_e165/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.9999954277833902,
+   "symbol_H_given_prev": 3.999513058665641,
+   "symbol_H_given_prev2": 3.9984305422578714,
+   "symbol_H_given_pos": 3.999992092461053,
+   "word16_H": 15.9769277366314,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.999996089784733,
+   "symbol_H_given_prev": 3.999569856275143,
+   "symbol_H_given_prev2": 3.998565491577187,
+   "symbol_H_given_pos": 3.999992801170741,
+   "word16_H": 15.978760388578372,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.99999546388142,
+   "symbol_H_given_prev": 3.999502327076452,
+   "symbol_H_given_prev2": 3.9983691362123777,
+   "symbol_H_given_pos": 3.9999903490845643,
+   "word16_H": 15.976143262379093,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l16/exl3_e36/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.9999954889830653,
+   "symbol_H_given_prev": 1.999995210861944,
+   "symbol_H_given_prev2": 1.99998299084382,
+   "symbol_H_given_pos": 1.9999953088243725,
+   "word16_H": 15.992890828881759,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999971961192418,
+   "symbol_H_given_prev": 1.999996584342031,
+   "symbol_H_given_prev2": 1.9999867246400163,
+   "symbol_H_given_pos": 1.9999980012119174,
+   "word16_H": 15.993155568830176,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999953965759882,
+   "symbol_H_given_prev": 1.9999953556597942,
+   "symbol_H_given_prev2": 1.9999824068162106,
+   "symbol_H_given_pos": 1.9999921763056587,
+   "word16_H": 15.991810864826292,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l16/exl3_e36/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.9999961358223617,
+   "symbol_H_given_prev": 3.999545029837661,
+   "symbol_H_given_prev2": 3.998500438358624,
+   "symbol_H_given_pos": 3.999998313615494,
+   "word16_H": 15.978367971606458,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.9999955157547835,
+   "symbol_H_given_prev": 3.9995618569455877,
+   "symbol_H_given_prev2": 3.9985739292975415,
+   "symbol_H_given_pos": 3.999998057621802,
+   "word16_H": 15.979008979420133,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.999994235373807,
+   "symbol_H_given_prev": 3.999533600200389,
+   "symbol_H_given_prev2": 3.9984769717662614,
+   "symbol_H_given_pos": 3.999996062183863,
+   "word16_H": 15.977736927935872,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l16/exl3_e92/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.9999948776219965,
+   "symbol_H_given_prev": 1.9999941976317082,
+   "symbol_H_given_prev2": 1.99998485142335,
+   "symbol_H_given_pos": 1.9999956270604358,
+   "word16_H": 15.993865266025864,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999959067513917,
+   "symbol_H_given_prev": 1.9999952648527934,
+   "symbol_H_given_prev2": 1.999983435021834,
+   "symbol_H_given_pos": 1.999995729454831,
+   "word16_H": 15.992740011940047,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999959384095432,
+   "symbol_H_given_prev": 1.999995455719453,
+   "symbol_H_given_prev2": 1.999981412826083,
+   "symbol_H_given_pos": 1.9999961348989483,
+   "word16_H": 15.992167367414767,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l16/exl3_e92/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.9999949391612444,
+   "symbol_H_given_prev": 3.9995630527475288,
+   "symbol_H_given_prev2": 3.998560047189864,
+   "symbol_H_given_pos": 3.9999838679450903,
+   "word16_H": 15.979064917606287,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.999995237589874,
+   "symbol_H_given_prev": 3.9995396327935917,
+   "symbol_H_given_prev2": 3.998510092970651,
+   "symbol_H_given_pos": 3.9999919451949317,
+   "word16_H": 15.978480407035303,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.9999956204063265,
+   "symbol_H_given_prev": 3.9996000978003283,
+   "symbol_H_given_prev2": 3.998633006625556,
+   "symbol_H_given_pos": 3.999999726370067,
+   "word16_H": 15.980320912052838,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l49/exl3_e165/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.9999952765921005,
+   "symbol_H_given_prev": 1.9999949866330442,
+   "symbol_H_given_prev2": 1.9999840624870049,
+   "symbol_H_given_pos": 1.9999944757752317,
+   "word16_H": 15.992118824271621,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999956286538636,
+   "symbol_H_given_prev": 1.9999954059638312,
+   "symbol_H_given_prev2": 1.999984425804794,
+   "symbol_H_given_pos": 1.999994804475362,
+   "word16_H": 15.992519756016767,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999970048439895,
+   "symbol_H_given_prev": 1.9999969273444216,
+   "symbol_H_given_prev2": 1.999984717715936,
+   "symbol_H_given_pos": 1.9999989020743296,
+   "word16_H": 15.99262978486744,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l49/exl3_e165/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.999995728653242,
+   "symbol_H_given_prev": 3.9995360774732434,
+   "symbol_H_given_prev2": 3.9984528681598164,
+   "symbol_H_given_pos": 3.99999388277239,
+   "word16_H": 15.977276424967954,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.999993587814905,
+   "symbol_H_given_prev": 3.9995101586105704,
+   "symbol_H_given_prev2": 3.9984253597698194,
+   "symbol_H_given_pos": 3.999996216454498,
+   "word16_H": 15.976931460318259,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.9999933168886654,
+   "symbol_H_given_prev": 3.999532287132167,
+   "symbol_H_given_prev2": 3.9984172511912375,
+   "symbol_H_given_pos": 3.9999908697250177,
+   "word16_H": 15.977355367751706,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l49/exl3_e36/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.9999965296425826,
+   "symbol_H_given_prev": 1.9999963968332382,
+   "symbol_H_given_prev2": 1.9999847513904578,
+   "symbol_H_given_pos": 1.9999970904972795,
+   "word16_H": 15.991789840574,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999955423424036,
+   "symbol_H_given_prev": 1.9999955155807316,
+   "symbol_H_given_prev2": 1.999979823172512,
+   "symbol_H_given_pos": 1.9999952471168,
+   "word16_H": 15.99216613192269,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999967066398514,
+   "symbol_H_given_prev": 1.9999956458280854,
+   "symbol_H_given_prev2": 1.9999815977497533,
+   "symbol_H_given_pos": 1.9999956212570513,
+   "word16_H": 15.991052399963948,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l49/exl3_e36/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.999994089364118,
+   "symbol_H_given_prev": 3.9995194899539768,
+   "symbol_H_given_prev2": 3.9984449244695526,
+   "symbol_H_given_pos": 3.999986708395765,
+   "word16_H": 15.977217812419383,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.9999951572697725,
+   "symbol_H_given_prev": 3.9995315011675814,
+   "symbol_H_given_prev2": 3.9984560929058217,
+   "symbol_H_given_pos": 4.00000144005503,
+   "word16_H": 15.977439449140178,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.9999966400825873,
+   "symbol_H_given_prev": 3.99954629229618,
+   "symbol_H_given_prev2": 3.9985323190315984,
+   "symbol_H_given_pos": 3.999994806613252,
+   "word16_H": 15.978681973681756,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l49/exl3_e92/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.999996212221407,
+   "symbol_H_given_prev": 1.999995962259035,
+   "symbol_H_given_prev2": 1.9999785699597723,
+   "symbol_H_given_pos": 1.9999965278378422,
+   "word16_H": 15.991819074460114,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999937066582547,
+   "symbol_H_given_prev": 1.9999928078996976,
+   "symbol_H_given_prev2": 1.9999776589618299,
+   "symbol_H_given_pos": 1.9999929083352832,
+   "word16_H": 15.991950182291424,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999969713838834,
+   "symbol_H_given_prev": 1.9999962551214867,
+   "symbol_H_given_prev2": 1.9999788240174712,
+   "symbol_H_given_pos": 1.9999984490384257,
+   "word16_H": 15.991704577622745,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l49/exl3_e92/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.9999941470399403,
+   "symbol_H_given_prev": 3.99952001597955,
+   "symbol_H_given_prev2": 3.9984196714427256,
+   "symbol_H_given_pos": 3.999991654474508,
+   "word16_H": 15.977042930671168,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.9999939659428487,
+   "symbol_H_given_prev": 3.9995514268716574,
+   "symbol_H_given_prev2": 3.9985129571625784,
+   "symbol_H_given_pos": 3.9999892359814275,
+   "word16_H": 15.977985340246693,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.99999641610905,
+   "symbol_H_given_prev": 3.99951950370376,
+   "symbol_H_given_prev2": 3.9984053689615955,
+   "symbol_H_given_pos": 3.999995365890163,
+   "word16_H": 15.977083281851716,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l66/exl3_e165/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.9999986432056311,
+   "symbol_H_given_prev": 1.9999977287781483,
+   "symbol_H_given_prev2": 1.9999808991899695,
+   "symbol_H_given_pos": 1.999998631306532,
+   "word16_H": 15.991857802242105,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.99999745865807,
+   "symbol_H_given_prev": 1.9999963945126733,
+   "symbol_H_given_prev2": 1.9999804951803233,
+   "symbol_H_given_pos": 1.999996804485411,
+   "word16_H": 15.991297454975495,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999964020567067,
+   "symbol_H_given_prev": 1.9999959758532202,
+   "symbol_H_given_prev2": 1.999975468903386,
+   "symbol_H_given_pos": 1.9999968828852683,
+   "word16_H": 15.99026177037118,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l66/exl3_e165/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.9999935311404125,
+   "symbol_H_given_prev": 3.9995295347718893,
+   "symbol_H_given_prev2": 3.9984711244465583,
+   "symbol_H_given_pos": 3.99999258376239,
+   "word16_H": 15.977888044595888,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.9999970927461224,
+   "symbol_H_given_prev": 3.999477259501574,
+   "symbol_H_given_prev2": 3.998359379128593,
+   "symbol_H_given_pos": 4.000007798518439,
+   "word16_H": 15.976299961835782,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.999995704761738,
+   "symbol_H_given_prev": 3.99951477114823,
+   "symbol_H_given_prev2": 3.9984120328043424,
+   "symbol_H_given_pos": 4.00000264583557,
+   "word16_H": 15.97640854787245,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l66/exl3_e36/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.999995628575622,
+   "symbol_H_given_prev": 1.9999953500039522,
+   "symbol_H_given_prev2": 1.9999788372345866,
+   "symbol_H_given_pos": 1.9999974861964294,
+   "word16_H": 15.991676707145704,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999944760430308,
+   "symbol_H_given_prev": 1.999993881724389,
+   "symbol_H_given_prev2": 1.999976770238864,
+   "symbol_H_given_pos": 1.999996562094216,
+   "word16_H": 15.991306163395516,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999966540945118,
+   "symbol_H_given_prev": 1.99999590873021,
+   "symbol_H_given_prev2": 1.9999769275961636,
+   "symbol_H_given_pos": 1.9999967664096285,
+   "word16_H": 15.991347173118395,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l66/exl3_e36/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.9999950751853954,
+   "symbol_H_given_prev": 3.999557253172302,
+   "symbol_H_given_prev2": 3.998549028715969,
+   "symbol_H_given_pos": 4.000004875801661,
+   "word16_H": 15.979041409791384,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.999995563275349,
+   "symbol_H_given_prev": 3.9994749884839824,
+   "symbol_H_given_prev2": 3.998314939480313,
+   "symbol_H_given_pos": 3.999993660126707,
+   "word16_H": 15.974963783328086,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.9999951237459284,
+   "symbol_H_given_prev": 3.9995145861320123,
+   "symbol_H_given_prev2": 3.99842520029145,
+   "symbol_H_given_pos": 3.999995302967493,
+   "word16_H": 15.976704892588678,
+   "n_words": 3145728
+  }
+ ],
+ "glm53_pilot_matched_l66/exl3_e92/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.999997563590083,
+   "symbol_H_given_prev": 1.9999970933562774,
+   "symbol_H_given_prev2": 1.9999828448389412,
+   "symbol_H_given_pos": 1.9999996838494614,
+   "word16_H": 15.992490340507349,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999966115911771,
+   "symbol_H_given_prev": 1.999996677698532,
+   "symbol_H_given_prev2": 1.9999845358153423,
+   "symbol_H_given_pos": 1.9999991374754185,
+   "word16_H": 15.991833330149227,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999963936889789,
+   "symbol_H_given_prev": 1.9999965671585977,
+   "symbol_H_given_prev2": 1.9999866645430213,
+   "symbol_H_given_pos": 1.9999946085778806,
+   "word16_H": 15.992528548357711,
+   "n_words": 1572864
+  }
+ ],
+ "glm53_pilot_matched_l66/exl3_e92/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.9999967863709704,
+   "symbol_H_given_prev": 3.9995519733410063,
+   "symbol_H_given_prev2": 3.998516990801374,
+   "symbol_H_given_pos": 3.9999999545935125,
+   "word16_H": 15.978692084455567,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.9999964239287333,
+   "symbol_H_given_prev": 3.999521484129255,
+   "symbol_H_given_prev2": 3.9984785733106225,
+   "symbol_H_given_pos": 3.9999968266023362,
+   "word16_H": 15.977779665395222,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.9999941725992496,
+   "symbol_H_given_prev": 3.999547680373186,
+   "symbol_H_given_prev2": 3.998497145293757,
+   "symbol_H_given_pos": 3.9999972050094783,
+   "word16_H": 15.978161240072087,
+   "n_words": 3145728
+  }
+ ],
+ "full55_exl3_e70/expert_2.bin": [
+  {
+   "proj": 0,
+   "K": 2,
+   "symbol_H0": 1.9999952343790794,
+   "symbol_H_given_prev": 1.9999952574205373,
+   "symbol_H_given_prev2": 1.9999815386216402,
+   "symbol_H_given_pos": 1.9999971542324975,
+   "word16_H": 15.9911570554228,
+   "n_words": 1572864
+  },
+  {
+   "proj": 1,
+   "K": 2,
+   "symbol_H0": 1.9999954818805676,
+   "symbol_H_given_prev": 1.9999946460134566,
+   "symbol_H_given_prev2": 1.9999754854544776,
+   "symbol_H_given_pos": 1.9999976627967886,
+   "word16_H": 15.990221131859773,
+   "n_words": 1572864
+  },
+  {
+   "proj": 2,
+   "K": 2,
+   "symbol_H0": 1.9999968265523815,
+   "symbol_H_given_prev": 1.999996502427575,
+   "symbol_H_given_prev2": 1.9999862776610478,
+   "symbol_H_given_pos": 1.9999919387099307,
+   "word16_H": 15.991868281581826,
+   "n_words": 1572864
+  }
+ ],
+ "full55_exl3_e70/expert_4.bin": [
+  {
+   "proj": 0,
+   "K": 4,
+   "symbol_H0": 3.99999531955599,
+   "symbol_H_given_prev": 3.999562757634903,
+   "symbol_H_given_prev2": 3.9985486405115305,
+   "symbol_H_given_pos": 3.9999996905004025,
+   "word16_H": 15.978966338291228,
+   "n_words": 3145728
+  },
+  {
+   "proj": 1,
+   "K": 4,
+   "symbol_H0": 3.99999493319395,
+   "symbol_H_given_prev": 3.999531792126061,
+   "symbol_H_given_prev2": 3.9984728502851645,
+   "symbol_H_given_pos": 4.000002843684445,
+   "word16_H": 15.978094403195346,
+   "n_words": 3145728
+  },
+  {
+   "proj": 2,
+   "K": 4,
+   "symbol_H0": 3.9999958025788636,
+   "symbol_H_given_prev": 3.9995268067736665,
+   "symbol_H_given_prev2": 3.998425701453212,
+   "symbol_H_given_pos": 3.999994985274391,
+   "word16_H": 15.97740411624751,
+   "n_words": 3145728
+  }
+ ]
+}

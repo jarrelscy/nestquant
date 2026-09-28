@@ -1,0 +1,394 @@
+{
+ "exl3_2": {
+  "table": {
+   "all/forced": 40.011,
+   "all/routed": 37.411,
+   "control/forced": 38.341,
+   "control/routed": 34.934,
+   "ood/forced": 42.572,
+   "ood/routed": 42.757
+  },
+  "proxy": {
+   "gate": 0.009385882579437841,
+   "up": 0.009705498694626747,
+   "down": 0.016195089157648182
+  },
+  "meta": null
+ },
+ "exl3_4": {
+  "table": {
+   "all/forced": 10.457,
+   "all/routed": 9.736,
+   "control/forced": 10.004,
+   "control/routed": 9.058,
+   "ood/forced": 11.152,
+   "ood/routed": 11.181
+  },
+  "proxy": {
+   "gate": 0.0005630540245016489,
+   "up": 0.0005817415294742925,
+   "down": 0.0010016500028007665
+  },
+  "meta": null
+ },
+ "nvfp4": {
+  "table": {
+   "all/forced": 12.779,
+   "all/routed": 12.287,
+   "control/forced": 12.818,
+   "control/routed": 12.074,
+   "ood/forced": 12.714,
+   "ood/routed": 12.781
+  },
+  "proxy": {
+   "gate": 0.004657745418212503,
+   "up": 0.004807711021041434,
+   "down": 0.004890611739519054
+  },
+  "meta": null
+ },
+ "exl3_2_s0.3": {
+  "table": {
+   "all/forced": 37.045,
+   "all/routed": 34.974,
+   "control/forced": 35.891,
+   "control/routed": 33.113,
+   "ood/forced": 38.84,
+   "ood/routed": 39.066
+  },
+  "proxy": {
+   "gate": 0.011273387523762838,
+   "up": 0.011661120771289411,
+   "down": 0.018104537143930316
+  },
+  "meta": null
+ },
+ "exl3_4_s0.3": {
+  "table": {
+   "all/forced": 9.638,
+   "all/routed": 9.112,
+   "control/forced": 9.338,
+   "control/routed": 8.58,
+   "ood/forced": 10.104,
+   "ood/routed": 10.278
+  },
+  "proxy": {
+   "gate": 0.0006951136100419134,
+   "up": 0.000718940709760413,
+   "down": 0.001135790396917713
+  },
+  "meta": null
+ },
+ "centre_dual_g128_h1_n2_s0.3@2": {
+  "table": {
+   "all/forced": 47.788,
+   "all/routed": 45.221,
+   "control/forced": 46.308,
+   "control/routed": 42.792,
+   "ood/forced": 50.09,
+   "ood/routed": 50.555
+  },
+  "proxy": {
+   "gate": 0.01995943144500547,
+   "up": 0.02062227195852273,
+   "down": 0.031156643937845955
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n2_s0.3@4": {
+  "table": {
+   "all/forced": 21.866,
+   "all/routed": 20.601,
+   "control/forced": 21.097,
+   "control/routed": 19.427,
+   "ood/forced": 23.055,
+   "ood/routed": 23.171
+  },
+  "proxy": {
+   "gate": 0.003960383626363483,
+   "up": 0.004074029490831454,
+   "down": 0.005832751469059003
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 0.0001,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r1_s0.3@2": {
+  "table": {
+   "all/forced": 47.621,
+   "all/routed": 45.244,
+   "control/forced": 46.358,
+   "control/routed": 43.064,
+   "ood/forced": 49.597,
+   "ood/routed": 50.069
+  },
+  "proxy": {
+   "gate": 0.02205521997483437,
+   "up": 0.02280139463453723,
+   "down": 0.033676675705847585
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r1_s0.3@4": {
+  "table": {
+   "all/forced": 18.991,
+   "all/routed": 17.943,
+   "control/forced": 18.35,
+   "control/routed": 16.95,
+   "ood/forced": 19.985,
+   "ood/routed": 20.124
+  },
+  "proxy": {
+   "gate": 0.0030726923102857326,
+   "up": 0.0031617008290661416,
+   "down": 0.004542936899160774
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3_s0.3@2": {
+  "table": {
+   "all/forced": 48.436,
+   "all/routed": 46.106,
+   "control/forced": 47.351,
+   "control/routed": 44.063,
+   "ood/forced": 50.141,
+   "ood/routed": 50.652
+  },
+  "proxy": {
+   "gate": 0.026985664923802763,
+   "up": 0.027925879197413815,
+   "down": 0.039745357623798175
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r3_s0.3@4": {
+  "table": {
+   "all/forced": 16.697,
+   "all/routed": 15.781,
+   "control/forced": 16.163,
+   "control/routed": 14.918,
+   "ood/forced": 17.525,
+   "ood/routed": 17.667
+  },
+  "proxy": {
+   "gate": 0.0024147390999578575,
+   "up": 0.0024871990066102118,
+   "down": 0.003607563293666282
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 3,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r10_s0.3@2": {
+  "table": {
+   "all/forced": 51.094,
+   "all/routed": 48.798,
+   "control/forced": 50.366,
+   "control/routed": 46.936,
+   "ood/forced": 52.25,
+   "ood/routed": 52.983
+  },
+  "proxy": {
+   "gate": 0.04200709586588448,
+   "up": 0.043400490002536304,
+   "down": 0.05821202444363886
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r10_s0.3@4": {
+  "table": {
+   "all/forced": 14.612,
+   "all/routed": 13.759,
+   "control/forced": 14.141,
+   "control/routed": 12.973,
+   "ood/forced": 15.343,
+   "ood/routed": 15.48
+  },
+  "proxy": {
+   "gate": 0.0017855024803799429,
+   "up": 0.001842310311802906,
+   "down": 0.002746453704841903
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 10,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 7.6,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r30_s0.3@2": {
+  "table": {
+   "all/forced": 54.208,
+   "all/routed": 52.049,
+   "control/forced": 53.942,
+   "control/routed": 50.638,
+   "ood/forced": 54.636,
+   "ood/routed": 55.273
+  },
+  "proxy": {
+   "gate": 0.06503599028006676,
+   "up": 0.0674002201275465,
+   "down": 0.08548870207485705
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_r30_s0.3@4": {
+  "table": {
+   "all/forced": 13.758,
+   "all/routed": 12.935,
+   "control/forced": 13.322,
+   "control/routed": 12.235,
+   "ood/forced": 14.437,
+   "ood/routed": 14.471
+  },
+  "proxy": {
+   "gate": 0.001482383234723579,
+   "up": 0.0015317980353549722,
+   "down": 0.002349976725631718
+  },
+  "meta": {
+   "cfg": {
+    "l2": 1,
+    "l4": 30,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.4,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4_s0.3@2": {
+  "table": {
+   "all/forced": 58.106,
+   "all/routed": 56.149,
+   "control/forced": 58.327,
+   "control/routed": 55.117,
+   "ood/forced": 57.746,
+   "ood/routed": 58.536
+  },
+  "proxy": {
+   "gate": 0.10086169803578109,
+   "up": 0.10358462973897983,
+   "down": 0.124360834328041
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ },
+ "centre_dual_g128_h1_n4_s0.3@4": {
+  "table": {
+   "all/forced": 13.504,
+   "all/routed": 12.736,
+   "control/forced": 13.065,
+   "control/routed": 12.008,
+   "ood/forced": 14.185,
+   "ood/routed": 14.327
+  },
+  "proxy": {
+   "gate": 0.0013703168537204872,
+   "up": 0.0014151969527144786,
+   "down": 0.0022129499586330172
+  },
+  "meta": {
+   "cfg": {
+    "l2": 0.0001,
+    "l4": 1,
+    "had": true,
+    "sigma_reg": 0.3
+   },
+   "seconds": 8.5,
+   "bpw2": 2.2506510416666665,
+   "bpw4": 4.250651041666667
+  }
+ }
+}

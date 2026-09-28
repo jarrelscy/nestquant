@@ -1,0 +1,151 @@
+{
+ "family": "deq_trellis",
+ "train_sample_rel_l2": {
+  "nat2@2": 0.15980099622982352,
+  "nat2@4": 0.05770618661106087,
+  "nat4@2": 1.0,
+  "nat4@4": 0.03994657525714526,
+  "blend_0.3@2": 0.1694729697561233,
+  "blend_0.3@4": 0.05048800904446412,
+  "blend_0.5@2": 0.18768129979289916,
+  "blend_0.5@4": 0.046846248127172314,
+  "blend_0.7@2": 0.22450495073748497,
+  "blend_0.7@4": 0.04382885975039705,
+  "blend_0.9@2": 0.2945112104824046,
+  "blend_0.9@4": 0.0415386335662052,
+  "innov_exact_Minv@2": 0.15980099622982352,
+  "innov_exact_Minv@4": 0.04288751156614138,
+  "EXL3-2": 0.15944837476974635,
+  "EXL3-4": 0.0403201937360953
+ },
+ "capture": {
+  "nat2@2": {
+   "all/forced": 42.02,
+   "all/routed": 39.182,
+   "control/forced": 40.128,
+   "control/routed": 36.428,
+   "ood/forced": 44.912,
+   "ood/routed": 45.093
+  },
+  "nat2@4": {
+   "all/forced": 14.545,
+   "all/routed": 13.499,
+   "control/forced": 13.917,
+   "control/routed": 12.541,
+   "ood/forced": 15.507,
+   "ood/routed": 15.547
+  },
+  "nat4@2": {
+   "all/forced": 100.0,
+   "all/routed": 100.0,
+   "control/forced": 100.0,
+   "control/routed": 100.0,
+   "ood/forced": 100.0,
+   "ood/routed": 100.0
+  },
+  "nat4@4": {
+   "all/forced": 11.036,
+   "all/routed": 10.309,
+   "control/forced": 10.501,
+   "control/routed": 9.511,
+   "ood/forced": 11.85,
+   "ood/routed": 12.002
+  },
+  "blend_0.3@2": {
+   "all/forced": 38.867,
+   "all/routed": 36.492,
+   "control/forced": 37.342,
+   "control/routed": 34.341,
+   "ood/forced": 41.214,
+   "ood/routed": 41.18
+  },
+  "blend_0.3@4": {
+   "all/forced": 13.025,
+   "all/routed": 12.137,
+   "control/forced": 12.454,
+   "control/routed": 11.259,
+   "ood/forced": 13.899,
+   "ood/routed": 14.015
+  },
+  "blend_0.5@2": {
+   "all/forced": 37.7,
+   "all/routed": 35.685,
+   "control/forced": 36.438,
+   "control/routed": 33.753,
+   "ood/forced": 39.655,
+   "ood/routed": 39.928
+  },
+  "blend_0.5@4": {
+   "all/forced": 12.317,
+   "all/routed": 11.43,
+   "control/forced": 11.75,
+   "control/routed": 10.609,
+   "ood/forced": 13.183,
+   "ood/routed": 13.181
+  },
+  "blend_0.7@2": {
+   "all/forced": 37.306,
+   "all/routed": 35.675,
+   "control/forced": 36.456,
+   "control/routed": 34.144,
+   "ood/forced": 38.642,
+   "ood/routed": 39.096
+  },
+  "blend_0.7@4": {
+   "all/forced": 11.752,
+   "all/routed": 10.982,
+   "control/forced": 11.205,
+   "control/routed": 10.167,
+   "ood/forced": 12.586,
+   "ood/routed": 12.725
+  },
+  "blend_0.9@2": {
+   "all/forced": 38.502,
+   "all/routed": 37.133,
+   "control/forced": 38.177,
+   "control/routed": 36.276,
+   "ood/forced": 39.022,
+   "ood/routed": 39.108
+  },
+  "blend_0.9@4": {
+   "all/forced": 11.396,
+   "all/routed": 10.602,
+   "control/forced": 10.848,
+   "control/routed": 9.81,
+   "ood/forced": 12.231,
+   "ood/routed": 12.295
+  },
+  "innov_exact_Minv@2": {
+   "all/forced": 42.02,
+   "all/routed": 39.182,
+   "control/forced": 40.128,
+   "control/routed": 36.428,
+   "ood/forced": 44.912,
+   "ood/routed": 45.093
+  },
+  "innov_exact_Minv@4": {
+   "all/forced": 11.676,
+   "all/routed": 10.871,
+   "control/forced": 11.125,
+   "control/routed": 10.062,
+   "ood/forced": 12.517,
+   "ood/routed": 12.595
+  },
+  "EXL3-2": {
+   "all/forced": 40.011,
+   "all/routed": 37.411,
+   "control/forced": 38.341,
+   "control/routed": 34.934,
+   "ood/forced": 42.572,
+   "ood/routed": 42.757
+  },
+  "EXL3-4": {
+   "all/forced": 10.457,
+   "all/routed": 9.736,
+   "control/forced": 10.004,
+   "control/routed": 9.058,
+   "ood/forced": 11.152,
+   "ood/routed": 11.181
+  }
+ }
+}
