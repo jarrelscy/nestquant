@@ -1,0 +1,31 @@
+--- a/threads/19-full-capture/nq19_load.py	2026-09-28 15:20:19.927816824 +0000
++++ b/threads/19-full-capture/nq19_load.py	2026-09-28 15:20:19.939817113 +0000
+@@ -30,9 +30,18 @@
+     Each layer is resolved to one immutable version directory and all its files are opened on first access,
+     so a concurrent merge (atomic symlink swap + deletion of the superseded version) never affects a reader."""
+ 
+-    def __init__(self, root=OUT, stats="stats"):
++    def __init__(self, root=OUT, stats="stats", mm_root=None, mm_w=0.25, mm_stats="stats"):
++        """mm_root: T26 vision capture root (e.g. /tmp/nestquant/19-capture-mm). When given, glm_H returns the
++        per-expert blend (1 - w_e) H_text + w_e H_vision (mean-diag normalised; w_e = mm_w * min(1, n_vis / 128)),
++        see threads/26-vision-calib/nq26_blend.py.  mm_w = 0 or mm_root None = text only (unchanged)."""
+         self.root = root
+         self.stats = stats
++        self._mm = None
++        if mm_root is not None and mm_w:
++            import sys
++            sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "26-vision-calib"))
++            import nq26_blend
++            self._mm = nq26_blend.BlendCapture(Capture(root, stats), Capture(mm_root, mm_stats), w_vision=mm_w)
+         self._layer = {}
+         self._bndc = {}
+         self._teacher = {}
+@@ -88,6 +97,8 @@
+         """Thread-08 recipe (unif0.75): H = alpha nt(W) + (1-alpha) nt(U), count = 1, with
+         W = routed p-weighted + context at weight cp,  U = routed + context unweighted,  cp^2 = ctx_mass * sum p^2 / n_ctx.
+         G (thread 06/12): diag(dmix(sum w cg^2)^0.5) for gate, same with cu for up."""
++        if self._mm is not None and c is None:
++            return self._mm.glm_H(L, E, alpha=alpha, ctx_mass=ctx_mass, device=device, bnd_w=bnd_w, bnd_ctx=bnd_ctx)
+         c = c or self.components(L, E, device, keys=("A2", "A0", "D2", "D0", "Dc", "C_ctx"))
+         cp2 = ctx_mass * c["sum_p2"] / c["n_ctx"]
+         if bnd_w is not None:                    # W' = W + sum_g (w_g - 1) W_g, U' likewise (then nt(), as usual)

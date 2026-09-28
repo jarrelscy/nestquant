@@ -1,0 +1,47 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[medical] streaming eltorio/ROCOv2-radiology split=train (sequential, keep_p=0.333, seed 42)
+[medical] 50/350 (scanned 135, peak rss 1.15 GB)
+[medical] 100/350 (scanned 276, peak rss 1.23 GB)
+[medical] 150/350 (scanned 417, peak rss 1.45 GB)
+[medical] 200/350 (scanned 584, peak rss 1.48 GB)
+[medical] 250/350 (scanned 717, peak rss 1.62 GB)
+[medical] 300/350 (scanned 909, peak rss 1.82 GB)
+[medical] 350/350 (scanned 1063, peak rss 1.84 GB)
+[medical] done: 350 samples from eltorio/ROCOv2-radiology (scanned 1063)
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[screenshots] streaming HuggingFaceM4/WebSight split=train (sequential, keep_p=0.333, seed 42)
+[screenshots] 50/350 (scanned 132, peak rss 1.14 GB)
+[screenshots] 100/350 (scanned 275, peak rss 1.38 GB)
+[screenshots] 150/350 (scanned 414, peak rss 1.54 GB)
+[screenshots] 200/350 (scanned 557, peak rss 1.63 GB)
+[screenshots] 250/350 (scanned 706, peak rss 1.75 GB)
+[screenshots] 300/350 (scanned 887, peak rss 1.92 GB)
+[screenshots] 350/350 (scanned 1039, peak rss 2.11 GB)
+[screenshots] done: 350 samples from HuggingFaceM4/WebSight (scanned 1039)
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[natural] streaming lmms-lab/COCO-Caption2017 split=val (sequential, keep_p=0.333, seed 42)
+[natural] 50/350 (scanned 132, peak rss 1.09 GB)
+[natural] 100/350 (scanned 275, peak rss 1.15 GB)
+[natural] 150/350 (scanned 414, peak rss 1.27 GB)
+[natural] 200/350 (scanned 557, peak rss 1.39 GB)
+[natural] 250/350 (scanned 706, peak rss 1.50 GB)
+[natural] 300/350 (scanned 887, peak rss 1.57 GB)
+[natural] 350/350 (scanned 1039, peak rss 1.64 GB)
+[natural] done: 350 samples from lmms-lab/COCO-Caption2017 (scanned 1039)
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Repo card metadata block was not found. Setting CardData to empty.
+[ocr] streaming naver-clova-ix/synthdog-en split=train (sequential, keep_p=0.333, seed 42)
+[ocr] 50/350 (scanned 132, peak rss 3.23 GB)
+[ocr] 100/350 (scanned 275, peak rss 3.23 GB)
+[ocr] 150/350 (scanned 414, peak rss 3.23 GB)
+[ocr] 200/350 (scanned 557, peak rss 3.23 GB)
+[ocr] 250/350 (scanned 706, peak rss 3.23 GB)
+[ocr] 300/350 (scanned 887, peak rss 3.23 GB)
+[ocr] 350/350 (scanned 1039, peak rss 3.23 GB)
+[ocr] done: 350 samples from naver-clova-ix/synthdog-en (scanned 1039)
+[verify] medical: 300 tensors [1024,3,14,14] fp16, jsonl matches
+[verify] screenshots: 300 tensors [1024,3,14,14] fp16, jsonl matches
+[verify] natural: 300 tensors [1024,3,14,14] fp16, jsonl matches
+[verify] ocr: 300 tensors [1024,3,14,14] fp16, jsonl matches
+[verify] total 1200 samples across 4 domains
+[verify] heldout 200 samples, ids disjoint; caption overlap with calib: 0
