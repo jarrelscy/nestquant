@@ -45,8 +45,8 @@ SCHED_DEFAULTS = dict(chunk=16, gpus="0,1,2,3,4,5,6,7", workers_per_gpu=3, vram_
                       host_margin_gb=96.0, omp=8, max_attempts=3, spot=True, spot_workers=2, spot_vram_gb=14.0,
                       max_fin=4, tick=10.0, spot_l2=5.0, spot_l4=2.0, max_workers=64, min_shards=0, upload="dry", max_up=2,
                       nq_check="first", n_decode=8, refcheck=True, hf_reconcile=True, code_guard=True,
-                      repo="jarrelscy/GLM-5.3-NestQuant-2-4bit", stats_gate="final", gate_backup=True, t23_go="",
-                      t23_group=4, remanifest=True)
+                      repo="jarrelscy/GLM-5.3-NestQuant-2-4bit", stats_gate="final", gate_backup=False, t23_go="",
+                      t23_group=4, remanifest=True, mmw_go="")
 ALERTS = "ALERTS.jsonl"
 
 
@@ -219,17 +219,18 @@ def build_shim(root, cfg):
                 os.symlink(f"{real}/{n}", f"{shim}/{n}")
 
 
-def pin_layer(root, cfg, L, min_shards=0):
-    """Pin stats/L{L} of every configured shim to the version its real root resolves to now (once per layer).
-    Returns {shim: pinned dir} or None while a root is not ready (missing, or text < min_shards)."""
+def pin_layer(root, cfg, L, min_shards=0, force=None):
+    """Pin stats/L{L} of every configured shim to the version its real root resolves to now (once per layer), or to
+    force[shim] (T19's final/L{L}.json version_dir). Returns {shim: pinned dir} or None while a root is not ready."""
     want = []
+    force = force or {}
     for name, rk, vk in SHIMS:
         if not cfg.get(rk):
             continue
         link = f"{root}/{name}/stats/L{L}"
         if os.path.lexists(link):
             continue
-        vd = os.path.realpath(f"{cfg[rk]}/{cfg[vk]}/L{L}")
+        vd = force.get(name) or os.path.realpath(f"{cfg[rk]}/{cfg[vk]}/L{L}")
         m = jload(f"{vd}/meta.json")
         if m is None or (name == "_stats" and len(m.get("shards", [])) < min_shards):
             return None
@@ -260,6 +261,7 @@ class Campaign:
         self.experts = list(range(e0, e1))
         self.st = jload(f"{self.root}/state.json") or dict(layers={}, workers={}, created=mel(), events=[])
         self.procs = {}                                # wid -> psutil.Process / Popen
+        self._final = {}                               # L -> {"_stats": T19 final version_dir} (gate a pin)
         self.gpus_allowed = [int(x) for x in str(self.sched["gpus"]).split(",") if x != ""]
         self.last_du = (0, 0)
         self.log_f = open(f"{self.root}/campaign.log", "a")
@@ -601,19 +603,23 @@ class Campaign:
                 if why:
                     self._note(f"L{L}: holding ({why})")
                     break
-                if pin_layer(self.root, self.cfg, L, self.sched["min_shards"]) is None:
+                if pin_layer(self.root, self.cfg, L, self.sched["min_shards"], force=self._final.get(L)) is None:
                     self._note(f"L{L}: stats not ready (< {self.sched['min_shards']} shards); holding layer")
                     break
                 return L, k, c
         return None
 
     def layer_gate(self, L):
-        """per-layer launch gate (coordinator 2026-09-29): None = go, else the reason to hold. Checked only until the
-        layer's stats are pinned (a pinned layer is never re-gated).
-          text   : stats/L{L} resolves to a version whose meta shard set == plan.json's (all planned shards merged) and,
-                   with gate_backup, T19's full-set backup marker lists that exact version (logs/fb_backup_state_full*.json)
-          vision : the vision root's stats/L{L} likewise == its plan.json shard set
+        """per-layer launch gate (coordinator 2026-09-29): None = go, else the reason to hold. Stats are checked only
+        until the layer is pinned (a pinned layer is never re-gated); MMW / T23 gates apply to every new launch.
+          text   : T19's LOCAL final marker ROOT/final/L{L}.json (atomic; all 25 plan shards) -> pin its version_dir
+                   (+ optionally, gate_backup, the flashblade done_full state; off: backup is insurance, not a gate)
+          vision : the vision root's stats/L{L} meta shard set == its plan.json
+          mm_w   : the mmw_go file exists and holds the campaign's vision_weight (adopted if nothing encoded yet)
           t23    : a T23 encoder waits for the t23_go file (T23 gate pass) if one is configured"""
+        why = self.mmw_gate()
+        if why:
+            return why
         enc = self.layer_encoder(L)
         go = self.sched.get("t23_go")
         if enc in T23_ENCODERS and go and not os.path.exists(go):
@@ -621,23 +627,59 @@ class Campaign:
         if os.path.lexists(f"{self.root}/_stats/stats/L{L}") or self.sched.get("stats_gate") != "final":
             return None
         c = self.cfg
-        for kind, rk, vk in (("text", "stats_root", "stats_version"), ("vision", "vision_root", "vision_version")):
-            root = c.get(rk)
-            if not root:
-                continue
-            vd = os.path.realpath(f"{root}/{c[vk]}/L{L}")
-            m, plan = jload(f"{vd}/meta.json"), jload(f"{root}/plan.json")
+        root = c["stats_root"]
+        fm = jload(f"{root}/final/L{L}.json")
+        if fm is None:
+            return "text: no T19 final marker yet"
+        vd = fm.get("version_dir")
+        if not vd or not os.path.isdir(vd) or fm.get("layer") not in (L, str(L)):
+            return f"text: final marker bad ({vd})"
+        if self.sched.get("gate_backup"):
+            ok = any((jload(p) or {}).get(str(L), {}).get("version") == os.path.basename(vd)
+                     for p in glob.glob(f"{root}/logs/fb_backup_state_full*.json"))
+            if not ok:
+                return f"text {os.path.basename(vd)} final but no done_full backup marker yet"
+        if c.get("vision_root"):
+            vr = c["vision_root"]
+            vvd = os.path.realpath(f"{vr}/{c['vision_version']}/L{L}")
+            m, plan = jload(f"{vvd}/meta.json"), jload(f"{vr}/plan.json")
             if m is None or plan is None:
-                return f"{kind} stats/plan missing"
+                return "vision stats/plan missing"
             have = {s_["shard"] if isinstance(s_, dict) else s_ for s_ in m.get("shards", [])}
-            want = {int(k) for k in plan["shards"]}
-            if have != want:
-                return f"{kind} {os.path.basename(vd)} has {len(have & want)}/{len(want)} shards"
-            if kind == "text" and self.sched.get("gate_backup"):
-                ok = any((jload(p) or {}).get(str(L), {}).get("version") == os.path.basename(vd)
-                         for p in glob.glob(f"{root}/logs/fb_backup_state_full*.json"))
-                if not ok:
-                    return f"text {os.path.basename(vd)} final but no done_full backup marker yet"
+            if have != {int(k) for k in plan["shards"]}:
+                return f"vision {os.path.basename(vvd)} has {len(have)}/{len(plan['shards'])} shards"
+        self._final[L] = {"_stats": vd}
+        return None
+
+    def mmw_gate(self):
+        """MMW_GO (written by the lead after T12's w A/B) holds the chosen mm_w. vision_weight is in config_id, so a
+        different value is adopted only while no layer has pinned stats / encoded anything; otherwise hold + alert."""
+        p = self.sched.get("mmw_go")
+        if not p:
+            return None
+        try:
+            w = float(open(p).read().split()[0])
+        except FileNotFoundError:
+            return f"mm_w gate: {p} not present"
+        except (ValueError, IndexError):
+            return f"mm_w gate: {p} unparsable"
+        if w == float(self.cfg.get("vision_weight") or 0.0):
+            return None
+        started = [L for L in self.layers if self.lay(L)["state"] != "pending" or os.path.lexists(f"{self.root}/_stats/stats/L{L}")
+                   or os.path.isdir(f"{self.root}/L{L}/experts") and os.listdir(f"{self.root}/L{L}/experts")]
+        if started:
+            if not getattr(self, "_mmw_alerted", False):
+                self.alert("mmw_mismatch", None, f"MMW_GO says {w} but layers {started[:8]} already use "
+                           f"{self.cfg.get('vision_weight')}; holding new launches")
+                self._mmw_alerted = True
+            return f"mm_w gate: {p}={w} != campaign {self.cfg.get('vision_weight')} with layers started"
+        old = self.cfg.get("vision_weight")
+        self.cfg["vision_weight"] = w
+        cj = jload(f"{self.root}/campaign.json")
+        cj["frozen"]["vision_weight"] = w
+        cj["config_id"] = config_id(cj["frozen"]); cj["updated"] = mel()
+        jdump(cj, f"{self.root}/campaign.json")
+        self.alert("mmw_adopted", None, f"vision_weight {old} -> {w} from {p} (nothing encoded yet); config_id {cj['config_id']}")
         return None
 
     def refresh_manifests(self):

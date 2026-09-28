@@ -45,9 +45,9 @@ It has been tested from a fresh shell (`env -i HOME=$HOME PATH=/usr/bin:/bin bas
 ## Launch
 
 The gates are per layer. The driver can be started early, and each layer waits on its own gate (`layer_gate` in `nq25_campaign.py`). Layer L encodes once all of these hold:
-- **Text stats final:** T19's final text stats for L have every plan.json shard merged.
-- **Text stats backed up:** T19's `done_full` backup marker lists that exact version (`logs/fb_backup_state_full*.json`).
+- **Text stats final:** T19's local marker `19-capture-glmfmt/final/L{L}.json` exists. T19 writes it atomically once stats/L{L} links a version with all 25 plan shards. The layer's stats are pinned to the marker's `version_dir`, which is immutable. The flashblade `done_full` backup is restart insurance, not a gate (`gate_backup` false).
 - **Vision stats merged:** T26's vision stats for L are merged.
+- **mm_w chosen:** `MMW_GO` next to this file holds the mm_w that the lead picked from T12's w A/B. `vision_weight` is part of config_id. If MMW_GO differs from it and nothing has been encoded yet, the driver adopts the value and rewrites `ROOT/campaign.json`. Then copy the value into this directory's `campaign.json` and re-run `pin`. If layers have already started, the driver raises an `mmw_mismatch` alert and holds, so layers never mix weights.
 - **T23 gate** (t23b layers only): `T23_GO` exists next to this file. Commit it when T23's gate passes. If the gate fails, set `encoder` to `nq_layer`.
 
 Layers that pass their gate are uploaded straight away (tp shards plus manifest). When T19's blended `fixed_set.json` lands, the driver refreshes each manifest's `default_allocation` and re-uploads only `manifest.json`.
