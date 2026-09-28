@@ -18,8 +18,9 @@ class EXL3Group:
         s.bytes_per_expert=sum(t.numel()*2 for t in (s.gt[0],s.ut[0],s.dt[0]))
 class EXL3MoE:
     """groups: list of (EXL3Group, first_expert_id). Each group is one coop launch."""
-    def __init__(s,groups,B,H=6144,I=2048):
-        s.groups=groups;s.B=B;S=B*8
+    def __init__(s,groups,B,H=6144,I=2048,smax=None):
+        """smax: scratch rows (slots_max). EXL3_MOE_COOP_KSPLIT=k needs smax >= k*B*8 (partials at slot + ks*slots)."""
+        s.groups=groups;s.B=B;S=smax or B*8
         s.had_g=torch.empty(S,H,device='cuda').half();s.had_u=torch.empty_like(s.had_g)
         s.gu_g=torch.empty(S,I,device='cuda').half();s.gu_u=torch.empty_like(s.gu_g);s.act=torch.empty(S,I,device='cuda').half()
         s.d_out=torch.empty(S,H,device='cuda')

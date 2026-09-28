@@ -11,16 +11,22 @@
 //       out[b] = sum_k rw[b,k] * sv_o[e] (.) WHT128(acc_d[b*topk+k]), zeroing acc_d.
 // Levels are a block-uniform branch on table[e].level (0 = expert not resident on this GPU -> contributes 0; 2; 4).
 //
-// Plane layout (per expert, per projection; N rows x K cols; strip = 16 rows, chunk = 128 cols; C = K/128):
-//   base : uint4 per (strip, chunk, lane): 64 weights x 2 bit            -> ((strip*C + c)*32 + lane)
-//   P4   : residual records, same layout as base (dense)                 -> ((strip*C + c)*32 + lane)
-//   d4   : one fp16 delta per 16x128 block, stored as a duplicated half2 (uint32) -> strip*C + c
-//   level 2 = base; level 4 = base + P4.  Optional mask mode (flags != null): uint64 per strip, bit c = chunk c is
-//   refined; P4/d4 are then compact over the nm flagged chunks of each strip (-> (strip*nm + rank)*32 + lane).
-//   Flags must be uniform over each 128-row group (8 strips) for thread-block-uniform branching.
+// Plane layout (per expert, per projection; N rows x K cols; strip = 16 rows, chunk = 128 cols; C = K/128;
+// record = one lane's share of one 16x128 unit, record index ((strip*C + c)*32 + lane)):
+//   base : uint4 per record: 64 weights x 2 bit (K=2 ring stream, 128 bits)                     [nrec = S*C*32]
+//   P4   : residual records of RBITS = 4*(16*KA + popc(MASK)) bits (K = RBITS/64 per weight), stored as
+//          sub-arrays uint4[n4] | uint2 | uint | ushort (n4 = RBITS/128, then the 64/32/16-bit remainder, each
+//          sub-array present iff that bit of RBITS%128 is set), each sub-array contiguous over all nrec_r records
+//   d4   : uint32 block word Mb | N << 8 per 16x128 unit (1 <= Mb <= 255, Mb + N <= 257; delta = N/Mb) -> strip*C + c
+//   level 2 = base; level 4 = base + P4 (int-fold, see nqdec).  Optional mask mode (flags != null): uint64 per strip,
+//   bit c = chunk c is refined; P4/d4 are then compact over the nm flagged chunks of each strip
+//   (-> (strip*nm + rank)*32 + lane, nrec_r = S*nm*32). Flags must be uniform over each 128-row group (8 strips).
+//   Ring streams are tail-biting over G lanes (G = 4: lanes 4g..4g+3 = one ring of 256 weights; G = 2: lane pairs).
 // Device table: int64 [E][16]
 //   [0] level (0, 2, 4)  [1..4] gate|up: base, p4, d4, flags(0 = dense)  [5..8] down: same
-//   [9] signs: half[H su_in | I sv_g | I sv_u | I su_d | H sv_o]      [10..15] reserved
+//   [9] signs: half[H su_in | I sv_g | I sv_u | I su_d | H sv_o]
+//   [10] gate|up residual K code, [11] down residual K code (0: K=2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5; codes
+//        outside NQ_RK_CODES fall back to code 0)      [12..15] reserved
 #include <cuda_fp16.h>
 #include <stdint.h>
 #include <set>

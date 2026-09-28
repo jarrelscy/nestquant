@@ -3,9 +3,9 @@
  "steps": 200,
  "upgrades": 201,
  "downgrades": 198,
- "max_rel_err": 6.125377694843337e-05,
- "mean_rel_err": 5.852624739418388e-05,
- "min_rel_err_vs_wrong_state": 0.04696774110198021,
+ "max_rel_err": 6.232575833564624e-05,
+ "mean_rel_err": 4.012054814666044e-05,
+ "min_rel_err_vs_wrong_state": 0.04359721764922142,
  "max_l4_at_once": 4,
- "slot_bytes": 9568256
+ "slot_bytes": 10354688
 }

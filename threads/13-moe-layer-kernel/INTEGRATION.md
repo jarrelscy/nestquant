@@ -25,10 +25,28 @@ Per expert-shard sizes (bytes):
 
 | plane | gate\|up | down | total |
 |---|---|---|---|
-| base (2 bpw) | 786,432 | 393,216 | 1,179,648 (= 2 × 576 KiB) |
-| P4 (level 4 adds) | 786,432 | 393,216 | 1,179,648 |
-| d4 (fp16 δ per 16×128, stored as half2) | 6,144 | 3,072 | 9,216 |
+| base (2 bpw, uint4 per lane record) | 786,432 | 393,216 | 1,179,648 (= 2 × 576 KiB) |
+| P4 residual, K = 2 (level 4 adds) | 786,432 | 393,216 | 1,179,648 |
+| P4 residual, fractional K = 1.75 gu / 2.5 down | 688,128 | 491,520 | 1,179,648 (same total) |
+| d4 block word (u32 Mb \| N<<8 per 16×128 unit) | 6,144 | 3,072 | 9,216 |
 | signs (half[H \| I \| I \| I \| H]) | | | 26,112 |
+
+Plane layout (the decoder is thread 15's RM_P int-fold, `nqdec::` in nqmoe.cu; bit-level spec `ref15_spec.py`):
+
+- **Record** = one lane's bits of one 16×128 unit, index rec = (strip·C + chunk)·32 + lane, C = K/128.
+- **Base**: one uint4 (128 bits = 64 weights × K 2) per record. It is the same for every residual K.
+- **P4**: RBITS = 4·(16·KA + popc(MASK)) bits per record (K = 2: 128, 1.75: 112, 2.5: 160, 2.25: 144, 3: 192,
+  1.5: 96). It is stored as sub-arrays `uint4[n4] | uint2 | uint | ushort` (n4 = RBITS/128, then whichever
+  64/32/16-bit remainders apply), each contiguous over all records of the projection, so every lane load is coalesced.
+  A sub-array base is `p4 + nrec·(bytes of the earlier sub-arrays)`, with nrec = S·C·32 (dense) or S·nm·32 (mask mode).
+- **d4**: one u32 per unit, Mb in bits 0–7, N in bits 8–15 (δ = N/Mb, 1 ≤ Mb ≤ 255, Mb + N ≤ 257).
+- **Rings**: LSB-first, tail-biting over G = 4 lanes (lanes 4g..4g+3 = one 256-weight ring; thread 12/15 format).
+  G = 2 is still compiled and verified, but G = 4 is the default and the encoder format. G is a launch argument and
+  must match how the planes were encoded.
+- The encoder's repack from thread 12 ring streams is the inverse of `ref15_spec.rings_from_lane_words`
+  (`moe.pack_words` does the sub-array packing from lane words).
+- Both planes are laid out per (strip, chunk), so TP8 shards are unit ranges. Gate|up shards are contiguous strip
+  ranges. Down shards are chunk ranges (2 of 48 chunks per strip), i.e. strided in rec: repack per rank offline.
 
 Mask mode (128×128 per-block 2b/4b mixing inside the 4-bit tier) adds a uint64 per 16-row strip and compacts P4/d4
 to the flagged chunks. With the shard's K = 256 for down, that is only 2 chunks per strip.
@@ -50,12 +68,15 @@ Placement per rank:
 
 | tensor | shape | notes |
 |---|---|---|
-| `table` | int64 [256][16] | [0] level 0/2/4; [1..4] gate\|up base, p4, d4, flags; [5..8] down same; [9] signs; rest reserved. Read on device at every replay. |
+| `table` | int64 [256][16] | [0] level 0/2/4; [1..4] gate\|up base, p4, d4, flags; [5..8] down same; [9] signs; [10] gate\|up residual K code, [11] down residual K code (0: K 2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5); [12..15] reserved. Read on device at every replay. |
 | mailbox `stage`, `seq`, `applied` | int64 [256][16], int32 [256] ×2 | graph-safe updates (§4) |
 | `applied_host` | int32 [256], pinned host-mapped | the scheduler polls this without syncing |
 | `hits` | int32 [256], pinned host-mapped | routing-hit export (§5) |
 
 - `table` is 32 KiB per layer.
+- The residual K code is per (expert, projection) and is read at replay, so a slot can hold any K. Only the codes in
+  the `NQ_RK_CODES` build bitmask are compiled (default 0x7 = K 2 / 1.75 / 2.5; 0x3f = all six, same speed, larger
+  binary). A code outside the mask silently decodes as K = 2, so build with every code the checkpoint uses.
 - Levels should be identical across ranks at any step. This is not needed for correctness, but it keeps the model a
   single well-defined quantization. The mailbox lag is at most one step, and a per-rank lag difference only mixes
   shards of the same expert at two levels for that step.
@@ -71,7 +92,7 @@ apply(layer, x, topk_weights, topk_ids, shared_experts, shared_experts_input):
     if x.shape[0] <= 4:                                   # decode / MTP verify (B*topk <= 32)
         mbox.apply()                                      # captured: stage -> table for pending ops
         moe_forward(x16, ids64, rw16, table, out32, ws..., I=256, nm_gu, nm_dn,
-                    cfg_gu, cfg_dn, G=2, force_level=0, which=3, hits_ptr)
+                    cfg_gu, cfg_dn, G=4, force_level=0, which=3, hits_ptr)
         return out32.to(x.dtype)
     else:                                                 # prefill
         dense-decode experts per group + grouped GEMM (as HybridExpertsMoEMethod._apply_grouped)
@@ -90,9 +111,15 @@ Tuned configs:
 
 | shape | B | gate\|up | down |
 |---|---|---|---|
-| full I = 2048 (tune_I2048.json) | 1 | [1,4,8] | [1,4,8] |
-| full I = 2048 | 2–4 | [2,8,4] | [2,8,4] |
-| TP8 shard I = 256 (bench_shard.json, best of a small sweep) | 1–4 | [1,4,6] or [1,8,6] | [1,8,2] or [2,8,1] |
+| full I = 2048 (tune2_I2048.json) | 1 | [1,8,8] | [1,4,8] |
+| full I = 2048 | 2–4 | [1,8,8] | [1,8,8] |
+| TP8 shard I = 256, level 2 (tune2_I256.json + bench_shard.json) | 1–4 | [1,8,8] | [2,8,1] or [1,8,2] |
+| TP8 shard I = 256, level 4 | 1 | [1,4,6] | [1,8,2] |
+| TP8 shard I = 256, level 4 | 2–3 | [1,4,4] or [1,8,8] | [1,8,2] |
+| TP8 shard I = 256, level 4 | 4 | [1,8,6] | [1,8,2] |
+
+cfg = [chunks per warp, strips per block, stages]. For a mixed 2/4-bit shard layer use the level-4 row (the 4-bit
+experts dominate the time). Near-ties are within ~2%; any of the listed values is fine.
 
 Kernel constraints: B·topk ≤ 32, H and I multiples of 128 and ≤ 64·128, and K % (cpw·nst·128) == 0.
 
@@ -126,6 +153,9 @@ Measured on A100 (levelswitch_mbox.py; graph = [mailbox, MoE] captured once, sid
 - The host-stream-wait variant (levelswitch.py: event + `wait_event` + table copy on the main stream) passed
   399 switches over 200 steps, max rel err 6.3e-5, stale ≥ 4.7%.
 - Mailbox cost: 1.4 µs per layer (35.4 → 36.8 µs, I = 256 B1 2b). Hit export adds 0.3 µs.
+- Re-run on the thread 15 decoder with G = 4 and half the experts at fractional residual K (1.75 gu / 2.5 down),
+  slots sized for the largest K: mailbox 311 ops / 300 steps, max lag 1, max rel err 1.2e-4 (stale ≥ 2.6%); host-event
+  variant 399 switches, max rel err 6.2e-5 (stale ≥ 4.4%).
 
 ## 5. Miss list and routing export to the CPU scheduler
 
@@ -155,7 +185,16 @@ Measured on A100 (levelswitch_mbox.py; graph = [mailbox, MoE] captured once, sid
 
 - `nqmoe.cu`: kernels (K1 gate|up + SwiGLU, K2 down + fused combine, persistent variant, mailbox) and the
   `moe_forward` / `mailbox` / `occ` bindings.
-- `nqdec::`: the swappable decoder.
+- `nqdec::`: the decoder (thread 15 RM_P int-fold + greedy funnels, per-projection fractional residual K).
+- `ref15_spec.py`: bit-level spec (copied from thread 15). `verify15.py`: spec == torch reference == kernel-decoded
+  weights (NQ_WDUMP build), bitwise.
 - `moe.py`: pools, `entry()` table row builder, `MoELayer`, `Mailbox`, dense reference decode (`dense_W`,
-  `Expert.ref`).
+  `Expert.ref`), residual packing (`Proj`, `pack_words`, `RKP`).
 - `build.py`: JIT build (`NQ_DEFS` for variants).
+- `tune2.py` (per-stage config sweep across build variants → `tune2_I2048.json`, `tune2_I256.json`), `abtest.py`
+  (old nqk2 A4 decoder vs nqdec, one process), `bench_full.py` / `bench_shard.py` (vs EXL3; `bench_shard.json` has an
+  EXL3 default run and an `EXL3_MOE_COOP_KSPLIT=2` run), `exl3_sweep.py` (EXL3 coop launch-option sweep →
+  `exl3_sweep_I*.json`).
+- EXL3 comparison note: exllamav3 1.5.1's coop MoE kernel is fastest at the shard shape with
+  `EXL3_MOE_COOP_KSPLIT=2` for B1–B3 (default for B4). This needs scratch ≥ ksplit·slots rows (`EXL3MoE(smax=...)`).
+  The shard speedups quoted against EXL3 use its best option per B.

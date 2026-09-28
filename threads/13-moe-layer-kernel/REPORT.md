@@ -49,3 +49,32 @@ See INTEGRATION.md: moe_forward(x, sel, rw, table[E,16], out, workspaces, I, nm_
 7. I=256 configs untuned; EXL3 I=256 baseline may be weak.
 8. Persistent variant lacks hits export.
 9. PCIe link sharing across GPUs on a switch.
+
+## Update: RM_P decoder port (lead, from the agent's final message, 2026-09-28 21:50 AEST)
+Thread 15's int-fold RM_P decoder and greedy-funnel 2-bit base are ported into nqmoe.cu (`nqdec::`). The per-block (Mb, N) value is one 32-bit word. The residual plane is split into uint4/uint2/uint/ushort arrays so loads stay coalesced at any residual K. Table slots [10] and [11] set the residual K for gate|up and down (codes 0=2, 1=1.75, 2=2.5, 3=2.25, 4=3, 5=1.5). `NQ_RK_CODES` picks which codes get compiled (default 0x7); a code missing from the build silently decodes as K=2. 4-lane rings (256 weights) are now the default.
+
+Verification: verify15.py matches ref15_spec on 96 blocks, all K codes and both levels, with 0 mismatches. A decoded-weight dump matches the reference bit for bit on all 64 projections at I=2048 and I=256. check.py relative error is ≤1.15e-4. Split-K fp32 atomics are still not bit-reproducible run to run.
+
+Full shape, I=2048, recency routing, NQ vs EXL3 µs:
+
+| B | 2b | 4b | mixed |
+|---|---|---|---|
+| 1 | 132.7 vs 248.8 (1.87x) | 220.5 vs 255.1 (1.16x) | 1.86x |
+| 2 | 192.6 (1.74x) | 320.7 vs 340.0 (1.06x) | 1.56x |
+| 3 | 249.5 (1.74x) | 412.7 vs 444.2 (1.08x) | 1.52x |
+| 4 | 313.7 (1.70x) | 516.7 vs 544.1 (1.05x) | 1.47x |
+
+4-bit at B2–B4 was 0.89–0.92x before the port. Fractional K (gate|up 1.75, down 2.5) runs 1.03–1.15x.
+
+TP8 shard, I=256, against EXL3's best option (`EXL3_MOE_COOP_KSPLIT=2` at B1–B3):
+
+| B | 2b | 4b |
+|---|---|---|
+| 1 | 32.8 vs 74.9 (2.28x) | 46.2 vs 77.2 (1.67x) |
+| 2 | 42.9 vs 98.0 (2.28x) | 65.3 vs 100.6 (1.54x) |
+| 3 | 54.7 vs 128.9 (2.35x) | 85.7 vs 130.7 (1.53x) |
+| 4 | 71.6 vs 146.0 (2.04x) | 109.2 vs 151.2 (1.38x) |
+
+Level switching still works on the new layout: mailbox version 311 switches with at most 1 step of lag, host-event version 399 switches, max relative error ≤1.2e-4.
+
+Open: the encoder must use `ref15_spec.fold` with a least-squares refit of (Mb, N) per block, and write the new residual layout. The kernel must be compiled with every K code the checkpoint uses. There is no dense prefill kernel yet. New files: verify15.py, tune2.py, abtest.py, exl3_sweep.py plus JSON results. Scratch is in /tmp/nestquant/13-moe-layer-kernel/.
