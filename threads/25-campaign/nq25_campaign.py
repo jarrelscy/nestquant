@@ -906,6 +906,11 @@ class Campaign:
             a, b = rng(k)
             done = self.done_experts(L)
             miss = [e for e in range(a, b) if e not in done]
+            if not times and not miss:                 # t23b logs no per-expert lines: wall / experts new in this chunk
+                new = [e for e in range(a, b) if str(e) not in ly["experts"]]
+                for E in new:
+                    ly["experts"][str(E)] = dict(s=round(dt / len(new), 1), gpu=w["gpu"], wid=wid, t=w["end"], est=True)
+                times = {E: None for E in new}
             c["status"] = "pending" if miss else "done"
             if miss:
                 c["retry_after"] = now() + 60 * c["attempts"]
@@ -1091,8 +1096,12 @@ class Campaign:
         st["layers_encoded"] = len(te)
         st["layers_per_hour"] = round(len(win) / hspan, 2) if hspan else None
         holding = collections.defaultdict(list)
-        for L, why in sorted(getattr(self, "_holds", {}).items()):
-            holding[why].append(L)
+        for L in self.layers:                          # fresh (cheap file checks), not the last next_chunk verdicts
+            ly = self.lay(L)
+            if ly["state"] == "pending" and not ly.get("n_done"):
+                why = self.layer_gate(L)
+                if why:
+                    holding[why].append(L)
         st["holding"] = {w: ",".join(map(str, v)) if len(v) < 6 else f"{len(v)} layers L{v[0]}..L{v[-1]}" for w, v in holding.items()}
         if write:
             jdump(st, f"{self.root}/status.json")
