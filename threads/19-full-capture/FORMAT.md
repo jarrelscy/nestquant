@@ -266,7 +266,7 @@ that kind in the same segment, 0 = none. They are exclusive under the same rule 
   - The gate also runs per layer: under a lock, before each layer upload, it requires listed total + that
     layer's bytes not yet on S3 + other in-flight layers' reservations < budget. This covers layers that
     become final mid-pass.
-  - The final set ran with `--budget-tb 4.6` (the lead's cap).
+  - The final set ran with `--budget-tb 4.6`, then (19:26 UTC, lead) `--budget-tb 4.75 --gate-full-layer` (charge the whole 49.2 GB layer, no dedup credit). Peak jarrel/ total 4.518 TB.
   - New S3 bytes per final layer are 45.28 GB (grams 45.1 + C_ctx/C_all/gdiag). `eval/val` and the boundary
     rows of shards 0-11 share keys with the stats1 backup, so they are not re-uploaded.
   - Projected jarrel/ peak is ≈ 4.52 TB.

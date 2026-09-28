@@ -195,6 +195,8 @@ def make_layer_gate(a, prefix):
             lst = s3_listing(a.budget_scope)
             total = sum(lst.values())
             need = sum(os.path.getsize(p) for p, k in files if lst.get(f"{prefix}/{k}") != os.path.getsize(p))
+            if a.gate_full_layer:                  # conservative: charge every file of the layer, no dedup credit
+                need = max(need, sum(os.path.getsize(p) for p, k in files))
             other = sum(v for k, v in reserved.items() if k != L)
             rec = dict(gate_layer=L, total_tb=round(total / 1e12, 4), need_gb=round(need / 1e9, 2),
                        inflight_gb=round(other / 1e9, 2), budget_tb=a.budget_tb,
@@ -267,6 +269,8 @@ def main():
                     help="stats0 / stats1 / ...: a frozen snapshot (plan.json); full: stats after every planned shard")
     ap.add_argument("--bnd-max-shard", type=int, help="upload boundary rows only of shards <= N")
     ap.add_argument("--budget-tb", type=float, default=4.8, help="abort if scope total + planned upload >= this")
+    ap.add_argument("--gate-full-layer", action="store_true",
+                    help="per-layer gate charges the whole layer (marker bytes, 49.2 GB final) instead of missing bytes")
     ap.add_argument("--budget-scope", default="s3://annalise-shared-prod/jarrel/")
     ap.add_argument("--state-tag", default="", help="suffix for the local state file (separate passes of one set)")
     a = ap.parse_args()
