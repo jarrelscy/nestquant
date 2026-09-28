@@ -13,6 +13,7 @@ CH=[('2b_B2',0,0),('2b_B2greedy',34,34),('2b_B2raw',40,40),
     ('4b_A4',3,3),('4b_A4funnel',4,4),('4b_foldf32',6,6),('4b_P',33,33),('4b_Praw',41,41),('4b_P2',37,37),('4b_P2raw',42,42),
     ('frac_P_r1.75gu_r2.5dn',29,30),('frac_Praw_r1.75gu_r2.5dn',43,44),('frac_P2raw_r1.75gu_r2.5dn',46,45)]
 UNF=['4b_A4','4b_P','4b_P2']
+if os.environ.get('VARS'):CH=[c for c in CH if c[0] in os.environ['VARS'].split(',')];UNF=[u for u in UNF if u in os.environ['VARS'].split(',')]
 sg=lambda n:(torch.randint(0,2,(n,),device='cuda')*2-1).half()
 sv_g,sv_u,su_d,su_x,sv_d=sg(2048),sg(2048),sg(2048),sg(6144),sg(6144)
 out={}

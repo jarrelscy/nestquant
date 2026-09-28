@@ -1,7 +1,9 @@
 """Thread 15 projections: generic base/residual trellis planes with fractional K, sub-array packing; numpy reference."""
 import torch,itertools,numpy as np
+import os
 from build15 import get
-M=get()
+G=int(os.environ.get('NQ15_G',2))
+M=get(G=G)
 E=torch.empty(0,device='cuda')
 RM=dict(NONE=0,A=1,F=2,A2=3,F2=4,UNI4=5,P=6,P2=7)
 def popc(m):return bin(m).count('1')
@@ -58,7 +60,7 @@ class Proj:
             out.append((cpw,sb,nst))
         return out
 def _ext(w,bits):
-    n=w.shape[0];src=(np.arange(n)^1)   # lane^1 within the warp (records are lane-minor)
+    n=w.shape[0];a=np.arange(n);src=(a^1) if G==2 else ((a&~3)|((a+1)&3))   # ring neighbour lane (records are lane-minor)
     nb=w[src,0].astype(np.uint64);e=w.astype(np.uint64)
     if bits%32==0:e=np.concatenate([e,nb[:,None],np.zeros((n,1),np.uint64)],1)
     else:

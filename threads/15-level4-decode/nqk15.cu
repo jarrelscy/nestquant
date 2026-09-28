@@ -592,15 +592,18 @@ typedef void (*kfn)(Args);
 #define DEC_T(id, a, b, c, d, e, f, ...) using D##id = Dec<a, b, c, d, e, f, ##__VA_ARGS__>;
 VARIANTS(DEC_T)
 
+#ifndef NQ_G
+#define NQ_G 2
+#endif
 static std::map<std::tuple<int, int, int>, kfn>& reg()
 {
     static std::map<std::tuple<int, int, int>, kfn> m;
     if (m.empty())
     {
 #define REG(id, a, b, c, d, e, f, ...) \
-        m[{id, 1, 0}] = nq15_gemv<D##id, 2, 1, 0>; m[{id, 2, 0}] = nq15_gemv<D##id, 2, 2, 0>; \
-        m[{id, 1, 3}] = nq15_gemv<D##id, 2, 1, 3>; m[{id, 2, 3}] = nq15_gemv<D##id, 2, 2, 3>; \
-        m[{id, 1, 4}] = nq15_gemv<D##id, 2, 1, 4>; m[{id, 2, 4}] = nq15_gemv<D##id, 2, 2, 4>;
+        m[{id, 1, 0}] = nq15_gemv<D##id, NQ_G, 1, 0>; m[{id, 2, 0}] = nq15_gemv<D##id, NQ_G, 2, 0>; \
+        m[{id, 1, 3}] = nq15_gemv<D##id, NQ_G, 1, 3>; m[{id, 2, 3}] = nq15_gemv<D##id, NQ_G, 2, 3>; \
+        m[{id, 1, 4}] = nq15_gemv<D##id, NQ_G, 1, 4>; m[{id, 2, 4}] = nq15_gemv<D##id, NQ_G, 2, 4>;
         VARIANTS(REG)
     }
     return m;

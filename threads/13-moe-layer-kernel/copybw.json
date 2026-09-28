@@ -1,0 +1,42 @@
+{
+ "2b B1": {
+  "moe_us_alone": 144.2,
+  "moe_us_during_copy": 143.7,
+  "slowdown_pct": -0.3,
+  "h2d_GBps_idle": 20.14,
+  "h2d_GBps_during_moe": 22.78,
+  "copy_s": 0.244,
+  "moe_s": 0.345,
+  "us_per_576KiB_during": 25.9
+ },
+ "2b B4": {
+  "moe_us_alone": 342.7,
+  "moe_us_during_copy": 342.8,
+  "slowdown_pct": 0.0,
+  "h2d_GBps_idle": 19.96,
+  "h2d_GBps_during_moe": 22.78,
+  "copy_s": 0.575,
+  "moe_s": 0.823,
+  "us_per_576KiB_during": 25.9
+ },
+ "4b B1": {
+  "moe_us_alone": 234.9,
+  "moe_us_during_copy": 235.1,
+  "slowdown_pct": 0.1,
+  "h2d_GBps_idle": 21.4,
+  "h2d_GBps_during_moe": 22.54,
+  "copy_s": 0.427,
+  "moe_s": 0.564,
+  "us_per_576KiB_during": 26.2
+ },
+ "4b B4": {
+  "moe_us_alone": 604.1,
+  "moe_us_during_copy": 604.1,
+  "slowdown_pct": 0.0,
+  "h2d_GBps_idle": 21.16,
+  "h2d_GBps_during_moe": 22.7,
+  "copy_s": 1.081,
+  "moe_s": 1.45,
+  "us_per_576KiB_during": 26.0
+ }
+}

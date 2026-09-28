@@ -1,0 +1,9 @@
+{
+ "steps": 300,
+ "ops": 306,
+ "applied_same_replay": 134,
+ "applied_next": 172,
+ "max_lag": 1,
+ "max_rel_err": 6.990211841184646e-05,
+ "min_rel_err_vs_stale": 0.040879376232624054
+}

@@ -1,0 +1,39 @@
+{
+ "eval": {
+  "EXL3-2": {
+   "all/forced": 35.717,
+   "all/routed": 33.016,
+   "control/forced": 34.229,
+   "control/routed": 32.37,
+   "ood/forced": 38.922,
+   "ood/routed": 38.49
+  },
+  "EXL3-4": {
+   "all/forced": 9.252,
+   "all/routed": 8.443,
+   "control/forced": 8.837,
+   "control/routed": 8.245,
+   "ood/forced": 10.142,
+   "ood/routed": 10.098
+  },
+  "NVFP4": {
+   "all/forced": 12.627,
+   "all/routed": 11.597,
+   "control/forced": 12.414,
+   "control/routed": 11.426,
+   "ood/forced": 13.103,
+   "ood/routed": 13.081
+  }
+ },
+ "info": {
+  "EXL3-2": {
+   "bpw": 2.0104166666666665
+  },
+  "EXL3-4": {
+   "bpw": 4.010416666666667
+  },
+  "NVFP4": {
+   "bpw": 4.5
+  }
+ }
+}

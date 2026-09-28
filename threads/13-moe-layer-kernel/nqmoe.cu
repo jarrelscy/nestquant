@@ -216,6 +216,7 @@ struct MoeArgs
     float* acc_gu; half* h; float* acc_d; float* out;
     int* cnt_gu; int* cnt_d; int NST;
     int force_level;   // debug: >0 overrides table level
+    int* hits;         // optional [E] int32 pick counters (may be host-mapped pinned memory); nullptr = off
 };
 
 struct RunInfo { int e, level, ntok, nruns; int slot[8]; float w[8]; const int64_t* ent; };
@@ -437,6 +438,10 @@ __global__ void __launch_bounds__(256, NQ_MINB) nq_moe(MoeArgs a)
     __shared__ RunInfo R;
     __shared__ int nr, last;
     if (threadIdx.x < 32) { route(a, blockIdx.z, &R, threadIdx.x); if (threadIdx.x == 0) nr = R.nruns; }
+    // routing-hit export for the CPU scheduler: one warp of one K1 block counts every (token, expert) pick,
+    // whatever its level (the host owns the levels, so misses/upgrade candidates = hits where level < 4)
+    if (MODE == 0 && a.hits && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x < a.B * a.topk)
+        if (__half2float(a.rw[threadIdx.x]) != 0.f) atomicAdd(a.hits + a.sel[threadIdx.x], 1);
     __syncthreads();
     if ((int)blockIdx.z >= nr) return;
     do_item<G, CPW, MODE>(a, R, nr, blockIdx.z, blockIdx.x, blockIdx.y, gridDim.y, smem, &last);
@@ -506,14 +511,14 @@ static int resident_blocks(const void* f, int threads, int shm)
 void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Tensor table, torch::Tensor out,
                  torch::Tensor acc_gu, torch::Tensor h, torch::Tensor acc_d, torch::Tensor cnt_gu, torch::Tensor cnt_d,
                  torch::Tensor wq, int64_t I, int64_t nm_gu, int64_t nm_dn, std::vector<int64_t> cfg_gu,
-                 std::vector<int64_t> cfg_dn, int64_t G, int64_t force_level, int64_t which)
+                 std::vector<int64_t> cfg_dn, int64_t G, int64_t force_level, int64_t which, int64_t hits_ptr)
 {
     MoeArgs a{};
     a.x = (const half*)x.data_ptr(); a.sel = (const int64_t*)sel.data_ptr(); a.rw = (const half*)rw.data_ptr();
     a.B = x.size(0); a.topk = sel.size(1); a.table = (const int64_t*)table.data_ptr(); a.H = x.size(1); a.I = I;
     a.nm_gu = nm_gu; a.nm_dn = nm_dn; a.acc_gu = (float*)acc_gu.data_ptr(); a.h = (half*)h.data_ptr();
     a.acc_d = (float*)acc_d.data_ptr(); a.out = (float*)out.data_ptr(); a.cnt_gu = (int*)cnt_gu.data_ptr(); a.cnt_d = (int*)cnt_d.data_ptr();
-    a.force_level = force_level;
+    a.force_level = force_level; a.hits = (int*)hits_ptr;
     const int S = a.B * a.topk;
     TORCH_CHECK(S <= 32 && a.B <= 8, "B*topk <= 32");
     TORCH_CHECK(a.H % 128 == 0 && I % 128 == 0 && a.H / 128 <= 64 && I / 128 <= 64);
@@ -545,6 +550,28 @@ void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Te
         }
     }
 }
+// Table mailbox (graph-safe level switching without host access to the compute stream).
+// Captured once at the start of each layer. The scheduler, on its own side stream and in stream order, (1) copies P4/d4
+// into a free slot (upgrades only), (2) writes the new table row into stage[e], (3) bumps seq[e]. This kernel copies
+// stage[e] -> table[e] whenever seq[e] != applied[e] and publishes applied[e] (device copy + optional host-mapped
+// mirror). After the host sees applied == seq for a downgrade, no later kernel can reference the old slot.
+// Rule: at most one outstanding op per expert (the host waits for applied == seq before re-staging e).
+__global__ void nq_mailbox(int64_t* table, const int64_t* stage, const int* seq, int* applied, int* applied_host, int E)
+{
+    const int e = blockIdx.x * blockDim.x + threadIdx.x; if (e >= E) return;
+    const int sq = __ldcv(seq + e);
+    if (sq == applied[e]) return;
+    #pragma unroll
+    for (int i = 0; i < TBL_W; ++i) table[(size_t)e * TBL_W + i] = __ldcv((const long long*)stage + (size_t)e * TBL_W + i);
+    __threadfence();
+    applied[e] = sq; if (applied_host) applied_host[e] = sq;
+}
+void mailbox(torch::Tensor table, torch::Tensor stage, torch::Tensor seq, torch::Tensor applied, int64_t applied_host)
+{
+    const int E = table.size(0);
+    nq_mailbox<<<(E + 127) / 128, 128, 0, at::cuda::getCurrentCUDAStream()>>>((int64_t*)table.data_ptr(), (const int64_t*)stage.data_ptr(),
+        (const int*)seq.data_ptr(), (int*)applied.data_ptr(), (int*)applied_host, E);
+}
 int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
 {
     kfn f = mode == 0 ? pick<0>(G, cpw) : pick<1>(G, cpw);
@@ -553,4 +580,4 @@ int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
     cudaFuncAttributes at; cudaFuncGetAttributes(&at, f);
     return nb * 1000000 + at.numRegs * 1000 + at.localSizeBytes;
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("occ", &occ); }
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("occ", &occ); m.def("mailbox", &mailbox); }

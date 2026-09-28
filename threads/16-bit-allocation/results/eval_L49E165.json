@@ -1,0 +1,130 @@
+{
+ "EXL3_2": {
+  "all/forced": 35.852,
+  "all/routed": 30.691,
+  "control/forced": 35.542,
+  "control/routed": 30.589,
+  "ood/forced": 36.5,
+  "ood/routed": 41.356
+ },
+ "EXL3_4": {
+  "all/forced": 9.347,
+  "all/routed": 7.822,
+  "control/forced": 9.24,
+  "control/routed": 7.792,
+  "ood/forced": 9.568,
+  "ood/routed": 10.864
+ },
+ "uni_none@2": {
+  "all/forced": 35.845,
+  "all/routed": 31.142,
+  "control/forced": 35.674,
+  "control/routed": 31.052,
+  "ood/forced": 36.205,
+  "ood/routed": 40.614
+ },
+ "uni_none@4": {
+  "all/forced": 9.853,
+  "all/routed": 8.168,
+  "control/forced": 9.744,
+  "control/routed": 8.137,
+  "ood/forced": 10.079,
+  "ood/routed": 11.389
+ },
+ "gate=A4g_none,up=A4g_none,down=uni_none@2": {
+  "all/forced": 35.848,
+  "all/routed": 31.215,
+  "control/forced": 35.688,
+  "control/routed": 31.127,
+  "ood/forced": 36.185,
+  "ood/routed": 40.577
+ },
+ "gate=A4g_none,up=A4g_none,down=uni_none@4": {
+  "all/forced": 9.857,
+  "all/routed": 8.181,
+  "control/forced": 9.748,
+  "control/routed": 8.15,
+  "ood/forced": 10.085,
+  "ood/routed": 11.38
+ },
+ "A4pm_none@2": {
+  "all/forced": 35.811,
+  "all/routed": 30.962,
+  "control/forced": 35.646,
+  "control/routed": 30.866,
+  "ood/forced": 36.158,
+  "ood/routed": 40.97
+ },
+ "A4pm_none@4": {
+  "all/forced": 10.825,
+  "all/routed": 9.048,
+  "control/forced": 10.684,
+  "control/routed": 9.014,
+  "ood/forced": 11.121,
+  "ood/routed": 12.541
+ },
+ "A2pm_none@2": {
+  "all/forced": 39.507,
+  "all/routed": 34.481,
+  "control/forced": 39.229,
+  "control/routed": 34.377,
+  "ood/forced": 40.089,
+  "ood/routed": 45.446
+ },
+ "A2pm_none@4": {
+  "all/forced": 10.961,
+  "all/routed": 9.084,
+  "control/forced": 10.807,
+  "control/routed": 9.045,
+  "ood/forced": 11.281,
+  "ood/routed": 12.908
+ },
+ "gate=C1.75_greedy,up=C1.75_greedy,down=C2.5_uniform@2": {
+  "all/forced": 35.777,
+  "all/routed": 31.051,
+  "control/forced": 35.623,
+  "control/routed": 30.957,
+  "ood/forced": 36.102,
+  "ood/routed": 40.966
+ },
+ "gate=C1.75_greedy,up=C1.75_greedy,down=C2.5_uniform@4": {
+  "all/forced": 10.286,
+  "all/routed": 8.22,
+  "control/forced": 10.068,
+  "control/routed": 8.18,
+  "ood/forced": 10.734,
+  "ood/routed": 12.175
+ },
+ "gate=C1.75_alternate,up=C1.75_alternate,down=C2.5_uniform@2": {
+  "all/forced": 35.817,
+  "all/routed": 31.316,
+  "control/forced": 35.622,
+  "control/routed": 31.224,
+  "ood/forced": 36.227,
+  "ood/routed": 41.021
+ },
+ "gate=C1.75_alternate,up=C1.75_alternate,down=C2.5_uniform@4": {
+  "all/forced": 10.402,
+  "all/routed": 8.287,
+  "control/forced": 10.203,
+  "control/routed": 8.249,
+  "ood/forced": 10.811,
+  "ood/routed": 12.063
+ },
+ "gate=C1.75_positional,up=C1.75_positional,down=C2.5_uniform@2": {
+  "all/forced": 35.816,
+  "all/routed": 30.976,
+  "control/forced": 35.639,
+  "control/routed": 30.88,
+  "ood/forced": 36.189,
+  "ood/routed": 41.019
+ },
+ "gate=C1.75_positional,up=C1.75_positional,down=C2.5_uniform@4": {
+  "all/forced": 10.292,
+  "all/routed": 8.168,
+  "control/forced": 10.073,
+  "control/routed": 8.128,
+  "ood/forced": 10.74,
+  "ood/routed": 12.077
+ }
+}

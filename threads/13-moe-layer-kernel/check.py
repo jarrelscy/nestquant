@@ -17,7 +17,7 @@ for B in [1,2,3,4]:
         sel,rw=routing_tensors(rows,seed=B)
         x=(torch.randn(B,H,device='cuda')*0.05).half()
         r=moe_ref(ex,levels,x,sel,rw)
-        for cg,cd in [([1,8,3],[1,8,2]),([2,8,4,1],[2,8,4,1]),([1,4,6,2],[1,8,2,1])]:
+        for cg,cd in ([([1,8,3],[1,8,2]),([2,8,4,1],[2,8,4,1]),([1,4,6,2],[1,8,2,1])] if I>=1024 else [([1,8,3],[1,8,2]),([2,8,4],[1,4,2]),([1,4,6,2],[2,8,1,1])]):
             y=L(x,sel,rw,cfg_gu=cg,cfg_dn=cd).clone();y2=L(x,sel,rw,cfg_gu=cg,cfg_dn=cd).clone()
             print(B,mode,cg,cd,'distinct experts',len(set(sum(rows,[]))),'rel err',round(((y-r).norm()/r.norm()).item(),6),'repeat bitwise',torch.equal(y,y2),flush=True)
 print('ws clean',L.acc_gu.abs().max().item(),L.acc_d.abs().max().item(),L.cnt_gu.abs().sum().item(),L.cnt_d.abs().sum().item(),L.wq.abs().sum().item())

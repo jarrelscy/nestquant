@@ -31,6 +31,7 @@ Status: frozen enough to build. Open items are marked OPEN; the owning thread de
 A nested 4.0 bpw level 4 sits ~2.8% above native at best (code-structure floor), so it cannot beat EXL3-4 on GLM at exactly 4.0 bpw. User requirement is one dynamic 2-4 bit artifact, so a separate native 4-bit code is ruled out. Gap closers under test in thread 12: 3-bit residual on top-benefit blocks at +0.0625/+0.125/+0.25 bpw, per-tile seed/codebook choice, per-block δ.
 
 ## Kernel
+Update (thread 15, REPORT.md + ref15_spec.py): adopted decoder is the int-fold RM_P with greedy funnels, V1 residual, per-projection fractional residual K, 4-lane rings (256 weights): 4b 38.8-43.8 µs B1-B4 (7.15 ops/weight), 2b 26.4-30.7 µs (3.91). Q4 = fp16(A'(1024+F)+C), F = (Mb·S(sb)+N·S(sr)+128)>>8, δ = N/Mb; encoders must emit this exactly. Per-unit K3 residual units need a kernel branch (not built). MoE layer kernel (thread 13): TP8 shard 1.36-2.90x faster than EXL3 exl3_moe_coop at B1-B4; being ported to RM_P.
 Adopted (thread 04 follow-up, REPORT2.md): nqk2.cu A4 additive decode, rings shared by 2 or 4 lanes (128/256 weights), one fp16 δ per 16x128 block folded into 2 HFMA2, fused-B 2 launches. 4b 42.5-46.8 µs B1-B4 vs EXL3 bare 53.9-74.9; 2b 28.7-31.3 vs 60.2-72.5. Level 3 dropped.
 Custom tensor-core GEMV (mma.m16n8k16), each lane decodes straight into fragments, split planes, per-expert level and pointer tables read at CUDA-graph replay, one launch for mixed levels. Budget: 10 or fewer ops/weight at 4 bit, 8 or fewer at 2 bit. Fuse Hadamard/SwiGLU into the GEMVs.
 

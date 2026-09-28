@@ -117,13 +117,28 @@ class MoELayer:
         s.acc_gu=torch.zeros(S,2*I,device=dev);s.h=torch.zeros(S,I,device=dev).half();s.acc_d=torch.zeros(S,H,device=dev)
         s.cnt_gu=torch.zeros(S*(I//128),dtype=torch.int32,device=dev);s.cnt_d=torch.zeros(H//128,dtype=torch.int32,device=dev);s.wq=torch.zeros(4,dtype=torch.int32,device=dev)
         s.out=torch.zeros(Bmax,H,device=dev)
-        s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2]
+        s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2];s.hits_ptr=0   # set to a (host-mapped) int32 [E] pointer to export routing hits
     def set(s,e,ex,level):s.table[e].copy_(entry(ex,level).to(s.table.device),non_blocking=False)
     def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None):
         out=s.out[:x.shape[0]] if out is None else out
         s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
-                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which)
+                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr)
         return out
+
+class Mailbox:
+    """Graph-safe table updates: call .apply() inside the captured graph before the layer; stage from a side stream."""
+    def __init__(s,layer):
+        E=layer.E;dev=layer.table.device;s.L=layer
+        s.stage=torch.zeros(E,TBL_W,dtype=torch.int64,device=dev);s.seq=torch.zeros(E,dtype=torch.int32,device=dev)
+        s.applied=torch.zeros(E,dtype=torch.int32,device=dev);s.applied_host=torch.zeros(E,dtype=torch.int32).pin_memory()
+        s.hseq=[0]*E;s.pins=[]
+    def apply(s):s.L.M.mailbox(s.L.table,s.stage,s.seq,s.applied,s.applied_host.data_ptr())
+    def post(s,e,row,stream):
+        """enqueue on `stream` (after any P4 copy already enqueued there): stage[e]=row; seq[e]+=1"""
+        assert s.done(e),'one outstanding op per expert'
+        s.hseq[e]+=1;r=row.pin_memory();q=torch.tensor([s.hseq[e]],dtype=torch.int32).pin_memory();s.pins+=[r,q]
+        with torch.cuda.stream(stream):s.stage[e].copy_(r,non_blocking=True);s.seq[e:e+1].copy_(q,non_blocking=True)
+    def done(s,e):return int(s.applied_host[e])==s.hseq[e]
 
 def moe_ref(experts,levels,x,sel,rw):
     y=torch.zeros(x.shape[0],x.shape[1],device=x.device);xf=x.float();cache={}

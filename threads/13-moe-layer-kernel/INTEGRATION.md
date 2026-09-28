@@ -1,0 +1,161 @@
+# Plugging the NestQuant MoE layer kernel into vLLM (GLM-5.3, TP8)
+
+vLLM is not modified. Everything below goes in an out-of-tree plugin package that is loaded through the
+`vllm.general_plugins` entry point and registers a quantization config with
+`@register_quantization_config("nestquant")` (both exist in the local checkout, /home/coder/git/glm52/vllm @ f32e283).
+The in-repo `nvfp4_aqlm_hybrid.HybridExpertsMoEMethod` is the structural template: a `FusedMoEMethodBase` subclass with
+its own `create_weights` / `process_weights_after_loading` / `apply`, `get_fused_moe_quant_config -> None`,
+`supports_eplb = False`, and a gemv path whenever `torch.cuda.is_current_stream_capturing()` is true.
+
+## 1. What a TP8 rank holds
+
+GLM-5.3 routed experts: H = 6144, I = 2048, 256 experts, top-8. vLLM's TP MoE splits I, so each rank holds all
+256 experts at I/8 = **256**. Each shard is a self-contained NestQuant "expert" of shape (H = 6144, I = 256):
+
+- **gate|up** [2·256 × 6144] and **down** [6144 × 256].
+- Rotations are per 128-wide Hadamard block, so every I-side rotation stays inside the 256-wide shard. This covers
+  sv_g, sv_u and su_d (DESIGN.md format item 1).
+- The H-side signs (su_in, sv_o) are identical on all ranks.
+- The kernel's output for a shard is a partial sum of the full expert output. The output rotation
+  (WHT128 · sv_o, over H) is linear and identical per rank, so partial sums stay valid. vLLM's MoE runner then does
+  the usual `tensor_model_parallel_all_reduce` (the method must not set `skip_final_all_reduce`).
+- The routed-weight combine is fused into K2, so each rank returns out[b] = Σ_k rw[b,k] · partial_e(x_b).
+
+Per expert-shard sizes (bytes):
+
+| plane | gate\|up | down | total |
+|---|---|---|---|
+| base (2 bpw) | 786,432 | 393,216 | 1,179,648 (= 2 × 576 KiB) |
+| P4 (level 4 adds) | 786,432 | 393,216 | 1,179,648 |
+| d4 (fp16 δ per 16×128, stored as half2) | 6,144 | 3,072 | 9,216 |
+| signs (half[H \| I \| I \| I \| H]) | | | 26,112 |
+
+Mask mode (128×128 per-block 2b/4b mixing inside the 4-bit tier) adds a uint64 per 16-row strip and compacts P4/d4
+to the flagged chunks. With the shard's K = 256 for down, that is only 2 chunks per strip.
+
+Per rank per MoE layer: the base for all 256 experts is **288 MiB**, and each level-4 expert adds 1.13 MiB.
+
+Placement per rank:
+
+- **Base planes: always resident**, one pool per layer (constant size per (layer, plane, shard), 64 KiB aligned,
+  DESIGN.md format item 5). At TP8 every expert is resident at level ≥ 2. Level 0 ("not resident, contributes 0")
+  is only for EP or pruning. It must then be all-or-none across the 8 ranks, because one rank at level 0 would
+  drop one shard of the expert.
+- **P4 slots**: a preallocated per-layer (or global) slot pool of fixed-size slots (P4 + d4 [+ flags] ≈ 1.13 MiB per
+  expert-shard). The static 4-bit set and the dynamic upgrades both live in slots.
+- **Host**: pinned P4 + d4 images of every expert-shard, per rank. This is the full 4-bit tier: 256 × 1.13 MiB per
+  layer per rank. Keep it in NUMA-local pinned memory of each GPU's socket.
+
+## 2. Device tables (per rank, per layer)
+
+| tensor | shape | notes |
+|---|---|---|
+| `table` | int64 [256][16] | [0] level 0/2/4; [1..4] gate\|up base, p4, d4, flags; [5..8] down same; [9] signs; rest reserved. Read on device at every replay. |
+| mailbox `stage`, `seq`, `applied` | int64 [256][16], int32 [256] ×2 | graph-safe updates (§4) |
+| `applied_host` | int32 [256], pinned host-mapped | the scheduler polls this without syncing |
+| `hits` | int32 [256], pinned host-mapped | routing-hit export (§5) |
+
+- `table` is 32 KiB per layer.
+- Levels should be identical across ranks at any step. This is not needed for correctness, but it keeps the model a
+  single well-defined quantization. The mailbox lag is at most one step, and a per-rank lag difference only mixes
+  shards of the same expert at two levels for that step.
+- The workspace (acc_gu [32, 2I] f32, h [32, I] f16, acc_d [32, H] f32, counters) can be one shared set per rank.
+  Layers run in stream order and the kernels leave the workspace zeroed on exit. At I = 256 it is about 0.9 MB.
+- It must not be shared with a concurrently running shared-expert stream. Leave `mk_can_overlap_shared_experts`
+  False, as the hybrid method does.
+
+## 3. The `apply` path
+
+```
+apply(layer, x, topk_weights, topk_ids, shared_experts, shared_experts_input):
+    if x.shape[0] <= 4:                                   # decode / MTP verify (B*topk <= 32)
+        mbox.apply()                                      # captured: stage -> table for pending ops
+        moe_forward(x16, ids64, rw16, table, out32, ws..., I=256, nm_gu, nm_dn,
+                    cfg_gu, cfg_dn, G=2, force_level=0, which=3, hits_ptr)
+        return out32.to(x.dtype)
+    else:                                                 # prefill
+        dense-decode experts per group + grouped GEMM (as HybridExpertsMoEMethod._apply_grouped)
+```
+
+Dtype and shape notes:
+
+- The kernel takes x as **fp16** [B, H], sel as **int64** [B, 8], rw as **fp16** [B, 8], and writes out as
+  **fp32** [B, H].
+- vLLM hands over bf16 x, int32 ids and fp32 weights. Today that means three small cast kernels, which are
+  graph-capturable. Native bf16-in and int32-ids variants are an open item (a few lines in the prologue and route).
+- Check whether GLM's `routed_scaling_factor` is already folded into `topk_weights` on the chosen router path.
+  The kernel applies rw exactly as given.
+
+Tuned configs:
+
+| shape | B | gate\|up | down |
+|---|---|---|---|
+| full I = 2048 (tune_I2048.json) | 1 | [1,4,8] | [1,4,8] |
+| full I = 2048 | 2–4 | [2,8,4] | [2,8,4] |
+| TP8 shard I = 256 (bench_shard.json, best of a small sweep) | 1–4 | [1,4,6] or [1,8,6] | [1,8,2] or [2,8,1] |
+
+Kernel constraints: B·topk ≤ 32, H and I multiples of 128 and ≤ 64·128, and K % (cpw·nst·128) == 0.
+
+Prefill (B > 4) needs a dense-decode kernel. The decode math is `nqdec::` in nqmoe.cu, but only the torch reference
+(`moe.dense_W`) exists as a whole-matrix decoder today (open item).
+
+## 4. Level switching under vLLM's CUDA graphs
+
+Under full CUDA graphs the host never gets to enqueue work on the compute stream between layers, so the table flip is
+done by a tiny captured kernel, `mailbox()` (nqmoe.cu `nq_mailbox`, python `moe.Mailbox`). It runs at the start of each
+MoE layer, before K1. The scheduler only ever touches its own side stream (one per rank).
+
+**Upgrade 2→4.** On the side stream, in order:
+1. `cudaMemcpyAsync` pinned P4 + d4 (+ flags) into a free slot, as 576 KiB chunks.
+2. Write `stage[e]` = new row (level 4, slot pointers).
+3. Bump `seq[e]`.
+
+The next `mailbox()` that sees `seq != applied` copies the row into the table and publishes `applied[e]`. Because
+the side stream orders copy → stage → seq, a row is never live before its P4 bytes are.
+
+**Downgrade 4→2.** Post a level-2 row (P4 pointers ignored). Once `applied_host[e] == seq[e]`, no later kernel can
+reference the slot, so the slot is free and may be overwritten immediately.
+
+**Rule:** at most one outstanding op per expert.
+
+Measured on A100 (levelswitch_mbox.py; graph = [mailbox, MoE] captured once, side-stream ops racing the replays):
+- 306 ops over 300 steps, all applied in the same or the next replay.
+- Every replay matched the dense reference of the state it saw (max rel err 7.0e-5). The stale state would have
+  shown ≥ 4.1% error.
+- Freed slots were scribbled with junk right after release without affecting any output.
+- The host-stream-wait variant (levelswitch.py: event + `wait_event` + table copy on the main stream) passed
+  399 switches over 200 steps, max rel err 6.3e-5, stale ≥ 4.7%.
+- Mailbox cost: 1.4 µs per layer (35.4 → 36.8 µs, I = 256 B1 2b). Hit export adds 0.3 µs.
+
+## 5. Miss list and routing export to the CPU scheduler
+
+- Set `MoELayer.hits_ptr` (the `moe_forward` arg `hits_ptr`) to a **pinned host-mapped** int32 [256] buffer per
+  layer. One warp of one K1 block `atomicAdd`s one count per (token, expert) pick with nonzero weight, straight
+  over PCIe. The pointer is fixed, so this is graph-safe, needs no extra graph node, and involves no sync.
+- The host owns the levels, so the **miss / upgrade-candidate list** for a step is simply {e : hits[e] increased and
+  level[e] < 4}.
+- The scheduler thread polls the counters (monotone, so it diffs against the previous snapshot) and applies the
+  thread 10 policy:
+  - static 4-bit set by benefit per byte;
+  - recency upgrades with a one-step lag, which matches the mailbox's ≤ 1-step latency;
+  - next-layer top-12–16 prefetch;
+  - instant downgrade under KV pressure;
+  - a per-step byte cap at link rate.
+- All 8 ranks see identical routing, so one scheduler process can decide for all ranks and push per-rank ops to each
+  rank's side stream. Alternatively, each rank decides deterministically from the same counters.
+- Only the grid-mapped kernel (the one used) exports hits; the persistent variant does not.
+
+**Copy budget** (copybw.py, A100, pinned host → device, 576 KiB `cudaMemcpyAsync` chunks):
+- Idle: 20–21 GB/s (short run). Concurrent with the MoE graph: 22.5–22.8 GB/s.
+- That is 26 µs per 576 KiB chunk, and one expert-shard upgrade (1.13 MiB) takes about 52 µs.
+- The MoE kernel slowed by 0.0% ± 0.3% during copies (2b/4b, B1/B4).
+- Divide the link rate among the GPUs that share a PCIe switch on the target box.
+
+## 6. Files
+
+- `nqmoe.cu`: kernels (K1 gate|up + SwiGLU, K2 down + fused combine, persistent variant, mailbox) and the
+  `moe_forward` / `mailbox` / `occ` bindings.
+- `nqdec::`: the swappable decoder.
+- `moe.py`: pools, `entry()` table row builder, `MoELayer`, `Mailbox`, dense reference decode (`dense_W`,
+  `Expert.ref`).
+- `build.py`: JIT build (`NQ_DEFS` for variants).
