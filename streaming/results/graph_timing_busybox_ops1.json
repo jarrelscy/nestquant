@@ -1,0 +1,1 @@
+{"layers": [3, 10], "rank": 0, "B": 4, "steps": 500, "ops_per_step": 1, "idle_us": {"mean": 640.3, "p50": 639.0, "p99": 688.2}, "stream_us": {"mean": 644.3, "p50": 643.4, "p99": 686.1}, "regress_pct": 0.63, "upgrades": 523, "GBps": 0.9, "op_p50_ms": 0.48, "op_p99_ms": 13.79, "failed": 0}

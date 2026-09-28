@@ -1,6 +1,11 @@
-L8 TP4: loaded 256 experts x 4 ranks in 190.7s
+L8 TP4: loaded 256 experts x 4 ranks in 47.1s
   level 4: 76 experts (26 fixed); P4 slot per rank [2554112, 2554112, 2554112, 2554112] B; lr ranks gu/dn max 4/4
-  B1 trial 0: 3/8 picks at level 4, rel err 8.20e-04
-  B1 trial 1: 4/8 picks at level 4, rel err 8.45e-04
-  B2 trial 0: 7/16 picks at level 4, rel err 8.54e-04
-  B2 trial 1: 6/16 picks at level 4, rel err 8.17e-04
+  B1 trial 0: 3/8 picks at level 4, rel err 8.21e-04
+  B1 trial 1: 2/8 picks at level 4, rel err 8.29e-04
+  B2 trial 0: 7/16 picks at level 4, rel err 8.30e-04
+  B2 trial 1: 7/16 picks at level 4, rel err 8.74e-04
+  B3 trial 0: 6/24 picks at level 4, rel err 8.18e-04
+  B3 trial 1: 7/24 picks at level 4, rel err 8.29e-04
+  B4 trial 0: 8/32 picks at level 4, rel err 8.40e-04
+  B4 trial 1: 14/32 picks at level 4, rel err 8.41e-04
+L8 TP4 worst 8.74e-04 LAYER PASS
