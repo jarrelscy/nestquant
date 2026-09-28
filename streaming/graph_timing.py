@@ -27,7 +27,7 @@ class St:
     def released(s,L,E):s.st.pop((L,E),None)
     def failed(s,L,E,read_error=False):s.st.pop((L,E),None)
 S=St();X=EX.RankExecutor(rf,lays,NSLOT,n_host=64,qd=8)
-x=(torch.randn(B,H,device=dev)*0.05).half();rw=torch.full((B,8),1/8,device=dev)
+x=(torch.randn(B,H,device=dev)*0.05).half();rw=torch.full((B,8),1/8,device=dev).half()
 sel={L:torch.stack([torch.randperm(NE,device=dev)[:8] for _ in range(B)]) for L in LAYERS}
 s_=torch.cuda.Stream()
 def f():

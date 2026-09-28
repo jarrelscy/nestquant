@@ -196,10 +196,10 @@ class MoELayer:
         s.M=mod or M;s.E,s.H,s.I,s.nm_gu,s.nm_dn,s.G=E,H,I,nm_gu,nm_dn,G
         s.table=torch.zeros(E,TBL_W,dtype=torch.int64,device=dev)
         S=Bmax*topk
-        s.acc_gu=torch.zeros(S,2*I,device=dev);s.h=torch.zeros(S,I,device=dev).half();s.acc_d=torch.zeros(S,H,device=dev)
+        s.acc_gu=torch.zeros(S,2*I,dtype=torch.float32,device=dev);s.h=torch.zeros(S,I,dtype=torch.float16,device=dev);s.acc_d=torch.zeros(S,H,dtype=torch.float32,device=dev)
         s.cnt_gu=torch.zeros(S*(I//128),dtype=torch.int32,device=dev);s.cnt_d=torch.zeros(H//128,dtype=torch.int32,device=dev);s.wq=torch.zeros(4,dtype=torch.int32,device=dev)
-        s.zd=torch.zeros(S*(I//128)*4,device=dev)
-        s.out=torch.zeros(Bmax,H,device=dev)
+        s.zd=torch.zeros(S*(I//128)*4,dtype=torch.float32,device=dev)
+        s.out=torch.zeros(Bmax,H,dtype=torch.float32,device=dev)
         s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2];s.hits_ptr=0   # set to a (host-mapped) int32 [E] pointer to export routing hits
     def set(s,e,ex,level):
         if getattr(ex,'lr',None) is not None:assert ex.rg<=4 and ex.rd<=4 and ex.lr.dtype==torch.float16
@@ -208,6 +208,7 @@ class MoELayer:
             assert s.rkm[0]>>ex.gu.rk&1 and s.rkm[1]>>ex.dn.rk&1,f'residual K code gu {ex.gu.rk} / dn {ex.dn.rk} not compiled (rk_codes {s.rkm})'
         s.table[e].copy_(entry(ex,level).to(s.table.device),non_blocking=False)
     def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None):
+        assert x.dtype==torch.float16 and rw.dtype==torch.float16 and sel.dtype==torch.int64,(x.dtype,rw.dtype,sel.dtype)
         out=s.out[:x.shape[0]] if out is None else out
         s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
                       cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr,s.zd)

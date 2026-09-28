@@ -42,7 +42,7 @@ S=SC.Scheduler(LAYERS,fx,dflt,rf.rb*tp,NE=NE,n_float=NF,slots=NSLOT)
 X=EX.RankExecutor(rf,lays,NSLOT,n_host=64,qd=8)
 rng=torch.Generator(device=dev).manual_seed(rank)
 xs={L:(torch.randn(1,H,device=dev,generator=rng)*0.05).half() for L in LAYERS}
-sel={L:torch.zeros(1,8,dtype=torch.long,device=dev) for L in LAYERS};rw=torch.full((1,8),1/8,device=dev)
+sel={L:torch.zeros(1,8,dtype=torch.long,device=dev) for L in LAYERS};rw=torch.full((1,8),1/8,device=dev).half()
 graphs={}
 s_=torch.cuda.Stream()
 for L in LAYERS:

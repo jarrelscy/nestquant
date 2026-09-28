@@ -40,7 +40,7 @@ def setlv(Lr,E,lv):ex=RL.ex[E];ex.signs=ex.sc[lv];Lr.set(E,ex,lv);ex.signs=ex.sc
 for E in ids:setlv(M,E,2);setlv(Ref,E,2)
 B=4;TK=min(8,len(ids));rng=random.Random(L*10+rank)
 sel=torch.tensor([rng.sample(ids,TK) for _ in range(B)],device=dev,dtype=torch.long)
-rw=torch.softmax(torch.randn(B,TK,device=dev),-1)
+rw=torch.softmax(torch.randn(B,TK,device=dev),-1).half()   # the kernel reads rw as fp16
 x=(torch.randn(B,H,device=dev)*0.05).half()
 s=torch.cuda.Stream();side=torch.cuda.Stream()
 if ENG:

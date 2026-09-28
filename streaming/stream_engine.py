@@ -9,7 +9,7 @@ _m=None
 def mod():
     global _m
     if _m is None:
-        b='/data/Jarrel/nq-build/nqstream';os.makedirs(b,exist_ok=True)
+        b=os.environ.get('NQ_BUILD','/data/Jarrel/nq-build')+'/nqstream';os.makedirs(b,exist_ok=True)
         _m=load('nqstream',[D+'/nqstream.cu'],extra_include_paths=[URING+'/include'],extra_ldflags=[URING+'/lib/liburing.a'],
                 extra_cuda_cflags=['-O2'],build_directory=b,verbose=False)
     return _m
