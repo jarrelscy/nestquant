@@ -345,6 +345,11 @@ __device__ __forceinline__ void ld4h(const half* p, float* f)
     uint2 u = *(const uint2*)p; half2 a = *(half2*)&u.x, b = *(half2*)&u.y;
     f[0] = __low2float(a); f[1] = __high2float(a); f[2] = __low2float(b); f[3] = __high2float(b);
 }
+__device__ __forceinline__ void cv4h(uint2 u, float* f)   // 4 packed halves -> fp32 (pair with an early raw __ldg)
+{
+    half2 a = *(half2*)&u.x, b = *(half2*)&u.y;
+    f[0] = __low2float(a); f[1] = __high2float(a); f[2] = __low2float(b); f[3] = __high2float(b);
+}
 __device__ __forceinline__ void st4h(half* p, const float* v)
 {
     half2 h0 = __floats2half2_rn(v[0], v[1]), h1 = __floats2half2_rn(v[2], v[3]);
@@ -361,7 +366,16 @@ struct MoeArgs
     int force_level;   // debug: >0 overrides table level
     half* wdump[2]; int dump_e;   // NQ_WDUMP debug builds only: decoded fp16 weights of expert dump_e (gu [2I][H], dn [H][I])
     int* hits;         // optional [E] int32 pick counters (may be host-mapped pinned memory); nullptr = off
+    float* z_gu;       // low-rank plane: [S][I/128][4] partial z = x V_g^T per (slot, gate|up column group); zero on entry/exit
+    float* z_dn;       // [32][I/128][4] per (slot, column group) partial z = h V_d^T (h = un-rotated SwiGLU output, this
+                       // rank's I slice); written exactly once per call by the group's K1 epilogue, summed in the K2 combine
 };
+__device__ __forceinline__ float warp_sum(float v)
+{
+    #pragma unroll
+    for (int m = 16; m; m >>= 1) v += __shfl_xor_sync(0xffffffffu, v, m);
+    return v;
+}
 
 struct RunInfo { int e, level, ntok, nruns; int slot[8]; float w[8]; const int64_t* ent; };
 
@@ -446,17 +460,31 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
     const int ntok = R.ntok, lv = R.level;
     const half* signs = (const half*)R.ent[9];
     half* xs = (half*)smem;
+    // low-rank plane (table [14] = fp16 block, [15] = r_gu | r_dn << 8; r = 0: off, nothing is read)
+    const int lrr = (int)R.ent[15], rg = lrr & 255, rd = (lrr >> 8) & 255;
+    const half* lrp = (const half*)R.ent[14];
+    const int NG = a.I / 128;
 
     // prologue: stage the run's token inputs for this k-slice
     if constexpr (MODE == 0)
     {
         const int ng = kslice / 128;
         const half* su = bx * SB * 16 >= a.I ? signs + 2 * a.H + 3 * a.I : signs;   // gate rows: su_g, up rows: su_u
+        // one block per (gate column group, k-slice) adds this k-slice's partial z = x V_g^T (un-rotated x)
+        const int r0 = bx * SB * 16, zg = r0 / 128;
+        const bool zc = rg && r0 < a.I && (r0 & 127) == 0;
         for (int task = warp; task < ntok * ng; task += SB)
         {
             int j = task / ng, gg = task % ng, k = k0 + gg * 128 + lane * 4;
             int tok = R.slot[j] / a.topk;
             float f[4], s[4]; ld4h(a.x + (size_t)tok * a.H + k, f); ld4h(su + k, s);
+            if (zc)
+                for (int r = 0; r < rg; ++r)
+                {
+                    float vv[4]; ld4h(lrp + (size_t)r * a.H + k, vv);
+                    float d = warp_sum(f[0] * vv[0] + f[1] * vv[1] + f[2] * vv[2] + f[3] * vv[3]);
+                    if (lane == 0) atomicAdd(a.z_gu + ((size_t)R.slot[j] * NG + zg) * 4 + r, d);
+                }
             float v[4] = {f[0] * s[0], f[1] * s[1], f[2] * s[2], f[3] * s[3]};
             wht128_warp(v, lane);
             st4h(xs + j * kslice + gg * 128 + lane * 4, v);
@@ -553,23 +581,71 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
         {
             int j = task >> 1, up = task & 1, col = grp * 128 + lane * 4;
             float* p = a.acc_gu + (size_t)R.slot[j] * N + up * a.I + col;
+            // lr (U2_g, U2_u, U4_g, U4_u [rg][I] follow V_g [rg][H]): issue z and the rank-0 U loads before the
+            // acc_gu load/zero-store (which the compiler cannot reorder them across)
+            const half* U = lrp + (size_t)rg * a.H + (size_t)up * rg * a.I + col;
+            float4 zq = make_float4(0, 0, 0, 0); uint2 u20 = make_uint2(0, 0), u40 = make_uint2(0, 0);
+            if (rg)
+            {
+                zq = __ldcg((const float4*)(a.z_gu + ((size_t)R.slot[j] * NG + grp) * 4));
+                u20 = __ldg((const uint2*)U); if (lv >= 4) u40 = __ldg((const uint2*)(U + (size_t)2 * rg * a.I));
+            }
             float4 f = __ldcg((const float4*)p); __stcg((float4*)p, make_float4(0, 0, 0, 0));
             float v[4] = {f.x, f.y, f.z, f.w}, s[4];
             wht128_warp(v, lane);
             ld4h((up ? sv_u : sv_g) + col, s);
             #pragma unroll
-            for (int i = 0; i < 4; ++i) sg[(j * 2 + up) * 128 + lane * 4 + i] = v[i] * s[i];
+            for (int i = 0; i < 4; ++i) v[i] *= s[i];
+            if (rg)   // + z (U2 [+ U4]) in the un-rotated output basis
+            {
+                float u2[4], u4[4]; cv4h(u20, u2); cv4h(u40, u4);
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) v[i] += zq.x * (u2[i] + u4[i]);
+                #pragma unroll
+                for (int r = 1; r < 4; ++r)
+                {
+                    if (r >= rg) break;
+                    const float zr = r == 1 ? zq.y : r == 2 ? zq.z : zq.w;
+                    ld4h(U + (size_t)r * a.I, u2);
+                    #pragma unroll
+                    for (int i = 0; i < 4; ++i) v[i] += zr * u2[i];
+                    if (lv >= 4)
+                    {
+                        ld4h(U + (size_t)2 * rg * a.I + (size_t)r * a.I, u4);
+                        #pragma unroll
+                        for (int i = 0; i < 4; ++i) v[i] += zr * u4[i];
+                    }
+                }
+            }
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) sg[(j * 2 + up) * 128 + lane * 4 + i] = v[i];
         }
         __syncthreads();
+        if (rg) for (int i = threadIdx.x; i < ntok * 4; i += blockDim.x) __stcg(a.z_gu + ((size_t)R.slot[i >> 2] * NG + grp) * 4 + (i & 3), 0.f);
         for (int j = warp; j < ntok; j += SB)
         {
             int col = grp * 128 + lane * 4; float s[4], v[4]; ld4h(su_d + col, s);
+            const half* Vd = lrp + (size_t)rg * a.H + (size_t)4 * rg * a.I + col;
+            const uint2 vd0 = rd ? __ldg((const uint2*)Vd) : make_uint2(0, 0);
             #pragma unroll
             for (int i = 0; i < 4; ++i)
             {
                 float gg = sg[(j * 2) * 128 + lane * 4 + i], uu = sg[(j * 2 + 1) * 128 + lane * 4 + i];
-                v[i] = gg / (1.f + __expf(-gg)) * uu * s[i];
+                v[i] = gg / (1.f + __expf(-gg)) * uu;
             }
+            if (rd)   // partial z_dn over this column group: un-rotated SwiGLU output . V_d [rd][I] (after the 4 U blocks)
+            {
+                #pragma unroll
+                for (int r = 0; r < 4; ++r)
+                {
+                    if (r >= rd) break;
+                    float vv[4]; if (r == 0) cv4h(vd0, vv); else ld4h(Vd + (size_t)r * a.I, vv);
+                    float d = warp_sum(v[0] * vv[0] + v[1] * vv[1] + v[2] * vv[2] + v[3] * vv[3]);
+                    if (lane == 0) __stcg(a.z_dn + ((size_t)R.slot[j] * NG + grp) * 4 + r, d);
+                }
+            }
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) v[i] *= s[i];
             wht128_warp(v, lane);
             st4h(a.h + (size_t)R.slot[j] * a.I + col, v);
         }
@@ -590,12 +666,50 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
                 if (w == 0.f || ent[0] <= 0) continue;
                 const half* sv_o = (const half*)ent[9] + a.H + 3 * a.I;
                 float* p = a.acc_d + (size_t)s * a.H + grp * 128 + lane * 4;
+                // lr: + z_dn (U2_d [+ U4_d]), U [rd][H] replicated; under TP the per-rank partial z sums in the all-reduce.
+                // z partials and the rank-0 U loads are issued before the acc_d load/zero-store.
+                const int lr_ = (int)ent[15], rg_ = lr_ & 255, rd_ = (lr_ >> 8) & 255;
+                const half* U = (const half*)ent[14] + (size_t)rg_ * a.H + (size_t)4 * rg_ * a.I + (size_t)rd_ * a.I + grp * 128 + lane * 4;
+                const bool l4 = (a.force_level ? a.force_level : (int)ent[0]) >= 4;
+                float4 zq = make_float4(0, 0, 0, 0); uint2 u20 = make_uint2(0, 0), u40 = make_uint2(0, 0);
+                if (rd_)
+                {
+                    for (int g = lane; g < NG; g += 32)   // z_dn = sum of the NG per-group partials (lane-strided, warp reduce)
+                    {
+                        const float4 q = __ldcg((const float4*)(a.z_dn + ((size_t)s * NG + g) * 4));
+                        zq.x += q.x; zq.y += q.y; zq.z += q.z; zq.w += q.w;
+                    }
+                    u20 = __ldg((const uint2*)U); if (l4) u40 = __ldg((const uint2*)(U + (size_t)rd_ * a.H));
+                }
                 float4 f = __ldcg((const float4*)p); __stcg((float4*)p, make_float4(0, 0, 0, 0));
                 float v[4] = {f.x, f.y, f.z, f.w}, sg[4];
                 wht128_warp(v, lane);
                 ld4h(sv_o + grp * 128 + lane * 4, sg);
                 #pragma unroll
-                for (int i = 0; i < 4; ++i) o[i] += w * v[i] * sg[i];
+                for (int i = 0; i < 4; ++i) v[i] *= sg[i];
+                if (rd_)
+                {
+                    float u2[4], u4[4]; cv4h(u20, u2); cv4h(u40, u4);
+                    const float z0 = warp_sum(zq.x);
+                    #pragma unroll
+                    for (int i = 0; i < 4; ++i) v[i] += z0 * (u2[i] + u4[i]);
+                    #pragma unroll
+                    for (int r = 1; r < 4; ++r)
+                    {
+                        if (r >= rd_) break;
+                        const float zr = warp_sum(r == 1 ? zq.y : r == 2 ? zq.z : zq.w); ld4h(U + (size_t)r * a.H, u2);
+                        #pragma unroll
+                        for (int i = 0; i < 4; ++i) v[i] += zr * u2[i];
+                        if (l4)
+                        {
+                            ld4h(U + (size_t)rd_ * a.H + (size_t)r * a.H, u4);
+                            #pragma unroll
+                            for (int i = 0; i < 4; ++i) v[i] += zr * u4[i];
+                        }
+                    }
+                }
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) o[i] += w * v[i];
             }
             #pragma unroll
             for (int i = 0; i < 4; ++i) part[warp * 128 + lane * 4 + i] = o[i];
@@ -697,10 +811,11 @@ void set_wdump(int64_t gu, int64_t dn, int64_t e) { g_wdump[0] = gu; g_wdump[1] 
 // One MoE layer forward (graph-capturable; all routing/level/pointer decisions are read on device).
 // cfg_gu/cfg_dn: (cpw, sb, nst[, persistent]).  ws: acc_gu [S,2I] f32, h [S,I] f16, acc_d [S,H] f32,
 // cnt_gu [S*I/128] i32, cnt_d [H/128] i32, wq [4] i32 (persistent work counters) -- all zero on entry, zero on exit.
+// zws f32 [2*32*(I/128)*4]: z_gu (zero on entry/exit) | z_dn per-group partials (overwritten each call, never zeroed).
 void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Tensor table, torch::Tensor out,
                  torch::Tensor acc_gu, torch::Tensor h, torch::Tensor acc_d, torch::Tensor cnt_gu, torch::Tensor cnt_d,
                  torch::Tensor wq, int64_t I, int64_t nm_gu, int64_t nm_dn, std::vector<int64_t> cfg_gu,
-                 std::vector<int64_t> cfg_dn, int64_t G, int64_t force_level, int64_t which, int64_t hits_ptr)
+                 std::vector<int64_t> cfg_dn, int64_t G, int64_t force_level, int64_t which, int64_t hits_ptr, torch::Tensor zws)
 {
     MoeArgs a{};
     a.x = (const half*)x.data_ptr(); a.sel = (const int64_t*)sel.data_ptr(); a.rw = (const half*)rw.data_ptr();
@@ -711,6 +826,8 @@ void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Te
     a.wdump[0] = (half*)g_wdump[0]; a.wdump[1] = (half*)g_wdump[1]; a.dump_e = g_dump_e;
     const int S = a.B * a.topk;
     TORCH_CHECK(S <= 32 && a.B <= 8, "B*topk <= 32");
+    TORCH_CHECK(wq.numel() >= 4 && zws.numel() >= (int64_t)2 * 32 * (I / 128) * 4 && zws.scalar_type() == torch::kFloat32);
+    a.z_gu = (float*)zws.data_ptr(); a.z_dn = a.z_gu + (size_t)32 * (I / 128) * 4;   // fixed offsets (B may vary per call)
     TORCH_CHECK(a.H % 128 == 0 && I % 128 == 0 && a.H / 128 <= 64 && I / 128 <= 64);
     auto st = at::cuda::getCurrentCUDAStream();
     for (int mode = 0; mode < 2; ++mode)

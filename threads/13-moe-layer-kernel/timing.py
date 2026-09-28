@@ -17,7 +17,10 @@ def bench(fns,blocks=60,repeats=10,warm=5):
         order=list(fns);random.Random(seed).shuffle(order)
         for name in order:
             a=torch.cuda.Event(enable_timing=True);b=torch.cuda.Event(enable_timing=True)
-            graphs[name].replay();a.record();graphs[name].replay();b.record();b.synchronize()
+            if os.environ.get('NQ_TIMING')=='idle':   # time one replay started from an idle GPU: on a time-sliced shared GPU
+                torch.cuda.synchronize();a.record();graphs[name].replay();b.record()   # a fresh slice; keep replays < ~1 ms
+            else:graphs[name].replay();a.record();graphs[name].replay();b.record()
+            b.synchronize()
             rows[name].append(a.elapsed_time(b)*1000/repeats)
     q=lambda v,p:sorted(v)[int(p*(len(v)-1))]
     if os.environ.get('NQ_STAT')=='min':return {k:min(v) for k,v in rows.items()},{k:(min(v),q(v,.1),q(v,.25)) for k,v in rows.items()}

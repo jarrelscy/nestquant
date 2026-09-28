@@ -70,6 +70,61 @@ Plane layout (the decoder is thread 15's RM_P int-fold, `nqdec::` in nqmoe.cu; b
 - Both planes are laid out per (strip, chunk), so TP8 shards are unit ranges. Gate|up shards are contiguous strip
   ranges. Down shards are chunk ranges (2 of 48 chunks per strip), i.e. strided in rec: repack per rank offline.
 
+**Low-rank plane** (T12 f128e41 "eigen plane", DESIGN.md format item 7; per expert r ≤ 4, mostly 1, often 0).
+T12 stores V fp16 [r, in] (unrotated input basis) and U2 / U4 fp16 [r, out]; L2 = W2 + U2ᵀV, L4 = W4 + (U2 + U4)ᵀV.
+The kernel computes z = x·Vᵀ and adds z·U2 (+ z·U4 at level 4) in fp32, in the unrotated output basis:
+- gate/up: x = the hidden state (unrotated, fp16 as given). K1 blocks whose rows start a 128-column gate group add their
+  k-slice's partial z (atomicAdd into z_gu). The group's epilogue adds z·U after WHT · sv, then re-zeroes z_gu.
+- down: x = the unrotated SwiGLU output silu(g)·u, taken before su_d, WHT and the fp16 store of h. Each K1 epilogue
+  stores the partial z over its 128 columns, once per call (no atomics). The K2 combine sums the I/128 partials,
+  adds z·U2_d (+ U4_d) after WHT · sv_o, then applies rw.
+- One fp16 block per expert (shard), pointed to by table [14], in halves:
+  `V_g [r_gu,H] | U2_g [r_gu,I] | U2_u [r_gu,I] | U4_g [r_gu,I] | U4_u [r_gu,I] | V_d [r_dn,I] | U2_d [r_dn,H] | U4_d [r_dn,H]`,
+  with I the shard's I and each part 8-byte aligned. `moe.Expert.set_lr` packs it, and `verify_t12.load_expert` packs it from an artifact.
+- gate and up share one V (T12 `lrV_from="gate"`, `meta.lr.shared_V`). Older encodes with separate V (pat9 `*lr.pt`)
+  pack as V = [V_g; V_u] with zero-padded U (U_g = [U_g; 0], U_u = [0; U_u]), which needs r_g + r_u ≤ 4.
+- r = 0 reads nothing and costs nothing. The level-4 U4 read follows force_level like the other level-4 planes. The
+  block holds U4 even at level 2 (resident, 13 KB per r=1 expert-shard). Splitting U4 into the P4 slot would need a
+  second pointer, which is not done.
+- **TP8**: gate/up are shard_axis n, so V is replicated and U is sliced by output. Each rank's gate/up term is exact
+  locally. down is shard_axis k: V_d is sliced by input columns and U_d is replicated. Each rank computes a partial
+  z_s = h_s·V_dsᵀ and adds z_s·U_d to its partial output. Because Σ_s z_s·U_d = (Σ_s z_s)·U_d = z·U_d, **the existing
+  row-parallel output all-reduce already covers it**. No extra all-reduce of z is needed. DESIGN.md item 7 and
+  nq_layer's comment ("all-reduce z") describe the unneeded extra reduce. The nq_layer tp{s}.pt fields map 1:1:
+  gate lrV, gate/up lrU2 / lrU4 → V_g, U*_g, U*_u, and down lrV / lrU2 / lrU4 → V_d, U2_d, U4_d.
+- Bytes per expert-shard at I = 256: 2·(r_gu·(H + 4·256) + r_dn·(256 + 2·H)), i.e. 39,424 at r = 1/1 (1.6% of a
+  4.13-bpw expert-shard) and 157,696 at r = 4/4.
+- Cost (`bench_lr.py`, PER=1 NQ_TIMING=idle NQ_STAT=min, GPU 6 shared).
+  - Setup: µs per layer, cold recency routing, top-8. Every expert has r_gu = r_dn = r.
+  - "pre" is the pre-lr kernel build. 4q is production level 4 (4.1263 bpw).
+  - Every number includes a constant 6.6 µs graph-launch offset (the null graph).
+
+  TP8 shard I = 256:
+
+  | B | EXL3 2 | L2 pre | L2 r0 | L2 r1 | L2 r4 | EXL3 4 | 4q pre | 4q r0 | 4q r1 | 4q r4 |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | 1 | 108.9 | 41.3 | 40.8 | 41.2 | 48.9 | 111.3 | 53.4 | 53.0 | 56.3 | 61.4 |
+  | 2 | 123.0 | 50.3 | 49.3 | 51.2 | 61.1 | 126.3 | 69.1 | 69.5 | 72.9 | 82.6 |
+  | 3 | 138.4 | 65.1 | 66.1 | 69.4 | 82.2 | 142.4 | 98.1 | 100.1 | 102.9 | 116.2 |
+  | 4 | 153.1 | 83.8 | 85.0 | 90.4 | 104.3 | 158.1 | 121.6 | 124.0 | 127.7 | 142.5 |
+
+  Full I = 2048:
+
+  | B | EXL3 2 | L2 pre | L2 r0 | L2 r1 | L2 r4 | EXL3 4 | 4q pre | 4q r0 | 4q r1 | 4q r4 |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | 1 | 255.9 | 151.2 | 154.3 | 157.0 | 168.6 | 262.7 | 235.0 | 235.2 | 238.0 | 251.3 |
+  | 2 | 341.5 | 212.2 | 215.4 | 219.5 | 235.5 | 346.6 | 340.6 | 342.0 | 345.6 | 358.6 |
+  | 3 | 440.8 | 274.2 | 279.0 | 284.0 | 305.4 | 449.9 | 435.2 | 439.1 | 445.2 | 470.4 |
+  | 4 | 538.9 | 332.4 | 339.2 | 345.9 | 370.8 | 550.7 | 547.6 | 551.7 | 557.8 | 582.4 |
+
+  - r = 0 vs pre: −1.0 to +2.4 µs at the shard (noise level), and +0.2 to +6.8 µs (≤ 2%) at the full shape.
+  - r = 1: +0.4 to +5.4 µs (1–6%) at the shard and +2.7 to +6.7 µs (≈ 1–2%) at full.
+  - r = 4: +8 to +19 µs (≈ 15%) at the shard and +13 to +31 µs (5–9%) at full.
+  - Every NQ variant stays below EXL3 at the same level, except full 4q at B3–B4, which was already at parity before lr.
+- Registers (cuobjdump, vs pre-lr): 64 everywhere, unchanged.
+  - Grid kernels: stack unchanged, except <2,1,1> 0 → 8 and <2,2,0>/<4,2,0> 72 → 64.
+  - Persistent kernels: stack 0 to +40 bytes, e.g. <2,1,1> 176 → 216 and <4,2,1> 440 → 464.
+
 Mask mode (128×128 per-block 2b/4b mixing inside the 4-bit tier) adds a uint64 per 16-row strip and compacts P4/d4
 to the flagged chunks. With the shard's K = 256 for down, that is only 2 chunks per strip.
 
@@ -90,7 +145,7 @@ Placement per rank:
 
 | tensor | shape | notes |
 |---|---|---|
-| `table` | int64 [256][16] | [0] level 0/2/4; [1..4] gate\|up base, p4, d4, flags; [5..8] down same; [9] scales of the current level; [10] gate\|up residual K code, [11] down residual K code (0: K 2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5, 6: 1.9375, 7: 2.3125); [12] gate\|up, [13] down base-variant plane (0 = none); [14..15] reserved. Read on device at every replay. |
+| `table` | int64 [256][16] | [0] level 0/2/4; [1..4] gate\|up base, p4, d4, flags; [5..8] down same; [9] scales of the current level; [10] gate\|up residual K code, [11] down residual K code (0: K 2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5, 6: 1.9375, 7: 2.3125); [12] gate\|up, [13] down base-variant plane (0 = none); [14] low-rank block pointer (fp16, §1 "Low-rank plane"; 0 = none); [15] lr ranks r_gu \| r_dn << 8 (0 = none). Read on device at every replay. |
 | mailbox `stage`, `seq`, `applied` | int64 [256][16], int32 [256] ×2 | graph-safe updates (§4) |
 | `applied_host` | int32 [256], pinned host-mapped | the scheduler polls this without syncing |
 | `hits` | int32 [256], pinned host-mapped | routing-hit export (§5) |
@@ -109,8 +164,10 @@ Placement per rank:
 - Levels should be identical across ranks at any step. This is not needed for correctness, but it keeps the model a
   single well-defined quantization. The mailbox lag is at most one step, and a per-rank lag difference only mixes
   shards of the same expert at two levels for that step.
-- The workspace (acc_gu [32, 2I] f32, h [32, I] f16, acc_d [32, H] f32, counters) can be one shared set per rank.
-  Layers run in stream order and the kernels leave the workspace zeroed on exit. At I = 256 it is about 0.9 MB.
+- The workspace (acc_gu [32, 2I] f32, h [32, I] f16, acc_d [32, H] f32, counters, wq int32 [8], zws f32
+  [2·32·(I/128)·4]) can be one shared set per rank. Layers run in stream order, and the kernels leave the workspace
+  zeroed on exit. zws is the low-rank z: the z_gu half returns to zero, while the z_dn partials are overwritten every
+  call and never need zeroing. At I = 256 the workspace is about 0.9 MB. `moe_forward` takes zws as its last argument.
 - It must not be shared with a concurrently running shared-expert stream. Leave `mk_can_overlap_shared_experts`
   False, as the hybrid method does.
 
@@ -222,10 +279,18 @@ Measured on A100 (levelswitch_mbox.py; graph = [mailbox, MoE] captured once, sid
 - `verify_t12.py ART.pt`: repacks a thread 12 encoded expert into the kernel layout. Checks that `moe.dense_W`, the
   kernel decode and `nq_decode` agree bitwise at levels 2 and 4, then checks the forward pass against
   `nq_decode.decode_expert`.
+- `verify_lr.py [ROOT] [L]`: low-rank plane on the T12 f128e41 artifacts (smoke_lr L30 E168 / E169, text + mmself).
+  Kernel vs decode_expert and vs Expert.ref at L2 / L4, with U × 64 (lr-dominated), mixed levels in one launch
+  (grid + persistent), and the TP8 shard fields: reassembly, per-rank kernel, Σ_s partial z = full z.
+  `lrtest.py`: synthetic ranks {0/0, 1/0, 0/1, 1/1, 2/1, 4/4} × levels × configs × B1–4, I = 2048 and 256, workspace clean.
+  `bench_lr.py`: lr cost, r = 0 / 1 / 4 vs the pre-lr build and EXL3.
 - `abk.py`: A/B of build variants (`NQ_RK_CODES` / `NQ_RK_GU,NQ_RK_DN` / other defines) at levels 2, 4, 4p (1.9375 / 2.3125)
   and 4q (2 / 2.3125).
 - `timing.py`: `NQ_STAT=min NQ_BLOCKS=150` reports the min over blocks instead of the median. Use it on a shared,
-  time-sliced GPU.
+  time-sliced GPU. `NQ_TIMING=idle` times one replay started from an idle GPU, which gets a fresh time slice. The
+  default mode times the second of two back-to-back replays. On GPU 6 (slice about 2.1 ms), any variant whose replay is
+  longer than about 1.05 ms then always crosses a slice boundary, which shows up as a fake step of 1.6–4x (e.g. lr r3 at
+  B4). Keep each timed replay under about 1 ms, e.g. `bench_lr.py PER=1` (one graph per routing).
 - `moe.py`: pools, `entry()` table row builder, `MoELayer`, `Mailbox`, dense reference decode (`dense_W`,
   `Expert.ref`), residual packing (`Proj`, `pack_words`, `RKP`).
 - `build.py`: JIT build (`NQ_DEFS` for variants).

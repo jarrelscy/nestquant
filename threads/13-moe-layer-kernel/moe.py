@@ -148,22 +148,40 @@ class Expert:
         s.gu=Proj(2*I,H,gen,nm_gu,rk_gu,mbn,var).to(dev);s.dn=Proj(H,I,gen,nm_dn,rk_dn,mbn if mbn=='rand' else ('exh',mbn[1]+(2*I//16)*(H//128)),var).to(dev)
         sg=torch.randint(0,2,(2*H+3*I,),generator=gen)*2-1;su_u=torch.randint(0,2,(H,),generator=gen)*2-1
         s.signs=torch.cat([sg,su_u]).half().to(dev)      # [H su_g | I sv_g | I sv_u | I su_d | H sv_o | H su_u]
-        s.H,s.I=H,I
+        s.H,s.I=H,I;s.lr=None;s.rg=s.rd=0
+    def set_lr(s,Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d):
+        """low-rank plane (T12 f128e41 lr): V [r,in] un-rotated input basis, U2/U4 [r,out] fp16; gate/up share V_g.
+        Packs the fp16 device block of table [14]: V_g | U2_g | U2_u | U4_g | U4_u | V_d | U2_d | U4_d."""
+        s.rg,s.rd=Vg.shape[0],Vd.shape[0];assert s.rg<=4 and s.rd<=4
+        ts=[Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d]
+        s.lr=torch.cat([t.reshape(-1).half().to(s.signs.device) for t in ts]) if s.rg+s.rd else None
+        s.lr_parts=[t.float().to(s.signs.device) for t in ts]
+        return s
+    def rand_lr(s,rg,rd,seed=7,scale=0.02):
+        g=torch.Generator().manual_seed(seed);H,I=s.H,s.I;r=lambda a,b:(torch.randn(a,b,generator=g)*scale)
+        return s.set_lr(r(rg,H)*8,r(rg,I),r(rg,I),r(rg,I)*0.3,r(rg,I)*0.3,r(rd,I)*8,r(rd,H),r(rd,H)*0.3)
     def bytes(s,level):
         b=0
         for p in (s.gu,s.dn):
             b+=p.base.numel()*4+(0 if getattr(p,'var',None) is None else p.var.numel())
             if level>=4:b+=(p.p4.numel()+p.d4.numel())*4+(0 if p.flags is None else p.flags.numel()*8)
+        if s.lr is not None:b+=s.lr.numel()*2
         return b
-    def ref(s,x,level,G=4):
-        """x [T,H] fp32 -> [T,H] fp32, through the dense-decoded weights."""
+    def ref(s,x,level,G=4,ret_ho=False):
+        """x [T,H] fp32 -> [T,H] fp32, through the dense-decoded weights (ret_ho: also the un-rotated SwiGLU output)."""
         H,I=s.H,s.I;Hm=H128(x.device);wht=lambda v:(v.view(*v.shape[:-1],-1,128)@Hm).view(v.shape)
         sg=s.signs.float();su,svg,svu,sud,svo,suu=sg[:H],sg[H:H+I],sg[H+I:H+2*I],sg[H+2*I:H+3*I],sg[H+3*I:2*H+3*I],sg[2*H+3*I:]
         Wg=dense_W(s.gu,level,G);Wd=dense_W(s.dn,level,G)
         xg=wht(x*su).half().float();xu=wht(x*suu).half().float();a=torch.cat([xg@Wg[:I].T,xu@Wg[I:].T],1)
         g=wht(a[:,:I])*svg;u=wht(a[:,I:])*svu
-        h=wht(torch.nn.functional.silu(g)*u*sud).half().float()
-        return wht(h@Wd.T)*svo
+        if s.lr is not None:
+            Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d=s.lr_parts;z=x@Vg.T
+            g=g+z@U2g+(z@U4g if level>=4 else 0);u=u+z@U2u+(z@U4u if level>=4 else 0)
+        ho=torch.nn.functional.silu(g)*u
+        h=wht(ho*sud).half().float()
+        y=wht(h@Wd.T)*svo
+        if s.lr is not None:zd=ho@Vd.T;y=y+zd@U2d+(zd@U4d if level>=4 else 0)
+        return (y,ho) if ret_ho else y
 
 def entry(ex,level):
     e=torch.zeros(TBL_W,dtype=torch.int64)
@@ -174,6 +192,8 @@ def entry(ex,level):
     e[9]=ex.signs.data_ptr();e[10]=ex.gu.rk;e[11]=ex.dn.rk
     for i,p in ((12,ex.gu),(13,ex.dn)):
         v=getattr(p,'var',None);e[i]=0 if v is None else v.data_ptr()
+    lr=getattr(ex,'lr',None)
+    if lr is not None:e[14]=lr.data_ptr();e[15]=ex.rg|(ex.rd<<8)
     return e
 
 class MoELayer:
@@ -184,7 +204,8 @@ class MoELayer:
         s.table=torch.zeros(E,TBL_W,dtype=torch.int64,device=dev)
         S=Bmax*topk
         s.acc_gu=torch.zeros(S,2*I,device=dev);s.h=torch.zeros(S,I,device=dev).half();s.acc_d=torch.zeros(S,H,device=dev)
-        s.cnt_gu=torch.zeros(S*(I//128),dtype=torch.int32,device=dev);s.cnt_d=torch.zeros(H//128,dtype=torch.int32,device=dev);s.wq=torch.zeros(4,dtype=torch.int32,device=dev)
+        s.cnt_gu=torch.zeros(S*(I//128),dtype=torch.int32,device=dev);s.cnt_d=torch.zeros(H//128,dtype=torch.int32,device=dev);s.wq=torch.zeros(8,dtype=torch.int32,device=dev)
+        s.zws=torch.zeros(2*32*(I//128)*4,device=dev)   # low-rank plane z workspace: z_gu [32][I/128][4] (zero on entry/exit) | z_dn partials [32][I/128][4]
         s.out=torch.zeros(Bmax,H,device=dev)
         s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2];s.hits_ptr=0   # set to a (host-mapped) int32 [E] pointer to export routing hits
     def set(s,e,ex,level):
@@ -195,7 +216,7 @@ class MoELayer:
     def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None):
         out=s.out[:x.shape[0]] if out is None else out
         s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
-                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr)
+                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr,s.zws)
         return out
 
 class Mailbox:
