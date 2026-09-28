@@ -20,7 +20,7 @@ Private GitHub repo `jarrelscy/nestquant` (the user's account). Read, in this or
 
    INTEGRATION.md is written for TP8; you adapt it to TP4.
 4. `threads/10-streaming-system/REPORT.md`: sizing, router statistics and format requirements.
-5. `threads/14-level4-floor/`: the pattern-rate residual trellis (per-projection K 1.875 on gate/up and 2.25 on down; step i shifts in KA + bit(i mod 16) of MASK bits). The final artifact may use it, so the decoder must support it.
+5. `threads/14-level4-floor/`: the pattern-rate residual trellis (per-projection K 1.875 on gate/up and 2.25 on down; step i shifts in KA + bit((-i) mod 16) of MASK bits; bit(i mod 16) is wrong). The final artifact may use it, so the decoder must support it.
 
 The quantized model is `jarrelscy/GLM-5.3-NestQuant-2-4bit` on Hugging Face (public). It is being encoded layer by layer now. Until the layers you need exist, use:
 - random planes (decode timing doesn't depend on values), and
