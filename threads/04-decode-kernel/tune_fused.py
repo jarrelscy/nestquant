@@ -6,7 +6,7 @@ NC=6
 sg=lambda n:(torch.randint(0,2,(n,),device='cuda')*2-1).half()
 sv_g,sv_u,su_d,su_x,sv_d=sg(2048),sg(2048),sg(2048),sg(6144),sg(6144)
 out=json.load(open('tune_fused.json')) if os.path.exists('tune_fused.json') else {}
-for d,G,kw in [('B2',2,{}),('A4',2,{}),('A4',4,{}),('MIX',2,dict(grp=8)),('A3',2,{}),('T4',2,{})]:
+for d,G,kw in [('T2H',2,{}),('B2',2,{}),('A4',2,{}),('A4',4,{}),('MIX',2,dict(grp=8)),('A3',2,{}),('T4',2,{})]:
     nm=f"{d}{'g8' if kw else ''}_G{G}"
     gu=[Proj2(d,4096,6144,G=G,**kw) for _ in range(NC)];dn=[Proj2(d,6144,2048,G=G,**kw) for _ in range(NC)]
     for B in [1,4]:

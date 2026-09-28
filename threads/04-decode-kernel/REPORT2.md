@@ -38,3 +38,8 @@ Marginal ops/weight: B2 5.4, T4 5.1, A4 10.3 (2 IMAD hash, 2 IDP, 3.5 SHF/LOP, 1
 
 ## Verdict
 Adopt A4 additive, split planes, G=2 or 4, fused-B: 21-37% faster than EXL3 bare kernels at 4b B1-B4, 37-49% faster than the adapter. 2b: B2 fused-A, 2.1-2.5x faster than EXL3 bare kernels. Level 3 = option (b) at 128x128 block granularity. Reject T2R2 and per-strip mixing. Still to do: single graph-replayed launch with per-expert level/pointer tables.
+
+## Addendum (second final message, re-measured anchors on GPU 7)
+- EXL3-4 bare 53.7/64.4/74.0/74.9, adapter 67.1/78.2/88.2/89.6; A4 (T2R2) fused 42.5/44.2-44.6/45.9/46.8 (-21% to -38% vs bare).
+- T2H (HYB LUT residual) fused 41.8/43.1/44.7/46.0: only 1-2% faster than T2R2, adds a bank-conflicted shared-memory LUT and unvalidated quality. Rejected.
+- 3b option (b) 40.4-43.5, option (a) 42.3-45.8. Level 3 is chosen on quality.

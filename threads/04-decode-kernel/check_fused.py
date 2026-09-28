@@ -8,7 +8,7 @@ def H128():
 H=H128()
 wht=lambda v:(v.view(*v.shape[:-1],-1,128)@H).view(v.shape)
 sg=lambda n:(torch.randint(0,2,(n,),device='cuda')*2-1).half()
-for d in ['B2','A4','MIX','A3']:
+for d in __import__('os').environ.get('DECS','B2,A4,MIX,A3').split(','):
   for B in [1,4]:
     gu=Proj2(d,4096,6144,G=2);dn=Proj2(d,6144,2048,G=2)
     su_x,sv_g,sv_u,su_d,sv_o=sg(6144),sg(2048),sg(2048),sg(2048),sg(6144)

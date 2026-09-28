@@ -4,3 +4,4 @@ export CUDA_VISIBLE_DEVICES=6
 export PYTHONPATH=/home/coder/git/orbit-duet:/home/coder/git/nestquant/threads/13-moe-layer-kernel
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8
 P=/home/coder/git/glm52/.venv/bin/python
+export PATH=/home/coder/git/glm52/.venv/bin:$PATH

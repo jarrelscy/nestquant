@@ -2,7 +2,7 @@ import torch,json,sys,os;torch.cuda.set_per_process_memory_fraction(12/80)
 from nq2 import *
 from timing import bench
 NC=6
-CANDS=[('B2',1),('B2',2),('B2',4),('T4',1),('T4',2),('A3',2),('A3',4),('A4',2),('A4',4),('MIX',2),('MIX',4)]
+CANDS=[('T2H',2),('B2',1),('B2',2),('B2',4),('T4',1),('T4',2),('A3',2),('A3',4),('A4',2),('A4',4),('MIX',2),('MIX',4)]
 out=json.load(open('tune2.json')) if os.path.exists('tune2.json') else {}
 for d,G in CANDS:
     for (N,K,nm) in [(4096,6144,'gu'),(6144,2048,'down')]:
