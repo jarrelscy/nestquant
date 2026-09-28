@@ -28,6 +28,16 @@ SIGMA = {"gate": 0.5, "up": 0.5, "down": 1.0}          # thread-08 selection (nq
 KEYS = ("all/routed", "all/forced", "ood/routed", "ood/forced", "control/routed")
 
 
+def bpw(D, art):
+    """expert bits/weight at L2 / L4 (nq_decode.bits_per_level, weighted by k*n over gate/up/down)."""
+    try:
+        per = {pn: D.bits_per_level(art[pn]) for pn in PROJ}
+        nw = {pn: art[pn]["meta"]["k"] * art[pn]["meta"]["n"] for pn in PROJ}
+        return {lv: sum(per[pn][lv] * nw[pn] for pn in PROJ) / sum(nw.values()) for lv in (2, 4)}
+    except Exception as e:
+        return str(e)[:80]
+
+
 def rel(a, b):
     return None if a is None or b is None else 100 * (a / b - 1)
 
@@ -45,6 +55,8 @@ def main():
     ap.add_argument("--key", default="all/routed")
     ap.add_argument("--h-fn", help="override: module:function(cap, L, E, vision_stats, w) -> HG; default T12 expert_HG")
     ap.add_argument("--vision-stats"); ap.add_argument("--vision-weight", type=float, default=0.0)
+    ap.add_argument("--eval", default="matched", help="eval set: matched (production spot) | val (held-out, ~13x rows)")
+    ap.add_argument("--tag", default="", help="output ROOT/spot/L{L}{tag}.json")
     a = ap.parse_args()
     torch.cuda.set_per_process_memory_fraction(12 / 80)
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -64,7 +76,7 @@ def main():
     cap = nq19_load.Capture(root=a.stats)
     hcap = NL.open_stats(a.stats, a.vision_stats, a.vision_weight) if a.vision_stats else cap
     fixed = [int(e) for e in json.load(open(a.fixed_set))["fixed_set"][str(L)]]
-    ids = torch.load(cap.eval_path(L, "matched"), weights_only=True, mmap=True)["ids"]
+    ids = torch.load(cap.eval_path(L, a.eval), weights_only=True, mmap=True)["ids"]
     rows = np.bincount(ids.flatten().numpy(), minlength=256)
     if a.experts:
         ef, eo = map(int, a.experts.split(","))
@@ -81,7 +93,7 @@ def main():
     for role, E in (("fixed", ef), ("ordinary", eo)):
         t0 = time.time()
         art = torch.load(f"{a.out}/L{L}/experts/E{E}.pt", weights_only=False, map_location="cpu")
-        dm = cap.expert_data(L, E, "matched", source=a.source)
+        dm = cap.expert_data(L, E, a.eval, source=a.source)
         HG = hfn(cap, L, E, a.vision_stats, a.vision_weight) if hfn else NL.expert_HG(hcap, L, E)[0]   # encode's H
         methods = {}
         for K in (2, 4):
@@ -109,7 +121,8 @@ def main():
                                     delta_pct={k: dict(L2=rel(ev["nq/L2"].get(k), ev["EXL3-2"].get(k)),
                                                        L4=rel(ev["nq/L4"].get(k), ev["EXL3-4"].get(k)))
                                                for k in KEYS if k in ev["EXL3-2"]},
-                                    rate=art["meta"].get("rate"), flags=art["meta"].get("flags"), s=round(time.time() - t0))
+                                    rate=art["meta"].get("rate"), flags=art["meta"].get("flags"), bpw=bpw(D, art),
+                                    s=round(time.time() - t0))
         print(f"[L{L} E{E} {role}] rows {rows[E]} {key} dL2 {d2:+.2f}% dL4 {d4:+.2f}% flag {f} ({time.time()-t0:.0f}s)", flush=True)
         del art, dm, HG, methods; torch.cuda.empty_cache()
     res["flag"] = flag
@@ -117,7 +130,8 @@ def main():
                          f"L4 {v['delta_pct'][v['flag_key']]['L4']:+.2f}%"
                       for r, v in res["experts"].items()}
     os.makedirs(f"{a.out}/spot", exist_ok=True)
-    p = f"{a.out}/spot/L{L}.json"
+    res["eval_set"] = a.eval
+    p = f"{a.out}/spot/L{L}{a.tag}.json"
     json.dump(res, open(p + ".tmp", "w"), indent=1); os.replace(p + ".tmp", p)
     print(json.dumps(res["summary"]), "flag", flag, flush=True)
 
