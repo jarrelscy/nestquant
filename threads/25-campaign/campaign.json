@@ -32,9 +32,10 @@
   "code_guard": true,
   "t23_group": 4,
   "stats_gate": "final",
-  "gate_backup": true,
+  "gate_backup": false,
   "remanifest": true,
-  "t23_go": "/home/coder/git/nestquant/threads/25-campaign/T23_GO"
+  "t23_go": "/home/coder/git/nestquant/threads/25-campaign/T23_GO",
+  "mmw_go": "/home/coder/git/nestquant/threads/25-campaign/MMW_GO"
  },
  "calibration": "H = 0.75 H_text/tr + 0.25 H_vision/tr (T12 nq_layer --stats-mm ROOT --mm-w 0.25 via T26 BlendCapture; per-expert w_e = w*min(1, n_v/128))",
  "fp8_source": {
@@ -101,7 +102,7 @@
    "threads/23-encode-throughput/k2vit.py": "d0e5ef02ab9dc539",
    "threads/23-encode-throughput/csrc/nq_k2vit.cu": "eaf93cb78aff6d41",
    "threads/25-campaign/nq25_t23.py": "a35bc7574306e34b",
-   "threads/25-campaign/nq25_campaign.py": "64ec083780dee5f8",
+   "threads/25-campaign/nq25_campaign.py": "e8c2ae046abb4902",
    "threads/25-campaign/nq25_finalize.py": "ff0e81d83c3dda65",
    "threads/25-campaign/nq25_st.py": "332cd322760d1773",
    "threads/25-campaign/nq25_spot.py": "bdbba643d28eb5a3",
@@ -109,11 +110,11 @@
   },
   "code_id": "2d29edea6b00349d",
   "t23_id": "c149a800ed4e17c9",
-  "t25_id": "416fcd598d64c720",
-  "git_head": "97ae61f",
+  "t25_id": "04442808e1bb9afa",
+  "git_head": "c1c6a10",
   "dirty": [],
-  "pinned": "2026-09-29 01:56:03"
+  "pinned": "2026-09-29 02:02:00"
  },
- "_gates": "Per-layer (coordinator 2026-09-29): layer L encodes once (a) T19 final text stats for L = all plan shards merged + done_full backup marker, (b) T26 vision stats for L merged, (c) T23 gate passed = T23_GO file committed next to this (t23b layers only; nq_layer fallback needs no T23 gate). fixed_set only feeds manifest default_allocation: not in config_id; manifests are refreshed + re-uploaded when fixed_set.json changes.",
+ "_gates": "Per-layer (coordinator 2026-09-29): layer L encodes once (a) T19's LOCAL final marker 19-capture-glmfmt/final/L{L}.json exists (atomic, all 25 plan shards, fit_tokens 15363584) -> stats pinned to its immutable version_dir (flashblade done_full is restart insurance, not a gate: gate_backup=false), (b) T26 vision stats for L merged, (c) MMW_GO file (lead-written, holds mm_w) exists; if it differs from frozen vision_weight and nothing is encoded yet, the driver adopts it (config_id changes), else alerts mmw_mismatch and holds, (d) T23 gate passed = T23_GO file committed next to this (t23b layers only). fixed_set only feeds manifest default_allocation: not in config_id; manifests are refreshed + re-uploaded when fixed_set.json changes.",
  "config_id": "0f996ec4b4f8d4dd"
 }
