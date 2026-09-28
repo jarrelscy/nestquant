@@ -4,7 +4,8 @@ thread-13 Mailbox per MoE layer (its apply() is captured at the start of each la
   ex = RankExecutor(rankfile, layers={L: (MoELayer, Mailbox, experts{E: kernel expert})}, nslot, n_host, qd)
   ex.apply(ups, downs, sched)   issue ops (no waits); an upgrade with no free slot waits (FIFO) for the next slot a
                                 downgrade frees; with wait_for_slot=False it is refused instead (sched.failed)
-  ex.poll(sched)                after a replay: ops the mailbox applied -> sched.landed / slot release
+  ex.poll(sched)                after a replay: ops the mailbox applied -> sched.landed / slot release (issue=False:
+                                don't start waiting upgrades, e.g. while a CUDA graph is being captured)
 Invariants: one outstanding op per expert (the scheduler only downgrades landed experts and only upgrades idle ones);
 a slot is reused only after the level-2 row that replaced it was applied; a failed read never posts its row, so the
 expert simply stays at level 2."""
@@ -37,7 +38,7 @@ class RankExecutor:
             M,MB,_=s.layers[L];sl=s.free.pop();s.slot_of[L,E]=sl;s.tag+=1;q=MB.hseq[E]+1
             s.eng.upgrade(s.tag,s.rf.rec(L,E),s.slots[sl].data_ptr(),MB.stage[E].data_ptr(),s._row(L,E,4,sl),MB.seq.data_ptr()+4*E,q)
             s.ops[s.tag]=(L,E,4,q)
-    def poll(s,sched=None):
+    def poll(s,sched=None,issue=True):
         for tag,hit,trd,te2e in s.eng.poll():
             L,E,kind,q=s.ops.pop(tag)
             if trd<0:                                             # read failed: row never posted
@@ -55,7 +56,7 @@ class RankExecutor:
             else:
                 s.free.append(s.slot_of.pop((L,E)))
                 if sched is not None:sched.released(L,E)
-        if s.pend and s.free:
+        if issue and s.pend and s.free:
             n=min(len(s.pend),len(s.free));go,s.pend=s.pend[:n],s.pend[n:];s.apply(go,[],sched)
     def busy(s):return bool(s.ops or s.wait_apply or s.pend)
     def close(s):s.eng.close()

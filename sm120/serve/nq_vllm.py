@@ -64,6 +64,7 @@ class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
+        s.cv=threading.Condition();s.ncap=0;s.in_iter=False
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -108,6 +109,7 @@ class Runtime:
         for L,E in init:s.S.state[s.S.li[L],E]=1
         s.X.apply(init,[],s.S)
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
+        _gate_captures(s)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
     def loop(s):
         try:
@@ -115,9 +117,14 @@ class Runtime:
             H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time()
             while not s.stop:
                 time.sleep(ms)
-                cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
-                s.X.poll(s.S)
-                if ntok>0:ups,downs=s.S.step(c,ntok);s.X.apply(ups,downs,s.S)
+                with s.cv:s.in_iter=True;cap=s.ncap>0
+                try:
+                    s.X.poll(s.S,issue=not cap)
+                    if not cap:        # hits counted during a capture are dropped with it (warmup inputs)
+                        cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
+                        if ntok>0:ups,downs=s.S.step(c,ntok);s.X.apply(ups,downs,s.S)
+                finally:
+                    with s.cv:s.in_iter=False;s.cv.notify_all()
                 if time.time()-last>60:
                     last=time.time();lv=s.S.level()
                     log.info('NestQuant rank %d: level-4 experts %d/%d, ups %d downs %d, read errors %d, op p50 %.1f ms',s.rank,
@@ -125,6 +132,25 @@ class Runtime:
                              float(np.median(s.X.lat[-256:]))*1e3 if s.X.lat else -1)
         except Exception as e:           # streaming stops; every expert keeps its current (valid) row
             s.err=e;log.exception('NestQuant streaming thread stopped')
+
+def _gate_captures(rt):
+    """The engine thread calls cudaEventQuery / cudaMemcpyAsync while it has ops in flight; any of those during a
+    global-mode CUDA graph capture (vLLM's) invalidates the capture. So every capture_begin waits until the host loop
+    is between iterations and the engine is idle, and no new op is issued until capture_end."""
+    G=torch.cuda.CUDAGraph
+    if getattr(G,'_nq_gated',False):return
+    b0,e0=G.capture_begin,G.capture_end
+    def begin(g,*a,**k):
+        with rt.cv:
+            rt.ncap+=1
+            if not rt.cv.wait_for(lambda:not rt.in_iter and not rt.X.ops,timeout=120):
+                log.warning('NestQuant rank %d: engine not idle before graph capture (%d ops in flight)',rt.rank,len(rt.X.ops))
+        return b0(g,*a,**k)
+    def end(g,*a,**k):
+        try:return e0(g,*a,**k)
+        finally:
+            with rt.cv:rt.ncap-=1;rt.cv.notify_all()
+    G.capture_begin,G.capture_end,G._nq_gated=begin,end,True
 
 RT=Runtime()
 
