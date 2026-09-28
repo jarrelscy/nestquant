@@ -284,6 +284,12 @@ Measured on A100 (levelswitch_mbox.py; graph = [mailbox, MoE] captured once, sid
   (grid + persistent), and the TP8 shard fields: reassembly, per-rank kernel, Σ_s partial z = full z.
   `lrtest.py`: synthetic ranks {0/0, 1/0, 0/1, 1/1, 2/1, 4/4} × levels × configs × B1–4, I = 2048 and 256, workspace clean.
   `bench_lr.py`: lr cost, r = 0 / 1 / 4 vs the pre-lr build and EXL3.
+- `smoke_layer.py [LAYER_DIR]`: real-layer smoke on an uploaded nestquant-v1 layer. It loads all 256 experts (lr
+  included, 5.1 GB GPU) and compares the kernel with Σ rw·Expert.ref, under the default allocation, all L4 and all L2.
+  - Routing: B1–B4 random batches, plus a sweep that routes every expert. Tuned, persistent and grid configs are all used.
+  - L38 (/tmp/nestquant/nq-encode-v1/L38): 156 launches, all 256 experts routed, max rel err 1.43e-4 (gate 1.5e-4),
+    workspace clean, peak 9.1 GB. The kernel vs nq_decode dense forward gives 7.7–9.1e-4, the fp16-activation floor.
+  - Lr ranks g/u/d: (1,1,0) 214, (1,1,1) 34, (2,2,0) 5, (2,2,1) 2, (2,2,2) 1.
 - `abk.py`: A/B of build variants (`NQ_RK_CODES` / `NQ_RK_GU,NQ_RK_DN` / other defines) at levels 2, 4, 4p (1.9375 / 2.3125)
   and 4q (2 / 2.3125).
 - `timing.py`: `NQ_STAT=min NQ_BLOCKS=150` reports the min over blocks instead of the median. Use it on a shared,

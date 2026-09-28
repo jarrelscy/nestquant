@@ -1,0 +1,11 @@
+layer 38: 256 experts, 26 at L4 by default; lr ranks gate/up/down: {(1, 1, 0): 214, (1, 1, 1): 34, (2, 2, 0): 5, (2, 2, 1): 2, (2, 2, 2): 1}
+  loaded 64 (131 s, gpu 1.27 GB)
+  loaded 128 (259 s, gpu 2.55 GB)
+  loaded 192 (382 s, gpu 3.82 GB)
+  loaded 256 (514 s, gpu 5.10 GB)
+default: 20 batches (B1-4 random x 3 each + 8 B4 batches routing all 256 experts), max rel err vs Expert.ref 1.43e-04, workspace clean True
+allL4: 20 batches (B1-4 random x 3 each + 8 B4 batches routing all 256 experts), max rel err vs Expert.ref 1.40e-04, workspace clean True
+allL2: 20 batches (B1-4 random x 3 each + 8 B4 batches routing all 256 experts), max rel err vs Expert.ref 1.37e-04, workspace clean True
+kernel vs nq_decode.decode_expert dense (B1 x 4, default allocation, 8 experts each): 7.66e-04 .. 9.09e-04
+156 launches, 256 distinct experts routed, max rel err vs Expert.ref 1.43e-04 (gate 1.5e-4), peak gpu 9.10 GB
+PASS
