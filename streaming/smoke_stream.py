@@ -4,8 +4,8 @@ H2D into a slot (side stream) -> mailbox post -> captured graph [mailbox.apply, 
 Checks: (1) each slot's bytes equal the resident kernel tensors (format); (2) every replay's output equals a
 reference layer whose table holds the levels that replay applied, using resident level-4 planes (rel err ~0);
 (3) slot reuse after downgrade (slot scribbled with junk first) never leaks into the output; (4) the table row after each
-applied op equals the posted row. Pass: rel err < 1e-4 (the kernel is not bitwise repeatable: reference-vs-itself
-reaches ~1.5e-5 from atomic order through the fp16 h) and no wrong table rows."""
+applied op equals the posted row. Pass: every step rel err <= max(1e-4, 2 x reference-vs-itself) (the kernel is not bitwise repeatable: reference-vs-itself
+reaches ~1e-4 from K-split atomic order through the fp16 h) and no wrong table rows."""
 import os,sys,json,time,random,mmap,torch,numpy as np
 HERE=os.path.dirname(os.path.abspath(__file__));sys.path[:0]=[HERE,HERE+'/../sm120']
 torch.cuda.set_per_process_memory_fraction(12/96)
@@ -44,28 +44,28 @@ rw=torch.softmax(torch.randn(B,TK,device=dev),-1)
 x=(torch.randn(B,H,device=dev)*0.05).half()
 s=torch.cuda.Stream();side=torch.cuda.Stream()
 if ENG:
-    import stream_engine as SE;eng=SE.mod().Engine(f'{rp}/rank{rank}.bin',rb,max(4,NSLOT//2),4,torch.cuda.current_device());elat=[];ehit=0;kind={}
+    import stream_engine as SE;eng=SE.mod().Engine(f'{rp}/rank{rank}.bin',rb,max(4,NSLOT//2),4,torch.cuda.current_device());elat=[];ehit=0;kind={};ntag=0
 f=lambda:(MB.apply(),M(x,sel,rw))
 with torch.cuda.stream(s):
     for _ in range(3):f()
 torch.cuda.synchronize();g=torch.cuda.CUDAGraph()
 with torch.cuda.graph(g):f()
 torch.cuda.synchronize()
-lev={E:2 for E in ids};pend={};slot_of={};free=list(range(NSLOT));worst=0;lat=[];napplied=0;floor=0;want={};ntbl=0;nbig=0;sel_set=sorted(set(sel.flatten().tolist()))
+lev={E:2 for E in ids};pend={};slot_of={};free=list(range(NSLOT));worst=0;lat=[];napplied=0;floor=0;nover=0;want={};ntbl=0;nbig=0;sel_set=sorted(set(sel.flatten().tolist()))
 for st in range(NSTEP):
     for _ in range(rng.randint(0,3)):
         idle=[E for E in ids if E not in pend];upc=[E for E in idle if lev[E]==2 and E not in slot_of];dn=[E for E in idle if lev[E]==4]
         if free and upc and (not dn or rng.random()<0.6):
             E=rng.choice([e for e in upc if e in sel_set] or upc) if rng.random()<0.7 else rng.choice(upc)
             sl=free.pop();slot_of[E]=sl;rw_=PR.row(RL.ex[E],lay,slots[sl].data_ptr(),entry);want[E]=rw_;pend[E]=4
-            if ENG:kind[E]=4;MB.hseq[E]+=1;eng.upgrade(E,(L-idx['L0'])*idx['NE']+E,slots[sl].data_ptr(),MB.stage[E].data_ptr(),rw_,MB.seq.data_ptr()+4*E,MB.hseq[E])
+            if ENG:ntag+=1;kind[ntag]=4;MB.hseq[E]+=1;eng.upgrade(ntag,(L-idx['L0'])*idx['NE']+E,slots[sl].data_ptr(),MB.stage[E].data_ptr(),rw_,MB.seq.data_ptr()+4*E,MB.hseq[E])
             else:
                 lat.append(read(E,sl))
                 with torch.cuda.stream(side):slots[sl].copy_(bounce[sl*rb:(sl+1)*rb],non_blocking=True)
                 MB.post(E,rw_,side)
         elif dn:
             E=rng.choice(dn);rw_=entry(RL.ex[E],2);want[E]=rw_;pend[E]=2
-            if ENG:kind[E]=2;MB.hseq[E]+=1;eng.post(E,MB.stage[E].data_ptr(),rw_,MB.seq.data_ptr()+4*E,MB.hseq[E])
+            if ENG:ntag+=1;kind[ntag]=2;MB.hseq[E]+=1;eng.post(ntag,MB.stage[E].data_ptr(),rw_,MB.seq.data_ptr()+4*E,MB.hseq[E])
             else:MB.post(E,rw_,side)
     g.replay();torch.cuda.current_stream().synchronize();o=M.out[:B].float().clone()
     if ENG:
@@ -86,7 +86,7 @@ for st in range(NSTEP):
         if E in pend and torch.equal(tb[E],want[E]):print(f'    step {st}: E{E} row applied but done() false')
     for E in sel_set:setlv(Ref,E,lev[E])
     y=Ref(x,sel,rw).float().clone();y2=Ref(x,sel,rw).float()
-    e=((o-y).norm()/y.norm()).item();fl=((y2-y).norm()/y.norm()).item();floor=max(floor,fl);worst=max(worst,e)
+    e=((o-y).norm()/y.norm()).item();fl=((y2-y).norm()/y.norm()).item();floor=max(floor,fl);worst=max(worst,e);nover+=e>max(1e-4,2*fl)
     if e>1e-5:nbig+=1
     if e>1e-4:print(f'    step {st}: rel {e:.2e} (ref repeat {fl:.2e}) levels sel {[lev[E] for E in sel_set]}')
 side.synchronize();torch.cuda.synchronize()
@@ -94,7 +94,7 @@ if ENG:
     import time as _t;_t.sleep(0.05);[elat.append(t4) for tg,_,_,t4 in eng.poll() if kind.pop(tg)==4];st_=eng.stats();eng.close()
     el=np.array(elat)*1e3;print(f'  engine: {st_["upgrades"]} upgrades ({ehit} host-LRU hits), {st_["posts"]} posts; op end-to-end p50 {np.percentile(el,50):.3f} p99 {np.percentile(el,99):.3f} ms')
 lat=np.array(lat)*1e3
-ok=bad==0 and worst<1e-4 and ntbl==0;print(f'  table rows wrong after apply: {ntbl}')
-print(f'  {NSTEP} replays, {napplied} ops applied, worst rel err vs reference {worst:.2e} (reference repeat {floor:.2e}, {nbig} steps >1e-5); O_DIRECT read p50 {np.percentile(lat,50):.3f} '
+ok=bad==0 and nover==0 and ntbl==0;print(f'  table rows wrong after apply: {ntbl}')
+print(f'  {NSTEP} replays, {napplied} ops applied, worst rel err vs reference {worst:.2e} (reference repeat {floor:.2e}, {nbig} steps >1e-5, {nover} over the bound); O_DIRECT read p50 {np.percentile(lat,50):.3f} '
       f'p99 {np.percentile(lat,99):.3f} ms ({len(lat)} reads, {rb/np.median(lat)/1e6:.2f} GB/s at qd 1)')
 print('STREAM SMOKE','PASS' if ok else 'FAIL')
