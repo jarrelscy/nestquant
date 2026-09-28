@@ -38,3 +38,11 @@ rm -rf /tmp/nestquant/19-capture-mm/stats /tmp/nestquant/19-capture-mm/stats0 /t
 $T/launch_full.sh <gpu> <gpu> <gpu> <gpu>
 ```
 If the corpus is also gone, rebuild it with `run.sh mm_corpus.py`, then `CUDA_VISIBLE_DEVICES=<g> run.sh vis_feats.py`.
+
+## Result (full run, 2026-09-29 01:23-01:56 Melbourne)
+- It took 33 min. Stage 1 ran on 1 GPU (6.9 GB CUDA, 39.4 GiB RSS peak) and stage 2 on 3 workers. 1400 images were spliced, and there are 75 layers of stats: 3.1 TB on /tmp,
+  with 17.9 GB of small files on flashblade. `/tmp/nestquant/19-capture-mm/DONE` summarises the run.
+- `coverage.py` → `coverage.json` counts routed vision rows per expert. Across all layers, 214 experts have n_v < 128
+  (0-15 per layer, most in L10-L22) and 2021 have < 1000. Only L15 E50 has no vision rows at all. The median is ~5.3k.
+- The vision REAP salience is mostly different from text: Spearman against the text sal averages 0.18, ranging -0.08 to 0.52.
+- `final_check.py` checks that the blend is finite with mean diag 1, that w_eff is 0 for L15 E50, and that the fixed-set score sums to 1.
