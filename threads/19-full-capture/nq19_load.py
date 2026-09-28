@@ -21,18 +21,45 @@ GU_SIGMA = 0.5; DOWN_SIGMA = 1.0          # thread-08 selected damping (added by
 
 
 class Capture:
-    def __init__(self, root=OUT):
+    """stats="stats" = cumulative (all shards merged so far); "stats0" = frozen shard-0 snapshot.
+    Each layer is resolved to one immutable version directory and all its files are opened on first access,
+    so a concurrent merge (atomic symlink swap + deletion of the superseded version) never affects a reader."""
+
+    def __init__(self, root=OUT, stats="stats"):
         self.root = root
-        self._mm = {}
+        self.stats = stats
+        self._layer = {}
+
+    def _open(self, L):
+        if L not in self._layer:
+            for _ in range(5):
+                try:
+                    vd = os.path.realpath(f"{self.root}/{self.stats}/L{L}")
+                    m = json.load(open(f"{vd}/meta.json"))
+                    arr = {}
+                    if m.get("schema") == "nestquant-19-stats-v2":
+                        for k, r in m["files"]["raw"].items():
+                            mm = np.memmap(f"{vd}/{r['file']}", dtype=np.float32, mode="r",
+                                           shape=(r["rows"], r["stride_bytes"] // 4))
+                            arr[k] = mm[:, :r["packed"]]
+                        for k in ("C_ctx", "C_all", "gdiag", "scalars"):
+                            arr[k] = np.load(f"{vd}/{k}.npy", mmap_mode="r")
+                    else:                                    # v1 single-shot layout (pilot)
+                        for k in ("A2", "A0", "D2", "D0", "Dc", "C_ctx", "C_all", "gdiag", "scalars"):
+                            arr[k] = np.load(f"{vd}/{k}.npy", mmap_mode="r")
+                    self._layer[L] = (vd, m, arr)
+                    break
+                except FileNotFoundError:
+                    import time; time.sleep(1)               # raced a version swap; re-resolve
+            else:
+                raise FileNotFoundError(f"{self.root}/{self.stats}/L{L}")
+        return self._layer[L]
 
     def meta(self, L):
-        return json.load(open(f"{self.root}/stats/L{L}/meta.json"))
+        return self._open(L)[1]
 
     def _arr(self, L, k):
-        key = (L, k)
-        if key not in self._mm:
-            self._mm[key] = np.load(f"{self.root}/stats/L{L}/{k}.npy", mmap_mode="r")
-        return self._mm[key]
+        return self._open(L)[2][k]
 
     def packed(self, L, k, E=None, device="cuda"):
         a = self._arr(L, k)
@@ -78,8 +105,15 @@ class Capture:
         m = self.meta(L)
         return unpack(self.packed(L, which, None, device), D) / (m["T_fit"] if which == "C_all" else m["n_ctx"])
 
+    def ess_table(self, L):
+        sc = np.asarray(self._arr(L, "scalars"), np.float64)
+        return sc[:, 0], sc[:, 2] ** 2 / np.maximum(sc[:, 3], 1e-300)
+
     def eval_capture(self, L, kind="val"):
-        return torch.load(f"{self.root}/eval/{kind}/layer_{L}.pt", weights_only=True, mmap=True)
+        return torch.load(self.eval_path(L, kind), weights_only=True, mmap=True)
+
+    def eval_path(self, L, kind="val"):
+        return f"{self.root}/eval/{kind}/layer_{L}.pt"
 
     def expert_data(self, L, E, kind="val", source=None):
         """harness.ExpertData with this capture's statistics and eval rows (teacher from the FP8 source)."""
@@ -87,5 +121,5 @@ class Capture:
         from orbit_duet.source import weights
         teacher = weights(source or nq19.SRC, L, E)
         cap = self.eval_capture(L, kind)
-        return h.ExpertData(L, E, teacher, self.pilot_stats(L, E), cap, f"{self.root}/eval/{kind}/layer_{L}.pt",
-                            f"{self.root}/stats/L{L}")
+        return h.ExpertData(L, E, teacher, self.pilot_stats(L, E), cap, self.eval_path(L, kind),
+                            self._open(L)[0])

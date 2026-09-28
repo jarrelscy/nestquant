@@ -24,6 +24,8 @@ MATCHED = f"{ORBIT}/runs/glm53_matched_context_pilot_v1"
 CTX_SEED = 20260925            # orbit_duet.glm_calibration.CalibrationBatches context seed
 CTX_FRACTION = 4               # context rows = T_fit // 4  (pilot: 65536 -> 16384)
 TAIL_FIRST_WINDOW = 28784      # thread 18 nq-tail = last 262144 tokens; fits must stay below
+VAL_WINDOWS_RESERVED = 128     # windows 28656..28783 = held-out val rows; fits use windows < 28656
+SHARD_WINDOWS = 2048           # progressive shard k = fit windows [2048 k, min(2048 (k + 1), 28656))
 D, F = 6144, 2048
 NEXP = 256
 

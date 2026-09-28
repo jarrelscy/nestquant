@@ -438,3 +438,93 @@ def free(P):
     for key in list(P.keys()):
         P[key] = None
     torch.cuda.empty_cache()
+
+
+# ================================================================================================ production API
+PROJ = ("gate", "up", "down")
+PROD = dict(base_var="sign", lam=0.3, inner=2, K_hi=2.5, sigma={"gate": 0.5, "up": 0.5, "down": 1.0},
+            axis={"gate": "n", "up": "n", "down": "k"}, units_per_shard=768)
+DEFAULT_RATE = 4.09375          # L4 bpw incl. all metadata; see REPORT/final message for the selection rule
+
+
+def rate_rule(ref_bits, rate, K_hi=PROD["K_hi"]):
+    """Positional residual rule for an L4 target rate given the uniform-K2 L4 bits (per projection)."""
+    if abs(rate - ref_bits) < 1e-9:
+        return dict(kind="uniform", K=2)
+    Kh = K_hi if rate > ref_bits else 1.5
+    f = max(0, round((rate - ref_bits) / (Kh - 2) * PROD["units_per_shard"])) / PROD["units_per_shard"]
+    return dict(kind="pos", K=2, K_hi=Kh, frac=f)
+
+
+@torch.no_grad()
+def encode_expert(Ws, HG, rate=DEFAULT_RATE, count=1, sigma=None, sigma_out=0.03, lam=PROD["lam"],
+                  base_var=PROD["base_var"], inner=PROD["inner"], check=True, canonical_base=True):
+    """One expert -> (artifact {gate, up, down: planes, meta}, dense {2, 4: [g, u, d] fp32 [out, in]}).
+    Ws: [Wg, Wu, Wd] teacher [out, in]; HG: thread-12 glm_H format {"H": [Hx, Hx, Ha], "G": [Gg, Gu, None]}
+    (e.g. threads/19-full-capture/nq19_load.Capture().glm_H(L, E)).
+    canonical_base: fit the base once against the uniform-K2 residual (rate-independent base bytes), then re-fit
+    only the P4 plane at `rate` on that frozen base (2 passes). False = single joint pass at `rate`."""
+    sigma = sigma or PROD["sigma"]
+    art, dense, info = {}, {2: [], 4: []}, {}
+    for pi, pn in enumerate(PROJ):
+        P = prep(Ws[pi], HG["H"][pi], count, sigma[pn], G=HG["G"][pi], sigma_out=sigma_out)
+        ax = PROD["axis"][pn]
+        nw = P["k"] * P["n"]
+        ref_bits = 4 + 16 / 2048 + 16 * (P["k"] + P["n"]) / nw + (D.variant_bits(base_var) / 256 if base_var else 0)
+        rule = rate_rule(ref_bits, rate)
+        if canonical_base and rule["kind"] != "uniform":
+            _, dn0, _, enc0, sc0 = encode_projection(P, shard_axis=ax, lam=lam, base_var=base_var, inner=inner)
+            planes, dn, inf, enc, _ = encode_projection(P, shard_axis=ax, lam=lam, base_var=base_var, inner=inner,
+                                                        base=frozen_base(enc0), base_scales=sc0[2], res_rule=rule)
+            inf["L2_equal_canonical"] = bool(torch.equal(dn[2], dn0[2]))
+            del enc0, dn0
+        else:
+            planes, dn, inf, enc, _ = encode_projection(P, shard_axis=ax, lam=lam, base_var=base_var, inner=inner,
+                                                        res_rule=rule)
+        if check:
+            rot = D.rotated_levels(planes)
+            inf["bitexact"] = {L: bool(torch.equal(D.decode_matrix(planes, L, rot=rot), dn[L])) for L in (2, 4)}
+            assert all(inf["bitexact"].values()), (pn, inf["bitexact"])
+            del rot
+        art[pn] = planes
+        for L in (2, 4):
+            dense[L].append(dn[L].cpu())
+        info[pn] = {k: v for k, v in inf.items() if k in ("bits", "proxy_rot", "time", "bitexact", "L2_equal_canonical",
+                                                         "stream_mismatch", "K_frac")}
+        del enc; free(P)
+    art["meta"] = dict(format="nestquant-v1", rate=rate, base_var=base_var, lam=lam, inner=inner, sigma=sigma,
+                       canonical_base=canonical_base, info=info)
+    return art, dense
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="NestQuant v1: encode one GLM expert into a base + P4 artifact")
+    ap.add_argument("--layer", type=int, required=True); ap.add_argument("--expert", type=int, required=True)
+    ap.add_argument("--rate", type=float, default=DEFAULT_RATE, help="level-4 bpw incl. metadata")
+    ap.add_argument("--stats", choices=["t19", "t12"], default="t19",
+                    help="t19 = threads/19 full-model capture (nq19_load.Capture().glm_H); t12 = thread-08 H from the "
+                         "orbit training sample (nq_run.glm_H)")
+    ap.add_argument("--out", required=True); ap.add_argument("--dense-out", help="also save internal dense {2,4}")
+    ap.add_argument("--single-pass", action="store_true", help="joint fit at --rate (base not rate-canonical)")
+    a = ap.parse_args()
+    torch.cuda.set_per_process_memory_fraction(12 / 80)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    data = h.load_expert(a.layer, a.expert)
+    if a.stats == "t19":
+        sys.path.insert(0, "/home/coder/git/nestquant/threads/19-full-capture")
+        import nq19_load
+        HG = nq19_load.Capture().glm_H(a.layer, a.expert)
+    else:
+        import nq_run
+        HG = nq_run.glm_H(data, a.layer, a.expert)
+    art, dense = encode_expert(data.teacher, HG, rate=a.rate, canonical_base=not a.single_pass)
+    torch.save(art, a.out)
+    if a.dense_out:
+        torch.save(dense, a.dense_out)
+    for pn in PROJ:
+        print(pn, art["meta"]["info"][pn])
+
+
+if __name__ == "__main__":
+    main()

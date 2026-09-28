@@ -1,7 +1,9 @@
-"""Thread 12 driver: fit NestQuant v0 + same-H EXL3 anchors on GLM experts, score with harness.evaluate().
+"""Thread 12 driver (v1, kernel-exact ref15 fold): NestQuant + same-H EXL3 anchors, scored with harness.evaluate().
 
-python nq_run.py --experts 16:36 [--variants pilot,k3,closers] [--smoke]
-Results: results/L{L}_E{E}.json (checkpointed after every method). Artifacts: /tmp/nestquant/12-reference-encoder.
+python nq_run.py --experts 16:36,49:92 [--variants anchors,rates,k3cmp,sg4,split] [--mimo]
+One reference fit per expert (base = per-ring sign + two-sided G + blend 0.3, residual uniform K2) produces the base;
+every rate variant re-fits ONLY the level-4 residual on that frozen base (base plane bytes asserted identical).
+Results: $NQ_RES (default results_v1)/L{L}_E{E}.json. Artifacts: /tmp/nestquant/12-reference-encoder/v1.
 """
 import os, sys, json, time, argparse
 os.environ.setdefault("OMP_NUM_THREADS", "16")
@@ -13,7 +15,8 @@ import nq_encode as NE
 import harness as h
 
 SCR = "/tmp/nestquant/12-reference-encoder"
-RES = os.environ.get("NQ_RES", f"{HERE}/results")
+RES = os.environ.get("NQ_RES", f"{HERE}/results_v1")
+ART = f"{SCR}/v1"
 PROJ = ["gate", "up", "down"]
 SIG = {"gate": 0.5, "up": 0.5, "down": 1.0}          # thread-08 selected damping
 AXIS = {"gate": "n", "up": "n", "down": "k"}          # TP shard axis in (k=in, n=out) layout
@@ -86,157 +89,176 @@ def evaluate_into(book, data, methods, extra=None):
 
 
 INNER = 2
-
-
-def nq_variant(Ps, HG, name, lam=0.3, k3=None, cands=(("mul1",),), delta_per="unit", gain=1.0,
-               keep_artifact=False, check=False, tag="", inner=None, base_var=None):
-    """Encode all three projections with shared prep Ps -> (dense {2,3,4: [g,u,d] cpu}, info, encs)."""
-    dense = {L: [] for L in (2, 4)}
-    info = {}; encs = {}; art = {}
-    for pi, pn in enumerate(PROJ):
-        planes, dn, inf, P, enc = NE.encode_projection(None, None, None, None, P=Ps[pn], lam=lam, shard_axis=AXIS[pn],
-                                                     k3=None if k3 is None else k3[pn], cands=cands,
-                                                     delta_per=delta_per, gain=gain,
-                                                     inner=INNER if inner is None else inner, base_var=base_var)
-        if check:
-            rot = D.rotated_levels(planes)
-            for L in (2, 4):
-                Wd = D.decode_matrix(planes, L, rot=rot)
-                inf.setdefault("bitexact", {})[L] = bool(torch.equal(Wd, dn[L]))
-            del rot
-        for L in (2, 4):
-            dense[L].append(dn[L].cpu())
-        info[pn] = {k: v for k, v in inf.items()}
-        info[pn]["plane_bytes"] = D.plane_bytes(planes)
-        encs[pn] = dict(cost4=enc["cost4"].cpu(), cost2=enc["cost2"].cpu())
-        art[pn] = planes
-        del enc, dn
-        torch.cuda.empty_cache()
-    if keep_artifact:
-        torch.save(art, f"{SCR}/{tag}{name}.pt")
-    return dense, info, encs
+BASE_VAR = os.environ.get("NQ_BASE_VAR", "sign")
+TARGETS = (4.0625, 4.09375, 4.125, 4.25)
+UNITS = 768                                            # units per TP shard (all three projections)
 
 
 def bits_expert(info, L):
-    nw = {"gate": 2048 * 6144, "up": 2048 * 6144, "down": 2048 * 6144}
-    return sum(info[p]["bits"][L] * nw[p] for p in PROJ) / sum(nw.values())
+    return sum(info[p]["bits"][L] for p in PROJ) / 3          # equal-size projections
 
 
-def run_glm(L, E, variants, smoke=False):
+def frac_for(ref_bits, target, K_hi, K=2):
+    """Positional/mask fraction of units (whole units per shard) so the L4 rate hits `target` bpw."""
+    f = (target - ref_bits) / (K_hi - K)
+    return max(0, round(f * UNITS)) / UNITS
+
+
+def base_identical(a, b):
+    ok = all(torch.equal(x, y) for x, y in zip(a["base"]["shards"], b["base"]["shards"]))
+    if a["base"].get("var") is not None:
+        ok &= all(torch.equal(x, y) for x, y in zip(a["base"]["var"], b["base"]["var"]))
+    return bool(ok and torch.equal(a["base"]["suh"], b["base"]["suh"]) and torch.equal(a["base"]["svh"], b["base"]["svh"]))
+
+
+class Fit:
+    """Reference fit (base) of one expert + residual-only rate variants on the frozen base."""
+    def __init__(self, Ps, base_var, lam=0.3, inner=INNER, tag=""):
+        self.Ps, self.bv, self.lam, self.inner, self.tag = Ps, base_var, lam, inner, tag
+        self.ref = {}
+
+    def run(self, name, rules=None, masks=None):
+        """rules {proj: res_rule} (None = reference uniform K2 base fit). -> (dense {2,4}, info, planes)."""
+        dense = {2: [], 4: []}; info = {}; art = {}
+        for pn in PROJ:
+            P = self.Ps[pn]
+            kw = dict(shard_axis=AXIS[pn], lam=self.lam, base_var=self.bv, inner=self.inner)
+            if rules is not None:
+                r = self.ref[pn]
+                kw.update(base=r["base"], base_scales=r["scales"], res_rule=rules[pn],
+                          mask_flat=None if masks is None else masks[pn])
+            planes, dn, inf, enc, sc = NE.encode_projection(P, **kw)
+            rot = D.rotated_levels(planes)
+            inf["bitexact"] = {L: bool(torch.equal(D.decode_matrix(planes, L, rot=rot), dn[L])) for L in (2, 4)}
+            inf["ref15_mismatch"] = D.xcheck_ref15(planes, 8)
+            inf["plane_bytes"] = D.plane_bytes(planes)
+            if rules is None:
+                self.ref[pn] = dict(base=NE.frozen_base(enc), scales=sc[2], planes=planes, cost4=enc["cost4"],
+                                    dense2=dn[2].cpu())
+            else:
+                inf["base_identical"] = base_identical(self.ref[pn]["planes"], planes)
+                inf["L2_equal"] = bool(torch.equal(dn[2].cpu(), self.ref[pn]["dense2"]))
+            for L in (2, 4):
+                dense[L].append(dn[L].cpu())
+            info[pn] = inf; art[pn] = planes
+            del enc, rot; torch.cuda.empty_cache()
+        os.makedirs(ART, exist_ok=True)
+        torch.save(art, f"{ART}/{self.tag}{name}.pt")
+        return dense, info
+
+
+def summary_info(info, L):
+    keep = ("bits", "proxy_rot", "time", "bitexact", "ref15_mismatch", "stream_mismatch", "base_identical", "L2_equal",
+            "delta_mean", "Mb_mean", "Mb_min", "N0_frac", "K_frac", "gsr")
+    return dict(bpw=bits_expert(info, L), artifact_bpw=bits_expert(info, "artifact"),
+                proj={p: {k: info[p][k] for k in keep if k in info[p]} for p in PROJ})
+
+
+def copy_anchors(book, L, E):
+    for d in ("results", "results_b", "results_sg4"):
+        f = f"{HERE}/{d}/L{L}_E{E}.json"
+        if os.path.exists(f):
+            R = json.load(open(f))
+            for n in ("EXL3-2", "EXL3-4", "NVFP4"):
+                if n in R.get("eval", {}) and n not in book.R.get("eval", {}):
+                    book.R.setdefault("eval", {})[n] = R["eval"][n]
+                    book.R.setdefault("info", {})[n] = dict(R.get("info", {}).get(n, {}), copied_from=f)
+
+
+def exl3_matched(Ws, HG, target):
+    """EXL3 with K5 on the lowest-index (= last-processed) 16-blocks so the bpw (incl. fp16 scales) ~= target."""
+    q, bpws = [], []
+    for pi, pn in enumerate(PROJ):
+        n_out, k_in = Ws[pi].shape
+        nb = k_in // 16
+        sc = 16 * (k_in + n_out) / (k_in * n_out)
+        m = max(0, round((target - 4 - sc) * nb))
+        Ks = [5 if j < m else 4 for j in range(nb)]
+        Wq, inf = h.quantize_exl3_like(Ws[pi], HG["H"][pi], Ks, count=1, sigma_reg=SIG[pn])
+        q.append(Wq.cpu()); bpws.append(inf["bpw"]); h.free_scratch()
+    return q, sum(bpws) / 3
+
+
+def run_glm(L, E, variants):
     os.makedirs(SCR, exist_ok=True)
     book = Book(f"{RES}/L{L}_E{E}.json")
     t0 = time.time()
     data = h.load_expert(L, E)
     HG = glm_H(data, L, E)
     Ws = data.teacher
-    print(f"[{L}:{E}] data+H {time.time()-t0:.0f}s", flush=True)
+    ev = book.R.setdefault("eval", {})
+    log = lambda m: print(f"[{L}:{E}] {m} {time.time()-t0:.0f}s", flush=True)
     methods, extra = {}, {}
+
+    def flush():
+        nonlocal methods, extra
+        if methods:
+            evaluate_into(book, data, methods, extra)
+        methods, extra = {}, {}
     # ---- anchors
+    copy_anchors(book, L, E)
     if "anchors" in variants:
         for K in (2, 4):
             nm = f"EXL3-{K}"
-            if nm in book.R.get("eval", {}):
-                continue
-            q = []
-            for pi, pn in enumerate(PROJ):
-                Wq, inf = h.quantize_exl3_like(Ws[pi], HG["H"][pi], K, count=1, sigma_reg=SIG[pn])
-                q.append(Wq.cpu())
-            h.free_scratch()
-            methods[nm] = q; extra[nm] = dict(bpw=K + 16 * (6144 + 2048) / (6144 * 2048))
-        if "NVFP4" not in book.R.get("eval", {}):
+            if nm not in ev:
+                q = []
+                for pi, pn in enumerate(PROJ):
+                    Wq, _ = h.quantize_exl3_like(Ws[pi], HG["H"][pi], K, count=1, sigma_reg=SIG[pn])
+                    q.append(Wq.cpu()); h.free_scratch()
+                methods[nm] = q; extra[nm] = dict(bpw=K + 16 * (6144 + 2048) / (6144 * 2048))
+        if "NVFP4" not in ev:
             methods["NVFP4"] = [w.cpu() for w in h.load_nvfp4(f"{h.GLM_RUN.format(L=L)}/nvfp4_e{E}/weights.pt", data)]
             extra["NVFP4"] = dict(bpw=4.5)
-        evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-        print(f"[{L}:{E}] anchors {time.time()-t0:.0f}s", flush=True)
-    # ---- shared preprocessing
-    Ps = {}
-    for pi, pn in enumerate(PROJ):
-        G = HG["G"][pi]
-        Ps[pn] = NE.prep(Ws[pi], HG["H"][pi], 1, SIG[pn], G=G)
-    print(f"[{L}:{E}] prep {time.time()-t0:.0f}s", flush=True)
-
-    def add(name, dense, info, levels=(2, 4)):
-        for Lv in levels:
-            nm = f"{name}/L{Lv}"
-            methods[nm] = dense[Lv]
-            extra[nm] = dict(bpw=bits_expert(info, Lv), artifact_bpw=bits_expert(info, "artifact"),
-                             **({"proj": {p: {k: info[p][k] for k in ("bits", "proxy_rot", "time", "gs", "gsr", "bitexact", "cost4_mean")
-                                             if k in info[p]} for p in PROJ}} if Lv == 4 else {}))
-        if Lv == 4 or True:
-            book.R.setdefault("planes", {})[name] = {p: info[p]["plane_bytes"] for p in PROJ}
-
-    # ---- pilot (GLM default: blend 0.3, mul1 residual, delta per 16x128)
-    pilot_costs = None
-    t = time.time()
-    dense, info, encs = nq_variant(Ps, HG, "nq", check=True, keep_artifact=True, tag=f"L{L}_E{E}_")
-    pilot_costs = {p: encs[p]["cost4"] for p in PROJ}
-    print(f"[{L}:{E}] pilot encode {time.time()-t:.0f}s bitexact "
-          f"{[info[p].get('bitexact') for p in PROJ]} proxy {[round(info[p]['proxy_rot'][4],6) for p in PROJ]}", flush=True)
-    add("nq", dense, info)
-    evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-    if smoke:
-        return book
-    # ---- 3-bit residual on the top-cost units (per shard)
-    if "k3" in variants:
-        for f in (0.0625, 0.125, 0.25):
-            k3 = {p: NE.select_k3(pilot_costs[p].cuda(), AXIS[p], f) for p in PROJ}
-            dense, info, _ = nq_variant(Ps, HG, f"nq_k3_{f}", k3=k3, check=True)
-            add(f"nq_k3_{f}", dense, info, levels=(4,))
-            evaluate_into(book, data, methods, extra); methods, extra = {}, {}
+        flush(); log("anchors")
+    Ps = {pn: NE.prep(Ws[pi], HG["H"][pi], 1, SIG[pn], G=HG["G"][pi]) for pi, pn in enumerate(PROJ)}
+    log("prep")
+    stacks = [("nq", BASE_VAR)] + ([("nq_sg4", "sg4")] if "sg4" in variants else [])
+    for sname, bv in stacks:
+        fit = Fit(Ps, bv, tag=f"L{L}_E{E}_")
+        dense, info = fit.run(sname)
+        ref_bits = bits_expert(info, 4)
+        for Lv in (2, 4):
+            nm = f"{sname}/L{Lv}"
+            methods[nm] = dense[Lv]; extra[nm] = summary_info(info, Lv)
+        book.R.setdefault("planes", {})[sname] = {p: info[p]["plane_bytes"] for p in PROJ}
+        flush(); log(f"{sname} ref fit L4 {ref_bits:.4f} bitexact {[info[p]['bitexact'] for p in PROJ]} "
+                     f"ref15 {[info[p]['ref15_mismatch'] for p in PROJ]}")
+        # ---- rate variants on the frozen base (residual only)
+        rv = []
+        if "rates" in variants:
+            rv.append((f"{sname}_r4.0", dict(kind="pos", K=2, K_hi=1.5, frac=frac_for(ref_bits, 4.0, 1.5)), None))
+            for T in TARGETS:
+                rv.append((f"{sname}_r{T}", dict(kind="pos", K=2, K_hi=2.5, frac=frac_for(ref_bits, T, 2.5)), None))
+        if "k3cmp" in variants and sname == "nq":
+            for T in (4.125, 4.25):
+                f3 = frac_for(ref_bits, T, 3)
+                rv.append((f"{sname}_pos3_r{T}", dict(kind="pos", K=2, K_hi=3, frac=f3), None))
+                rv.append((f"{sname}_mask3_r{T}", dict(kind="mask", K=2, K_hi=3, frac=f3),
+                           {p: NE.select_mask(fit.ref[p]["cost4"], AXIS[p], f3) for p in PROJ}))
+        if "split" in variants and sname == "nq":     # low priority (thread 16: worse at 4.0): g/u 1.75 ~ down 2.5
+            pass
+        for nm, rule, masks in rv:
+            if f"{nm}/L4" in ev:
+                continue
+            dense, info = fit.run(nm, rules={p: rule for p in PROJ}, masks=masks)
+            methods[f"{nm}/L4"] = dense[4]
+            extra[f"{nm}/L4"] = dict(summary_info(info, 4), rule=rule, L2_bpw=bits_expert(info, 2),
+                                     L2_equals_base=all(info[p]["L2_equal"] and info[p]["base_identical"] for p in PROJ))
+            book.R.setdefault("planes", {})[nm] = {p: info[p]["plane_bytes"] for p in PROJ}
+            flush(); log(f"{nm} L4 {bits_expert(info, 4):.4f} base+L2 identical "
+                         f"{[info[p]['base_identical'] and info[p]['L2_equal'] for p in PROJ]} "
+                         f"bitexact {[info[p]['bitexact'] for p in PROJ]} ref15 {[info[p]['ref15_mismatch'] for p in PROJ]}")
             h.free_scratch()
-            print(f"[{L}:{E}] k3 {f} done {time.time()-t0:.0f}s", flush=True)
-    # ---- closers at 4.0 bpw
-    if "closers" in variants:
-        for name, kw in (("nq_sign", dict(cands=(("mul1",), ("mul1", -1.0)))),
-                         ("nq_ring_delta", dict(delta_per="ring")),
-                         ("nq_cb6", dict(cands=tuple((c, s) for c in ("mul1", "mcg", "3inst") for s in (1.0, -1.0))))):
-            dense, info, _ = nq_variant(Ps, HG, name, check=True, **kw)
-            add(name, dense, info, levels=(4,))
-            evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-            h.free_scratch()
-            print(f"[{L}:{E}] {name} done {time.time()-t0:.0f}s", flush=True)
-    if "combo" in variants:
-        for f in (0.0625, 0.125, 0.25):
-            k3 = {p: NE.select_k3(pilot_costs[p].cuda(), AXIS[p], f) for p in PROJ}
-            nm = f"nq_sign_ring_k3_{f}"
-            dense, info, _ = nq_variant(Ps, HG, nm, k3=k3, cands=(("mul1",), ("mul1", -1.0)), delta_per="ring")
-            add(nm, dense, info, levels=(4,))
-            evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-            h.free_scratch()
-            print(f"[{L}:{E}] {nm} done {time.time()-t0:.0f}s", flush=True)
-    if "sg4" in variants:        # thread 17 winner: per-ring sign+gain base variants (3 bits / 256-weight ring)
-        for nm, kw in (("nq_sg4", dict(base_var="sg4")), ("nq_sign4", dict(base_var="sign"))):
-            dense, info, _ = nq_variant(Ps, HG, nm, check=True, **kw)
-            add(nm, dense, info)
-            evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-            h.free_scratch()
-            print(f"[{L}:{E}] {nm} done {time.time()-t0:.0f}s bitexact {[info[p].get('bitexact') for p in PROJ]}", flush=True)
-    if "k3fine" in variants:
-        for f in (0.1875,):
-            k3 = {p: NE.select_k3(pilot_costs[p].cuda(), AXIS[p], f) for p in PROJ}
-            nm = f"nq_k3_{f}"
-            dense, info, _ = nq_variant(Ps, HG, nm, k3=k3, check=True)
-            add(nm, dense, info, levels=(4,))
-            evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-            h.free_scratch()
-            print(f"[{L}:{E}] {nm} done {time.time()-t0:.0f}s", flush=True)
-    if "stack" in variants:      # thread-17 sg4 base + residual sign choice + K3 residual
-        for f in (0.0, 0.125, 0.15625):
-            k3 = {p: NE.select_k3(pilot_costs[p].cuda(), AXIS[p], f) for p in PROJ} if f else None
-            nm = f"nq_sg4_sign_k3_{f}"
-            dense, info, _ = nq_variant(Ps, HG, nm, k3=k3, cands=(("mul1",), ("mul1", -1.0)), base_var="sg4", check=True)
-            add(nm, dense, info, levels=(2, 4) if f == 0.0 else (4,))
-            evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-            h.free_scratch()
-            print(f"[{L}:{E}] {nm} done {time.time()-t0:.0f}s bitexact {[info[p].get('bitexact') for p in PROJ]}", flush=True)
-    if "inner0" in variants:
-        dense, info, _ = nq_variant(Ps, HG, "nq_inner0", inner=0)
-        add("nq_inner0", dense, info)
-        evaluate_into(book, data, methods, extra); methods, extra = {}, {}
-    if "seq" in variants:
-        dense, info, _ = nq_variant(Ps, HG, "nq_seq", lam=0.0)
-        add("nq_seq", dense, info)
-        evaluate_into(book, data, methods, extra); methods, extra = {}, {}
+        del fit; torch.cuda.empty_cache()
+    # ---- matched-rate EXL3 anchors
+    if "anchors" in variants:
+        for T in (4.0221,) + TARGETS:
+            nm = f"EXL3-4+{T}"
+            if nm in ev:
+                continue
+            q, bpw = exl3_matched(Ws, HG, T)
+            methods[nm] = q; extra[nm] = dict(bpw=bpw, rule="K5 on lowest-index 16-blocks")
+            flush(); log(f"{nm} bpw {bpw:.4f}")
     book.R["time_s"] = time.time() - t0
     book.save()
     for p in Ps:
@@ -251,10 +273,8 @@ MIMO_CAPS = {"id": h.ORBIT + "/runs/native_id_control_v1_capture/layer_{L}.pt",
              "ood": h.ORBIT + "/runs/ood_controlled_v1_capture/layer_{L}.pt"}
 
 
-def run_mimo(L=55, E=70, keep=True):
-    """MiMo L55 E70, level 2 (and 4) vs same-H EXL3, with/without the thread-01 down split (act-order-shard, 1/3 per shard).
-    H = router-p^2 grams / training_rows, sigma 0.03; G = diag(outputs)^0.5 (two-sided gate/up); lambda = 0 (seq)."""
-    os.makedirs(SCR, exist_ok=True)
+def run_mimo(L=55, E=70):
+    """MiMo L55 E70 (no down split): H = router-p^2 grams / training_rows, sigma 0.03, G two-sided, lambda 0 (seq)."""
     book = Book(f"{RES}/mimo_L{L}_E{E}.json")
     t0 = time.time()
     data = h.load_expert(L, E, source=MIMO_SRC, statistics=MIMO_STATS.format(L=L, E=E), capture=MIMO_CAPS["id"].format(L=L))
@@ -264,8 +284,6 @@ def run_mimo(L=55, E=70, keep=True):
     dg = [st["outputs"][i].float().diagonal().clamp_min(1e-30).pow(0.5) for i in range(2)]
     Ws = [w.float() for w in data.teacher]
     sig = 0.03
-    srt = torch.argsort(Ha.diagonal()); perm = torch.cat([srt[j::8] for j in range(8)])
-    k = Ha.shape[0]; nblk = k // 16; shard = k // 8
 
     def ev(methods, extra):
         for dom, cap in caps.items():
@@ -281,77 +299,41 @@ def run_mimo(L=55, E=70, keep=True):
                 del grp; torch.cuda.empty_cache()
         data.capture = caps["id"]
         book.save()
-
-    for split in (False, True):
-        tag = "_split" if split else ""
-        if split:
-            pm = perm
-            Wg, Wu_, Wd = Ws[0][pm], Ws[1][pm], Ws[2][:, pm]
-            Hd = Ha[pm][:, pm]; Gg, Gu = dg[0][pm], dg[1][pm]
-        else:
-            pm = None; Wg, Wu_, Wd = Ws; Hd = Ha; Gg, Gu = dg
-        Wl, Hl = [Wg, Wu_, Wd], [Hx, Hx, Hd]
-        unperm = (lambda q: [q[0][torch.argsort(pm)], q[1][torch.argsort(pm)], q[2][:, torch.argsort(pm)]]) if split else (lambda q: q)
-        # ---- anchors: EXL3-2/4 same H (split: K list per 16-block, low half of each shard K-1, high half K+1)
-        methods, extra = {}, {}
-        for K in (2, 4):
-            nm = f"EXL3-{K}{tag}"
-            if nm in book.R.get("eval", {}):
-                continue
+    old = f"{HERE}/results/mimo_L{L}_E{E}.json"
+    if os.path.exists(old):
+        R = json.load(open(old))
+        for n in ("EXL3-2", "EXL3-4"):
+            if n in R["eval"]:
+                book.R.setdefault("eval", {})[n] = R["eval"][n]
+    methods, extra = {}, {}
+    for K in (2, 4):
+        if f"EXL3-{K}" not in book.R.get("eval", {}):
             q = []
             for pi in range(3):
-                Kp = [K - 1 if (j % (shard // 16)) < shard // 32 else K + 1 for j in range(nblk)] if (split and pi == 2) else K
-                Wq, _ = h.quantize_exl3_like(Wl[pi], Hl[pi], Kp, count=cnt, sigma_reg=sig)
+                Wq, _ = h.quantize_exl3_like(Ws[pi], [Hx, Hx, Ha][pi], K, count=cnt, sigma_reg=sig)
                 q.append(Wq.cpu()); h.free_scratch()
-            methods[nm] = unperm(q); extra[nm] = dict(bpw=K + 16 * (6144 + 2048) / (6144 * 2048))
-        if methods:
-            ev(methods, extra)
-        print(f"[mimo{tag}] anchors {time.time()-t0:.0f}s", flush=True)
-        # ---- NestQuant (lambda 0, inner 2)
-        art = {}; dense = {2: [], 4: []}; info = {}
-        for pi, pn in enumerate(PROJ):
-            G = torch.diag(Gg if pi == 0 else Gu) if pi < 2 else None
-            P = NE.prep(Wl[pi], Hl[pi], cnt, sig, G=G, sigma_out=sig)
-            bK = [1, 3] * (k // 256) if (split and pi == 2) else None
-            planes, dn, inf, _, enc = NE.encode_projection(None, None, None, None, P=P, lam=0.0, shard_axis=AXIS[pn],
-                                                         base_K=bK, inner=INNER)
-            rot = D.rotated_levels(planes)
-            inf["bitexact"] = {Lv: bool(torch.equal(D.decode_matrix(planes, Lv, rot=rot), dn[Lv])) for Lv in (2, 4)}
-            for Lv in (2, 4):
-                dense[Lv].append(dn[Lv].cpu())
-            inf["plane_bytes"] = D.plane_bytes(planes)
-            info[pn] = inf; art[pn] = planes
-            NE.free(P); del enc, rot; torch.cuda.empty_cache()
-        if split:
-            art["meta"] = dict(inter_perm=perm.tolist())
-        if keep:
-            torch.save(art, f"{SCR}/mimo_L{L}_E{E}_nq{tag}.pt")
-            # decode-from-artifact check at expert level (includes the inter_perm un-permute)
-            for Lv in (2, 4):
-                Wdec = D.decode_expert(art, Lv)
-                info.setdefault("expert_bitexact", {})[Lv] = all(torch.equal(a.cpu(), b) for a, b in zip(Wdec, unperm(dense[Lv])))
-        print(f"[mimo{tag}] nq encode {time.time()-t0:.0f}s bitexact {[info[p]['bitexact'] for p in PROJ]} "
-              f"expert {info.get('expert_bitexact')}", flush=True)
-        methods, extra = {}, {}
-        for Lv in (2, 4):
-            nm = f"nq{tag}/L{Lv}"
-            methods[nm] = unperm(dense[Lv])
-            extra[nm] = dict(bpw=bits_expert(info, Lv), artifact_bpw=bits_expert(info, "artifact"),
-                             proj={p: {kk: info[p][kk] for kk in ("bits", "proxy_rot", "time", "bitexact") if kk in info[p]} for p in PROJ},
-                             expert_bitexact=info.get("expert_bitexact"))
-        book.R.setdefault("planes", {})[f"nq{tag}"] = {p: info[p]["plane_bytes"] for p in PROJ}
+            methods[f"EXL3-{K}"] = q; extra[f"EXL3-{K}"] = dict(bpw=K + 16 * (6144 + 2048) / (6144 * 2048))
+    if methods:
         ev(methods, extra)
-        h.free_scratch()
+    Ps = {}
+    for pi, pn in enumerate(PROJ):
+        G = torch.diag(dg[pi]) if pi < 2 else None
+        Ps[pn] = NE.prep(Ws[pi], [Hx, Hx, Ha][pi], cnt, sig, G=G, sigma_out=sig)
+    fit = Fit(Ps, BASE_VAR, lam=0.0, tag=f"mimo_L{L}_E{E}_")
+    dense, info = fit.run("nq")
+    methods = {f"nq/L{Lv}": dense[Lv] for Lv in (2, 4)}
+    extra = {f"nq/L{Lv}": summary_info(info, Lv) for Lv in (2, 4)}
+    book.R.setdefault("planes", {})["nq"] = {p: info[p]["plane_bytes"] for p in PROJ}
+    ev(methods, extra)
+    print(f"[mimo] nq {time.time()-t0:.0f}s bitexact {[info[p]['bitexact'] for p in PROJ]}", flush=True)
     book.R["time_s"] = time.time() - t0
     book.save()
-    return book
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--experts", default="16:36")
-    ap.add_argument("--variants", default="anchors,k3,closers")
-    ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--variants", default="anchors,rates,k3cmp")
     ap.add_argument("--mimo", action="store_true")
     a = ap.parse_args()
     torch.cuda.set_per_process_memory_fraction(12 / 80)
@@ -361,7 +343,7 @@ def main():
         run_mimo(); return
     for spec in a.experts.split(","):
         L, E = map(int, spec.split(":"))
-        run_glm(L, E, a.variants.split(","), smoke=a.smoke)
+        run_glm(L, E, a.variants.split(","))
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 
 import nq19
-from nq19 import D, NEXP, OUT, CORPUS, MATCHED, TAIL_FIRST_WINDOW
+from nq19 import D, NEXP, OUT, CORPUS, MATCHED, TAIL_FIRST_WINDOW, VAL_WINDOWS_RESERVED
 
 CTX = 512
 
@@ -39,6 +39,24 @@ def ffn(x, w):
     return F.linear(F.silu(F.linear(x, g)) * F.linear(x, u), d)
 
 
+def pending_acts_gb(shards_root):
+    """Stage-1 activations on disk not yet merged into the cumulative stats (stage 2 writes acts/L*/merged)."""
+    import glob
+    tot = 0
+    for f in glob.glob(f"{shards_root}/s*/acts/L*/x.bf16"):
+        if not os.path.exists(os.path.join(os.path.dirname(f), "merged")):
+            try:
+                tot += os.path.getsize(f)
+            except FileNotFoundError:
+                pass
+    return tot / 2**30
+
+
+def free_gb(path):
+    st = os.statvfs(path)
+    return st.f_bavail * st.f_frsize / 2**30
+
+
 def write_json(path, obj):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -47,12 +65,12 @@ def write_json(path, obj):
 
 
 class Corpus:
-    def __init__(self, fit_windows, val_windows):
+    def __init__(self, fit_windows, val_windows, fit_start=0):
         self.tokens = np.load(f"{CORPUS}/tokens.npy", mmap_mode="r")
         self.segs = np.load(f"{CORPUS}/segments.npy", mmap_mode="r")
-        if fit_windows > TAIL_FIRST_WINDOW - val_windows:
+        if fit_start + fit_windows > TAIL_FIRST_WINDOW - VAL_WINDOWS_RESERVED:
             raise ValueError("fit windows overlap the held-out / nq-tail windows")
-        self.windows = list(range(fit_windows)) + list(range(TAIL_FIRST_WINDOW - val_windows, TAIL_FIRST_WINDOW))
+        self.windows = list(range(fit_start, fit_start + fit_windows)) + list(range(TAIL_FIRST_WINDOW - val_windows, TAIL_FIRST_WINDOW))
         self.n_fit = fit_windows * CTX
         self.T = len(self.windows) * CTX
 
@@ -104,7 +122,10 @@ def val_meta(corpus, fit_rows):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=OUT)
+    ap.add_argument("--fit-start", type=int, default=0, help="first fit window (shard k: 2048 k)")
     ap.add_argument("--fit-windows", type=int, default=2048)
+    ap.add_argument("--acts-budget-gb", type=float, default=0,
+                    help="wait before a layer while shards/*/acts/L*/x.bf16 not yet merged by stage 2 exceed this (0 = off)")
     ap.add_argument("--val-windows", type=int, default=128)
     ap.add_argument("--last-layer", type=int, default=77)
     ap.add_argument("--acts-layers", default="all", help="MoE layers whose acts/evals are written (all|list)")
@@ -117,7 +138,7 @@ def main():
     from benchmarks.ood.glm_reference import Layer
     src = nq19.Src()
     cfg = src.config
-    corpus = Corpus(a.fit_windows, a.val_windows)
+    corpus = Corpus(a.fit_windows, a.val_windows, a.fit_start)
     n_fit, T = corpus.n_fit, corpus.T
     nwin = len(corpus.windows)
     plan = chunks(n_fit, T, a.chunk)
@@ -126,7 +147,7 @@ def main():
     for d in ("state", "acts", "eval/val", "eval/matched"):
         os.makedirs(f"{a.out}/{d}", exist_ok=True)
     protocol = dict(
-        schema="nestquant-19-glm53-full-capture-v1", fit_windows=a.fit_windows, fit_tokens=n_fit,
+        schema="nestquant-19-glm53-full-capture-v1", fit_start=a.fit_start, fit_windows=a.fit_windows, fit_tokens=n_fit,
         val_windows=[corpus.windows[a.fit_windows]] + [corpus.windows[-1]] if a.val_windows else [],
         corpus=CORPUS, corpus_tokens_sha256=json.load(open(f"{CORPUS}/manifest.json"))["tokens_sha256"],
         source=src.root, chunk0=plan[0], chunk=a.chunk,
@@ -171,6 +192,9 @@ def main():
     t_start = time.time()
     new_layers = 0
     for li in range(first_layer, a.last_layer + 1):
+        while ((a.acts_budget_gb and pending_acts_gb(os.path.dirname(os.path.abspath(a.out))) > a.acts_budget_gb)
+               or free_gb(a.out) < 200 + 50):
+            time.sleep(30)                                   # back-pressure: let stage 2 merge / delete; disk floor
         t0 = time.time()
         layer = Layer(src, li)
         sparse = layer.sparse

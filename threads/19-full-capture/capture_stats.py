@@ -1,4 +1,4 @@
-"""Thread 19 stage 2: per-layer routed / context second-moment statistics from stage-1 activations.
+"""Thread 19 stage 2: per-layer routed / context second-moment statistics, accumulated over progressive shards.
 
 For every routed expert e of a layer (FP8-source teacher, fp32 dequant; bf16 cast for the SwiGLU path):
   A2[e] = sum_routed p^2 x x^T      A0[e] = sum_routed x x^T                      (gate/up input, 6144^2)
@@ -8,14 +8,19 @@ For every routed expert e of a layer (FP8-source teacher, fp32 dequant; bf16 cas
   scalars n, sum p, sum p^2, sum p^4  (ESS = (sum p^2)^2 / sum p^4)
 per layer:
   C_ctx = sum_ctx x x^T,  C_all = sum_all-fit-rows x x^T
-with h = bf16(silu(bf16(x g_bf16)) * bf16(x u_bf16)), cg = ux sig(gx)(1 + gx(1 - sig(gx))), cu = silu(gx) (gx, ux fp32),
-ctx = randperm(T_fit, seed 20260925)[:T_fit // 4]  (identical to orbit CalibrationBatches at T = 65536).
-All Grams fp32 (no TF32), stored as packed upper triangles; vectors/scalars fp64.  See FORMAT.md.
+with h = bf16(silu(bf16(x g_bf16)) * bf16(x u_bf16)), cg = ux sig(gx)(1 + gx(1 - sig(gx))), cu = silu(gx),
+ctx(shard k) = randperm(T_k, seed 20260925 + k)[:T_k // 4]  (k = 0 at T = 65536 is orbit's CalibrationBatches set).
+Dc and the ctx g rows use the first n_dc = min(n_ctx_k, 131072) ctx rows scaled by n_ctx_k / n_dc (unbiased).
+Every job (layer L, shard k) adds its sums into stats/L{L} (atomic directory swap under a per-layer flock).
+Grams: bf16 tensor-core GEMMs with fp32 output per 2048-row sub-chunk, fp32 accumulation. See FORMAT.md.
 """
 import argparse
+import fcntl
+import glob
 import json
 import os
 import queue
+import shutil
 import threading
 import time
 
@@ -28,6 +33,21 @@ from nq19 import D, F as FF, NEXP, OUT, npk, pack
 
 ROWS = 16384          # rows per GPU chunk
 TC = 2048             # rows per tensor-core Gram sub-chunk (fp32 accumulation across sub-chunks)
+NDC = 131072          # context rows per shard used for Dc / ctx-g (scaled to n_ctx)
+ALIGN = 4096
+RAW = {"A2": D, "A0": D, "D2": FF, "D0": FF, "Dc": FF}
+
+
+MIN_FREE_GB = 200
+
+
+def free_gb(path):
+    st = os.statvfs(path)
+    return st.f_bavail * st.f_frsize / 2**30
+
+
+def stride_bytes(n):
+    return -(-npk(n) * 4 // ALIGN) * ALIGN
 
 
 def write_json(path, obj):
@@ -95,61 +115,131 @@ def prefetch(X, rows_list, out_q, stop):
     out_q.put(None)
 
 
-class RowWriter:
-    """Pinned staging + background pwrite of per-expert packed rows into preallocated .npy files."""
+class RowIO:
+    """Per-expert packed rows of the raw .f32 files: background O_DIRECT pwrite of new rows from pinned staging
+    and background pread of the previous cumulative rows (prefetched one expert ahead)."""
 
-    def __init__(self, files, nbuf=3):
-        self.files = {}
-        for k, (path, n) in files.items():
-            m = np.lib.format.open_memmap(path, mode="w+", dtype=np.float32, shape=(NEXP, npk(n)))
-            off = m.offset; del m
-            self.files[k] = (os.open(path, os.O_WRONLY), off, npk(n) * 4)
-        self.pool = queue.Queue()
+    def __init__(self, new_dir, prev_dir, nbuf=3):
+        self.wfd, self.rfd = {}, {}
+        for k, n in RAW.items():
+            path = f"{new_dir}/{k}.f32"
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+            os.ftruncate(fd, NEXP * stride_bytes(n)); os.close(fd)
+            self.wfd[k] = os.open(path, os.O_WRONLY | os.O_DIRECT)
+            if prev_dir:
+                self.rfd[k] = os.open(f"{prev_dir}/{k}.f32", os.O_RDONLY)
+        mk = lambda: {k: torch.empty(stride_bytes(n) // 4, dtype=torch.float32, pin_memory=True) for k, n in RAW.items()}
+        self.wpool = queue.Queue(); self.rpool = queue.Queue()
         for _ in range(nbuf):
-            self.pool.put({k: torch.empty(npk(n), dtype=torch.float32, pin_memory=True) for k, (_, n) in files.items()})
-        self.q = queue.Queue()
-        self.th = threading.Thread(target=self._run, daemon=True); self.th.start()
+            self.wpool.put(mk())
         self.err = None
+        self.wq = queue.Queue()
+        self.wth = threading.Thread(target=self._wrun, daemon=True); self.wth.start()
+        if prev_dir:
+            for _ in range(2):
+                self.rpool.put(mk())
+            self.rq = queue.Queue()
+            self.rth = threading.Thread(target=self._rrun, daemon=True); self.rth.start()
 
-    def _run(self):
+    def _rrun(self):
+        for e in range(NEXP):
+            bufs = self.rpool.get()
+            try:
+                for k, n in RAW.items():
+                    mv = memoryview(bufs[k].numpy()).cast("B")
+                    nb = stride_bytes(n); got = 0
+                    while got < nb:
+                        r = os.preadv(self.rfd[k], [mv[got:nb]], e * nb + got)
+                        if r <= 0:
+                            raise IOError(f"short read {k} expert {e}")
+                        got += r
+            except Exception as ex:
+                self.err = ex
+            self.rq.put(bufs)
+
+    def prev(self, e):
+        """Previous cumulative packed rows of expert e on the GPU (dict), or None when this is the first shard."""
+        if not self.rfd:
+            return None
+        bufs = self.rq.get()
+        if self.err:
+            raise self.err
+        out = {k: bufs[k][:npk(n)].cuda() for k, n in RAW.items()}
+        torch.cuda.synchronize()
+        self.rpool.put(bufs)
+        return out
+
+    def _wrun(self):
         while True:
-            it = self.q.get()
+            it = self.wq.get()
             if it is None:
                 return
             e, bufs, ev = it
             try:
                 ev.synchronize()
-                for k, b in bufs.items():
-                    fd, off, nb = self.files[k]
-                    mv = memoryview(b.numpy()).cast("B")
-                    done = 0
+                for k, n in RAW.items():
+                    mv = memoryview(bufs[k].numpy()).cast("B")
+                    nb = stride_bytes(n); done = 0
                     while done < nb:
-                        done += os.pwrite(fd, mv[done:], off + e * nb + done)
-            except Exception as ex:          # surfaced in close()
+                        done += os.pwrite(self.wfd[k], mv[done:nb], e * nb + done)
+            except Exception as ex:
                 self.err = ex
-            self.pool.put(bufs)
+            self.wpool.put(bufs)
 
-    def put(self, e, mats):
-        bufs = self.pool.get()
-        for k, A in mats.items():
-            bufs[k].copy_(pack(A), non_blocking=True)
+    def put(self, e, packed):
+        bufs = self.wpool.get()
+        for k, v in packed.items():
+            bufs[k][:v.numel()].copy_(v, non_blocking=True)
+            bufs[k][v.numel():].zero_()
         ev = torch.cuda.Event(); ev.record()
-        self.q.put((e, bufs, ev))
+        self.wq.put((e, bufs, ev))
 
     def close(self):
-        self.q.put(None); self.th.join()
-        for fd, _, _ in self.files.values():
+        self.wq.put(None); self.wth.join()
+        for fd in self.wfd.values():
             os.fsync(fd); os.close(fd)
+        for fd in self.rfd.values():
+            os.close(fd)
         if self.err:
             raise self.err
 
 
+def current(sd):
+    """Resolved version directory of the cumulative stats symlink sd (None if absent)."""
+    return os.path.realpath(sd) if os.path.lexists(sd) else None
+
+
+def publish(sd, target):
+    """Atomically point symlink sd at `target` (link text, relative to sd's directory)."""
+    tmp = f"{sd}.lnk.{os.getpid()}"
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    os.symlink(target, tmp)
+    os.replace(tmp, sd)
+
+
+def fsync_dir(d):
+    for f in os.listdir(d):
+        fd = os.open(f"{d}/{f}", os.O_RDONLY); os.fsync(fd); os.close(fd)
+    fd = os.open(d, os.O_RDONLY); os.fsync(fd); os.close(fd)
+
+
 @torch.no_grad()
-def run_layer(L, acts, outd, src, cache, max_rows=None):
+def run_job(L, acts, sd, src, cache, max_rows=None):
+    """Add shard `acts` (stage-1 acts/L{L}) into cumulative stats directory sd.  Caller holds the layer lock."""
     t0 = time.time()
     meta_in = json.load(open(f"{acts}/done.json"))
+    proto = meta_in["protocol"]
+    shard = dict(fit_start=proto.get("fit_start", 0), fit_windows=proto["fit_windows"], acts=acts)
+    k = shard["fit_start"] // nq19.SHARD_WINDOWS
+    shard["shard"] = k
+    pd = current(sd)
+    prev = json.load(open(f"{pd}/meta.json")) if pd else None
+    if prev and any(s["fit_start"] == shard["fit_start"] for s in prev["shards"]):
+        return prev                                              # already merged
     T = meta_in["rows"] if max_rows is None else max_rows
-    os.makedirs(outd, exist_ok=True)
+    nd = f"{sd}.v{len(prev['shards']) + 1 if prev else 1}"
+    shutil.rmtree(nd, ignore_errors=True); os.makedirs(nd)
     tim = {}
     # ---- host activations
     X = torch.empty(T, D, dtype=torch.bfloat16)
@@ -165,25 +255,27 @@ def run_layer(L, acts, outd, src, cache, max_rows=None):
     cnt = torch.bincount(flat, minlength=NEXP); offs = [0] + cnt.cumsum(0).tolist()
     tim["read"] = time.time() - t0
     n_ctx = T // nq19.CTX_FRACTION
-    ctx = torch.randperm(T, generator=torch.Generator().manual_seed(nq19.CTX_SEED))[:n_ctx].clone()
-    ctx.numpy().astype(np.int64).tofile(f"{outd}/ctx_idx.i64")
+    ctx = torch.randperm(T, generator=torch.Generator().manual_seed(nq19.CTX_SEED + k))[:n_ctx].clone()
+    n_dc = min(n_ctx, NDC); dc_scale = n_ctx / n_dc
+    shard.update(T=T, n_ctx=n_ctx, n_dc=n_dc, dc_scale=dc_scale, ctx_seed=nq19.CTX_SEED + k)
     cache.load(L)
     gd = np.zeros((NEXP, 6, FF), np.float64)
     sc = np.zeros((NEXP, 4), np.float64)
     # ---- per-layer grams: context rows and all fit rows
     tc = time.time()
-    Xc = X[ctx].cuda()                                            # [n_ctx, 6144] bf16, resident
     A = torch.zeros(D, D, device="cuda")
-    gram_(A, Xc)
-    np.save(f"{outd}/C_ctx.npy", pack(A).cpu().numpy())
+    for b in range(0, n_ctx, ROWS):
+        gram_(A, X[ctx[b:b + ROWS]].cuda())
+    C_ctx = pack(A).cpu().numpy()
     A.zero_()
     for b in range(0, T, ROWS):
         gram_(A, X[b:b + ROWS].cuda())
-    np.save(f"{outd}/C_all.npy", pack(A).cpu().numpy())
+    C_all = pack(A).cpu().numpy()
     del A
+    Xc = X[ctx[:n_dc]].cuda()                                    # Dc / ctx-g rows, resident
     tim["layer_grams"] = time.time() - tc
     # ---- experts
-    W = RowWriter({k: (f"{outd}/{k}.npy", n) for k, n in (("A2", D), ("A0", D), ("D2", FF), ("D0", FF), ("Dc", FF))})
+    io = RowIO(nd, pd)
     q = queue.Queue(maxsize=3); stop = threading.Event()
     rl = [(e, rows_all[offs[e]:offs[e + 1]]) for e in range(NEXP)]
     th = threading.Thread(target=prefetch, args=(X, rl, q, stop), daemon=True); th.start()
@@ -210,59 +302,110 @@ def run_layer(L, acts, outd, src, cache, max_rows=None):
             del xb, h, cg2, cu2
             item = q.get()
         torch.cuda.synchronize(); tb = time.time(); tr += tb - ta
-        for b in range(0, n_ctx, ROWS):
+        for b in range(0, n_dc, ROWS):
             h, cg2, cu2 = te.fwd(Xc[b:b + ROWS], accurate=False)
             gram_(Dm[2], h)
             g[4] += cg2.sum(0).double(); g[5] += cu2.sum(0).double()
             del h, cg2, cu2
         del te
-        W.put(e, dict(A2=A2, A0=A0, D2=Dm[0], D0=Dm[1], Dc=Dm[2]))
-        gd[e] = g.cpu().numpy()
+        if dc_scale != 1:
+            Dm[2] *= dc_scale; g[4:] *= dc_scale
+        new = dict(A2=pack(A2), A0=pack(A0), D2=pack(Dm[0]), D0=pack(Dm[1]), Dc=pack(Dm[2]))
         del A2, A0, Dm
+        old = io.prev(e)
+        if old is not None:
+            for kk in new:
+                new[kk] += old[kk]
+            del old
+        io.put(e, new)
+        del new
+        gd[e] = g.cpu().numpy()
         tctx += time.time() - tb
-        if e % 32 == 0:
-            print(json.dumps(dict(layer=L, expert=e, n=int(sc[e, 0]), routed_s=round(tr, 1), ctx_s=round(tctx, 1),
+        if e % 64 == 0:
+            print(json.dumps(dict(layer=L, shard=k, expert=e, n=int(sc[e, 0]), routed_s=round(tr, 1), ctx_s=round(tctx, 1),
                                   elapsed=round(time.time() - t0, 1))), flush=True)
     stop.set(); th.join(timeout=5)
-    W.close()
-    np.save(f"{outd}/gdiag.npy", gd)
-    np.save(f"{outd}/scalars.npy", sc)
+    io.close()
+    shards = (prev["shards"] if prev else []) + [shard]
+    if prev:
+        C_ctx += np.load(f"{pd}/C_ctx.npy"); C_all += np.load(f"{pd}/C_all.npy")
+        gd += np.load(f"{pd}/gdiag.npy"); sc += np.load(f"{pd}/scalars.npy")
+    np.save(f"{nd}/C_ctx.npy", C_ctx); np.save(f"{nd}/C_all.npy", C_all)
+    np.save(f"{nd}/gdiag.npy", gd); np.save(f"{nd}/scalars.npy", sc)
     ess = sc[:, 2] ** 2 / np.maximum(sc[:, 3], 1e-300)
     tim.update(routed=tr, ctx=tctx, total=time.time() - t0)
-    meta = dict(layer=L, T_fit=T, n_ctx=n_ctx, ctx_seed=nq19.CTX_SEED, ctx_rule="randperm(T_fit, seed)[:T_fit//4]",
-                acts=acts, source=src.root,
-                files=dict(A2="[256, npk(6144)] f32 packed upper: sum_routed p^2 x x^T", A0="sum_routed x x^T",
-                           D2="[256, npk(2048)]: sum_routed p^2 h h^T", D0="sum_routed h h^T", Dc="sum_ctx h h^T",
-                           C_ctx="[npk(6144)]: sum_ctx x x^T", C_all="[npk(6144)]: sum over all T_fit rows x x^T",
-                           gdiag="[256, 6, 2048] f64", scalars="[256, 4] f64", ctx_idx="[n_ctx] int64 raw"),
+    meta = dict(schema="nestquant-19-stats-v2", layer=L, shards=shards,
+                T_fit=sum(s["T"] for s in shards), n_ctx=sum(s["n_ctx"] for s in shards),
+                files=dict(raw={kk: dict(file=f"{kk}.f32", rows=NEXP, n=n, packed=npk(n), stride_bytes=stride_bytes(n))
+                                for kk, n in RAW.items()},
+                           A2="sum_routed p^2 x x^T", A0="sum_routed x x^T", D2="sum_routed p^2 h h^T",
+                           D0="sum_routed h h^T", Dc="sum_ctx h h^T (per shard: n_dc rows x n_ctx/n_dc)",
+                           C_ctx="[npk(6144)] f32: sum_ctx x x^T", C_all="[npk(6144)] f32: sum over all fit rows x x^T",
+                           gdiag="[256, 6, 2048] f64", scalars="[256, 4] f64"),
+                packing="row-major upper triangle i <= j (nq19.pack / nq19.unpack)",
                 gdiag_rows=["routed sum p^2 cg^2", "routed sum cg^2", "routed sum p^2 cu^2", "routed sum cu^2",
                             "ctx sum cg^2 (bf16 gx/ux)", "ctx sum cu^2 (bf16 gx/ux)"],
                 scalars_cols=["n_routed", "sum_p", "sum_p2", "sum_p4"],
                 arithmetic="bf16 tensor-core Grams, fp32 out per 2048-row sub-chunk, fp32 accumulation; p^2-weighted "
-                           "Grams via bf16 hi/lo split of p^2 x; h = bf16 silu(x g_bf16) * (x u_bf16), no reduced-precision split-K",
+                           "Grams via bf16 hi/lo split of p^2 x; routed gx/ux fp32 (bf16 hi+lo teacher); "
+                           "h = bf16 silu(x g_bf16) * (x u_bf16), no reduced-precision split-K",
                 n_routed=sc[:, 0].astype(int).tolist(), ess=ess.round(1).tolist(),
-                ess_summary=dict(min=float(ess.min()), p05=float(np.percentile(ess, 5)), median=float(np.median(ess)), max=float(ess.max())),
+                ess_summary=dict(min=float(ess.min()), p01=float(np.percentile(ess, 1)), p05=float(np.percentile(ess, 5)),
+                                 median=float(np.median(ess)), max=float(ess.max())),
                 n_summary=dict(min=int(sc[:, 0].min()), median=float(np.median(sc[:, 0])), max=int(sc[:, 0].max())),
-                seconds={k: round(v, 1) for k, v in tim.items()}, torch=torch.__version__, complete=True)
-    write_json(f"{outd}/meta.json", meta)
+                last_job_seconds={kk: round(v, 1) for kk, v in tim.items()}, torch=torch.__version__, complete=True)
+    write_json(f"{nd}/meta.json", meta)
+    fsync_dir(nd)
+    publish(sd, os.path.basename(nd))                                              # readers see old or new, never partial
+    if [s["shard"] for s in shards] == [0]:                      # frozen shard-0 snapshot (never auto-deleted)
+        os.makedirs(os.path.join(os.path.dirname(os.path.dirname(sd)), "stats0"), exist_ok=True)
+        publish(os.path.join(os.path.dirname(os.path.dirname(sd)), "stats0", os.path.basename(sd)),
+                os.path.join("..", "stats", os.path.basename(nd)))
+    if pd and not (len(prev["shards"]) == 1 and prev["shards"][0]["shard"] == 0):
+        shutil.rmtree(pd, ignore_errors=True)                    # superseded (open readers keep their inodes)
     return meta
 
 
-def claim(path):
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, f"{os.getpid()} {os.environ.get('CUDA_VISIBLE_DEVICES')}\n".encode()); os.close(fd)
-        return True
-    except FileExistsError:
-        return False
+class LayerLock:
+    def __init__(self, path):
+        self.fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+
+    def try_acquire(self):
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB); return True
+        except BlockingIOError:
+            return False
+
+    def release(self):
+        fcntl.flock(self.fd, fcntl.LOCK_UN); os.close(self.fd)
+
+
+def finish_acts(acts, delete_x):
+    open(f"{acts}/merged", "w").close()
+    if delete_x and os.path.exists(f"{acts}/x.bf16"):
+        os.remove(f"{acts}/x.bf16")
+
+
+def jobs(shards_root, last_layer):
+    """(shard, layer, acts dir) ready for merging, in shard-major order (earliest shard first)."""
+    out = []
+    for d in sorted(glob.glob(f"{shards_root}/s*")):
+        k = int(os.path.basename(d)[1:])
+        for a in glob.glob(f"{d}/acts/L*"):
+            L = int(os.path.basename(a)[1:])
+            if L <= last_layer and os.path.exists(f"{a}/done.json") and not os.path.exists(f"{a}/merged"):
+                out.append((k, L, a))
+    return sorted(out)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default=OUT)
-    ap.add_argument("--layers", default="auto", help="comma list, or 'auto' = claim layers as stage 1 finishes them")
+    ap.add_argument("--root", default=OUT, help="capture root: shards in ROOT/shards/s*, cumulative stats in ROOT/stats")
+    ap.add_argument("--layers", default="auto", help="comma list (single-dir mode: ROOT/acts -> ROOT/stats), or auto")
     ap.add_argument("--last-layer", type=int, default=77)
     ap.add_argument("--max-rows", type=int)
+    ap.add_argument("--keep-x-shards", default="0", help="shards whose x.bf16 are kept after merging")
+    ap.add_argument("--exit-when-idle", type=int, default=0, help="exit after this many idle seconds (0 = never)")
     a = ap.parse_args()
     nq19.gpu_cap()
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
@@ -271,25 +414,37 @@ def main():
     os.makedirs(f"{a.root}/stats", exist_ok=True)
     if a.layers != "auto":
         for L in [int(v) for v in a.layers.split(",")]:
-            print(json.dumps(run_layer(L, f"{a.root}/acts/L{L}", f"{a.root}/stats/L{L}", src, cache, a.max_rows)["seconds"]), flush=True)
+            m = run_job(L, f"{a.root}/acts/L{L}", f"{a.root}/stats/L{L}", src, cache, a.max_rows)
+            print(json.dumps(m["last_job_seconds"]), flush=True)
         return
-    todo = list(range(src.config["first_k_dense_replace"], a.last_layer + 1))
-    while todo:
-        for L in list(todo):
-            sd = f"{a.root}/stats/L{L}"
-            if os.path.exists(f"{sd}/meta.json"):
-                todo.remove(L); continue
-            if not os.path.exists(f"{a.root}/acts/L{L}/done.json"):
-                continue
-            os.makedirs(sd, exist_ok=True)
-            if not claim(f"{sd}/claim"):
-                todo.remove(L); continue
-            m = run_layer(L, f"{a.root}/acts/L{L}", sd, src, cache)
-            print(json.dumps(dict(layer=L, seconds=m["seconds"], ess=m["ess_summary"])), flush=True)
-            todo.remove(L)
+    keep = {int(v) for v in a.keep_x_shards.split(",") if v}
+    idle = 0
+    while True:
+        did = False
+        while free_gb(a.root) < MIN_FREE_GB + 50:
+            print(json.dumps(dict(paused="disk", free_gb=round(free_gb(a.root)))), flush=True); time.sleep(120)
+        for k, L, acts in jobs(f"{a.root}/shards", a.last_layer):
+            lk = LayerLock(f"{a.root}/stats/L{L}.lock")
+            if not lk.try_acquire():
+                os.close(lk.fd); continue
+            try:
+                if os.path.exists(f"{acts}/merged"):
+                    continue
+                m = run_job(L, acts, f"{a.root}/stats/L{L}", src, cache)
+                finish_acts(acts, k not in keep)
+                print(json.dumps(dict(layer=L, shard=k, shards=len(m["shards"]), seconds=m["last_job_seconds"],
+                                      ess=m["ess_summary"])), flush=True)
+            finally:
+                lk.release()
+            did = True
             break
-        else:
+        if not did:
+            idle += 20
+            if a.exit_when_idle and idle >= a.exit_when_idle:
+                return
             time.sleep(20)
+        else:
+            idle = 0
 
 
 if __name__ == "__main__":
