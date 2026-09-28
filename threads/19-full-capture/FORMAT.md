@@ -4,24 +4,27 @@ Two roots, same schema (Python: `import nq19_load as C`, PYTHONPATH as in `run.s
 
 | root | corpus | status |
 |---|---|---|
-| `/tmp/nestquant/19-capture-glmfmt` | thread-21 GLM-native `glm53_calib_glmfmt_v1` (c512 + c2048 groups) | **chunk 0 = what the encode uses** |
+| `/tmp/nestquant/19-capture-glmfmt` | thread-21 GLM-native `glm53_calib_glmfmt_v1` (c512 + c2048 + c2048_traces groups) | **`stats0` = chunk 0; `stats1` = chunk 0 + traces (fixed set, T12 A/Bs); `stats` after shards 12-24 = production encode (15.4M tokens)** |
 | `/tmp/nestquant/19-capture` (default, `NQ19_OUT`) | old orbit `glm53_training_15m_v2` (512-token windows) | chunk 0 = fallback; shards 1-13 held |
 
 Pass the root explicitly: `C.Capture(root="/tmp/nestquant/19-capture-glmfmt", stats="stats0")`.
 
 ```python
 cap  = C.Capture()                    # cumulative stats (all shards merged so far)
-cap0 = C.Capture(stats="stats0")      # frozen shard-0 snapshot (1.05M tokens), what the first full encode uses
+cap0 = C.Capture(stats="stats0")      # frozen chunk-0 snapshot (1.05M tokens)
+cap1 = C.Capture(stats="stats1")      # frozen chunk-0 + traces snapshot (2.61M tokens): fixed set, T12 A/Bs
 HG   = cap.glm_H(L, E)                # thread-12 glm_H dict: {"H": [Hx, Hx, Ha], "G": [Gg, Gu, None], "meta": {...}}
 st   = cap.pilot_stats(L, E)          # orbit statistics-style {"grams": [Wx, Wd], "metadata": {training_rows, mass}}
 c    = cap.components(L, E)           # raw sums (below)
 cb   = cap.components_bnd(L, E)       # {(kind, bucket): same sums restricted to boundary rows} (below)
-HGb  = cap.glm_H(L, E, bnd_w=50)      # boundary-weighted recipe (flat 50x; or {"think": w, "end": {"d1": w, ..}})
-sal  = cap.salience(L, weights=50)    # REAP / usage per expert, optionally boundary-weighted
+HGb  = cap.glm_H(L, E, bnd_w=50)      # boundary-weighted recipe: experiments only, NOT the encode (see below)
+sal  = cap.salience(L)                # REAP / usage per expert per category (weights=... only for fixed-set style scores)
 U    = cap.uniform_H(L)               # per-layer all-token gate/up Gram / T_fit   (which="C_ctx" for context rows)
 ev   = cap.eval_capture(L, "val")     # harness capture dict (also "matched")
 data = cap.expert_data(L, E, "val")   # harness.ExpertData (FP8 teacher, pilot_stats, eval capture)
 ```
+**Encode = weight 1 everywhere:** `glm_H(L, E)` with no `bnd_w`. Boundary weights only enter `fixed_set.json`.
+
 Every layer resolves to one immutable version directory the first time it's accessed, and all of that
 directory's files are opened (mmapped) at that point. A concurrent merge, which swaps the symlink atomically
 and then deletes the superseded version, can't change what an existing `Capture` object sees. Create a new
@@ -144,13 +147,22 @@ MoE inputs of the fit rows.
   - C = 2048 is exactly the DSA index_topk, so the dense replay is exact.
 - **`ROOT/plan.json`:** `{"chunk0": [ids], "shards": {"<id>": {corpus, fit_start, fit_windows, val_windows (-1 = whole
   val split), matched}}}`. Stage 1 runs via `driver.sh plan <gpu> <ids..>`. Shard ids set the context seed
-  (20260925 + id). `stats0` is linked when the merged shard set equals `chunk0`, and that version is never
-  auto-deleted.
+  (20260925 + id). `"snapshots": {"stats1": [0..11]}` names further frozen sets. `stats0` (= `chunk0`) and every
+  snapshot `ROOT/<name>/L{L}` are linked when the merged shard set of a layer equals the set, and those versions
+  are never auto-deleted. Stage 2 completes each snapshot's set (in order) before merging any other shard.
+  Merge dedup is by shard id (`protocol.json["shard_id"]`); fit_start alone collides across groups.
 - **New-corpus chunk 0:** c512 fit windows [0,1280) (655,360 tokens) plus c2048 fit windows [0,192) (393,216
   tokens), 1,048,576 fit tokens in total.
   - Shards 0-3 are c512 [0,153), [153,529), [529,905), [905,1280).
   - Shards 4-5 are c2048 [0,75), [75,192).
   - Fit windows are pre-shuffled by thread 21, so these prefixes are random samples.
+- **Traces (`c2048_traces`, thread 21):** shards 6-11 = fit windows [0,117), [117,246), [246,375), [375,504),
+  [504,633), [633,761) (1,558,528 tokens; 512 think / 578 end boundaries). s06 writes the traces val split
+  (10 × 2048), merged separately into `ROOT/eval/val_traces/layer_L.pt` (20,480 rows, `VAL_TRACES_READY`), so
+  `eval/val` is unchanged. Traces are summed with plain weight 1 (lead, 2026-09-28).
+- **Full rest (production):** shards 12-19 = c512 fit from 1280 in 2048-window pieces (19 = 1295 windows),
+  20-24 = c2048 fit from 192 in 512-window pieces (24 = 273). 12,756,480 tokens; with shards 0-11 the final
+  `stats` = 15,363,584 fit tokens (c512 8,658,432 + c2048 5,146,624 + traces 1,558,528).
 - **Val:** s00 writes the whole c512 val split (223 × 512) and s04 the whole c2048 val split (42 × 2048).
   `merge_eval.py --root R --shards 0,4` concatenates them into `ROOT/eval/val/layer_L.pt` (200,192 rows,
   document_ids renumbered). `eval/matched` comes from s00.
@@ -163,7 +175,10 @@ MoE inputs of the fit rows.
 - **Rows:** positions t with 1 ≤ b − t ≤ 32 before a boundary b, in the same segment.
 - **Buckets:** `d1`, `d2_4`, `d5_16`, `d17_32`, kept separately per kind.
 - **Exclusivity:** a row near both kinds counts only toward the nearer one; ties go to `end`.
-- **Default fit weight:** a flat 50x on every group. The encoder can retune it with `bnd_w`.
+- **Calibration weight: 1 everywhere (lead decision 2026-09-28).** Boundary upweighting is NOT used in the encode
+  H: thread 12's A/B showed 50x costs +3% on all tokens. `glm_H` / `salience` default to `bnd_w=None` /
+  `weights=None` (= weight 1); encode consumers must not pass them. Boundary weighting is used only for
+  `fixed_set.json` (REAP 50/20/5/2, below). The boundary rows stay captured for analysis.
 
 `bnd_rows/s{kk}/L{L}/` holds the raw rows of shard k (the per-bucket grams are rebuilt on the GPU; materialised
 bucket grams would be about 360 GB/layer):
@@ -199,3 +214,41 @@ bucket grams would be about 360 GB/layer):
 
 `eval/val/layer_L.pt` has `bnd_think` / `bnd_end` int8 [rows] tensors: the distance (1..32) to the next boundary of
 that kind in the same segment, 0 = none. They are exclusive under the same rule as the fit rows.
+
+## Flashblade backup / restore (restart insurance: /tmp is wiped on container restart)
+
+| root | S3 prefix | content |
+|---|---|---|
+| `19-capture-glmfmt` | `s3://annalise-shared-prod/jarrel/nestquant/19-capture-glmfmt/` | full, ≈ 46.5 GB/layer, ≈ 3.5 TB |
+| `19-capture` | `s3://annalise-shared-prod/jarrel/nestquant/19-capture/` | `--small-only` (no A0/A2/D0/D2/Dc grams), 1.83 GB/layer, 137 GB |
+
+- **Sets:** `--set stats0` (default; markers `done/`, `latest.json`), `--set stats1 --small-only` (`done_stats1/`,
+  `latest_stats1.json`; the traces delta is small-only per the lead) and `--set full` (all 25 plan shards merged;
+  `done_full/`, `latest_full.json`). `fb_restore.py --set <same>` restores one; restore stats0 first.
+  `fixed_set.json`, `MANIFEST.json` and `eval/val_traces` are global files.
+- **What `fb_backup19.py` uploads:** per final layer (the set's version plus `eval/VAL_READY`), the stats version
+  dir, the boundary rows of its shards, `eval/val` and `eval/matched`.
+  - Every object carries `sha256` and `size` metadata and is HEAD-verified.
+  - After that it writes `done/L{L}.json` (file list) and `latest.json`.
+  - Global small files (plan, corpus shas, shard protocol/progress, markers, boundary flags) go to `global/`.
+  - It does not upload raw x or stage-1 hidden-state checkpoints; those are recomputable (chunk 0: ≈ 30 min
+    stage 1 on 6 GPUs).
+- **Environment:** `AWS_PROFILE=flashblade`, `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
+  `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` (the scripts set these themselves). The endpoint is
+  https://fb.harrisonai.io.
+- **Restore:**
+  `./run.sh fb_restore.py --prefix s3://annalise-shared-prod/jarrel/nestquant/19-capture-glmfmt --root /tmp/nestquant/19-capture-glmfmt`
+  - It sha256-verifies every file and rebuilds the `stats/L{L}` → `L{L}.vN` and `stats0/L{L}` links.
+  - It then works with `Capture(root=..., stats="stats0")`.
+  - Speed is about 1 GB/s, so a full restore takes about 1 h.
+
+## Fixed set: `ROOT/fixed_set.json` (`fixed_set19.py`, lead's final spec 2026-09-28)
+
+- **Score:** token-weighted REAP, S_e = Σp‖y‖[all] + Σ_c (w_c − 1) Σp‖y‖[c] over the 8 boundary categories
+  (sal column 4), w = d1 50, d2_4 20, d5_16 5, d17_32 2 for both think and end, 1 elsewhere. Un-normalized, so
+  routing frequency counts.
+- **Set:** top 26 per layer by S_e (ties → lower id), computed on `stats1` (chunk 0 + traces).
+- **Keys:** `fixed_set{L: [26 ids]}`, `S_e`, `reap_sum` (w = 1), `reap_mean` (classic REAP), `n_routed`,
+  `coverage{L: {all, think, end, think_d1, end_d1}}` (share of routes landing in the set), `changed_vs_unweighted`,
+  `stats_version`, `weights`, `definition`. The sha256 and weights are recorded in `ROOT/MANIFEST.json["fixed_set"]`.
+- Copy: `threads/22-boundary-experts/fixed_set.json`.

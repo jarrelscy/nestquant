@@ -16,21 +16,23 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--shards", required=True)
     ap.add_argument("--layers", default="3-77")
+    ap.add_argument("--name", default="val", help="output set name: ROOT/eval/<name>/layer_L.pt (e.g. val_traces)")
     a = ap.parse_args()
     lo, hi = [int(v) for v in a.layers.split("-")]
     shards = [int(v) for v in a.shards.split(",")]
-    os.makedirs(f"{a.root}/eval/val", exist_ok=True)
+    os.makedirs(f"{a.root}/eval/{a.name}", exist_ok=True)
     for k in shards:
         md = f"{a.root}/shards/s{k:02d}/eval/matched"
         if os.path.exists(f"{md}/layer_{lo}.pt") and not os.path.lexists(f"{a.root}/eval/matched"):
             os.symlink(os.path.relpath(md, f"{a.root}/eval"), f"{a.root}/eval/matched")
     for L in range(lo, hi + 1):
-        out = f"{a.root}/eval/val/layer_{L}.pt"
+        out = f"{a.root}/eval/{a.name}/layer_{L}.pt"
         if os.path.exists(out):
             continue
         parts = [f"{a.root}/shards/s{k:02d}/eval/val/layer_{L}.pt" for k in shards]
         parts = [p for p in parts if os.path.exists(p)]
-        if not parts:
+        if len(parts) != len(shards):                  # never write a partial merge
+            print(json.dumps(dict(layer=L, missing=len(shards) - len(parts))), flush=True)
             continue
         ds = [torch.load(p, weights_only=True, mmap=True) for p in parts]
         m = dict(layer=L, domains=[], protocol=dict(role="evaluation only", parts=[d["protocol"] for d in ds],

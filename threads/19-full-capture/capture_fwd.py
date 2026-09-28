@@ -196,7 +196,7 @@ def main():
     prog_path = f"{a.out}/state/progress.json"
     if os.path.exists(prog_path):
         prog = json.load(open(prog_path))
-        if prog["protocol"] != protocol:
+        if prog["protocol"] != json.loads(json.dumps(protocol)):
             raise ValueError("protocol differs from the existing state; use a fresh --out")
     else:
         prog = dict(protocol=protocol, next_layer=0, layers={})

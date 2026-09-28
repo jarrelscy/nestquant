@@ -256,6 +256,11 @@ def fsync_dir(d):
 
 
 @torch.no_grad()
+def acts_shard_id(acts):
+    pr = json.load(open(f"{acts}/done.json"))["protocol"]
+    return pr.get("shard_id", pr.get("fit_start", 0) // nq19.SHARD_WINDOWS)
+
+
 def run_job(L, acts_list, sd, src, cache, max_rows=None):
     """Add the shards `acts_list` (stage-1 acts/L{L} dirs) into cumulative stats directory sd (one read of the
     previous version, one write of the new one).  Caller holds the layer lock."""
@@ -264,9 +269,8 @@ def run_job(L, acts_list, sd, src, cache, max_rows=None):
         acts_list = [acts_list]
     pd = current(sd)
     prev = json.load(open(f"{pd}/meta.json")) if pd else None
-    have = {s_["fit_start"] for s_ in prev["shards"]} if prev else set()
-    acts_list = [a_ for a_ in acts_list
-                 if json.load(open(f"{a_}/done.json"))["protocol"].get("fit_start", 0) not in have]
+    have = {s_["shard"] for s_ in prev["shards"]} if prev else set()     # shard ids (group corpora share fit_starts)
+    acts_list = [a_ for a_ in acts_list if acts_shard_id(a_) not in have]
     if not acts_list:
         return prev                                              # already merged
     nd = f"{sd}.v{len(have) + len(acts_list)}"
@@ -396,14 +400,26 @@ def run_job(L, acts_list, sd, src, cache, max_rows=None):
     write_json(f"{nd}/meta.json", meta)
     fsync_dir(nd)
     publish(sd, os.path.basename(nd))                                              # readers see old or new, never partial
-    root = os.path.dirname(os.path.dirname(sd)); c0 = chunk0_ids(root)
-    if {s["shard"] for s in shards} == c0:                       # frozen chunk-0 snapshot (never auto-deleted)
-        os.makedirs(os.path.join(os.path.dirname(os.path.dirname(sd)), "stats0"), exist_ok=True)
-        publish(os.path.join(os.path.dirname(os.path.dirname(sd)), "stats0", os.path.basename(sd)),
-                os.path.join("..", "stats", os.path.basename(nd)))
-    if pd and {s_["shard"] for s_ in prev["shards"]} != c0:
+    root = os.path.dirname(os.path.dirname(sd)); snaps = snapshots(root)
+    got = {s["shard"] for s in shards}
+    for name, ids in snaps:                                  # frozen snapshots (stats0 = chunk 0, ...; never auto-deleted)
+        if got == ids:
+            os.makedirs(os.path.join(root, name), exist_ok=True)
+            publish(os.path.join(root, name, os.path.basename(sd)), os.path.join("..", "stats", os.path.basename(nd)))
+    if pd and {s_["shard"] for s_ in prev["shards"]} not in [ids for _, ids in snaps]:
         shutil.rmtree(pd, ignore_errors=True)                    # superseded (open readers keep their inodes)
     return meta
+
+
+def snapshots(root):
+    """Ordered frozen snapshots [(link dir name, shard-id set)]: stats0 = plan.json "chunk0" (default {0}), then
+    plan.json "snapshots" {"stats1": [ids], ...} (each a superset of the previous).  Stage 2 completes each snapshot's
+    shard set in a layer before merging any other shard, and never deletes a snapshot version."""
+    p = f"{root}/plan.json"
+    if not os.path.exists(p):
+        return [("stats0", {0})]
+    pl = json.load(open(p))
+    return [("stats0", set(pl["chunk0"]))] + sorted((k, set(v)) for k, v in pl.get("snapshots", {}).items())
 
 
 def chunk0_ids(root):
@@ -484,13 +500,14 @@ def main():
                 group = [(k2, a2) for k2, L2, a2 in pending if L2 == L and not os.path.exists(f"{a2}/merged")][:a.max_shards]
                 if not group:
                     continue
-                c0 = chunk0_ids(a.root)
                 cur = current(f"{a.root}/stats/L{L}")
                 have = {s_["shard"] for s_ in json.load(open(f"{cur}/meta.json"))["shards"]} if cur else set()
-                if not c0 <= have:                           # finish chunk 0 first (frozen stats0 snapshot)
-                    group = [g_ for g_ in group if g_[0] in c0]
-                    if not group:
-                        continue
+                for _, ids in snapshots(a.root):             # finish each frozen snapshot's shard set first
+                    if not ids <= have:
+                        group = [g_ for g_ in group if g_[0] in ids]
+                        break
+                if not group:
+                    continue
                 m = run_job(L, [a2 for _, a2 in group], f"{a.root}/stats/L{L}", src, cache)
                 for k2, a2 in group:
                     finish_acts(a2, k2 not in keep)

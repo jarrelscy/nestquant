@@ -7,7 +7,8 @@
     c   = cap.components(L, E)              # raw sums (A2, A0, D2, D0, Dc, C_ctx, C_all, g, scalars)
     ev  = cap.eval_capture(L, "val"|"matched")   # harness capture dict for harness.evaluate
     cb  = cap.components_bnd(L, E)          # {(kind, bucket): same sums restricted to boundary rows} (bnd19)
-    HGb = cap.glm_H(L, E, bnd_w=50)         # recipe with boundary rows upweighted (flat 50x, or per kind/bucket)
+    HGb = cap.glm_H(L, E, bnd_w=50)         # boundary-upweighted recipe: EXPERIMENTS ONLY. Encode = bnd_w None (weight 1;
+                                            # lead 2026-09-28: 50x costs +3% on all tokens)
     sal = cap.salience(L)                   # REAP-style salience / usage per expert, all rows and per bucket
 See FORMAT.md for definitions.
 """
@@ -119,7 +120,9 @@ class Capture:
             m = self.meta(L)
             xs, parts = [], []
             for sh in m["shards"]:
-                d = sh.get("bnd_rows") or f"{self.root}/bnd_rows/s{sh['shard']:02d}/L{L}"
+                d = sh.get("bnd_rows")
+                if not d or not os.path.exists(f"{d}/rows.npz"):        # restored elsewhere: root-relative
+                    d = f"{self.root}/bnd_rows/s{sh['shard']:02d}/L{L}"
                 if not os.path.exists(f"{d}/rows.npz"):
                     raise FileNotFoundError(f"{d}: no boundary rows (backfill with capture_bnd.py)")
                 r = dict(np.load(f"{d}/rows.npz"))
