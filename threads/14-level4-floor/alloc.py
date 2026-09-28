@@ -9,7 +9,9 @@ CFG = sys.argv[3] if len(sys.argv) > 3 else 'screen'
 Ws = weights('/tmp/nestquant/glm53-fp8-experts', L, E)
 Hs = hessians(L, E, Ws)
 
+PAT = os.environ.get('MIX', '0') != '1'     # default: uniform pattern-rate trellis per projection
 def klist(avg, nblk):
+    if PAT and float(avg * 16).is_integer(): return avg
     """Per-block K list with the given average using the two nearest half-bit rates, evenly interleaved."""
     lo = math.floor(avg * 2) / 2; hi = lo + 0.5
     if abs(avg - lo) < 1e-9: return lo
@@ -18,7 +20,7 @@ def klist(avg, nblk):
     for t in range(nh): ks[int((t + 0.5) * nblk / nh)] = hi
     return [k if k != int(k) else int(k) for k in ks]
 
-def key(p, lam, kb, kr): return f'{SCR}/fit_l{L}_e{E}_{p}_lam{lam}_kb{kb}_kr{kr}.pt'
+def key(p, lam, kb, kr): return f'{SCR}/fit_l{L}_e{E}_{p}_lam{lam}_kb{kb}_kr{kr}' + ('p' if PAT and ((2*kb) % 1 or (2*kr) % 1) else '') + '.pt'
 
 def get(mi, lam, kb, kr, P=[None]):
     f = key(PROJ[mi], lam, kb, kr)
@@ -36,20 +38,24 @@ if CFG == 'screen':
     pairs = [(2, 2), (1.875, 2.25), (1.75, 2.5), (1.625, 2.75), (1.5, 3)]
     lams = [0.3, 0.5, 0.7]
     todo = [(lam, bp, rp) for lam in lams for bp in pairs[:4] for rp in pairs]
+elif CFG == 'pat':
+    pairs = [(2, 2), (1.875, 2.25), (1.8125, 2.375)]
+    todo = [(lam, bp, rp) for lam in [0.3, 0.5, 0.7] for bp in pairs for rp in pairs]
 else:
     todo = json.loads(CFG)
-for mi in (2, 0, 1):
+for mi in [int(c) for c in os.environ.get("ORDER", "201")]:
     for lam, bp, rp in todo:
         kb = bp[0] if mi < 2 else bp[1]; kr = rp[0] if mi < 2 else rp[1]
         get(mi, lam, kb, kr)
+if os.environ.get('FITONLY'): sys.exit(0)
 meth = {}
 for lam, bp, rp in todo:
     parts = [get(mi, lam, bp[0] if mi < 2 else bp[1], rp[0] if mi < 2 else rp[1]) for mi in range(3)]
-    meth[f'lam{lam}_b{bp[0]}/{bp[1]}_r{rp[0]}/{rp[1]}@4'] = [p['w4'].cuda().float() for p in parts]
-    meth.setdefault(f'lam{lam}_b{bp[0]}/{bp[1]}@2', [p['w2'].cuda().float() for p in parts])
+    meth[f'lam{lam}_b{bp[0]}/{bp[1]}_r{rp[0]}/{rp[1]}@4'] = [p['w4'] for p in parts]
+    meth.setdefault(f'lam{lam}_b{bp[0]}/{bp[1]}@2', [p['w2'] for p in parts])
 res = {}
 names = list(meth)
-for a in range(0, len(names), 12):
-    res.update(evaluate(L, E, {k: meth[k] for k in names[a:a+12]}))
+for a in range(0, len(names), 8):
+    res.update(evaluate(L, E, {k: [w.cuda().float() for w in meth[k]] for k in names[a:a+8]})); torch.cuda.empty_cache()
 for k in sorted(res): print(f"{k:36s} routed {res[k]['routed']:7.3f} forced {res[k]['forced']:7.3f} ood {res[k]['ood']:7.3f}")
-json.dump(res, open(f'results_alloc_{CFG if CFG=="screen" else "custom"}_l{L}_e{E}.json', 'w'), indent=1)
+json.dump(res, open(f'results_alloc_{CFG if CFG in ("screen", "pat") else "custom"}_l{L}_e{E}.json', 'w'), indent=1)

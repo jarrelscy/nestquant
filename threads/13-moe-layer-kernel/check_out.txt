@@ -1,0 +1,37 @@
+1 recency [1, 8, 3] [1, 8, 2] distinct experts 8 rel err 5.7e-05 repeat bitwise False
+1 recency [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 8 rel err 6.6e-05 repeat bitwise False
+1 recency [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 8 rel err 6.2e-05 repeat bitwise False
+1 distinct [1, 8, 3] [1, 8, 2] distinct experts 8 rel err 4.7e-05 repeat bitwise False
+1 distinct [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 8 rel err 5.6e-05 repeat bitwise False
+1 distinct [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 8 rel err 5.5e-05 repeat bitwise False
+1 same [1, 8, 3] [1, 8, 2] distinct experts 8 rel err 5.5e-05 repeat bitwise False
+1 same [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 8 rel err 6.3e-05 repeat bitwise False
+1 same [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 8 rel err 6.1e-05 repeat bitwise False
+2 recency [1, 8, 3] [1, 8, 2] distinct experts 9 rel err 6e-05 repeat bitwise False
+2 recency [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 9 rel err 6.8e-05 repeat bitwise False
+2 recency [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 9 rel err 6.6e-05 repeat bitwise False
+2 distinct [1, 8, 3] [1, 8, 2] distinct experts 11 rel err 6.9e-05 repeat bitwise False
+2 distinct [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 11 rel err 7.4e-05 repeat bitwise False
+2 distinct [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 11 rel err 7.2e-05 repeat bitwise False
+2 same [1, 8, 3] [1, 8, 2] distinct experts 8 rel err 6.5e-05 repeat bitwise False
+2 same [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 8 rel err 7.5e-05 repeat bitwise False
+2 same [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 8 rel err 7.1e-05 repeat bitwise False
+3 recency [1, 8, 3] [1, 8, 2] distinct experts 10 rel err 4.9e-05 repeat bitwise False
+3 recency [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 10 rel err 5.8e-05 repeat bitwise False
+3 recency [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 10 rel err 5.5e-05 repeat bitwise False
+3 distinct [1, 8, 3] [1, 8, 2] distinct experts 12 rel err 5.6e-05 repeat bitwise False
+3 distinct [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 12 rel err 5.9e-05 repeat bitwise False
+3 distinct [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 12 rel err 5.9e-05 repeat bitwise False
+3 same [1, 8, 3] [1, 8, 2] distinct experts 8 rel err 6.2e-05 repeat bitwise False
+3 same [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 8 rel err 6.7e-05 repeat bitwise False
+3 same [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 8 rel err 6.2e-05 repeat bitwise False
+4 recency [1, 8, 3] [1, 8, 2] distinct experts 12 rel err 5.1e-05 repeat bitwise False
+4 recency [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 12 rel err 5.7e-05 repeat bitwise False
+4 recency [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 12 rel err 5.6e-05 repeat bitwise False
+4 distinct [1, 8, 3] [1, 8, 2] distinct experts 12 rel err 5.4e-05 repeat bitwise False
+4 distinct [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 12 rel err 5.9e-05 repeat bitwise False
+4 distinct [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 12 rel err 5.6e-05 repeat bitwise False
+4 same [1, 8, 3] [1, 8, 2] distinct experts 8 rel err 5.8e-05 repeat bitwise False
+4 same [2, 8, 4, 1] [2, 8, 4, 1] distinct experts 8 rel err 6.4e-05 repeat bitwise False
+4 same [1, 4, 6, 2] [1, 8, 2, 1] distinct experts 8 rel err 6.2e-05 repeat bitwise False
+ws clean 0.0 0.0 0 0 0

@@ -1,0 +1,528 @@
+#!/usr/bin/env python3
+"""NestQuant thread 18: full-model KLD / top-1 / ppl of GLM-5.3 with quantised routed experts,
+against the FP8 reference (block-FP8 weights dequantised to bf16, bf16 arithmetic).
+
+Only routed experts differ between reference and candidates; attention, dense MLPs (L0-2), shared
+experts, router, norms, embeddings and lm_head are the FP8 reference for every stream.
+
+Protocol (same as glm52/tools/capture53/eval3_kld.py, the 2026-09 campaign):
+  teacher-forced, non-overlapping SEQ=2048 windows (== index_topk, so the DSA indexer selects every
+  causal token and dense causal SDPA is exact -> indexers skipped), windows sharded win[RANK::WORLD],
+  each rank streams all 78 decoder layers once (MTP layer 78 excluded).
+
+Multi-stream: one pass carries the reference stream plus K candidate streams (separate residual
+streams, separate routing).  Per layer the backbone is read once; per expert the FP8 reference is read
+once and every stream that routed tokens to that expert runs through it (candidates get their own
+weights from the quantiser plug-in, see quantisers.py).  Candidates therefore never need their own
+copy of the backbone, and the reference is computed bit-identically in the same process.
+
+Metrics per (candidate, corpus): KLD(ref||cand) mean nats (+ per-window stderr, per-token p50/p90/
+p99), top-1 agreement with ref argmax, ppl(ref), ppl(cand).  Per layer (inline reference only):
+residual-stream relative divergence ||h_c-h_r||/||h_r||, router top-8 set agreement, and (with
+--local-err) router-weighted relative routed-expert output L2 on the candidate's own inputs.
+
+Subcommands
+  prep  [--default] [NAME=SRC ...]   tokenise corpora into $NQ_OUT/corpora/NAME.npy (int32, flat)
+        SRC = text file | npytail:/path/tokens.npy:NTOK (last NTOK tokens of a token array)
+  run   --corpora a,b,... --cand NAME=SPEC [...] [--n-layers N] [--max-windows W] [--local-err]
+        [--ref inline|cache] [--tag T]            (per rank; RANK/WORLD env)
+  merge [--tag T]                                 aggregate ranks -> table + $NQ_OUT/results/T.json
+  predecode --cand NAME=SPEC [--layers 3-77] [--out DIR]   decode once -> DIR/NAME (use as dir:DIR/NAME)
+Env: NQ_FP8 (FP8 checkpoint dir), NQ_OUT (scratch), NQ_VRAM_GB (per-process cap), NQ_SEQ, RANK, WORLD.
+"""
+import argparse
+import glob
+import hashlib
+import json
+import math
+import os
+import sys
+import time
+
+import numpy as np
+import torch
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import nq_io  # noqa: E402
+import quantisers  # noqa: E402
+
+FP8_DIR = os.environ.get("NQ_FP8", "/tmp/nestquant/src/glm53-fp8")
+OUT = os.environ.get("NQ_OUT", "/tmp/nestquant/18-e2e")
+SEQ = int(os.environ.get("NQ_SEQ", "2048"))
+RANK = int(os.environ.get("RANK", "0"))
+WORLD = int(os.environ.get("WORLD", "1"))
+EVALSETS = f"{OUT}/evalsets"
+NQ_TRAIN = "/home/coder/git/orbit-duet/runs/glm53_training_15m_v2/tokens.npy"
+
+
+def log(m):
+    print(f"[r{RANK} {time.strftime('%H:%M:%S')}] {m}", flush=True)
+
+
+# ------------------------------------------------------------------------------------------ corpora
+DEFAULT_CORPORA = {
+    # in-distribution for NestQuant's calibration mixture: tail of the frozen 15M training corpus
+    # (seeded doc permutation, packed; fits must only use windows before the tail -- see REPORT.md)
+    "nq-tail": f"npytail:{NQ_TRAIN}:262144",
+    # earlier campaign's corpora (restored from ~/glm53-evalsets-backup.tar.gz)
+    "vllm-docs": f"{EVALSETS}/glm52-heldout-xl.txt",       # code/docs held-out (ID-ish, continuity)
+    "wikitext": f"{EVALSETS}/glm52-neutral-wikitext.txt",  # OOD prose: the calib-bias canary
+    "github": f"{EVALSETS}/glm52-neutral-github.txt",      # OOD code committed after model cutoff
+}
+
+
+def cmd_prep(a):
+    os.makedirs(f"{OUT}/corpora", exist_ok=True)
+    items = dict(DEFAULT_CORPORA) if a.default else {}
+    for s in a.items:
+        k, _, v = s.partition("=")
+        items[k] = v
+    tok = None
+    man = {}
+    for name, src in items.items():
+        if src.startswith("npytail:"):
+            _, path, n = src.split(":")
+            t = np.load(path, mmap_mode="r").reshape(-1)
+            ids = np.asarray(t[len(t) - int(n):], dtype=np.int32)
+        else:
+            if tok is None:
+                from transformers import AutoTokenizer
+                tok = AutoTokenizer.from_pretrained(a.tokenizer or FP8_DIR)
+            ids = np.asarray(tok.encode(open(src, errors="ignore").read(),
+                                        add_special_tokens=False), dtype=np.int32)
+        np.save(f"{OUT}/corpora/{name}.npy", ids)
+        man[name] = {"src": src, "tokens": int(len(ids)), "windows": int(len(ids) // SEQ),
+                     "sha256": hashlib.sha256(ids.tobytes()).hexdigest()}
+        log(f"{name}: {len(ids)} tokens, {len(ids)//SEQ} windows of {SEQ}")
+    old = {}
+    mp = f"{OUT}/corpora/manifest.json"
+    if os.path.exists(mp):
+        old = json.load(open(mp))
+    old.update(man)
+    json.dump(old, open(mp, "w"), indent=1)
+
+
+def load_windows(names, max_windows):
+    seqs, groups, shas = [], [], []
+    for g, n in enumerate(names):
+        ids = np.load(f"{OUT}/corpora/{n}.npy")
+        nw = len(ids) // SEQ
+        if max_windows:
+            nw = min(nw, max_windows)
+        w = torch.from_numpy(ids[: nw * SEQ].astype(np.int32)).view(nw, SEQ)[RANK::WORLD]
+        seqs.append(w)
+        groups += [g] * w.shape[0]
+        shas.append(hashlib.sha256(ids[: nw * SEQ].tobytes()).hexdigest()[:16])
+        log(f"corpus {n}: {nw} windows, rank takes {w.shape[0]}")
+    return torch.cat(seqs), groups, shas
+
+
+# ------------------------------------------------------------------------------------------ model
+def load_config():
+    from transformers import AutoConfig
+    cfg = AutoConfig.from_pretrained(FP8_DIR)
+    cfg._attn_implementation = "sdpa"
+    assert SEQ <= cfg.index_topk, "SEQ must be <= index_topk for the exact indexer skip"
+    return cfg
+
+
+class Backbone:
+    def __init__(self, cfg, fp8, dev):
+        self.cfg, self.fp8, self.dev = cfg, fp8, dev
+        self.names = sorted(fp8.idx.names())
+
+    def build(self, li):
+        from transformers.models.glm_moe_dsa.modeling_glm_moe_dsa import GlmMoeDsaDecoderLayer
+        with torch.device("meta"):
+            layer = GlmMoeDsaDecoderLayer(self.cfg, li)
+        layer.self_attn.indexer = None          # exact at SEQ <= index_topk (all causal keys kept)
+        sparse = self.cfg.mlp_layer_types[li] == "sparse"
+        if sparse:
+            layer.mlp.experts = torch.nn.Module()   # routed experts are streamed per expert
+        pre = f"model.layers.{li}."
+        sd = {}
+        for n in self.names:
+            if not n.startswith(pre):
+                continue
+            k = n[len(pre):]
+            if ".experts." in n or "indexer" in k or k.endswith("weight_scale_inv"):
+                continue
+            sd[k] = self.fp8.tensor(n, self.dev)
+        layer.load_state_dict(sd, strict=True, assign=True)
+        return layer.eval(), sparse
+
+
+def ffn(x, W):
+    g = torch.nn.functional.linear(x, W["gate_proj"].to(x.dtype))
+    u = torch.nn.functional.linear(x, W["up_proj"].to(x.dtype))
+    return torch.nn.functional.linear(torch.nn.functional.silu(g) * u, W["down_proj"].to(x.dtype))
+
+
+def moe_multi(layer, li, xs, qs, fp8, dev, stats, local_err):
+    """xs: per-stream [T,H] bf16 MoE inputs; qs: per-stream quantiser (Ref for the reference).
+    Returns per-stream [T,H] MoE outputs (routed + shared)."""
+    E = layer.mlp.gate.num_experts
+    route = []
+    for x in xs:
+        _, w, i = layer.mlp.gate(x)
+        ids = i.reshape(-1)
+        order = torch.argsort(ids, stable=True)
+        tok = torch.arange(x.shape[0], device=dev).repeat_interleave(i.shape[1])[order]
+        cnt = torch.bincount(ids, minlength=E)
+        offs = [0] + cnt.cumsum(0).tolist()
+        route.append((tok, w.reshape(-1)[order], offs, i))
+    outs = [torch.zeros_like(x) for x in xs]
+    ref_i = route[0][3] if getattr(qs[0], "is_ref", False) else None
+    for s in range(len(xs)):
+        st = stats[s]
+        if ref_i is not None and s > 0:          # router top-8 set agreement vs reference stream
+            same = (route[s][3].unsqueeze(-1) == ref_i.unsqueeze(-2)).any(-1).float().mean()
+            st["route_agree"][li] = float(same)
+    lerr = [[0.0, 0.0] for _ in xs]
+    for e in range(E):
+        if all(r[2][e] == r[2][e + 1] for r in route):
+            continue
+        cache = {}
+
+        def ref():
+            if "w" not in cache:
+                cache["w"] = fp8.expert(li, e, dev)
+            return cache["w"]
+        for s, (x, q) in enumerate(zip(xs, qs)):
+            tok, wts, offs, _ = route[s]
+            a, b = offs[e], offs[e + 1]
+            if a == b:
+                continue
+            supplied = False
+            if getattr(q, "is_ref", False):
+                W = ref()
+            else:
+                W = q.expert(li, e, ref)
+                if W is None:
+                    W = ref()
+                    stats[s]["fallback"] += 1
+                else:
+                    stats[s]["supplied"] += 1
+                    supplied = True
+            xe = x[tok[a:b]]
+            y = ffn(xe, W)
+            if local_err and supplied:          # routed-expert output error, supplied experts only
+                yr = ffn(xe, ref()).float()
+                p = wts[a:b].float()
+                lerr[s][0] += float((p * (y.float() - yr).pow(2).sum(-1)).sum())
+                lerr[s][1] += float((p * yr.pow(2).sum(-1)).sum())
+            outs[s].index_add_(0, tok[a:b], (y * wts[a:b, None]).to(x.dtype))
+        cache.clear()
+    for s, x in enumerate(xs):
+        if lerr[s][1] > 0:
+            stats[s]["local_rel_l2"][li] = math.sqrt(lerr[s][0] / lerr[s][1])
+        outs[s] += layer.mlp.shared_experts(x)
+    return outs
+
+
+# ------------------------------------------------------------------------------------------ run
+def cmd_run(a):
+    dev = "cuda:0"
+    if os.environ.get("NQ_VRAM_GB"):
+        tot = torch.cuda.get_device_properties(0).total_memory / 2**30
+        torch.cuda.set_per_process_memory_fraction(min(1.0, float(os.environ["NQ_VRAM_GB"]) / tot))
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    cfg = load_config()
+    nl = a.n_layers or cfg.num_hidden_layers
+    names = a.corpora.split(",")
+    seqs, groups, shas = load_windows(names, a.max_windows)
+    N = seqs.shape[0]
+    key = hashlib.sha256(json.dumps([names, shas, nl, SEQ, WORLD, a.max_windows]).encode()
+                         ).hexdigest()[:12]
+    cdir = f"{OUT}/refcache/{key}"
+    cfile = f"{cdir}/hid_r{RANK}.pt"
+    use_cache = a.ref == "cache" and os.path.exists(cfile)
+
+    qs = [] if use_cache else [quantisers.make("ref", "ref")]
+    for c in a.cand:
+        n, _, spec = c.partition("=")
+        qs.append(quantisers.make(n, spec))
+    for q in qs:
+        q.dev = dev
+    stats = [{"fallback": 0, "supplied": 0, "route_agree": {}, "local_rel_l2": {},
+              "rel_div": {}} for _ in qs]
+    log(f"{N} windows x {SEQ}; streams {[q.name for q in qs]}; layers {nl}; "
+        f"ref={'cache ' + cfile if use_cache else 'inline'}")
+
+    fp8 = nq_io.FP8Model(FP8_DIR)
+    bb = Backbone(cfg, fp8, dev)
+    from transformers.models.glm_moe_dsa.modeling_glm_moe_dsa import (
+        GlmMoeDsaRotaryEmbedding, GlmMoeDsaRMSNorm)
+    rot = GlmMoeDsaRotaryEmbedding(cfg).to(dev)
+    pos = torch.arange(SEQ, device=dev).view(1, -1)
+    cos_sin = rot(torch.empty(1, SEQ, 1, device=dev, dtype=torch.bfloat16), pos)
+    topk_all = pos.to(torch.int32).view(1, 1, SEQ).expand(a.attn_chunk, SEQ, SEQ)
+    ids_dev = seqs.to(dev).long()
+    emb = fp8.tensor("model.embed_tokens.weight", dev)
+    h0 = torch.nn.functional.embedding(ids_dev, emb).to(torch.bfloat16)
+    del emb
+    hid = [h0] + [h0.clone() for _ in qs[1:]]
+    torch.cuda.empty_cache()
+
+    t_start = time.time()
+    tl = {}
+    for li in range(nl):
+        t0 = time.time()
+        layer, sparse = bb.build(li)
+        for q in qs:
+            q.begin_layer(li, dev)
+        with torch.no_grad():
+            for h in hid:                                   # attention, per stream
+                for s0 in range(0, N, a.attn_chunk):
+                    s1 = min(s0 + a.attn_chunk, N)
+                    att, _, _ = layer.self_attn(
+                        hidden_states=layer.input_layernorm(h[s0:s1]),
+                        position_embeddings=cos_sin, attention_mask=None,
+                        position_ids=pos.expand(s1 - s0, -1),
+                        prev_topk_indices=topk_all[: s1 - s0])
+                    h[s0:s1] += att
+                    del att
+            flats = [h.view(N * SEQ, -1) for h in hid]
+            if not sparse:
+                for f in flats:
+                    for t0_ in range(0, f.shape[0], a.moe_chunk):
+                        t1_ = min(t0_ + a.moe_chunk, f.shape[0])
+                        f[t0_:t1_] += layer.mlp(layer.post_attention_layernorm(f[t0_:t1_]))
+            else:
+                T = N * SEQ
+                for t0_ in range(0, T, a.moe_chunk):
+                    t1_ = min(t0_ + a.moe_chunk, T)
+                    xs = [layer.post_attention_layernorm(f[t0_:t1_]) for f in flats]
+                    ys = moe_multi(layer, li, xs, qs, fp8, dev, stats, a.local_err)
+                    for f, y in zip(flats, ys):
+                        f[t0_:t1_] += y
+                    del xs, ys
+            if not use_cache:
+                r = hid[0].float()
+                den = float(r.pow(2).sum())
+                for s in range(1, len(hid)):
+                    stats[s]["rel_div"][li] = math.sqrt(float((hid[s].float() - r).pow(2).sum()) / den)
+                del r
+        for q in qs:
+            q.end_layer(li)
+        del layer
+        torch.cuda.empty_cache()
+        tl[li] = time.time() - t0
+        msg = " ".join(f"{q.name}:div={stats[s]['rel_div'].get(li, 0):.4f}"
+                       for s, q in enumerate(qs) if s > 0 or use_cache)
+        log(f"layer {li} {tl[li]:.1f}s peakVRAM {torch.cuda.max_memory_allocated()/2**30:.1f}G {msg}")
+
+    # ---- reference cache
+    if use_cache:
+        href = torch.load(cfile, map_location=dev)
+        cand = list(range(len(qs)))
+    else:
+        href = hid[0]
+        cand = list(range(1, len(qs)))
+        os.makedirs(cdir, exist_ok=True)
+        if os.path.exists(cfile):
+            old = torch.load(cfile, map_location=dev)
+            eq = bool(torch.equal(old, href))
+            log(f"inline reference vs cached reference bitwise equal: {eq}")
+            stats[0]["ref_cache_bitwise_equal"] = eq
+        elif a.save_ref:
+            torch.save(href, cfile)
+            log(f"saved reference final hidden -> {cfile}")
+
+    # ---- logits + metrics
+    norm = GlmMoeDsaRMSNorm(cfg.hidden_size, cfg.rms_norm_eps).to(dev)
+    norm.load_state_dict({"weight": fp8.tensor("model.norm.weight", dev)})
+    head = fp8.tensor("lm_head.weight", dev).float()      # [V, H] fp32
+    ng = len(names)
+    res = {q.name: {"groups": [{"ce_ref": 0.0, "ce": 0.0, "ntok": 0, "klsum": 0.0,
+                                "agree": 0, "win_kl": []} for _ in range(ng)]}
+           for i, q in enumerate(qs) if i in cand}
+    tokkl = {qs[i].name: [] for i in cand}
+    P = a.pos_chunk
+    with torch.no_grad():
+        for w in range(N):
+            g = groups[w]
+            hr = norm(href[w])[:-1]
+            tgt = ids_dev[w, 1:]
+            hc = [norm(hid[i][w])[:-1] for i in cand]
+            wk = [0.0] * len(cand)
+            for p0 in range(0, SEQ - 1, P):
+                p1 = min(p0 + P, SEQ - 1)
+                lr = torch.log_softmax(hr[p0:p1].float() @ head.T, -1)
+                ce_r = float(-lr.gather(1, tgt[p0:p1, None]).sum())
+                am_r = lr.argmax(-1)
+                for j, i in enumerate(cand):
+                    lc = torch.log_softmax(hc[j][p0:p1].float() @ head.T, -1)
+                    kl = (lr.exp() * (lr - lc)).sum(-1)
+                    G = res[qs[i].name]["groups"][g]
+                    G["ce_ref"] += ce_r
+                    G["ce"] += float(-lc.gather(1, tgt[p0:p1, None]).sum())
+                    G["klsum"] += float(kl.sum())
+                    G["agree"] += int((lc.argmax(-1) == am_r).sum())
+                    G["ntok"] += p1 - p0
+                    wk[j] += float(kl.sum())
+                    tokkl[qs[i].name].append(kl.half().cpu().numpy())
+                    del lc, kl
+                del lr
+            for j, i in enumerate(cand):
+                res[qs[i].name]["groups"][g]["win_kl"].append(wk[j] / (SEQ - 1))
+    rdir = f"{OUT}/results/{a.tag}"
+    os.makedirs(rdir, exist_ok=True)
+    for j, i in enumerate(cand):
+        q = qs[i]
+        res[q.name].update({"spec": q.spec, "stats": stats[i], "tokkl_groups": None})
+        np.save(f"{rdir}/tokkl_{q.name}_r{RANK}.npy", np.concatenate(tokkl[q.name]))
+    json.dump({"rank": RANK, "world": WORLD, "corpora": names, "corpus_sha": shas, "seq": SEQ,
+               "n_layers": nl, "groups_per_window": groups, "ref": "cache" if use_cache else "inline",
+               "ref_stats": stats[0] if not use_cache else None,
+               "layer_seconds": tl, "wall_seconds": time.time() - t_start, "results": res},
+              open(f"{rdir}/r{RANK}.json", "w"))
+    for name, r in res.items():
+        for g, G in enumerate(r["groups"]):
+            if G["ntok"]:
+                log(f"{name:12s} {names[g]:10s} ppl_ref {math.exp(G['ce_ref']/G['ntok']):8.4f} "
+                    f"ppl {math.exp(G['ce']/G['ntok']):8.4f} KLD {G['klsum']/G['ntok']:.5f} "
+                    f"top1 {100*G['agree']/G['ntok']:.2f}%  (fallback experts {r['stats']['fallback']})")
+
+
+def cmd_predecode(a):
+    """Decode a candidate once into a dir: layout (GPU-parallel via RANK/WORLD), so the eval pass only
+    reads bf16/fp16 weights.  Experts are sharded (L*E + e) % WORLD == RANK; one file per (layer, rank),
+    written .part then renamed (the dir: plug-in only globs finished *.safetensors).  fp32 decodes are
+    stored as fp16 when that is lossless (NestQuant's kernel decode is fp16), else bf16."""
+    from safetensors.torch import save_file
+    dev = "cuda:0"
+    if os.environ.get("NQ_VRAM_GB"):
+        tot = torch.cuda.get_device_properties(0).total_memory / 2**30
+        torch.cuda.set_per_process_memory_fraction(min(1.0, float(os.environ["NQ_VRAM_GB"]) / tot))
+    cfg = load_config()
+    n, _, spec = a.cand.partition("=")
+    q = quantisers.make(n, spec)
+    q.dev = dev
+    fp8 = nq_io.FP8Model(FP8_DIR)
+    lo, _, hi = a.layers.partition("-")
+    layers = [li for li in range(int(lo), int(hi or lo) + 1) if li >= cfg.first_k_dense_replace]
+    E = cfg.n_routed_experts
+    out = f"{a.out}/{n}"
+    os.makedirs(out, exist_ok=True)
+    lossy = 0
+    for li in layers:
+        f = f"{out}/layer_{li:03d}.r{RANK}of{WORLD}.safetensors"
+        if os.path.exists(f):
+            continue
+        t0 = time.time()
+        q.begin_layer(li, dev)
+        tens, miss = {}, 0
+        for e in range(E):
+            if (li * E + e) % WORLD != RANK:
+                continue
+            cache = {}
+
+            def ref():
+                if "w" not in cache:
+                    cache["w"] = fp8.expert(li, e, dev)
+                return cache["w"]
+            W = q.expert(li, e, ref)
+            if W is None:
+                miss += 1
+                continue
+            for pn, w in W.items():
+                if w.dtype == torch.float32:
+                    h = w.half()
+                    if torch.equal(h.float(), w):
+                        w = h
+                    else:
+                        w, lossy = w.bfloat16(), lossy + 1
+                tens[f"model.layers.{li}.mlp.experts.{e}.{pn}.weight"] = w.contiguous().cpu()
+        q.end_layer(li)
+        if tens:
+            save_file(tens, f + ".part")
+            os.rename(f + ".part", f)
+        log(f"L{li}: {len(tens) // 3} experts written, {miss} missing, {time.time() - t0:.1f}s")
+        del tens
+    if lossy:
+        log(f"WARNING: {lossy} fp32 tensors were not fp16-exact -> stored bf16")
+
+
+def cmd_merge(a):
+    rdir = f"{OUT}/results/{a.tag}"
+    parts = [json.load(open(p)) for p in sorted(glob.glob(f"{rdir}/r*.json"))]
+    names = parts[0]["corpora"]
+    out = {"tag": a.tag, "ranks": len(parts), "corpora": names, "table": {}}
+    print(f"{a.tag}: {len(parts)} ranks, corpora {names}, n_layers {parts[0]['n_layers']}")
+    print(f"{'cand':14} {'corpus':10} {'ntok':>8} {'ppl_ref':>8} {'ppl':>8} {'KLD':>9} {'±se':>8} "
+          f"{'p99':>7} {'top1%':>7} {'fallbk':>7}")
+    for cand in parts[0]["results"]:
+        # token kl in rank order, groups known from per-window groups
+        for g, n in enumerate(names):
+            A = {"ce_ref": 0.0, "ce": 0.0, "ntok": 0, "klsum": 0.0, "agree": 0, "win_kl": []}
+            fb = 0
+            tk = []
+            for p in parts:
+                r = p["results"][cand]
+                G = r["groups"][g]
+                for k in ("ce_ref", "ce", "ntok", "klsum", "agree"):
+                    A[k] += G[k]
+                A["win_kl"] += G["win_kl"]
+                fb += r["stats"]["fallback"]
+                kl = np.load(f"{rdir}/tokkl_{cand}_r{p['rank']}.npy").astype(np.float32)
+                gw = np.repeat(np.array(p["groups_per_window"]), p["seq"] - 1)
+                tk.append(kl[gw == g])
+            if not A["ntok"]:
+                continue
+            tk = np.concatenate(tk)
+            wk = np.array(A["win_kl"])
+            row = {"ntok": A["ntok"], "ppl_ref": math.exp(A["ce_ref"] / A["ntok"]),
+                   "ppl": math.exp(A["ce"] / A["ntok"]), "kld": A["klsum"] / A["ntok"],
+                   "kld_se": float(wk.std(ddof=1) / math.sqrt(len(wk))) if len(wk) > 1 else float("nan"),
+                   "kld_p50": float(np.percentile(tk, 50)), "kld_p90": float(np.percentile(tk, 90)),
+                   "kld_p99": float(np.percentile(tk, 99)), "top1": 100 * A["agree"] / A["ntok"],
+                   "fallback_expert_calls": fb}
+            out["table"].setdefault(cand, {})[n] = row
+            print(f"{cand:14} {n:10} {row['ntok']:8d} {row['ppl_ref']:8.4f} {row['ppl']:8.4f} "
+                  f"{row['kld']:9.5f} {row['kld_se']:8.5f} {row['kld_p99']:7.3f} {row['top1']:7.3f} {fb:7d}")
+        st = parts[0]["results"][cand]["stats"]
+        if st["rel_div"]:
+            ls = sorted(st["rel_div"], key=int)
+            out.setdefault("per_layer_r0", {})[cand] = {
+                "rel_div": st["rel_div"], "route_agree": st["route_agree"],
+                "local_rel_l2": st["local_rel_l2"]}
+            print(f"   {cand} rank0 residual divergence by layer: " +
+                  " ".join(f"L{l}:{st['rel_div'][l]:.3f}" for l in ls[:: max(1, len(ls) // 12)]))
+    json.dump(out, open(f"{OUT}/results/{a.tag}.json", "w"), indent=1)
+    print(f"-> {OUT}/results/{a.tag}.json")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("prep")
+    p.add_argument("--default", action="store_true")
+    p.add_argument("--tokenizer")
+    p.add_argument("items", nargs="*")
+    r = sub.add_parser("run")
+    r.add_argument("--corpora", required=True)
+    r.add_argument("--cand", action="append", default=[])
+    r.add_argument("--n-layers", type=int, default=0)
+    r.add_argument("--max-windows", type=int, default=0, help="cap per corpus (before sharding)")
+    r.add_argument("--ref", choices=["inline", "cache"], default="inline")
+    r.add_argument("--save-ref", action="store_true")
+    r.add_argument("--local-err", action="store_true")
+    r.add_argument("--attn-chunk", type=int, default=4)
+    r.add_argument("--moe-chunk", type=int, default=1 << 30, help="tokens per MoE slab (per stream)")
+    r.add_argument("--pos-chunk", type=int, default=512)
+    r.add_argument("--tag", default="run")
+    m = sub.add_parser("merge")
+    m.add_argument("--tag", default="run")
+    d = sub.add_parser("predecode")
+    d.add_argument("--cand", required=True, help="NAME=SPEC")
+    d.add_argument("--layers", default="3-77")
+    d.add_argument("--out", default=f"{OUT}/predecoded")
+    a = ap.parse_args()
+    {"prep": cmd_prep, "run": cmd_run, "merge": cmd_merge, "predecode": cmd_predecode}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    main()

@@ -16,7 +16,7 @@ Status: frozen enough to build. Open items are marked OPEN; the owning thread de
 1. Rotation: EXL3 random signs (su/sv) + Hadamard-128 on both sides. Down's input rotation stays inside a 256-wide TP8 shard.
 2. Level 2 (base): EXL3 mul1 bitshift trellis, K=2, L=16, 256-weight tiles, tail-biting rings of at least 128 weights (kernel constraint from thread 04; thread 03 measured 0.06 dB at 128).
 3. Level 4: base + δ_b · g(P4). g is a second K=2 L=16 mul1 trellis coding the rotated residual; δ_b is one fp16 scale per 16x16 block folded into the final HFMA2. Decode is additive (combined-window reinterpretation rejected by thread 03).
-4. Level 3: OPEN (thread 04 times, thread 12 fits). Option (b) preferred: a per-block subset of blocks carries P4 bits; the rest are base only. Selection by benefit per byte, constant bytes per (layer, plane, shard).
+4. Level 3: dropped (user 2026-09-28: only 2 and 4 bit needed). Mixing 2b/4b blocks inside the 4-bit tier is allowed as allocation (thread 16).
 5. Planes: base, P3/P4 stored as separate contiguous chunks per (layer, expert, plane, TP shard), constant size per (layer, plane, shard), 64 KiB aligned. Level-specific metadata (δ, block masks) travels with its plane.
 6. MiMo only: act-order-shard permutation of down's input channels + ±1 per-block split (1/3 → 2/4 → 3/5), enabled per layer when CV AM/GM of act-order-shard innovations is large (thread 01).
 
@@ -31,7 +31,7 @@ Status: frozen enough to build. Open items are marked OPEN; the owning thread de
 A nested 4.0 bpw level 4 sits ~2.8% above native at best (code-structure floor), so it cannot beat EXL3-4 on GLM at exactly 4.0 bpw. User requirement is one dynamic 2-4 bit artifact, so a separate native 4-bit code is ruled out. Gap closers under test in thread 12: 3-bit residual on top-benefit blocks at +0.0625/+0.125/+0.25 bpw, per-tile seed/codebook choice, per-block δ.
 
 ## Kernel
-Adopted (thread 04 follow-up, REPORT2.md): nqk2.cu A4 additive decode, rings shared by 2 or 4 lanes (128/256 weights), one fp16 δ per 16x128 block folded into 2 HFMA2, fused-B 2 launches. 4b 42.5-46.8 µs B1-B4 vs EXL3 bare 53.9-74.9; 2b 28.7-31.3 vs 60.2-72.5. Level 3 = 2b/4b mix at 128x128 block granularity.
+Adopted (thread 04 follow-up, REPORT2.md): nqk2.cu A4 additive decode, rings shared by 2 or 4 lanes (128/256 weights), one fp16 δ per 16x128 block folded into 2 HFMA2, fused-B 2 launches. 4b 42.5-46.8 µs B1-B4 vs EXL3 bare 53.9-74.9; 2b 28.7-31.3 vs 60.2-72.5. Level 3 dropped.
 Custom tensor-core GEMV (mma.m16n8k16), each lane decodes straight into fragments, split planes, per-expert level and pointer tables read at CUDA-graph replay, one launch for mixed levels. Budget: 10 or fewer ops/weight at 4 bit, 8 or fewer at 2 bit. Fuse Hadamard/SwiGLU into the GEMVs.
 
 ## Streaming

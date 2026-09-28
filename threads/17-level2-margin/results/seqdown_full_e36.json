@@ -1,0 +1,50 @@
+{
+ "nat2": {
+  "routed": 34.416,
+  "forced": 35.363,
+  "ood": 37.379,
+  "ood_r": 37.734
+ },
+ "seqW_r0.1": {
+  "routed": 34.775,
+  "forced": 36.01,
+  "ood": 38.312,
+  "ood_r": 38.788
+ },
+ "seqW_r0.3": {
+  "routed": 34.475,
+  "forced": 35.606,
+  "ood": 37.851,
+  "ood_r": 38.187
+ },
+ "seqW_r1.0": {
+  "routed": 34.237,
+  "forced": 35.296,
+  "ood": 37.461,
+  "ood_r": 37.796
+ },
+ "seqH": {
+  "routed": 34.486,
+  "forced": 35.382,
+  "ood": 37.402,
+  "ood_r": 37.755
+ },
+ "seqW_r1_unq": {
+  "routed": 24.769,
+  "forced": 26.253,
+  "ood": 28.203,
+  "ood_r": 28.583
+ },
+ "gu_only": {
+  "routed": 25.002,
+  "forced": 26.318,
+  "ood": 28.065,
+  "ood_r": 28.43
+ },
+ "seqW_r3.0": {
+  "routed": 34.265,
+  "forced": 35.226,
+  "ood": 37.319,
+  "ood_r": 37.7
+ }
+}

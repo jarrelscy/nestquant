@@ -1,0 +1,32 @@
+{
+ "nat2": {
+  "routed": 34.416,
+  "forced": 35.363,
+  "ood": 37.379,
+  "ood_r": 37.734
+ },
+ "oracle_mix0.5_s0.5": {
+  "routed": 15.853,
+  "forced": 29.473,
+  "ood": 28.301,
+  "ood_r": 17.867
+ },
+ "oracle_mix0.5_s0.1": {
+  "routed": 12.569,
+  "forced": 27.743,
+  "ood": 26.435,
+  "ood_r": 14.356
+ },
+ "oracle_mix1.0_s0.5": {
+  "routed": 12.208,
+  "forced": 27.348,
+  "ood": 25.479,
+  "ood_r": 13.956
+ },
+ "oracle_mix1.0_s0.1": {
+  "routed": 9.126,
+  "forced": 24.246,
+  "ood": 22.655,
+  "ood_r": 10.43
+ }
+}

@@ -20,3 +20,10 @@ def bench(fns,blocks=60,repeats=10,warm=5):
             rows[name].append(a.elapsed_time(b)*1000/repeats)
     q=lambda v,p:sorted(v)[int(p*(len(v)-1))]
     return {k:statistics.median(v) for k,v in rows.items()},{k:(min(v),q(v,.1),q(v,.25)) for k,v in rows.items()}
+def warmup(sec=2.0):
+    """spin the GPU so clocks are at boost before timing"""
+    import time
+    a=torch.randn(4096,4096,device='cuda',dtype=torch.half);t=time.time()
+    while time.time()-t<sec:
+        for _ in range(20):a@a
+        torch.cuda.synchronize()

@@ -1,24 +1,29 @@
-"""NestQuant v0 reference decoder (thread 12).
+"""NestQuant v0 reference decoder (thread 12), fitted to the thread-04 kernel layout (nqk2.cu, REPORT2.md).
 
-Dense fp32 reference decode of one expert at level 2, 3 or 4 from the stored planes alone.
+Dense fp32 reference decode of one expert at level 2 or 4 from the stored planes alone.
 
-Planes (per projection; see nq_encode.py for how they are fitted):
-    base   K_a-bit mul1 trellis symbols for every 16x16 tile (K per 16-row input block a, usually 2),
-           tiles in shard-major order, plus su2/sv2 fp16 scales.
-    p4a    level-3 tile subset: 2-bit symbols (low bits for K=3 residual tiles), residual codebook id,
-           per-tile fp16 delta, the level-3 tile mask, and su3/sv3.
-    p4b    remaining tiles' residual symbols / codebook ids / deltas, and su4/sv4.
-    p4x    top bit of the 3-bit residual symbols for the K3 tiles (all of them lie in p4a), and the K3 mask.
-Level 2 reads base; level 3 reads base + p4a (+ p4x); level 4 reads base + p4a + p4b (+ p4x).
-Each level uses its own (refit) output/input scales, which live in the level's plane.
+Geometry (rotated basis, kernel orientation W[N=out, K=in]; the encoder works on the EXL3 (k=in, n=out) transpose):
+  unit      = one 16-row strip x 128-k chunk (2048 weights) = one kernel mma block = 8 tail-biting rings of 256
+              weights (G=4 lanes share a ring). Ring g of a unit holds rows {g, g+8} x all 128 k; ring position
+              p = t4*64 + j (lane 4g+t4, lane weight j) maps to row g + 8*(r&1), k 16t + 2*t4 + 8*(r>>1) + e with
+              pp=j>>1, e=j&1, t=pp>>2, r=pp&3 (mma.m16n8k16 A-fragment order, nq2.ref_W).
+  state     trellis state at ring position p = (sum_j sym[p+j] << K*j) & 0xFFFF (ring wraps), i.e. the 16-bit
+              window starting at bit K*p of the ring's LSB-first bit stream (kernel's lane record + neighbour word).
+  value     mul1: fp16(A*(1024 + bytesum(state*0x83DCD12D)) + B), A=0x1eee, B=0xc931 (harness.codebook_lut).
+  delta     one fp16 per unit (16x128 block, kernel default) or, as a closer, one per ring.
+  TP shard  256 intermediate channels: gate/up = 16 strips x all chunks, down = 2 chunks x all strips
+              (768 units / shard either way). Units inside a shard are stored strip-major (strip, chunk).
 
-Reconstruction in the rotated basis (tile t = (a, c), trellis order inside the tile):
-    Q2[t]  = lut_mul1[state_base]
-    Q_L[t] = Q2[t] + delta[t] * lut_cb[t][state_res]         for tiles present at level L, else Q2[t]
-    W_L    = (had128_n( had128_k(Q_L.half()) * su_L ) * sv_L)^T        (exllamav3 fp16 decode path)
-The trellis state at step i is (sum_j sym[i-j] << K*j) & 0xFFFF, indices wrap around the 256-step ring.
+Planes (per projection, per shard, constant size per (projection, plane, shard)):
+  base  K_u-bit symbols of every unit (K_u = 2, or the MiMo 1/3 down split), + su2/sv2 fp16
+  p4    residual low-2-bit symbols, delta, (optional) residual codebook id of every unit, + su4/sv4
+  p4x   top bit of the 3-bit residual symbols of the K3 units (shard order) + the K3 unit mask
+Level 2 reads base; level 4 reads base + p4 + p4x.  (Level 3 dropped by user decision 2026-09-28.)
 
-CLI:  python nq_decode.py EXPERT.pt --level 4 [--out dense.pt] [--check-against internal.pt]
+Reconstruction:   Q2 = lut_mul1[state_base];   Q4 = Q2 + delta * lut_cb[state_res]
+                  W_L = (had128_n(had128_k(Q_L.half()) * su_L) * sv_L)^T      (exllamav3 fp16 decode path)
+
+CLI:  python nq_decode.py ARTIFACT.pt --level 4 [--out dense.pt] [--check-against internal.pt]
 """
 import os, sys, math, argparse
 os.environ.setdefault("OMP_NUM_THREADS", "8")
@@ -28,17 +33,16 @@ H05 = "/home/coder/git/nestquant/threads/05-exl3-harness"
 if H05 not in sys.path:
     sys.path.insert(0, H05)
 
-_LUT = {}
+CODEBOOKS = ["mul1", "mcg", "3inst"]
+_LUT, _RI = {}, {}
 
 
 def lut(cb, device="cuda"):
-    if cb not in _LUT:
+    key = (cb, str(device))
+    if key not in _LUT:
         import harness as h
-        _LUT[cb] = h.codebook_lut(cb, device)
-    return _LUT[cb]
-
-
-CODEBOOKS = ["mul1", "mcg", "3inst"]
+        _LUT[key] = h.codebook_lut(cb, device)
+    return _LUT[key]
 
 
 def _Q():
@@ -46,114 +50,143 @@ def _Q():
     return Q
 
 
-def tc_perm(device="cuda"):
-    return _Q().tensor_core_perm(device).long()
+def ring_index(device="cuda"):
+    """RI[g, p] = local index (k_local*16 + row_local) inside a [128 k, 16 n] unit of ring g, position p."""
+    key = str(device)
+    if key not in _RI:
+        RI = torch.empty(8, 256, dtype=torch.long)
+        for g in range(8):
+            for t4 in range(4):
+                for j in range(64):
+                    pp, e = j >> 1, j & 1
+                    t, r = pp >> 2, pp & 3
+                    row = g + 8 * (r & 1)
+                    kk = 16 * t + 2 * t4 + 8 * (r >> 1) + e
+                    RI[g, t4 * 64 + j] = kk * 16 + row
+        assert torch.equal(RI.flatten().sort().values, torch.arange(2048))
+        _RI[key] = RI.to(device)
+    return _RI[key]
 
 
 # ------------------------------------------------------------------------------------------------ bits
 def pack_bits(sym, K):
-    """sym: [T, 256] integer symbols < 2^K  ->  uint8 [T, 32*K] (LSB-first bit stream per tile)."""
+    """sym [T, 256] ints < 2^K -> uint8 [T, 32K], LSB-first bit stream (= kernel lane records, lanes in order)."""
     T = sym.shape[0]
-    s = sym.long()
-    bits = (s.unsqueeze(-1) >> torch.arange(K, device=s.device)) & 1          # [T, 256, K]
+    bits = (sym.long().unsqueeze(-1) >> torch.arange(K, device=sym.device)) & 1
     bits = bits.reshape(T, 32 * K, 8)
-    return (bits << torch.arange(8, device=s.device)).sum(-1).to(torch.uint8)
+    return (bits << torch.arange(8, device=sym.device)).sum(-1).to(torch.uint8)
 
 
 def unpack_bits(buf, K):
     T = buf.shape[0]
-    b = (buf.long().unsqueeze(-1) >> torch.arange(8, device=buf.device)) & 1  # [T, 32K, 8]
+    b = (buf.long().unsqueeze(-1) >> torch.arange(8, device=buf.device)) & 1
     b = b.reshape(T, 256, K)
     return (b << torch.arange(K, device=buf.device)).sum(-1)
 
 
 def states_from_symbols(sym, K):
-    """Tail-biting shift-register states of a 256-step ring: state_i = (sum_j sym_{i-j} << K j) & 0xFFFF."""
     st = torch.zeros_like(sym)
     for j in range(math.ceil(16 / K)):
-        st |= torch.roll(sym, j, dims=1) << (K * j)
+        st |= torch.roll(sym, -j, dims=1) << (K * j)
     return st & 0xFFFF
 
 
 # ------------------------------------------------------------------------------------------------ layout
-def shard_order(tk, tn, shard_axis, shard_tiles=16, device="cpu"):
-    """Flat tile ids (a*tn + c) in shard-major order: shard s covers tile columns (axis 'n') or tile rows
-    (axis 'k') [16s, 16s+16), i.e. 256 intermediate channels; inside a shard tiles run in (a, c) order."""
+def unit_order(tk, tn, shard_axis, device="cpu"):
+    """Flat unit ids u = a*tn + c (a = 128-k chunk, c = 16-n strip) in storage order: shard-major, then (c, a).
+    Returns (order [tk*tn], shard_of_unit [tk*tn] in flat-id order)."""
     a = torch.arange(tk, device=device).repeat_interleave(tn)
     c = torch.arange(tn, device=device).repeat(tk)
-    shard = (c if shard_axis == "n" else a) // shard_tiles
-    key = shard * (tk * tn) + a * tn + c
-    return torch.argsort(key)
+    shard = c // 16 if shard_axis == "n" else a // 2
+    key = (shard * tn + c) * tk + a
+    return torch.argsort(key), shard
 
 
-def base_K_per_tile(meta, device="cpu"):
-    Ka = torch.tensor(meta["base_K"], device=device)
-    return Ka.repeat_interleave(meta["tn"])            # flat (a, c) order
+def superblock_of_unit(tk, tn, device="cpu"):
+    a = torch.arange(tk, device=device).repeat_interleave(tn)
+    c = torch.arange(tn, device=device).repeat(tk)
+    return a * (tn // 8) + c // 8
+
+
+def superblock_order(tk, tn, shard_axis, device="cpu"):
+    """Flat superblock ids (a*(tn/8) + c8) in storage order (shard-major, then (c8, a)) and shard of each sb."""
+    t8 = tn // 8
+    a = torch.arange(tk, device=device).repeat_interleave(t8)
+    c8 = torch.arange(t8, device=device).repeat(tk)
+    shard = c8 // 2 if shard_axis == "n" else a // 2
+    return torch.argsort((shard * t8 + c8) * tk + a), shard
 
 
 # ------------------------------------------------------------------------------------------------ decode
+BASE_VARIANTS = {"sign": [1.0, -1.0], "sg4": [s * g for g in (0.9, 0.97, 1.03, 1.1) for s in (1, -1)]}
+
+
+def variant_table(name, device="cuda"):
+    """Per-ring base scale variants, fp16-representable (the kernel folds a into its fp16 hfma constants)."""
+    return torch.tensor(BASE_VARIANTS[name], device=device).half().float()
+
+
+def variant_bits(name):
+    return math.ceil(math.log2(len(BASE_VARIANTS[name])))
+
+
+def _values(sym, K, cb, device):
+    return lut(cb, device)[states_from_symbols(sym, K)]
+
+
 @torch.no_grad()
 def rotated_levels(P, device="cuda"):
-    """Rotated-basis reconstructions {2: Q2, 3: Q3, 4: Q4} ([k, n] fp32) from the planes of one projection."""
+    """Rotated-basis reconstructions {2, 4: [k, n] fp32} of one projection from its planes."""
     m = P["meta"]; k, n, tk, tn = m["k"], m["n"], m["tk"], m["tn"]
-    perm = tc_perm(device)
-    order = shard_order(tk, tn, m["shard_axis"], device=device)
-    Kt = base_K_per_tile(m, device)[order]            # base K of each tile in stored order
-    raw = P["base"]["sym"].to(device)
-    vals = torch.empty((tk * tn, 256), device=device)
-    off = 0
-    # base tiles are stored back to back with K*32 bytes each
-    offs = torch.cat([torch.zeros(1, dtype=torch.long, device=device), torch.cumsum(Kt * 32, 0)])
-    for K in sorted(set(Kt.tolist())):
-        sel = (Kt == K).nonzero().flatten()
-        idx = offs[sel].unsqueeze(1) + torch.arange(32 * K, device=device)
-        sym = unpack_bits(raw[idx], K)
-        vals[order[sel]] = lut("mul1", device)[states_from_symbols(sym, K)]
-    Q2t = vals                                          # [tiles, 256] trellis order, flat (a, c)
-
-    def residual(plane, ids):
-        """ids: flat tile ids (stored order) present in `plane`; returns delta*g tiles in trellis order."""
-        sym = unpack_bits(plane["sym"].to(device), 2)
-        if "x_rows" in plane:                           # 3-bit tiles: top bit from p4x
-            xr = plane["x_rows"].to(device)             # positions in this plane that are K3
-            hi = unpack_bits(P["p4x"]["sym"].to(device), 1)[plane["x_src"].to(device)]
-            sym[xr] = sym[xr] | (hi << 2)
-            Kt_ = torch.full((len(ids),), 2, device=device, dtype=torch.long); Kt_[xr] = 3
-        else:
-            Kt_ = torch.full((len(ids),), 2, device=device, dtype=torch.long)
-        cb = plane["cb"].to(device).long()
-        g = torch.empty((len(ids), 256), device=device)
-        for K in (2, 3):
-            for ci, name in enumerate(CODEBOOKS):
-                sel = ((Kt_ == K) & (cb == ci)).nonzero().flatten()
-                if len(sel):
-                    g[sel] = lut(name, device)[states_from_symbols(sym[sel], K)]
-        d = delta_values(P, plane, ids, device)
-        return d.unsqueeze(1) * g
-
-    out = {2: Q2t}
-    ids_a = P["p4a"]["ids"].to(device).long(); ids_b = P["p4b"]["ids"].to(device).long()
-    Ra = residual(P["p4a"], ids_a); Rb = residual(P["p4b"], ids_b)
-    Q3 = Q2t.clone(); Q3[ids_a] = Q2t[ids_a] + Ra
-    Q4 = Q3.clone(); Q4[ids_b] = Q2t[ids_b] + Rb
-    out[3], out[4] = Q3, Q4
-    res = {}
-    pi = torch.argsort(perm)
-    for L, Qt in out.items():
-        nat = Qt[:, pi].view(tk, tn, 16, 16).permute(0, 2, 1, 3).reshape(k, n)
-        res[L] = nat.contiguous()
-    return res
-
-
-def delta_values(P, plane, ids, device):
-    m = P["meta"]
-    if m["delta_mode"] == "tile":
-        return plane["delta"].to(device).float()
-    # rank-1 fp16 map U[a] * V[c] rounded to fp16, sign per tile
-    U = P["p4a"]["U"].to(device).float(); V = P["p4a"]["V"].to(device).float()
-    a = ids // m["tn"]; c = ids % m["tn"]
-    d = (U[a] * V[c]).half().float()
-    return torch.where(plane["neg"].to(device).bool(), -d, d)
+    U = tk * tn
+    order, _ = unit_order(tk, tn, m["shard_axis"], device)
+    RI = ring_index(device).flatten()
+    Kb = torch.as_tensor(m["base_K"], device=device).view(tk, 1).expand(tk, tn).flatten()   # per chunk
+    # ---- base: units back to back in storage order, 256*K bytes each
+    raw = torch.cat([b.to(device) for b in P["base"]["shards"]])
+    Ks = Kb[order]
+    offs = torch.cat([torch.zeros(1, dtype=torch.long, device=device), torch.cumsum(Ks * 256, 0)])
+    Q2 = torch.empty(U, 2048, device=device)
+    for K in sorted(set(Ks.tolist())):
+        sel = (Ks == K).nonzero().flatten()
+        idx = offs[sel].unsqueeze(1) + torch.arange(256 * K, device=device)
+        sym = unpack_bits(raw[idx].view(-1, 32 * K), K)                 # [8*len, 256]
+        v = _values(sym, K, "mul1", device)
+        if m.get("base_var"):
+            var = torch.cat([b.to(device) for b in P["base"]["var"]]).long().view(U, 8)        # storage order
+            v = v * variant_table(m["base_var"], device)[var[sel]].view(-1, 1)
+        v = v.view(len(sel), 2048)
+        Q2[order[sel].unsqueeze(1), RI.unsqueeze(0)] = v
+    # ---- residual units
+    k3 = torch.zeros(U, dtype=torch.bool, device=device)
+    xsyms = torch.zeros(U, 8, 256, dtype=torch.long, device=device)
+    k3_ids = order[torch.cat([s.to(device) for s in P["p4x"]["mask"]]).bool()]            # storage order
+    if len(k3_ids):
+        hi = unpack_bits(torch.cat([s.to(device) for s in P["p4x"]["shards"]]).view(-1, 32), 1)
+        k3[k3_ids] = True
+        xsyms[k3_ids] = hi.view(-1, 8, 256)
+    pl = P["p4"]; uid = order
+    lo = unpack_bits(torch.cat([s.to(device) for s in pl["shards"]]).view(-1, 64), 2).view(-1, 8, 256)
+    cb = torch.cat([s.to(device) for s in pl["cb"]]).long() if pl["cb"] else torch.zeros(0, device=device)
+    if cb.numel() == 0:
+        cb = torch.zeros(len(uid), dtype=torch.long, device=device)
+    dl = torch.cat([s.to(device) for s in pl["delta"]]).float().view(len(uid), -1)        # [units, 1 or 8]
+    sym = lo | (xsyms[uid] << 2)
+    g = torch.empty(len(uid), 8, 256, device=device)
+    for K in (2, 3):
+        for ci, cbn in enumerate(CODEBOOKS):
+            sel = ((k3[uid] == (K == 3)) & (cb == ci)).nonzero().flatten()
+            if len(sel):
+                g[sel] = _values(sym[sel].view(-1, 256), K, cbn, device).view(-1, 8, 256)
+    d = dl.unsqueeze(-1) if dl.shape[1] == 8 else dl.view(-1, 1, 1)
+    r = torch.empty(len(uid), 2048, device=device)
+    r[:, RI] = (d * g).view(len(uid), 2048)
+    Q4 = Q2.clone(); Q4[uid] = Q2[uid] + r
+    Qs = {2: Q2, 4: Q4}
+    out = {}
+    for L, Qu in Qs.items():
+        out[L] = Qu.view(tk, tn, 128, 16).permute(0, 2, 1, 3).reshape(k, n).contiguous()
+    return out
 
 
 @torch.no_grad()
@@ -166,36 +199,61 @@ def dense_from_rotated(Q, suh, svh):
     return w.float().T.contiguous()
 
 
-def level_scales(P, level):
-    key = {2: "base", 3: "p4a", 4: "p4b"}[level]
-    return P[key]["suh"], P[key]["svh"]
+SCALE_PLANE = {2: "base", 4: "p4"}
 
 
 @torch.no_grad()
 def decode_matrix(P, level, device="cuda", rot=None):
     rot = rot if rot is not None else rotated_levels(P, device)
-    suh, svh = level_scales(P, level)
-    W = dense_from_rotated(rot[level], suh, svh)
-    m = P["meta"]
-    if m.get("out_perm") is not None:          # MiMo act-order: undo the intermediate-channel permutation
-        inv = torch.argsort(torch.as_tensor(m["out_perm"], device=W.device))
-        W = W[inv] if m["perm_axis"] == "out" else W[:, inv]
-    return W
+    pl = P[SCALE_PLANE[level]]
+    return dense_from_rotated(rot[level], pl["suh"].to(device), pl["svh"].to(device))
 
 
 @torch.no_grad()
 def decode_expert(art, level, device="cuda"):
-    """art: dict {gate, up, down: planes} (torch.load of an encoder artifact) -> [g, u, d] fp32 [out, in]."""
-    return [decode_matrix(art[p], level, device) for p in ("gate", "up", "down")]
+    """art = torch.load(encoder artifact): {gate, up, down: planes, meta}. -> [g, u, d] fp32 [out, in]
+    (un-permutes the intermediate channels if the artifact was fitted in act-order, e.g. the MiMo down split)."""
+    W = [decode_matrix(art[p], level, device) for p in ("gate", "up", "down")]
+    perm = art.get("meta", {}).get("inter_perm")
+    if perm is not None:
+        inv = torch.argsort(torch.as_tensor(perm, device=device))
+        W = [W[0][inv], W[1][inv], W[2][:, inv]]
+    return W
+
+
+def plane_bytes(P):
+    """Bytes per (plane, shard) for one projection (symbols + per-unit metadata + level scales, per shard)."""
+    out = {}
+    nsh = len(P["base"]["shards"])
+    for name in ("base", "p4", "p4x"):
+        pl = P[name]
+        per = []
+        for s in range(nsh):
+            b = pl["shards"][s].numel()
+            for key in ("delta", "cb", "mask", "var"):
+                if key in pl:
+                    if not pl[key]:
+                        continue
+                    t = pl[key][s]
+                    if key == "var":
+                        b += (t.numel() * variant_bits(P["meta"]["base_var"]) + 7) // 8; continue
+                    b += (t.numel() + 7) // 8 if key == "mask" else (t.numel() + 3) // 4 if key == "cb" else t.numel() * t.element_size()
+            per.append(b)
+        sc = 0
+        if "suh" in pl:     # scales: full input-side vector + the shard's output slice (gate/up); transposed for down
+            m = P["meta"]
+            sc = 2 * ((m["k"] + m["n"] // nsh) if m["shard_axis"] == "n" else (m["k"] // nsh + m["n"]))
+        out[name] = dict(min=min(per), max=max(per), scales=sc)
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("artifact"); ap.add_argument("--level", type=int, default=4, choices=[2, 3, 4])
-    ap.add_argument("--out"); ap.add_argument("--check-against", help="encoder's internal dense .pt {level: [g,u,d]}")
+    ap.add_argument("artifact"); ap.add_argument("--level", type=int, default=4, choices=[2, 4])
+    ap.add_argument("--out"); ap.add_argument("--check-against", help="encoder internal dense .pt {level: [g,u,d]}")
     a = ap.parse_args()
     torch.cuda.set_per_process_memory_fraction(12 / 80)
-    art = torch.load(a.artifact, weights_only=False)
+    art = torch.load(a.artifact, weights_only=False, map_location="cpu")
     W = decode_expert(art, a.level)
     if a.out:
         torch.save({k: w.cpu() for k, w in zip(["gate", "up", "down"], W)}, a.out)

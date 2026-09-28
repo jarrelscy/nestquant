@@ -1,0 +1,130 @@
+{
+ "EXL3_2": {
+  "all/forced": 40.208,
+  "all/routed": 39.353,
+  "control/forced": 39.122,
+  "control/routed": 33.675,
+  "ood/forced": 42.553,
+  "ood/routed": 42.425
+ },
+ "EXL3_4": {
+  "all/forced": 10.531,
+  "all/routed": 10.266,
+  "control/forced": 10.227,
+  "control/routed": 8.694,
+  "ood/forced": 11.187,
+  "ood/routed": 11.11
+ },
+ "uni_none@2": {
+  "all/forced": 40.04,
+  "all/routed": 39.44,
+  "control/forced": 39.082,
+  "control/routed": 34.476,
+  "ood/forced": 42.12,
+  "ood/routed": 42.163
+ },
+ "uni_none@4": {
+  "all/forced": 11.095,
+  "all/routed": 10.847,
+  "control/forced": 10.781,
+  "control/routed": 9.228,
+  "ood/forced": 11.774,
+  "ood/routed": 11.718
+ },
+ "gate=A4g_none,up=A4g_none,down=uni_none@2": {
+  "all/forced": 40.038,
+  "all/routed": 39.641,
+  "control/forced": 39.096,
+  "control/routed": 35.176,
+  "ood/forced": 42.084,
+  "ood/routed": 42.115
+ },
+ "gate=A4g_none,up=A4g_none,down=uni_none@4": {
+  "all/forced": 11.099,
+  "all/routed": 10.819,
+  "control/forced": 10.785,
+  "control/routed": 9.176,
+  "ood/forced": 11.777,
+  "ood/routed": 11.702
+ },
+ "A4pm_none@2": {
+  "all/forced": 40.051,
+  "all/routed": 39.299,
+  "control/forced": 39.13,
+  "control/routed": 34.301,
+  "ood/forced": 42.051,
+  "ood/routed": 42.039
+ },
+ "A4pm_none@4": {
+  "all/forced": 12.197,
+  "all/routed": 11.974,
+  "control/forced": 11.82,
+  "control/routed": 10.083,
+  "ood/forced": 13.006,
+  "ood/routed": 12.987
+ },
+ "A2pm_none@2": {
+  "all/forced": 44.12,
+  "all/routed": 43.221,
+  "control/forced": 43.008,
+  "control/routed": 37.333,
+  "ood/forced": 46.53,
+  "ood/routed": 46.425
+ },
+ "A2pm_none@4": {
+  "all/forced": 12.341,
+  "all/routed": 12.122,
+  "control/forced": 11.963,
+  "control/routed": 10.153,
+  "ood/forced": 13.151,
+  "ood/routed": 13.173
+ },
+ "gate=C1.75_greedy,up=C1.75_greedy,down=C2.5_uniform@2": {
+  "all/forced": 40.029,
+  "all/routed": 39.278,
+  "control/forced": 39.108,
+  "control/routed": 34.329,
+  "ood/forced": 42.032,
+  "ood/routed": 41.992
+ },
+ "gate=C1.75_greedy,up=C1.75_greedy,down=C2.5_uniform@4": {
+  "all/forced": 11.612,
+  "all/routed": 11.391,
+  "control/forced": 11.188,
+  "control/routed": 9.256,
+  "ood/forced": 12.514,
+  "ood/routed": 12.508
+ },
+ "gate=C1.75_alternate,up=C1.75_alternate,down=C2.5_uniform@2": {
+  "all/forced": 40.027,
+  "all/routed": 39.375,
+  "control/forced": 39.125,
+  "control/routed": 34.152,
+  "ood/forced": 41.988,
+  "ood/routed": 42.226
+ },
+ "gate=C1.75_alternate,up=C1.75_alternate,down=C2.5_uniform@4": {
+  "all/forced": 11.748,
+  "all/routed": 11.493,
+  "control/forced": 11.344,
+  "control/routed": 9.339,
+  "ood/forced": 12.61,
+  "ood/routed": 12.621
+ },
+ "gate=C1.75_positional,up=C1.75_positional,down=C2.5_uniform@2": {
+  "all/forced": 40.038,
+  "all/routed": 39.284,
+  "control/forced": 39.126,
+  "control/routed": 34.124,
+  "ood/forced": 42.019,
+  "ood/routed": 42.104
+ },
+ "gate=C1.75_positional,up=C1.75_positional,down=C2.5_uniform@4": {
+  "all/forced": 11.611,
+  "all/routed": 11.43,
+  "control/forced": 11.188,
+  "control/routed": 9.281,
+  "ood/forced": 12.514,
+  "ood/routed": 12.555
+ }
+}

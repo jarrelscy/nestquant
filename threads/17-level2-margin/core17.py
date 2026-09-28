@@ -97,7 +97,8 @@ def _block_ldl(Hm, sigma):
 
 @torch.no_grad()
 def quantize(W, H, *, K=2, sigma=0.5, seed=91426, base_q=None, lam=0.0, level4=False, G=None, sigma_out=None,
-             res_gain=1.0, gscale_mult=1.0, refit=True, prep_hook=None, post_hook=None, want_idx=False, gs_fixed=None):
+             res_gain=1.0, gscale_mult=1.0, refit=True, prep_hook=None, post_hook=None, want_idx=False, gs_fixed=None,
+             frozen_base=None, cd=None):
     """EXL3-frame quantization (rotation, regularize, g-scale, block-16 LDL, refit) with
     - base_q: callable(tiles[T,256], K) -> (q, idx) for the base code (default mul1 CUDA Viterbi)
     - level4: nested K2 mul1 residual plane with per-16x16-tile fp16 delta, separate E2/E4 feedback states
@@ -192,7 +193,10 @@ def quantize(W, H, *, K=2, sigma=0.5, seed=91426, base_q=None, lam=0.0, level4=F
             t2 = w + F2v[a, :, c, :]
             t4 = w + F4v[a, :, c, :] if F4v is not None else t2
             tb = t2 if not lam else (1 - lam) * t2 + lam * t4
-            q2, qi = tq(tb.reshape(-1, 256))
+            if frozen_base is not None:
+                q2, qi = frozen_base.view(tk, 16, tn, 16)[a, :, c, :], None
+            else:
+                q2, qi = tq(tb.reshape(-1, 256))
             Q2v[a, :, c, :] = q2
             if enc is not None: enc[a, c] = qi
             if level4:
@@ -209,6 +213,8 @@ def quantize(W, H, *, K=2, sigma=0.5, seed=91426, base_q=None, lam=0.0, level4=F
     torch.cuda.current_stream().wait_stream(stream); torch.cuda.synchronize()
     del F2, F4, Lk, Ln
     info = dict(g_scale=gs, aos=aos)
+    if cd is not None:
+        info["cd"] = cd(weight=weight, Hr=Hr, Q=Q2, tq=tq)
     E = weight - Q2
     info["proxy2"] = Qm.block_trace(E, Hr) / max(Qm.block_trace(weight, Hr), 1e-8)
     if level4:
@@ -231,7 +237,7 @@ def quantize(W, H, *, K=2, sigma=0.5, seed=91426, base_q=None, lam=0.0, level4=F
     if level4: out["W4"] = decode(Q4)
     if enc is not None: out["idx"] = enc
     if want_idx == "all":
-        out.update(Q2r=Q2, weight_r=weight, Hr=Hr)
+        out.update(Q2r=Q2, weight_r=weight, Hr=Hr, gs=gs)
     del H_orig
     torch.cuda.empty_cache()
     return out
@@ -260,3 +266,97 @@ def exl3_anchor(X, K, sig=SIG, alpha=0.75, **kw):
 
 def jdump(obj, path):
     json.dump(obj, open(path, "w"), indent=1, default=float)
+
+
+# ------------------------------------------------------------------ candidate 3: block coordinate descent on trellis tiles
+def make_cd(sweeps=2, order="rev", accept=True, damp_extra=0.0, log=None):
+    """After LDLQ: for each 16-row block b, target t_b = W_b - H_bb^-1 sum_{c!=b} H_bc E_c (E = Q - W), re-run the
+    tile Viterbi on t_b (MSE), keep each 16x16 tile's new path only if its exact H_bb loss drops."""
+    @torch.no_grad()
+    def cd(weight, Hr, Q, tq):
+        k, n = weight.shape; tk, tn = k // 16, n // 16
+        Hd = Hr.float()
+        hist = []
+        E = Q - weight
+        def total(): return float((E * (Hd @ E)).sum() / (weight * (Hd @ weight)).sum())
+        hist.append(total())
+        for sw in range(sweeps):
+            blocks = range(tk - 1, -1, -1) if (order == "rev") ^ (sw % 2 == 1 and order == "alt") else range(tk)
+            nacc = 0
+            for b in blocks:
+                r0, r1 = b * 16, b * 16 + 16
+                Hbb = Hd[r0:r1, r0:r1]
+                R = Hd[r0:r1] @ E - Hbb @ E[r0:r1]
+                shift = torch.linalg.solve(Hbb, R)
+                t = weight[r0:r1] - shift                               # (16, n)
+                tiles = t.reshape(16, tn, 16).permute(1, 0, 2)          # (tn, 16, 16)
+                qn, _ = tq(tiles.reshape(-1, 256))
+                qn = qn.permute(1, 0, 2).reshape(16, n)
+                # exact loss of block b given the rest: (e + shift)^T Hbb (e + shift), e = q - w
+                def bl(qq):
+                    z = qq - weight[r0:r1] + shift
+                    return (z * (Hbb @ z)).sum(0).view(tn, 16).sum(1)
+                lo, ln = bl(Q[r0:r1]), bl(qn)
+                m = (ln < lo) if accept else torch.ones_like(lo, dtype=torch.bool)
+                mm = m.repeat_interleave(16)[None]
+                Q[r0:r1] = torch.where(mm, qn, Q[r0:r1]); nacc += int(m.sum())
+                E[r0:r1] = Q[r0:r1] - weight[r0:r1]
+            hist.append(total())
+            if log: log(f"cd sweep {sw} proxy {hist[-1]:.6f} accepted {nacc}/{tk*tn}")
+        return hist
+    return cd
+
+
+# ------------------------------------------------------------------ sequential down (fit down against quantized hidden)
+@torch.no_grad()
+def hq_grams(X, gq, uq, alpha=0.75):
+    """Mixed (0.25 p^2 + 0.75 uniform) grams of quantized hidden Hq, cross C = sum h hq^T, teacher A (same normalisation)."""
+    g, u, d = X.W
+    Z = lambda: torch.zeros(2048, 2048, device="cuda", dtype=torch.float64)
+    o = {f"{k}{w}": Z() for k in "AQC" for w in "wu"}
+    gb, ub, gqb, uqb = g.bfloat16(), u.bfloat16(), gq.bfloat16(), uq.bfloat16()
+    for i in range(0, len(X.fit), 2048):
+        j = X.fit[i:i + 2048]; x = X.x[j].cuda(); p = X.p[j].cuda().float()[:, None]
+        a = (F.silu(F.linear(x, gb)) * F.linear(x, ub)).float(); aq = (F.silu(F.linear(x, gqb)) * F.linear(x, uqb)).float()
+        for w, wt in [("w", p), ("u", torch.ones_like(p))]:
+            A_, Q_ = (a * wt).double(), (aq * wt).double()
+            o["A" + w].addmm_(A_.T, A_); o["Q" + w].addmm_(Q_.T, Q_); o["C" + w].addmm_(A_.T, Q_)
+    sw, su_ = o["Aw"].diagonal().mean(), o["Au"].diagonal().mean()
+    mix = lambda k: ((1 - alpha) * o[k + "w"] / sw + alpha * o[k + "u"] / su_)
+    return mix("A"), mix("Q"), mix("C")
+
+
+def seq_down_target(X, gq, uq, ridge=1.0, alpha=0.75):
+    """W* = argmin sum ||W_d h - W hq||^2 + ridge*mean(diag Hq)*||W - W_d||^2  = W_d (C + r I)(Hq + r I)^-1."""
+    A, Hq, C = hq_grams(X, gq, uq, alpha)
+    lam = ridge * float(Hq.diagonal().mean())
+    I = torch.eye(2048, device="cuda", dtype=torch.float64)
+    Ws = (X.W[2].double() @ (C + lam * I) @ torch.linalg.inv(Hq + lam * I)).float()
+    return Ws, Hq.float(), A.float()
+
+
+# ------------------------------------------------------------------ candidate 2: per-tile affine codebook variants (free at decode:
+# the variant's (a, b) fold into mul1's final hfma constants, v = h*(a*k_inv) + a*k_bias + b)
+class VariantQ:
+    def __init__(self, variants, inner=EXT):
+        self.variants, self.inner, self.stats = variants, inner, torch.zeros(len(variants))
+    def __call__(self, tiles, K):
+        best = bi = None
+        for vi, (a, b) in enumerate(self.variants):
+            q, i = self.inner((tiles - b) / a, K)
+            q = q * a + b
+            m = (q - tiles).square().sum(1)
+            if best is None:
+                best, bq, bidx, sel = m, q, i, torch.zeros_like(m, dtype=torch.long)
+            else:
+                t = m < best
+                best = torch.where(t, m, best); bq = torch.where(t[:, None], q, bq); bidx = torch.where(t[:, None], i, bidx)
+                sel = torch.where(t, vi, sel)
+        self.stats += torch.bincount(sel.cpu(), minlength=len(self.variants)).float()
+        return bq, bidx
+    @property
+    def bits(self): return math.log2(len(self.variants))
+
+VARIANTS = {"sign": [(1.0, 0.0), (-1.0, 0.0)],
+            "sign_gain2": [(0.95, 0.0), (1.05, 0.0), (-0.95, 0.0), (-1.05, 0.0)],
+            "sign_gain4": [(s * g, 0.0) for g in (0.9, 0.97, 1.03, 1.1) for s in (1, -1)]}

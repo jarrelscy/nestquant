@@ -8,6 +8,7 @@ import torch.nn.functional as F
 sys.path.insert(0, '/home/coder/git/nestquant/threads/05-exl3-harness')
 sys.path.insert(0, '/home/coder/git/nestquant/threads/02-feedback-conflict')
 sys.path.insert(0, '/home/coder/git/orbit-duet')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as h
 h.gpu_cap(12)
 from fb import Problem
@@ -48,7 +49,12 @@ def tq(x, K, gain):
     """x [m, B] -> trellis-quantised along m (tiles of 256), per column. Returns (values, state idx)."""
     m, B = x.shape
     t = (x.T * gain).reshape(-1, 256).contiguous()
-    q, idx = TQ(t, K)
+    K = int(K) if float(K).is_integer() else float(K)
+    if (2 * K) % 1:                      # not a whole/half bit: pattern-rate torch Viterbi (patvit.py)
+        import patvit
+        q, idx = patvit.quantize_tiles(t, K)
+    else:
+        q, idx = TQ(t, K)
     return q.float().reshape(B, m).T / gain, idx.reshape(B, m).T
 
 

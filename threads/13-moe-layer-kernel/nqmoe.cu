@@ -9,19 +9,23 @@
 //   K2 (down):   grid (H/16/SB, I/kslice, S). Same dedup; h[slot] -> smem; GEMV; atomics into acc_d[slot]. The
 //       last-arriving block of a 128-row output group (counter over all runs) does the fused combine:
 //       out[b] = sum_k rw[b,k] * sv_o[e] (.) WHT128(acc_d[b*topk+k]), zeroing acc_d.
-// Levels 2/3/4 are a block-uniform branch on table[e].level (0 = expert not resident on this GPU -> contributes 0).
+// Levels are a block-uniform branch on table[e].level (0 = expert not resident on this GPU -> contributes 0; 2; 4).
 //
 // Plane layout (per expert, per projection; N rows x K cols; strip = 16 rows, chunk = 128 cols; C = K/128):
-//   base : uint4 per (strip, chunk, lane): 64 weights x 2 bit            -> (strip*C + c)*32 + lane
-//   P3   : residual records (uint4, 2 bit/w) of the n3 flagged chunks of each strip, compact
-//          -> (strip*n3 + rank_of_c_among_flagged)*32 + lane;  d3 (half2-dup uint32) -> strip*n3 + rank
-//   P4   : residual records of the C-n3 unflagged chunks, compact        -> (strip*(C-n3) + rank)*32 + lane; d4 idem
-//   flags: uint64 per strip, bit c = chunk c lives in P3 (C <= 64)
-//   level 2 = base; level 3 = base + P3 (flagged chunks refined); level 4 = base + P3 + P4 (all chunks refined).
-//   Strictly nested; constant bytes per (projection, plane) given n3.
+//   base : uint4 per (strip, chunk, lane): 64 weights x 2 bit            -> ((strip*C + c)*32 + lane)
+//   P4   : residual records, same layout as base (dense)                 -> ((strip*C + c)*32 + lane)
+//   d4   : one fp16 delta per 16x128 block, stored as a duplicated half2 (uint32) -> strip*C + c
+//   level 2 = base; level 4 = base + P4.  Optional mask mode (flags != null): uint64 per strip, bit c = chunk c is
+//   refined; P4/d4 are then compact over the nm flagged chunks of each strip (-> (strip*nm + rank)*32 + lane).
+//   Flags must be uniform over each 128-row group (8 strips) for thread-block-uniform branching.
+// Device table: int64 [E][16]
+//   [0] level (0, 2, 4)  [1..4] gate|up: base, p4, d4, flags(0 = dense)  [5..8] down: same
+//   [9] signs: half[H su_in | I sv_g | I sv_u | I su_d | H sv_o]      [10..15] reserved
 #include <cuda_fp16.h>
 #include <stdint.h>
 #include <set>
+#include <map>
+#include <tuple>
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 
@@ -38,6 +42,9 @@ __device__ __forceinline__ uint32_t wn(const uint32_t* w, int o)
 }
 __device__ __forceinline__ uint32_t mul1_raw(uint32_t v0, uint32_t v1)
 {
+#ifdef NQ_FAKE_HASH
+    return __byte_perm(v0, v1, 0x5410);   // diagnostic only: no hash
+#endif
     uint32_t x0 = v0 * 0x83DCD12Du, x1 = v1 * 0x83DCD12Du;
     uint32_t s0 = __dp4a(x0, 0x01010101u, 0x6400u), s1 = __dp4a(x1, 0x01010101u, 0x6400u);
     return __byte_perm(s0, s1, 0x5410);
@@ -50,15 +57,16 @@ __device__ __forceinline__ uint32_t hfma2u(uint32_t a, uint32_t s, uint32_t b)
 #define MUL1_A 0x1eee1eeeu
 #define MUL1_B 0xc931c931u
 
-struct Planes { const uint4* base; const uint4* p3; const uint4* p4; const uint32_t* d3; const uint32_t* d4; const uint64_t* flags; };
+// Planes of one projection of one expert. p4/d4 are indexed densely (every chunk refined) when flags == nullptr,
+// otherwise compactly over the flagged chunks of each strip (mask mode, nm flagged chunks per strip).
+struct Planes { const uint4* base; const uint4* p4; const uint32_t* d4; const uint64_t* flags; };
 
-// Per-(strip) decode context
-struct Ctx { size_t rec_base; int strip, C, n3; uint64_t fl; };
+struct Ctx { int strip, C, nm; uint64_t fl; };
 
+// LV: 2 = base only, 4 = base + P4 on every chunk, 5 = base + P4 on flagged chunks (mask mode)
 template <int LV, int CPW>
-struct Stage { uint32_t wb[CPW][4]; uint32_t wr[CPW][LV >= 3 ? 4 : 1]; uint32_t dl[CPW]; uint32_t on; };
+struct Stage { uint32_t wb[CPW][4]; uint32_t wr[CPW][LV >= 4 ? 4 : 1]; uint32_t dl[CPW]; uint32_t on; };
 
-// load CPW chunks starting at absolute chunk index ch0
 template <int LV, int CPW>
 __device__ __forceinline__ void load_stage(Stage<LV, CPW>& S, const Planes& P, const Ctx& X, int ch0, int lane)
 {
@@ -67,19 +75,25 @@ __device__ __forceinline__ void load_stage(Stage<LV, CPW>& S, const Planes& P, c
     for (int c = 0; c < CPW; ++c)
     {
         const int ch = ch0 + c;
-        const size_t rec = ((size_t)X.strip * X.C + ch) * 32 + lane;
-        uint4 v = P.base[rec]; S.wb[c][0] = v.x; S.wb[c][1] = v.y; S.wb[c][2] = v.z; S.wb[c][3] = v.w;
-        if constexpr (LV >= 3)
+        const size_t rec = (size_t)X.strip * X.C + ch;
+#ifdef NQ_FAKE_LOAD
+        uint4 v = make_uint4(rec * 0x9E3779B9u, rec ^ 0x1234567u, rec * 7u, lane * 13u + ch);
+#else
+        uint4 v = P.base[rec * 32 + lane];
+#endif
+        S.wb[c][0] = v.x; S.wb[c][1] = v.y; S.wb[c][2] = v.z; S.wb[c][3] = v.w;
+        if constexpr (LV >= 4)
         {
-            const bool f = (X.fl >> ch) & 1;
-            const int r3 = __popcll(X.fl & ((1ull << ch) - 1ull));
-            const uint4* src = nullptr; const uint32_t* dsrc = nullptr; size_t ri = 0;
-            if (f) { ri = (size_t)X.strip * X.n3 + r3; src = P.p3; dsrc = P.d3; }
-            else if (LV == 4) { ri = (size_t)X.strip * (X.C - X.n3) + (ch - r3); src = P.p4; dsrc = P.d4; }
-            if (src)
+            size_t ri = rec; bool on = true;
+            if constexpr (LV == 5)
             {
-                uint4 u = src[ri * 32 + lane]; S.wr[c][0] = u.x; S.wr[c][1] = u.y; S.wr[c][2] = u.z; S.wr[c][3] = u.w;
-                S.dl[c] = __ldg(dsrc + ri);
+                on = (X.fl >> ch) & 1;
+                ri = (size_t)X.strip * X.nm + __popcll(X.fl & ((1ull << ch) - 1ull));
+            }
+            if (on)
+            {
+                uint4 u = P.p4[ri * 32 + lane]; S.wr[c][0] = u.x; S.wr[c][1] = u.y; S.wr[c][2] = u.z; S.wr[c][3] = u.w;
+                S.dl[c] = __ldg(P.d4 + ri);
                 S.on |= 1u << c;
             }
         }
@@ -132,7 +146,11 @@ __device__ __forceinline__ void chunk_mma(const uint32_t* w, const uint32_t* wr,
         for (int r = 0; r < 4; ++r) a[r] = dec_pair<RES>(w, wr, t * 4 + r, Bp, dA);
         uint32_t b0 = 0, b1 = 0;
         if (g < ntok) { const half* xr = xs + g * kslice + kc + t * 16 + t4 * 2; b0 = *(const uint32_t*)xr; b1 = *(const uint32_t*)(xr + 8); }
+#ifdef NQ_ACC2
+        mma16816(acc + (t & 1) * 4, a, b0, b1);   // two independent accumulator chains
+#else
         mma16816(acc, a, b0, b1);
+#endif
     }
 }
 template <int LV, int G, int CPW>
@@ -190,14 +208,11 @@ __device__ __forceinline__ void st4h(half* p, const float* v)
     uint2 u; u.x = *(uint32_t*)&h0; u.y = *(uint32_t*)&h1; *(uint2*)p = u;
 }
 
-// Device table: int64 [E][16]
-//  [0] level (0 absent, 2, 3, 4)   [1..6] gate|up planes: base, p3, p4, d3, d4, flags   [7..12] down planes (same)
-//  [13] signs: half[H su_in | I sv_g | I sv_u | I su_d | H sv_o]      [14,15] reserved
 #define TBL_W 16
 struct MoeArgs
 {
     const half* x; const int64_t* sel; const half* rw; int B, topk;
-    const int64_t* table; int H, I; int n3_gu, n3_dn;
+    const int64_t* table; int H, I; int nm_gu, nm_dn;
     float* acc_gu; half* h; float* acc_d; float* out;
     int* cnt_gu; int* cnt_d; int NST;
     int force_level;   // debug: >0 overrides table level
@@ -221,8 +236,10 @@ __device__ __forceinline__ void route(const MoeArgs& a, int z, RunInfo* R, int l
     const bool leader = ok && lane == __ffs(m) - 1;
     const unsigned lm = __ballot_sync(0xffffffffu, leader);
     if (lane == 0) R->nruns = __popc(lm);
-    if (leader && __popc(lm & ((1u << lane) - 1u)) == z)
+    const int rank = __popc(lm & ((1u << lane) - 1u));
+    if (leader && (z < 0 || rank == z))
     {
+        if (z < 0) R += rank;
         R->e = (int)e; R->ent = a.table + e * TBL_W;
         int lv = (int)R->ent[0]; if (a.force_level) lv = a.force_level; R->level = lv;
         int n = 0; unsigned mm = m;
@@ -232,11 +249,11 @@ __device__ __forceinline__ void route(const MoeArgs& a, int z, RunInfo* R, int l
 }
 
 template <int LV, int G, int CPW>
-__device__ __forceinline__ void gemv_body(const Planes& P, int strip, int C, int n3, int chunk0, int NST, float* acc,
+__device__ __forceinline__ void gemv_body(const Planes& P, int strip, int C, int nm, int chunk0, int NST, float* acc,
                                           const half* xs, int kslice, int lane, int ntok)
 {
-    Ctx X; X.strip = strip; X.C = C; X.n3 = n3; X.fl = 0;
-    if constexpr (LV >= 3) X.fl = __ldg((const unsigned long long*)P.flags + strip);
+    Ctx X; X.strip = strip; X.C = C; X.nm = nm; X.fl = 0;
+    if constexpr (LV == 5) X.fl = __ldg((const unsigned long long*)P.flags + strip);
     Stage<LV, CPW> SA, SB_;
     load_stage<LV, CPW>(SA, P, X, chunk0, lane);
     if (NST > 1) load_stage<LV, CPW>(SB_, P, X, chunk0 + CPW, lane);
@@ -255,28 +272,24 @@ __device__ __forceinline__ void gemv_body(const Planes& P, int strip, int C, int
 __device__ __forceinline__ Planes planes_of(const int64_t* ent, int off)
 {
     Planes P;
-    P.base = (const uint4*)ent[off]; P.p3 = (const uint4*)ent[off + 1]; P.p4 = (const uint4*)ent[off + 2];
-    P.d3 = (const uint32_t*)ent[off + 3]; P.d4 = (const uint32_t*)ent[off + 4]; P.flags = (const uint64_t*)ent[off + 5];
+    P.base = (const uint4*)ent[off]; P.p4 = (const uint4*)ent[off + 1];
+    P.d4 = (const uint32_t*)ent[off + 2]; P.flags = (const uint64_t*)ent[off + 3];
     return P;
 }
 
 // MODE 0: gate|up (N = 2I, K = H). MODE 1: down (N = H, K = I).
+// One work item = (run z, row block bx, k-slice by). NY = number of k-slices. Must be called by the whole block.
 template <int G, int CPW, int MODE>
-__global__ void __launch_bounds__(256) nq_moe(MoeArgs a)
+__device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int nruns, int z, int bx, int by, int NY,
+                                        uint32_t* smem, int* last_s)
 {
-    extern __shared__ uint32_t smem[];
-    __shared__ RunInfo R;
-    __shared__ int last;
+    int& last = *last_s;
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5, SB = blockDim.x >> 5;
-    const int z = blockIdx.z;
-    if (warp == 0) route(a, z, &R, lane);
-    __syncthreads();
-    if (z >= R.nruns) return;
     const int N = MODE == 0 ? 2 * a.I : a.H, K = MODE == 0 ? a.H : a.I;
-    const int strip = blockIdx.x * SB + warp;
-    const int C = K / 128, kslice = CPW * a.NST * 128, k0 = blockIdx.y * kslice;
+    const int strip = bx * SB + warp;
+    const int C = K / 128, kslice = CPW * a.NST * 128, k0 = by * kslice;
     const int ntok = R.ntok, lv = R.level;
-    const half* signs = (const half*)R.ent[13];
+    const half* signs = (const half*)R.ent[9];
     half* xs = (half*)smem;
 
     // prologue: stage the run's token inputs for this k-slice
@@ -304,14 +317,22 @@ __global__ void __launch_bounds__(256) nq_moe(MoeArgs a)
     }
     __syncthreads();
 
-    float acc[4] = {0, 0, 0, 0};
-    const Planes P = planes_of(R.ent, MODE == 0 ? 1 : 7);
-    const int n3 = MODE == 0 ? a.n3_gu : a.n3_dn;
-    const int chunk0 = blockIdx.y * CPW * a.NST;
-    if (lv == 2) gemv_body<2, G, CPW>(P, strip, C, n3, chunk0, a.NST, acc, xs, kslice, lane, ntok);
-    else if (lv == 3) gemv_body<3, G, CPW>(P, strip, C, n3, chunk0, a.NST, acc, xs, kslice, lane, ntok);
-    else gemv_body<4, G, CPW>(P, strip, C, n3, chunk0, a.NST, acc, xs, kslice, lane, ntok);
+    float acc[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    const Planes P = planes_of(R.ent, MODE == 0 ? 1 : 5);
+    const int nm = MODE == 0 ? a.nm_gu : a.nm_dn;
+    const int chunk0 = by * CPW * a.NST;
+#ifndef NQ_SKIP_GEMV
+    if (lv == 2) gemv_body<2, G, CPW>(P, strip, C, nm, chunk0, a.NST, acc, xs, kslice, lane, ntok);
+#ifndef NQ_NO_MASK
+    else if (P.flags) gemv_body<5, G, CPW>(P, strip, C, nm, chunk0, a.NST, acc, xs, kslice, lane, ntok);
+#endif
+    else gemv_body<4, G, CPW>(P, strip, C, nm, chunk0, a.NST, acc, xs, kslice, lane, ntok);
+#endif
 
+#ifdef NQ_ACC2
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) acc[i] += acc[4 + i];
+#endif
     float* accb = MODE == 0 ? a.acc_gu : a.acc_d;
     {
         const int g = lane >> 2, t4 = lane & 3;
@@ -323,10 +344,10 @@ __global__ void __launch_bounds__(256) nq_moe(MoeArgs a)
         }
     }
     // arrival counters
-    const int rows0 = blockIdx.x * SB * 16;
+    const int rows0 = bx * SB * 16;
     const int grp = MODE == 0 ? (rows0 % a.I) / 128 : rows0 / 128;
     int* cnt = MODE == 0 ? a.cnt_gu + z * (a.I / 128) + grp : a.cnt_d + grp;
-    const int expect = (MODE == 0 ? 2 : R.nruns) * gridDim.y * (128 / (SB * 16));
+    const int expect = (MODE == 0 ? 2 : nruns) * NY * (128 / (SB * 16));
     __syncthreads();
     if (threadIdx.x == 0)
     {
@@ -335,7 +356,7 @@ __global__ void __launch_bounds__(256) nq_moe(MoeArgs a)
         last = (prev == expect - 1);
     }
     __syncthreads();
-    if (!last) return;
+    if (!last) return;   // block-uniform
     if constexpr (MODE == 0)
     {
         const half* sv_g = signs + a.H; const half* sv_u = sv_g + a.I; const half* su_d = sv_u + a.I;
@@ -379,7 +400,7 @@ __global__ void __launch_bounds__(256) nq_moe(MoeArgs a)
                 int64_t e = a.sel[s]; float w = __half2float(a.rw[s]);
                 const int64_t* ent = a.table + e * TBL_W;
                 if (w == 0.f || ent[0] <= 0) continue;
-                const half* sv_o = (const half*)ent[13] + a.H + 3 * a.I;
+                const half* sv_o = (const half*)ent[9] + a.H + 3 * a.I;
                 float* p = a.acc_d + (size_t)s * a.H + grp * 128 + lane * 4;
                 float4 f = __ldcg((const float4*)p); __stcg((float4*)p, make_float4(0, 0, 0, 0));
                 float v[4] = {f.x, f.y, f.z, f.w}, sg[4];
@@ -405,46 +426,131 @@ __global__ void __launch_bounds__(256) nq_moe(MoeArgs a)
     if (threadIdx.x == 0) *cnt = 0;
 }
 
+#ifndef NQ_MINB
+#define NQ_MINB 4
+#endif
+// grid-mapped kernel: grid (N/16/SB, K/kslice, B*topk); blocks with z >= nruns exit
+template <int G, int CPW, int MODE>
+__global__ void __launch_bounds__(256, NQ_MINB) nq_moe(MoeArgs a)
+{
+    extern __shared__ uint32_t smem[];
+    __shared__ RunInfo R;
+    __shared__ int nr, last;
+    if (threadIdx.x < 32) { route(a, blockIdx.z, &R, threadIdx.x); if (threadIdx.x == 0) nr = R.nruns; }
+    __syncthreads();
+    if ((int)blockIdx.z >= nr) return;
+    do_item<G, CPW, MODE>(a, R, nr, blockIdx.z, blockIdx.x, blockIdx.y, gridDim.y, smem, &last);
+}
+
+// persistent kernel: gridDim.x resident blocks pull items from a device work counter (wq[0]); the last block to leave
+// resets the counters (wq[0], wq[1]) so the kernel is graph-replayable. Items are run-major.
+template <int G, int CPW, int MODE>
+__global__ void __launch_bounds__(256, NQ_MINB) nq_moe_p(MoeArgs a, int NX, int NY, int* wq)
+{
+    extern __shared__ uint32_t smem[];
+    __shared__ RunInfo R[32];
+    __shared__ int nr, last, item;
+    if (threadIdx.x < 32)
+    {
+        route(a, -1, R, threadIdx.x);
+        __syncwarp();
+        if (threadIdx.x == 0) nr = R[0].nruns;
+    }
+    __syncthreads();
+    const int total = nr * NX * NY;
+    while (true)
+    {
+        if (threadIdx.x == 0) item = atomicAdd(wq, 1);
+        __syncthreads();
+        const int it = item;
+        if (it >= total) break;
+        const int z = it / (NX * NY), r = it % (NX * NY);
+        do_item<G, CPW, MODE>(a, R[z], nr, z, r % NX, r / NX, NY, smem, &last);
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+    {
+        __threadfence();
+        if (atomicAdd(wq + 1, 1) == (int)gridDim.x - 1) { wq[0] = 0; wq[1] = 0; __threadfence(); }
+    }
+}
+
 typedef void (*kfn)(MoeArgs);
+typedef void (*kfp)(MoeArgs, int, int, int*);
 template <int MODE> kfn pick(int g, int cpw)
 {
     if (g == 2) { if (cpw == 1) return nq_moe<2, 1, MODE>; if (cpw == 2) return nq_moe<2, 2, MODE>; }
     if (g == 4) { if (cpw == 1) return nq_moe<4, 1, MODE>; if (cpw == 2) return nq_moe<4, 2, MODE>; }
     return nullptr;
 }
+template <int MODE> kfp pickp(int g, int cpw)
+{
+    if (g == 2) { if (cpw == 1) return nq_moe_p<2, 1, MODE>; if (cpw == 2) return nq_moe_p<2, 2, MODE>; }
+    if (g == 4) { if (cpw == 1) return nq_moe_p<4, 1, MODE>; if (cpw == 2) return nq_moe_p<4, 2, MODE>; }
+    return nullptr;
+}
+static int resident_blocks(const void* f, int threads, int shm)
+{
+    static std::map<std::tuple<const void*, int, int>, int> cache;
+    auto k = std::make_tuple(f, threads, shm);
+    auto it = cache.find(k); if (it != cache.end()) return it->second;
+    cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, 100 * 1024);
+    int nb = 0, dev = 0, sms = 0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, f, threads, shm);
+    cudaGetDevice(&dev); cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
+    return cache[k] = nb * sms;
+}
 
-// cfg_gu/cfg_dn: (cpw, sb, nst). ws: acc_gu [S,2I] f32, h [S,I] f16, acc_d [S,H] f32, cnt_gu [S*I/128] i32, cnt_d [H/128] i32
+// One MoE layer forward (graph-capturable; all routing/level/pointer decisions are read on device).
+// cfg_gu/cfg_dn: (cpw, sb, nst[, persistent]).  ws: acc_gu [S,2I] f32, h [S,I] f16, acc_d [S,H] f32,
+// cnt_gu [S*I/128] i32, cnt_d [H/128] i32, wq [4] i32 (persistent work counters) -- all zero on entry, zero on exit.
 void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Tensor table, torch::Tensor out,
                  torch::Tensor acc_gu, torch::Tensor h, torch::Tensor acc_d, torch::Tensor cnt_gu, torch::Tensor cnt_d,
-                 int64_t I, int64_t n3_gu, int64_t n3_dn, std::vector<int64_t> cfg_gu, std::vector<int64_t> cfg_dn,
-                 int64_t G, int64_t force_level, int64_t which)
+                 torch::Tensor wq, int64_t I, int64_t nm_gu, int64_t nm_dn, std::vector<int64_t> cfg_gu,
+                 std::vector<int64_t> cfg_dn, int64_t G, int64_t force_level, int64_t which)
 {
     MoeArgs a{};
     a.x = (const half*)x.data_ptr(); a.sel = (const int64_t*)sel.data_ptr(); a.rw = (const half*)rw.data_ptr();
     a.B = x.size(0); a.topk = sel.size(1); a.table = (const int64_t*)table.data_ptr(); a.H = x.size(1); a.I = I;
-    a.n3_gu = n3_gu; a.n3_dn = n3_dn; a.acc_gu = (float*)acc_gu.data_ptr(); a.h = (half*)h.data_ptr();
+    a.nm_gu = nm_gu; a.nm_dn = nm_dn; a.acc_gu = (float*)acc_gu.data_ptr(); a.h = (half*)h.data_ptr();
     a.acc_d = (float*)acc_d.data_ptr(); a.out = (float*)out.data_ptr(); a.cnt_gu = (int*)cnt_gu.data_ptr(); a.cnt_d = (int*)cnt_d.data_ptr();
     a.force_level = force_level;
     const int S = a.B * a.topk;
     TORCH_CHECK(S <= 32 && a.B <= 8, "B*topk <= 32");
     TORCH_CHECK(a.H % 128 == 0 && I % 128 == 0 && a.H / 128 <= 64 && I / 128 <= 64);
     auto st = at::cuda::getCurrentCUDAStream();
-    static std::set<kfn> done;
     for (int mode = 0; mode < 2; ++mode)
     {
         if (!((which >> mode) & 1)) continue;
         auto& cf = mode == 0 ? cfg_gu : cfg_dn;
-        int cpw = cf[0], sb = cf[1], nst = cf[2];
+        int cpw = cf[0], sb = cf[1], nst = cf[2], pers = cf.size() > 3 ? cf[3] : 0;
         int N = mode == 0 ? 2 * I : a.H, K = mode == 0 ? a.H : I;
         int kslice = cpw * nst * 128;
         TORCH_CHECK(K % kslice == 0 && (N / 16) % sb == 0 && sb <= 8 && 128 % (sb * 16) == 0, "bad cfg");
         a.NST = nst;
-        kfn f = mode == 0 ? pick<0>(G, cpw) : pick<1>(G, cpw);
-        TORCH_CHECK(f, "no kernel");
         int shm = std::max(8 * kslice * 2, std::max(8 * 2 * 128 * 4, sb * 128 * 4));
-        if (!done.count(f)) { cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, 100 * 1024); done.insert(f); }
-        dim3 grid(N / 16 / sb, K / kslice, S);
-        f<<<grid, 32 * sb, shm, st>>>(a);
+        int NX = N / 16 / sb, NY = K / kslice;
+        if (!pers)
+        {
+            kfn f = mode == 0 ? pick<0>(G, cpw) : pick<1>(G, cpw);
+            TORCH_CHECK(f, "no kernel");
+            resident_blocks((const void*)f, 32 * sb, shm);
+            f<<<dim3(NX, NY, S), 32 * sb, shm, st>>>(a);
+        }
+        else
+        {
+            kfp f = mode == 0 ? pickp<0>(G, cpw) : pickp<1>(G, cpw);
+            TORCH_CHECK(f, "no kernel");
+            int nb = std::min(resident_blocks((const void*)f, 32 * sb, shm) * (int)pers, NX * NY * S);
+            f<<<nb, 32 * sb, shm, st>>>(a, NX, NY, (int*)wq.data_ptr() + 2 * mode);
+        }
     }
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); }
+int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
+{
+    kfn f = mode == 0 ? pick<0>(G, cpw) : pick<1>(G, cpw);
+    cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, 100 * 1024);
+    int nb = 0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, f, 32 * sb, shm);
+    cudaFuncAttributes at; cudaFuncGetAttributes(&at, f);
+    return nb * 1000000 + at.numRegs * 1000 + at.localSizeBytes;
+}
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("occ", &occ); }
