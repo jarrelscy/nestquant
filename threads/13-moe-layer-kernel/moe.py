@@ -56,7 +56,7 @@ class Proj:
     """Random packed planes of one projection of one expert (separate tensors so they can live in pools).
     base: int32 [S*C*32*4] (uint4 per record). p4: int32 view of the packed residual sub-arrays. d4: int32 Mb|N<<8 per block.
     mbn: 'rand' (realistic delta ~0.1-0.8 plus random extremes) or ('exh', offset): cycle through every valid (Mb, N)."""
-    def __init__(s,N,K,gen,nm=None,rk=0,mbn='rand'):
+    def __init__(s,N,K,gen,nm=None,rk=0,mbn='rand',var=False):
         z=proj_sizes(N,K,nm,rk);s.z=z;s.N,s.K,s.rk=N,K,rk
         S,C=z['S'],z['C'];R=C if nm is None else nm;nr=S*R*32;bits=rbits(rk);nw=(bits+31)//32
         ri=lambda n:torch.randint(-2**31,2**31-1,(n,),generator=gen,dtype=torch.int32)
@@ -73,10 +73,11 @@ class Proj:
         else:
             L=all_MbN();idx=(torch.arange(nb)+mbn[1])%len(L);Mb,Nn=L[idx,0],L[idx,1]
         s.Mb,s.Nn=Mb,Nn;s.d4=(Mb|(Nn<<8)).to(torch.int32)
+        s.var=torch.randint(0,256,(S*C,),generator=gen,dtype=torch.int64).to(torch.uint8) if var else None   # base variant signs
         if nm is None:s.flags=None;s.fl=None
         else:s.flags,s.fl=make_flags(S,C,nm,gen)
     def to(s,dev):
-        for k in ['base','p4','d4','flags','p4w','Mb','Nn']:
+        for k in ['base','p4','d4','flags','p4w','Mb','Nn','var']:
             if getattr(s,k) is not None:setattr(s,k,getattr(s,k).to(dev))
         return s
 
@@ -99,19 +100,22 @@ def lane_sums(w,nbits,KA,MASK,G,chunk=1<<14):
         st=(b[:,idx].long()*pw).sum(-1)                               # [rings, 64G]
         out[a:a+chunk]=_S(st).reshape(-1,64)
     return out
-def fold_vals(Sb,Sr,Mb,N):
+def fold_vals(Sb,Sr,Mb,N,sg=1.0):
     """ref15_spec.fold in torch (fp32 ops in spec order), Mb/N broadcast [..,1]"""
     rc=RCP.to(Sb.device)[Mb]
     Ah=(np.float32(1.732421875)*rc).half()
     t=(N.float()*rc)*np.float32(K0);t=t+np.float32(K0);C=(t-1024*Ah.float()).half()
     F=(Mb*Sb+N*Sr+128)>>8
-    return (Ah.double()*(1024+F)+C.double()).half()
+    return ((sg*Ah.double())*(1024+F)+sg*C.double()).half()     # sg = base variant sign (+-1, exact in fp16)
 def lane_vals(p,level,G):
     """decoded fp16 weights [S, C, 32, 64] in lane-weight order"""
     z=p.z;S,C=z['S'],z['C'];dev=p.base.device
     wb=(p.base.long()&0xFFFFFFFF).view(-1,4)
     Sb=lane_sums(wb,128,2,0,G).view(S,C,32,64)
-    q2=(A_*(1024+Sb.double())+B_).half()
+    sg=1.0
+    if getattr(p,'var',None) is not None:
+        assert G==4;bit=(p.var.long().view(S,C,1)>>(torch.arange(32,device=dev)>>2))&1;sg=(1-2*bit).double()[...,None]
+    q2=((sg*A_)*(1024+Sb.double())+sg*B_).half()
     if level==2:return q2
     KA,M=RKP[p.rk];R=C if p.fl is None else z['nm']
     Sr=lane_sums(p.p4w,rbits(p.rk),KA,M,G).view(S,R,32,64)
@@ -119,7 +123,7 @@ def lane_vals(p,level,G):
     if p.fl is None:on=torch.ones(S,C,dtype=torch.bool,device=dev);rank=torch.arange(C,device=dev)[None].expand(S,C)
     else:on=p.fl.to(dev);rank=(torch.cumsum(on.long(),1)-on.long()).clamp(max=R-1)
     si=torch.arange(S,device=dev)[:,None].expand(S,C)
-    q4=fold_vals(Sb,Sr[si,rank],Mb[si,rank][...,None,None],Nn[si,rank][...,None,None])
+    q4=fold_vals(Sb,Sr[si,rank],Mb[si,rank][...,None,None],Nn[si,rank][...,None,None],sg)
     return torch.where(on[...,None,None],q4,q2)
 def dense_W(p,level,G=4,dtype=torch.float32):
     """Independent dense decode of one projection at level 2 or 4 -> [N,K] (bit-exact fp16 values)."""
@@ -139,23 +143,24 @@ def H128(dev='cuda'):
     return (H/128**0.5).to(dev)
 
 class Expert:
-    def __init__(s,H,I,seed,nm_gu=None,nm_dn=None,dev='cuda',rk_gu=0,rk_dn=0,mbn='rand'):
+    def __init__(s,H,I,seed,nm_gu=None,nm_dn=None,dev='cuda',rk_gu=0,rk_dn=0,mbn='rand',var=False):
         gen=torch.Generator().manual_seed(seed)
-        s.gu=Proj(2*I,H,gen,nm_gu,rk_gu,mbn).to(dev);s.dn=Proj(H,I,gen,nm_dn,rk_dn,mbn if mbn=='rand' else ('exh',mbn[1]+(2*I//16)*(H//128))).to(dev)
-        s.signs=((torch.randint(0,2,(2*H+3*I,),generator=gen)*2-1).half()).to(dev)
+        s.gu=Proj(2*I,H,gen,nm_gu,rk_gu,mbn,var).to(dev);s.dn=Proj(H,I,gen,nm_dn,rk_dn,mbn if mbn=='rand' else ('exh',mbn[1]+(2*I//16)*(H//128)),var).to(dev)
+        sg=torch.randint(0,2,(2*H+3*I,),generator=gen)*2-1;su_u=torch.randint(0,2,(H,),generator=gen)*2-1
+        s.signs=torch.cat([sg,su_u]).half().to(dev)      # [H su_g | I sv_g | I sv_u | I su_d | H sv_o | H su_u]
         s.H,s.I=H,I
     def bytes(s,level):
         b=0
         for p in (s.gu,s.dn):
-            b+=p.base.numel()*4
+            b+=p.base.numel()*4+(0 if getattr(p,'var',None) is None else p.var.numel())
             if level>=4:b+=(p.p4.numel()+p.d4.numel())*4+(0 if p.flags is None else p.flags.numel()*8)
         return b
     def ref(s,x,level,G=4):
         """x [T,H] fp32 -> [T,H] fp32, through the dense-decoded weights."""
         H,I=s.H,s.I;Hm=H128(x.device);wht=lambda v:(v.view(*v.shape[:-1],-1,128)@Hm).view(v.shape)
-        sg=s.signs.float();su,svg,svu,sud,svo=sg[:H],sg[H:H+I],sg[H+I:H+2*I],sg[H+2*I:H+3*I],sg[H+3*I:]
+        sg=s.signs.float();su,svg,svu,sud,svo,suu=sg[:H],sg[H:H+I],sg[H+I:H+2*I],sg[H+2*I:H+3*I],sg[H+3*I:2*H+3*I],sg[2*H+3*I:]
         Wg=dense_W(s.gu,level,G);Wd=dense_W(s.dn,level,G)
-        xr=wht(x*su).half().float();a=xr@Wg.T
+        xg=wht(x*su).half().float();xu=wht(x*suu).half().float();a=torch.cat([xg@Wg[:I].T,xu@Wg[I:].T],1)
         g=wht(a[:,:I])*svg;u=wht(a[:,I:])*svu
         h=wht(torch.nn.functional.silu(g)*u*sud).half().float()
         return wht(h@Wd.T)*svo
@@ -167,6 +172,8 @@ def entry(ex,level):
         for i,k in enumerate(['base','p4','d4','flags']):
             t=getattr(p,k);e[off+i]=0 if t is None else t.data_ptr()
     e[9]=ex.signs.data_ptr();e[10]=ex.gu.rk;e[11]=ex.dn.rk
+    for i,p in ((12,ex.gu),(13,ex.dn)):
+        v=getattr(p,'var',None);e[i]=0 if v is None else v.data_ptr()
     return e
 
 class MoELayer:
@@ -180,7 +187,11 @@ class MoELayer:
         s.cnt_gu=torch.zeros(S*(I//128),dtype=torch.int32,device=dev);s.cnt_d=torch.zeros(H//128,dtype=torch.int32,device=dev);s.wq=torch.zeros(4,dtype=torch.int32,device=dev)
         s.out=torch.zeros(Bmax,H,device=dev)
         s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2];s.hits_ptr=0   # set to a (host-mapped) int32 [E] pointer to export routing hits
-    def set(s,e,ex,level):s.table[e].copy_(entry(ex,level).to(s.table.device),non_blocking=False)
+    def set(s,e,ex,level):
+        if level==4:
+            if not hasattr(s,'rkm'):s.rkm=s.M.rk_codes() if hasattr(s.M,'rk_codes') else [255,255]
+            assert s.rkm[0]>>ex.gu.rk&1 and s.rkm[1]>>ex.dn.rk&1,f'residual K code gu {ex.gu.rk} / dn {ex.dn.rk} not compiled (rk_codes {s.rkm})'
+        s.table[e].copy_(entry(ex,level).to(s.table.device),non_blocking=False)
     def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None):
         out=s.out[:x.shape[0]] if out is None else out
         s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,

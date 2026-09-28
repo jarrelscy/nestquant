@@ -25,17 +25,37 @@
 //   Ring streams are tail-biting over G lanes (G = 4: lanes 4g..4g+3 = one ring of 256 weights; G = 2: lane pairs).
 // Device table: int64 [E][16]
 //   [0] level (0, 2, 4)  [1..4] gate|up: base, p4, d4, flags(0 = dense)  [5..8] down: same
-//   [9] signs: half[H su_in | I sv_g | I sv_u | I su_d | H sv_o]
+//   [9] scales: half[H su_g | I sv_g | I sv_u | I su_d | H sv_o | H su_u] (EXL3 suh/svh; gate and up have separate
+//        input scales; the level's own scale vector: T12 stores separate level-2 / level-4 scales)
 //   [10] gate|up residual K code, [11] down residual K code (0: K=2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5, 6: 1.9375, 7: 2.3125; codes
-//        outside NQ_RK_CODES fall back to code 0)      [12..15] reserved
+//        outside NQ_RK_CODES / NQ_RK_GU / NQ_RK_DN fall back to code 0)
+//   [12] gate|up base-variant plane, [13] down (0 = none): uint8 per unit (strip*C + c, dense), bit g = sign of ring g
+//        (T12 base_var 'sign': a = -1 negates the ring's level-2 and level-4 values exactly). G = 4 only.  [14..15] reserved
 #include <cuda_fp16.h>
 #include <stdint.h>
 #include <set>
 #include <map>
 #include <tuple>
 #include <torch/extension.h>
+// Residual K codes compiled in (bit c = code c; code 0 always), per kernel: NQ_RK_GU (K1 gate|up), NQ_RK_DN (K2 down).
+// Default = the production set: gate|up {K 2, 1.9375}, down {K 2, 2.3125} (both T14 production options). Fewer codes
+// per kernel = less stack in the CPW=2 / persistent variants and faster 4p (abk.py). If NQ_RK_CODES is given
+// (e.g. 0x7 for the older 1.75 / 2.5 config, 0xff = all), both kernels get all of it unless NQ_RK_GU / NQ_RK_DN are
+// also given. Codes a kernel lacks decode as code 0; MoELayer.set asserts against rk_codes().
 #ifndef NQ_RK_CODES
-#define NQ_RK_CODES 0xC7  // residual K codes compiled in (bit c = code c; code 0 always): default K = 2, 1.75, 2.5, 1.9375, 2.3125
+#define NQ_RK_CODES 0xC1
+#ifndef NQ_RK_GU
+#define NQ_RK_GU 0x41
+#endif
+#ifndef NQ_RK_DN
+#define NQ_RK_DN 0x81
+#endif
+#endif
+#ifndef NQ_RK_GU
+#define NQ_RK_GU NQ_RK_CODES
+#endif
+#ifndef NQ_RK_DN
+#define NQ_RK_DN NQ_RK_CODES
 #endif
 #include <ATen/cuda/CUDAContext.h>
 
@@ -113,7 +133,7 @@ template <int RC> struct RKB { static constexpr int BITS = 4 * (16 * RK<RC>::KA 
 // Planes of one projection of one expert. p4/d4 are indexed densely (every chunk refined) when flags == nullptr,
 // otherwise compactly over the flagged chunks of each strip (mask mode, nm flagged chunks per strip).
 // base: uint4 per record. p4: sub-arrays (uint4 x n4 | uint2 | uint | ushort) each contiguous over the nrec records.
-struct Planes { const uint4* base; const uint8_t* p4; const uint32_t* d4; const uint64_t* flags; };
+struct Planes { const uint4* base; const uint8_t* p4; const uint32_t* d4; const uint64_t* flags; const uint8_t* var; };
 struct Ctx { int strip, C, nm; uint64_t fl; size_t nrec_r; };
 
 template <int BITS>
@@ -132,8 +152,14 @@ __device__ __forceinline__ void load_plane(uint32_t* w, const uint8_t* __restric
     if constexpr (T)
     {
         const size_t b = rec * T; const uint32_t* q = (const uint32_t*)p + (b >> 5); const int sh = b & 31;
+#ifdef NQ_TAIL_BR
         uint32_t v = __ldg(q) >> sh;
         if constexpr (32 % T) { if (sh + T > 32) v |= __ldg(q + 1) << (32 - sh); }
+#else
+        uint32_t v;
+        if constexpr (32 % T) v = __funnelshift_r(__ldg(q), __ldg(q + 1), sh);   // branch-free; q + 1 stays inside the 4 B pad
+        else v = __ldg(q) >> sh;
+#endif
         v &= (1u << T) - 1u;
         if constexpr (((BITS - T) & 31) == 16) w[k - 1] |= v << 16; else w[k++] = v;
     }
@@ -162,6 +188,7 @@ __device__ __forceinline__ void load_stage(Stage<LV, CPW, RC>& S, const Planes& 
         const size_t rec = (size_t)X.strip * X.C + ch;
         uint4 v = P.base[rec * 32 + lane];
         S.wb[c][0] = v.x; S.wb[c][1] = v.y; S.wb[c][2] = v.z; S.wb[c][3] = v.w;
+        if (P.var) S.on |= ((uint32_t)(__ldg(P.var + rec) >> (lane >> 2)) & 1u) << (16 + c);   // base variant sign of this lane's ring
         if constexpr (LV >= 4)
         {
             size_t ri = rec; bool on = true;
@@ -199,7 +226,7 @@ __device__ __forceinline__ uint32_t dec_pair(const uint32_t* w, const uint32_t* 
 {
     const uint32_t xb0 = wv<4 * P, 2, 0>(w) * HC, xb1 = wv<4 * P + 2, 2, 0>(w) * HC;
     if constexpr (!RES)
-        return hfma2u(__byte_perm(dp4u(xb0, 0x01010101u, 0x6400u), dp4u(xb1, 0x01010101u, 0x6400u), 0x5410), MUL1_A, MUL1_B);
+        return hfma2u(__byte_perm(dp4u(xb0, 0x01010101u, 0x6400u), dp4u(xb1, 0x01010101u, 0x6400u), 0x5410), k.Ah, k.Ch);
     else
     {
         constexpr int KA = RK<RC>::KA, M = RK<RC>::M;
@@ -214,7 +241,7 @@ struct WDump { half* p; int K; };   // debug: decoded weights of one projection,
 #endif
 // one 16x128 chunk: decode into A fragments, 8 MMAs; xs holds ntok rows of kslice halves
 template <bool RES, int RC>
-__device__ __forceinline__ void chunk_mma(const uint32_t* w, const uint32_t* r, uint32_t dl, float* acc, const half* xs,
+__device__ __forceinline__ void chunk_mma(const uint32_t* w, const uint32_t* r, uint32_t dl, uint32_t sgm, float* acc, const half* xs,
                                           int kslice, int kc, int lane, int ntok
 #ifdef NQ_WDUMP
                                           , half* wd, int WK
@@ -232,8 +259,9 @@ __device__ __forceinline__ void chunk_mma(const uint32_t* w, const uint32_t* r, 
         const half Ah = __float2half_rn(__fmul_rn(1.732421875f, rc));
         const float C = __fsub_rn(__fadd_rn(__fmul_rn(__fmul_rn((float)N, rc), -3.453125f), -3.453125f), __fmul_rn(1024.f, __half2float(Ah)));
         half2 a2 = __half2half2(Ah), c2 = __half2half2(__float2half_rn(C));
-        k.Ah = *(uint32_t*)&a2; k.Ch = *(uint32_t*)&c2;
+        k.Ah = *(uint32_t*)&a2 ^ sgm; k.Ch = *(uint32_t*)&c2 ^ sgm;
     }
+    else { k.Ah = MUL1_A ^ sgm; k.Ch = MUL1_B ^ sgm; }   // base variant a = -1: fp16(-A), fp16(-B) (exact negation)
     #pragma unroll
     for (int t = 0; t < 8; ++t)
     {
@@ -273,12 +301,13 @@ __device__ __forceinline__ void compute_stage(const Stage<LV, CPW, RC>& S, float
         for (int i = 0; i < 4; ++i) w[i] = S.wb[c][i];
         ext_words<128, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
         const int kc = kc0 + c * 128;
+        const uint32_t sgm = ((S.on >> (16 + c)) & 1u) * 0x80008000u;
 #ifdef NQ_WDUMP
 #define WDA , wd ? wd + kc : nullptr, WK
 #else
 #define WDA
 #endif
-        if constexpr (LV == 2) chunk_mma<false, RC>(w, r, 0, acc, xs, kslice, kc, lane, ntok WDA);
+        if constexpr (LV == 2) chunk_mma<false, RC>(w, r, 0, sgm, acc, xs, kslice, kc, lane, ntok WDA);
         else
         {
             if (LV == 4 || ((S.on >> c) & 1))
@@ -286,9 +315,9 @@ __device__ __forceinline__ void compute_stage(const Stage<LV, CPW, RC>& S, float
                 #pragma unroll
                 for (int i = 0; i < NWR; ++i) r[i] = S.wr[c][i];
                 ext_words<RKB<RC>::BITS, NWR>(r, __shfl_sync(0xffffffffu, r[0], src));
-                chunk_mma<true, RC>(w, r, S.dl[c], acc, xs, kslice, kc, lane, ntok WDA);
+                chunk_mma<true, RC>(w, r, S.dl[c], sgm, acc, xs, kslice, kc, lane, ntok WDA);
             }
-            else chunk_mma<false, RC>(w, r, 0, acc, xs, kslice, kc, lane, ntok WDA);
+            else chunk_mma<false, RC>(w, r, 0, sgm, acc, xs, kslice, kc, lane, ntok WDA);
         }
 #undef WDA
     }
@@ -399,6 +428,7 @@ __device__ __forceinline__ Planes planes_of(const int64_t* ent, int off)
     Planes P;
     P.base = (const uint4*)ent[off]; P.p4 = (const uint8_t*)ent[off + 1];
     P.d4 = (const uint32_t*)ent[off + 2]; P.flags = (const uint64_t*)ent[off + 3];
+    P.var = (const uint8_t*)ent[off == 1 ? 12 : 13];
     return P;
 }
 
@@ -421,7 +451,7 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
     if constexpr (MODE == 0)
     {
         const int ng = kslice / 128;
-        const half* su = signs;
+        const half* su = bx * SB * 16 >= a.I ? signs + 2 * a.H + 3 * a.I : signs;   // gate rows: su_g, up rows: su_u
         for (int task = warp; task < ntok * ng; task += SB)
         {
             int j = task / ng, gg = task % ng, k = k0 + gg * 128 + lane * 4;
@@ -459,29 +489,31 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
 #else
 #define LV45(RCv) { if (P.flags) BODY(5, RCv); else BODY(4, RCv); }
 #endif
+    constexpr unsigned RKM = ((MODE == 0 ? NQ_RK_GU : NQ_RK_DN) & NQ_RK_CODES) | 1;
+    const int rcm = (RKM >> rc) & 1 ? rc : 0;
     if (lv == 2) BODY(2, 0);
-    else switch (rc)
+    else switch (rcm)
     {
 #if NQ_RK_CODES & 2
-        case 1: LV45(1); break;
+        case 1: if constexpr (RKM & 2) LV45(1); break;
 #endif
 #if NQ_RK_CODES & 4
-        case 2: LV45(2); break;
+        case 2: if constexpr (RKM & 4) LV45(2); break;
 #endif
 #if NQ_RK_CODES & 8
-        case 3: LV45(3); break;
+        case 3: if constexpr (RKM & 8) LV45(3); break;
 #endif
 #if NQ_RK_CODES & 16
-        case 4: LV45(4); break;
+        case 4: if constexpr (RKM & 16) LV45(4); break;
 #endif
 #if NQ_RK_CODES & 32
-        case 5: LV45(5); break;
+        case 5: if constexpr (RKM & 32) LV45(5); break;
 #endif
 #if NQ_RK_CODES & 64
-        case 6: LV45(6); break;
+        case 6: if constexpr (RKM & 64) LV45(6); break;
 #endif
 #if NQ_RK_CODES & 128
-        case 7: LV45(7); break;
+        case 7: if constexpr (RKM & 128) LV45(7); break;
 #endif
         default: LV45(0); break;
     }
@@ -738,4 +770,7 @@ int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
     cudaFuncAttributes at; cudaFuncGetAttributes(&at, f);
     return nb * 1000000 + at.numRegs * 1000 + at.localSizeBytes;
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump); }
+// compiled residual K codes per kernel (bit c = code c): {gate|up, down}. Codes outside a mask silently decode as code 0,
+// so hosts must check (MoELayer.set does).
+std::vector<int64_t> rk_codes() { return {(NQ_RK_GU & NQ_RK_CODES) | 1, (NQ_RK_DN & NQ_RK_CODES) | 1}; }
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("rk_codes", &rk_codes); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump); }

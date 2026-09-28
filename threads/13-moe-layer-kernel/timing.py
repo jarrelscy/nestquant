@@ -1,7 +1,8 @@
-import torch,random,statistics
+import torch,random,statistics,os
 def bench(fns,blocks=60,repeats=10,warm=5):
     """fns: dict name->callable (no args). Captures each in a CUDA graph with `repeats` calls,
     then replays in shuffled order per block; returns median us per call."""
+    blocks=int(os.environ.get('NQ_BLOCKS',blocks))   # NQ_STAT=min: report min over blocks (robust on a time-sliced shared GPU)
     graphs={}
     s=torch.cuda.Stream()
     for name,f in fns.items():
@@ -19,6 +20,7 @@ def bench(fns,blocks=60,repeats=10,warm=5):
             graphs[name].replay();a.record();graphs[name].replay();b.record();b.synchronize()
             rows[name].append(a.elapsed_time(b)*1000/repeats)
     q=lambda v,p:sorted(v)[int(p*(len(v)-1))]
+    if os.environ.get('NQ_STAT')=='min':return {k:min(v) for k,v in rows.items()},{k:(min(v),q(v,.1),q(v,.25)) for k,v in rows.items()}
     return {k:statistics.median(v) for k,v in rows.items()},{k:(min(v),q(v,.1),q(v,.25)) for k,v in rows.items()}
 def warmup(sec=2.0):
     """spin the GPU so clocks are at boost before timing"""

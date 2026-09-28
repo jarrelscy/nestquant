@@ -6,7 +6,7 @@ against a dense reference for the level state the replay must have seen."""
 import torch,random,json;torch.cuda.set_per_process_memory_fraction(12/80)
 from moe import *;from routing import make_sel,routing_tensors
 H,I=6144,2048;NP=16;B=4;NSLOT=4;dev='cuda'
-ex=[Expert(H,I,seed=100+i,rk_gu=(i%2),rk_dn=2*(i%2)) for i in range(NP)]   # odd experts: fractional residual K 1.75 gu / 2.5 dn
+ex=[Expert(H,I,seed=100+i,rk_gu=6*(i%2),rk_dn=7*(i%2),var=bool(i%2)) for i in range(NP)]   # odd experts: production residual K 1.9375 gu / 2.3125 dn + base variants
 L=MoELayer(NP,H,I);L.cfg_gu=[2,8,4];L.cfg_dn=[2,8,4]
 # slot layout: [gu_p4 | gu_d4 | dn_p4 | dn_d4], each 64 KiB aligned (int32 words)
 al=lambda n:(n+16383)//16384*16384

@@ -32,14 +32,17 @@ ngu=(2*I//16)*(H//128);ndn=(H//16)*(I//128);nL=len(moe.all_MbN())
 rks=[(0,0),(1,2),(2,1),(3,4),(4,5),(5,3),(6,7),(0,7),(6,6),(7,0)]
 masked={6,7,8}
 ex=[Expert(H,I,seed=500+i,nm_gu=nmg if i in masked else None,nm_dn=nmd if i in masked else None,rk_gu=rks[i][0],rk_dn=rks[i][1],
-           mbn=('exh',i*(ngu+ndn))) for i in range(len(rks))]
+           mbn=('exh',i*(ngu+ndn)),var=bool(i%2)) for i in range(len(rks))]   # odd: base-variant signs
 cov=set()
 for e in ex:
     for pj in (e.gu,e.dn):cov|=set((pj.Mb.cpu()*256+pj.Nn.cpu()).tolist())
 print(f'(b) (Mb,N) coverage over the {len(ex)} experts: {len(cov)}/{nL} valid block words',flush=True)
 NE=len(rks);sel=torch.arange(8,device='cuda')[None];rw=torch.full((1,8),0.125,device='cuda').half();x=(torch.randn(1,H,device='cuda')*0.05).half()
 tot=0;bad=0
+VS={id(pj):pj.var for e in ex for pj in (e.gu,e.dn)}
 for G in (4,2):
+    for e in ex:
+        for pj in (e.gu,e.dn):pj.var=VS[id(pj)] if G==4 else None      # base variants are G=4 only
     L=MoELayer(NE,H,I,nmg,nmd,G=G,mod=Md)
     for lvl in (2,4):
         for e in range(NE):L.set(e,ex[e],lvl)

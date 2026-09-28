@@ -28,23 +28,45 @@ Per expert-shard sizes (bytes):
 | base (2 bpw, uint4 per lane record) | 786,432 | 393,216 | 1,179,648 (= 2 × 576 KiB) |
 | P4 residual, K = 2 (level 4 adds) | 786,432 | 393,216 | 1,179,648 |
 | P4 residual, fractional K = 1.75 gu / 2.5 down | 688,128 | 491,520 | 1,179,648 (same total) |
+| **P4 production (T14 pattern) 1.9375 gu / 2.3125 down (4.0846 bpw)** | 761,856 | 454,656 | 1,216,512 |
+| P4 production option 2 / 2.3125 (4.1263 bpw) | 786,432 | 454,656 | 1,241,088 |
 | d4 block word (u32 Mb \| N<<8 per 16×128 unit) | 6,144 | 3,072 | 9,216 |
-| signs (half[H \| I \| I \| I \| H]) | | | 26,112 |
+| base-variant signs (T12 `base_var` 'sign', uint8 per unit) | 1,536 | 768 | 2,304 |
+| scales, per level (half[H su_g \| I sv_g \| I sv_u \| I su_d \| H sv_o \| H su_u]) | | | 38,400 (× 2 levels) |
+
+(The tail sub-arrays add a 4-byte pad each. T12's `plane_bytes` counts the same payload without it.)
 
 Plane layout (the decoder is thread 15's RM_P int-fold, `nqdec::` in nqmoe.cu; bit-level spec `ref15_spec.py`):
 
 - **Record** = one lane's bits of one 16×128 unit, index rec = (strip·C + chunk)·32 + lane, C = K/128.
 - **Base**: one uint4 (128 bits = 64 weights × K 2) per record. It is the same for every residual K.
 - **P4**: RBITS = 4·(16·KA + popc(MASK)) bits per record (K = 2: 128, 1.75: 112, 2.5: 160, 2.25: 144, 3: 192,
-  1.5: 96). It is stored as sub-arrays `uint4[n4] | uint2 | uint | ushort` (n4 = RBITS/128, then whichever
-  64/32/16-bit remainders apply), each contiguous over all records of the projection, so every lane load is coalesced.
-  A sub-array base is `p4 + nrec·(bytes of the earlier sub-arrays)`, with nrec = S·C·32 (dense) or S·nm·32 (mask mode).
+  1.5: 96, 1.9375: 124, 2.3125: 148). Ring step p has KA + ((MASK >> (p%16)) & 1) bits, the same as
+  `nq_decode.PATTERNS`. It is stored as sub-arrays `uint4[n4] | uint2 | uint | ushort | tail` (n4 = RBITS/128, then
+  whichever 64/32/16-bit remainders apply). Each is contiguous over all records of the projection, so every lane load
+  is coalesced. `tail` exists iff T = RBITS % 16 ≠ 0 (12 bits for 1.9375, 4 for 2.3125). It is bit-packed over
+  records: record r's tail is at bit r·T, and it holds stream bits [RBITS − T, RBITS) of the record. It is followed by a
+  4-byte pad. A sub-array base is `p4 + nrec·(bytes of the earlier sub-arrays)`, with nrec = S·C·32 (dense) or
+  S·nm·32 (mask mode).
+- **Base variant** (T12 production `base_var` 'sign'): optional uint8 per unit (dense strip·C + chunk, also in mask
+  mode). Bit g is the sign of ring g, i.e. lanes 4g..4g+3. a = −1 negates that ring's level-2 and level-4 values
+  exactly; the kernel XORs the sign bit into the final HFMA2 constants. Table [12] is gate|up and [13] is down; 0 means
+  no variants. G = 4 only.
+- **Scales**: T12 gives every projection its own suh/svh. Gate and up have different input scales (su_g ≠ su_u), and
+  level 2 and level 4 have separate vectors (`planes["base"]` vs `planes["p4"]` suh/svh). The kernel takes one half
+  vector per (expert, level), `[H su_g | I sv_g | I sv_u | I su_d | H sv_o | H su_u]`. Gate row-blocks rotate x with
+  su_g and up row-blocks with su_u, which is a block-uniform choice at no extra cost. A level switch must also repoint
+  table [9] to the vector of the new level; the mailbox row carries it.
 - **d4**: one u32 per unit, Mb in bits 0–7, N in bits 8–15 (δ = N/Mb, 1 ≤ Mb ≤ 255, Mb + N ≤ 257).
 - **Rings**: LSB-first, tail-biting over G = 4 lanes (lanes 4g..4g+3 = one 256-weight ring; thread 12/15 format).
   G = 2 is still compiled and verified, but G = 4 is the default and the encoder format. G is a launch argument and
   must match how the planes were encoded.
-- The encoder's repack from thread 12 ring streams is the inverse of `ref15_spec.rings_from_lane_words`
-  (`moe.pack_words` does the sub-array packing from lane words).
+- Repacking a thread 12 artifact (`nq_encode.encode_expert`) into this layout is `verify_t12.repack`:
+  - ring streams → lane words (the inverse of `ref15_spec.rings_from_lane_words`), then `moe.pack_words`;
+  - the u16 block words go into d4 unchanged;
+  - `base["var"]` becomes the variant byte plane;
+  - storage order (shard, strip, chunk) becomes kernel order strip·C + chunk;
+  - gate strips then up strips form the fused gate|up.
 - Both planes are laid out per (strip, chunk), so TP8 shards are unit ranges. Gate|up shards are contiguous strip
   ranges. Down shards are chunk ranges (2 of 48 chunks per strip), i.e. strided in rec: repack per rank offline.
 
@@ -68,15 +90,22 @@ Placement per rank:
 
 | tensor | shape | notes |
 |---|---|---|
-| `table` | int64 [256][16] | [0] level 0/2/4; [1..4] gate\|up base, p4, d4, flags; [5..8] down same; [9] signs; [10] gate\|up residual K code, [11] down residual K code (0: K 2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5); [12..15] reserved. Read on device at every replay. |
+| `table` | int64 [256][16] | [0] level 0/2/4; [1..4] gate\|up base, p4, d4, flags; [5..8] down same; [9] scales of the current level; [10] gate\|up residual K code, [11] down residual K code (0: K 2, 1: 1.75, 2: 2.5, 3: 2.25, 4: 3, 5: 1.5, 6: 1.9375, 7: 2.3125); [12] gate\|up, [13] down base-variant plane (0 = none); [14..15] reserved. Read on device at every replay. |
 | mailbox `stage`, `seq`, `applied` | int64 [256][16], int32 [256] ×2 | graph-safe updates (§4) |
 | `applied_host` | int32 [256], pinned host-mapped | the scheduler polls this without syncing |
 | `hits` | int32 [256], pinned host-mapped | routing-hit export (§5) |
 
 - `table` is 32 KiB per layer.
 - The residual K code is per (expert, projection) and is read at replay, so a slot can hold any K. Only the codes in
-  the `NQ_RK_CODES` build bitmask are compiled (default 0x7 = K 2 / 1.75 / 2.5; 0x3f = all six, same speed, larger
-  binary). A code outside the mask silently decodes as K = 2, so build with every code the checkpoint uses.
+  the build masks are compiled, and gate|up (K1) and down (K2) each get their own mask:
+  - Default build: gate|up {K 2, 1.9375} (`NQ_RK_GU=0x41`), down {K 2, 2.3125} (`NQ_RK_DN=0x81`). This covers both T14
+    production options, 4.0846 (1.9375 / 2.3125) and 4.1263 (2 / 2.3125).
+  - `-DNQ_RK_CODES=m` gives both kernels the whole mask `m` (0x7 for the older 1.75 / 2.5 config, 0xff for all eight
+    codes). `NQ_RK_GU` / `NQ_RK_DN` narrow it further.
+  - The split exists for speed. Each extra code per kernel adds stack in the CPW = 2 and persistent variants.
+    One mask for both kernels (0xC7 or 0xC1) was 2–8% slower on 4p than the split.
+  - A code outside a kernel's mask silently decodes as K = 2. The binding `rk_codes()` returns the compiled {gate|up, down}
+    masks, and `MoELayer.set` asserts against them.
 - Levels should be identical across ranks at any step. This is not needed for correctness, but it keeps the model a
   single well-defined quantization. The mailbox lag is at most one step, and a per-rank lag difference only mixes
   shards of the same expert at two levels for that step.
@@ -156,6 +185,8 @@ Measured on A100 (levelswitch_mbox.py; graph = [mailbox, MoE] captured once, sid
 - Re-run on the thread 15 decoder with G = 4 and half the experts at fractional residual K (1.75 gu / 2.5 down),
   slots sized for the largest K: mailbox 311 ops / 300 steps, max lag 1, max rel err 1.2e-4 (stale ≥ 2.6%); host-event
   variant 399 switches, max rel err 6.2e-5 (stale ≥ 4.4%).
+- Re-run with the production residual (odd experts at 1.9375 gu / 2.3125 down, with base-variant sign planes; default build):
+  levelswitch_mbox.py max rel err 1.0e-4 (stale ≥ 9.0%).
 
 ## 5. Miss list and routing export to the CPU scheduler
 
@@ -187,7 +218,14 @@ Measured on A100 (levelswitch_mbox.py; graph = [mailbox, MoE] captured once, sid
   `moe_forward` / `mailbox` / `occ` bindings.
 - `nqdec::`: the decoder (thread 15 RM_P int-fold + greedy funnels, per-projection fractional residual K).
 - `ref15_spec.py`: bit-level spec (copied from thread 15). `verify15.py`: spec == torch reference == kernel-decoded
-  weights (NQ_WDUMP build), bitwise.
+  weights (NQ_WDUMP build), bitwise, all 8 K codes, with and without base variants.
+- `verify_t12.py ART.pt`: repacks a thread 12 encoded expert into the kernel layout. Checks that `moe.dense_W`, the
+  kernel decode and `nq_decode` agree bitwise at levels 2 and 4, then checks the forward pass against
+  `nq_decode.decode_expert`.
+- `abk.py`: A/B of build variants (`NQ_RK_CODES` / `NQ_RK_GU,NQ_RK_DN` / other defines) at levels 2, 4, 4p (1.9375 / 2.3125)
+  and 4q (2 / 2.3125).
+- `timing.py`: `NQ_STAT=min NQ_BLOCKS=150` reports the min over blocks instead of the median. Use it on a shared,
+  time-sliced GPU.
 - `moe.py`: pools, `entry()` table row builder, `MoELayer`, `Mailbox`, dense reference decode (`dense_W`,
   `Expert.ref`), residual packing (`Proj`, `pack_words`, `RKP`).
 - `build.py`: JIT build (`NQ_DEFS` for variants).
