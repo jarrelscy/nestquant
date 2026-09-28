@@ -1,0 +1,5 @@
+layers [3, 4, 5, 6, 7, 8, 9, 10] rank 0/TP4: loaded in 236s; slots 480 x 2560000 B = 1.1 GiB
+routing: 512 decode tokens
+  floating_default loaded: 408 upgrades in 0.75s, 0 refused
+{"layers": [3, 10], "rank": 0, "tokens": 512, "nslot": 480, "checks": 512, "worst_rel": 7.349e-05, "ref_floor": 6.669e-05, "over_bound": 0, "level_mismatch_after_settle": 0, "route_share": 0.4009, "ups": 861, "downs": 861, "deferred_steps": 5, "read_errors": 0, "refused": 0, "waited_for_slot": 0, "failed": 0, "op_p50_ms": 69.117, "op_p99_ms": 741.377, "fault": false, "host_step_ms_p50": 4.62, "ok": true}
+SCHED SMOKE PASS

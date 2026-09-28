@@ -3,7 +3,7 @@ layer L (nqload.RankLayer), levels = fixed set (threads/22) + random experts up 
 random top-8 routing, B = 1..4. Sum over ranks of the kernel outputs vs the dense reference built independently from
 all 8 shards (nq_layer.assemble -> nq_decode.decode_expert, lr included). Also reports load time and P4 slot size.
 usage: smoke_layer.py ROOT L [tp=4] [hot=0.3]"""
-import os,sys,json,time,random,torch;torch.cuda.set_per_process_memory_fraction(20/96)
+import os,sys,json,time,random,torch;torch.cuda.set_per_process_memory_fraction(40/96)
 HERE=os.path.dirname(os.path.abspath(__file__));sys.path[:0]=[HERE,HERE+'/../streaming']
 import nqload as NQ;from moe import MoELayer
 import nq_layer as NL,nq_decode as D
@@ -29,6 +29,7 @@ def dense(E,lv):
 ok=True;worst=0;TK=min(8,len(ids))
 for B in (1,2,3,4):
     for trial in range(2):
+        cache.clear();torch.cuda.empty_cache()
         sel=torch.tensor([rng.sample(ids,TK) for _ in range(B)],device=dev)   # distinct experts per token, as the router
         rw=torch.softmax(torch.randn(B,TK,device=dev),1).half()
         x=(torch.randn(B,H,device=dev)*0.05).half()
