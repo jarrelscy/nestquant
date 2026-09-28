@@ -22,61 +22,61 @@ encoded L3 E4 rate 4.1523
   ok   (3) E0 TP8: group decode from shard files == full decode slice (8 ranks x 2 levels)
   ok   (3) E0 TP8: kernel decode == nq_decode bitwise, 48 projections (0 mismatching)
   ok   (4) E0 TP8 level 2: sum of rank partials vs dense expert, rel err 1.09e-03
-  ok   (4) E0 TP8 level 4: sum of rank partials vs dense expert, rel err 1.02e-03
+  ok   (4) E0 TP8 level 4: sum of rank partials vs dense expert, rel err 1.01e-03
   ok   (3) E0 TP4: group decode from shard files == full decode slice (4 ranks x 2 levels)
   ok   (3) E0 TP4: kernel decode == nq_decode bitwise, 24 projections (0 mismatching)
   ok   (4) E0 TP4 level 2: sum of rank partials vs dense expert, rel err 1.09e-03
-  ok   (4) E0 TP4 level 4: sum of rank partials vs dense expert, rel err 1.02e-03
+  ok   (4) E0 TP4 level 4: sum of rank partials vs dense expert, rel err 1.01e-03
   ok   (3) E0 TP1: group decode from shard files == full decode slice (1 ranks x 2 levels)
   ok   (3) E0 TP1: kernel decode == nq_decode bitwise, 6 projections (0 mismatching)
   ok   (4) E0 TP1 level 2: sum of rank partials vs dense expert, rel err 1.09e-03
-  ok   (4) E0 TP1 level 4: sum of rank partials vs dense expert, rel err 1.02e-03
+  ok   (4) E0 TP1 level 4: sum of rank partials vs dense expert, rel err 1.01e-03
   ok   (3) E1 TP8: group decode from shard files == full decode slice (8 ranks x 2 levels)
   ok   (3) E1 TP8: kernel decode == nq_decode bitwise, 48 projections (0 mismatching)
   ok   (4) E1 TP8 level 2: sum of rank partials vs dense expert, rel err 9.43e-04
-  ok   (4) E1 TP8 level 4: sum of rank partials vs dense expert, rel err 8.71e-04
+  ok   (4) E1 TP8 level 4: sum of rank partials vs dense expert, rel err 8.84e-04
   ok   (3) E1 TP4: group decode from shard files == full decode slice (4 ranks x 2 levels)
   ok   (3) E1 TP4: kernel decode == nq_decode bitwise, 24 projections (0 mismatching)
   ok   (4) E1 TP4 level 2: sum of rank partials vs dense expert, rel err 9.43e-04
-  ok   (4) E1 TP4 level 4: sum of rank partials vs dense expert, rel err 8.71e-04
+  ok   (4) E1 TP4 level 4: sum of rank partials vs dense expert, rel err 8.84e-04
   ok   (3) E1 TP1: group decode from shard files == full decode slice (1 ranks x 2 levels)
   ok   (3) E1 TP1: kernel decode == nq_decode bitwise, 6 projections (0 mismatching)
-  ok   (4) E1 TP1 level 2: sum of rank partials vs dense expert, rel err 9.44e-04
-  ok   (4) E1 TP1 level 4: sum of rank partials vs dense expert, rel err 8.71e-04
+  ok   (4) E1 TP1 level 2: sum of rank partials vs dense expert, rel err 9.43e-04
+  ok   (4) E1 TP1 level 4: sum of rank partials vs dense expert, rel err 8.84e-04
   ok   (3) E2 TP8: group decode from shard files == full decode slice (8 ranks x 2 levels)
   ok   (3) E2 TP8: kernel decode == nq_decode bitwise, 48 projections (0 mismatching)
-  ok   (4) E2 TP8 level 2: sum of rank partials vs dense expert, rel err 1.31e-03
+  ok   (4) E2 TP8 level 2: sum of rank partials vs dense expert, rel err 1.33e-03
   ok   (4) E2 TP8 level 4: sum of rank partials vs dense expert, rel err 1.20e-03
   ok   (3) E2 TP4: group decode from shard files == full decode slice (4 ranks x 2 levels)
   ok   (3) E2 TP4: kernel decode == nq_decode bitwise, 24 projections (0 mismatching)
-  ok   (4) E2 TP4 level 2: sum of rank partials vs dense expert, rel err 1.31e-03
+  ok   (4) E2 TP4 level 2: sum of rank partials vs dense expert, rel err 1.33e-03
   ok   (4) E2 TP4 level 4: sum of rank partials vs dense expert, rel err 1.20e-03
   ok   (3) E2 TP1: group decode from shard files == full decode slice (1 ranks x 2 levels)
   ok   (3) E2 TP1: kernel decode == nq_decode bitwise, 6 projections (0 mismatching)
-  ok   (4) E2 TP1 level 2: sum of rank partials vs dense expert, rel err 1.31e-03
+  ok   (4) E2 TP1 level 2: sum of rank partials vs dense expert, rel err 1.33e-03
   ok   (4) E2 TP1 level 4: sum of rank partials vs dense expert, rel err 1.20e-03
   ok   (3) E3 TP8: group decode from shard files == full decode slice (8 ranks x 2 levels)
   ok   (3) E3 TP8: kernel decode == nq_decode bitwise, 48 projections (0 mismatching)
-  ok   (4) E3 TP8 level 2: sum of rank partials vs dense expert, rel err 1.00e-03
-  ok   (4) E3 TP8 level 4: sum of rank partials vs dense expert, rel err 9.61e-04
+  ok   (4) E3 TP8 level 2: sum of rank partials vs dense expert, rel err 9.97e-04
+  ok   (4) E3 TP8 level 4: sum of rank partials vs dense expert, rel err 9.56e-04
   ok   (3) E3 TP4: group decode from shard files == full decode slice (4 ranks x 2 levels)
   ok   (3) E3 TP4: kernel decode == nq_decode bitwise, 24 projections (0 mismatching)
-  ok   (4) E3 TP4 level 2: sum of rank partials vs dense expert, rel err 1.00e-03
-  ok   (4) E3 TP4 level 4: sum of rank partials vs dense expert, rel err 9.61e-04
+  ok   (4) E3 TP4 level 2: sum of rank partials vs dense expert, rel err 9.97e-04
+  ok   (4) E3 TP4 level 4: sum of rank partials vs dense expert, rel err 9.56e-04
   ok   (3) E3 TP1: group decode from shard files == full decode slice (1 ranks x 2 levels)
   ok   (3) E3 TP1: kernel decode == nq_decode bitwise, 6 projections (0 mismatching)
-  ok   (4) E3 TP1 level 2: sum of rank partials vs dense expert, rel err 1.00e-03
-  ok   (4) E3 TP1 level 4: sum of rank partials vs dense expert, rel err 9.61e-04
+  ok   (4) E3 TP1 level 2: sum of rank partials vs dense expert, rel err 9.97e-04
+  ok   (4) E3 TP1 level 4: sum of rank partials vs dense expert, rel err 9.56e-04
   ok   (3) E4 TP8: group decode from shard files == full decode slice (8 ranks x 2 levels)
   ok   (3) E4 TP8: kernel decode == nq_decode bitwise, 48 projections (0 mismatching)
   ok   (4) E4 TP8 level 2: sum of rank partials vs dense expert, rel err 1.04e-03
-  ok   (4) E4 TP8 level 4: sum of rank partials vs dense expert, rel err 9.63e-04
+  ok   (4) E4 TP8 level 4: sum of rank partials vs dense expert, rel err 9.65e-04
   ok   (3) E4 TP4: group decode from shard files == full decode slice (4 ranks x 2 levels)
   ok   (3) E4 TP4: kernel decode == nq_decode bitwise, 24 projections (0 mismatching)
   ok   (4) E4 TP4 level 2: sum of rank partials vs dense expert, rel err 1.04e-03
-  ok   (4) E4 TP4 level 4: sum of rank partials vs dense expert, rel err 9.63e-04
+  ok   (4) E4 TP4 level 4: sum of rank partials vs dense expert, rel err 9.65e-04
   ok   (3) E4 TP1: group decode from shard files == full decode slice (1 ranks x 2 levels)
   ok   (3) E4 TP1: kernel decode == nq_decode bitwise, 6 projections (0 mismatching)
   ok   (4) E4 TP1 level 2: sum of rank partials vs dense expert, rel err 1.04e-03
-  ok   (4) E4 TP1 level 4: sum of rank partials vs dense expert, rel err 9.63e-04
+  ok   (4) E4 TP1 level 4: sum of rank partials vs dense expert, rel err 9.65e-04
 SMOKE PASS
