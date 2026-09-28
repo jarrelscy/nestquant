@@ -33,13 +33,17 @@ def fetch_json(uri):
         return json.load(open(t.name))
 
 
-def get(rec, dst):
+def get(rec, dst, strict=True):
+    """strict=False (global files: mutable progress/markers shared by several backup sets) -> warn and keep the
+    current object on a sha mismatch; layer files are always strict."""
     if os.path.exists(dst) and os.path.getsize(dst) == rec["size"] and sha256(dst) == rec["sha256"]:
         return "skip"
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     aws("s3", "cp", rec["key"], dst + ".part", "--only-show-errors")
     if os.path.getsize(dst + ".part") != rec["size"] or sha256(dst + ".part") != rec["sha256"]:
-        raise RuntimeError(f"checksum mismatch for {rec['key']}")
+        if strict:
+            raise RuntimeError(f"checksum mismatch for {rec['key']}")
+        print(json.dumps(dict(warning="global file changed since the marker was written; kept current", key=rec["key"])))
     os.replace(dst + ".part", dst)
     return "ok"
 
@@ -66,8 +70,11 @@ def main():
         print("WARNING: this backup is small-only (no per-expert gram files); stats will be incomplete")
     if not a.no_global:
         for rec in latest["global_files"]:
-            get(rec, f"{a.root}/{rec['rel'][len('global/'):]}")
-    for L in latest["layers_done"]:
+            get(rec, f"{a.root}/{rec['rel'][len('global/'):]}", strict=False)
+    # latest_*.json is rewritten only at the end of each backup pass -> also take every per-layer done marker present
+    ls = aws("s3", "ls", f"{prefix}/{marker_dir(a.set)}/")
+    marked = {int(t[1:-5]) for t in ls.split() if t.startswith("L") and t.endswith(".json")}
+    for L in sorted(set(latest["layers_done"]) | marked):
         if not lo <= L <= hi:
             continue
         d = fetch_json(f"{prefix}/{marker_dir(a.set)}/L{L}.json")

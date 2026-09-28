@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 
 AWS = os.path.expanduser("~/.local/bin/aws")
@@ -146,11 +147,13 @@ def latest_name(which):
     return "latest" if which == "stats0" else f"latest_{which}"
 
 
-def backup_layer(root, prefix, L, small_only, tmpdir, which="stats0", bnd_max_shard=None):
+def backup_layer(root, prefix, L, small_only, tmpdir, which="stats0", bnd_max_shard=None, gate=None):
     lf = layer_files(root, L, small_only, which, bnd_max_shard)
     if lf is None:
         return None
     files, vname, m = lf
+    if gate is not None:
+        gate(L, files)                             # per-layer budget gate (raises BudgetExceeded)
     t0 = time.time()
     rec = []
     for path, key in files:
@@ -173,6 +176,40 @@ def s3_listing(scope):
         if len(parts) == 4:
             out[f"s3://{b}/{parts[3]}"] = int(parts[2])
     return out
+
+
+class BudgetExceeded(RuntimeError):
+    pass
+
+
+def make_layer_gate(a, prefix):
+    """Per-layer gate: before each layer upload, list the budget scope and require
+    total + (this layer's bytes not yet on S3) + (other in-flight layers' reservations) < budget.
+    The pass-level budget_check only sees layers that are final at pass start; this also covers layers that
+    become final mid-pass."""
+    lock = threading.Lock()
+    reserved = {}
+
+    def gate(L, files):
+        with lock:
+            lst = s3_listing(a.budget_scope)
+            total = sum(lst.values())
+            need = sum(os.path.getsize(p) for p, k in files if lst.get(f"{prefix}/{k}") != os.path.getsize(p))
+            other = sum(v for k, v in reserved.items() if k != L)
+            rec = dict(gate_layer=L, total_tb=round(total / 1e12, 4), need_gb=round(need / 1e9, 2),
+                       inflight_gb=round(other / 1e9, 2), budget_tb=a.budget_tb,
+                       utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            print(json.dumps(rec), flush=True)
+            if total + need + other >= a.budget_tb * 1e12:
+                raise BudgetExceeded(f"BUDGET: {rec} -- not uploading L{L}")
+            reserved[L] = need
+
+    def release(L):
+        with lock:
+            reserved.pop(L, None)
+
+    gate.release = release
+    return gate
 
 
 def budget_check(a, prefix, todo):
@@ -238,15 +275,27 @@ def main():
     state_p = f"{a.root}/logs/fb_backup_state{'' if a.set == 'stats0' else '_' + a.set}{a.state_tag}.json"
     latest = f"{prefix}/{latest_name(a.set)}.json"
     state = json.load(open(state_p)) if os.path.exists(state_p) else {}
+    gate = make_layer_gate(a, prefix)
+
+    def job(L):
+        try:
+            return backup_layer(a.root, prefix, L, a.small_only, tmpdir, a.set, a.bnd_max_shard, gate=gate)
+        finally:
+            gate.release(L)
+
     while True:
         todo = [L for L in range(3, 78) if str(L) not in state]
         budget_check(a, prefix, todo)
         with cf.ThreadPoolExecutor(a.workers) as ex:
-            futs = {ex.submit(backup_layer, a.root, prefix, L, a.small_only, tmpdir, a.set, a.bnd_max_shard): L
-                    for L in todo}
+            futs = {ex.submit(job, L): L for L in todo}
             for f in cf.as_completed(futs):
                 L = futs[f]
-                d = f.result()
+                try:
+                    d = f.result()
+                except BudgetExceeded as e:
+                    for g_ in futs:
+                        g_.cancel()
+                    raise SystemExit(str(e))
                 if d is None:
                     continue
                 state[str(L)] = dict(version=d["version"], bytes=d["bytes"], seconds=d["seconds"])

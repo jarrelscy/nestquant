@@ -246,6 +246,10 @@ that kind in the same segment, 0 = none. They are exclusive under the same rule 
   ./run.sh fb_restore.py ... --set stats1 --no-global             # optional: stats1 small files + chunk-0/traces bnd rows
   ```
   Then `Capture(root=..., stats="stats")`. The full restore is about 3.4 TB, roughly 1 h at 1 GB/s.
+  - Tested 2026-09-28 on L40 into a scratch root: 61 files, 49.2 GB, all sha-verified, 5 min. `glm_H` (H and G)
+    and `components_bnd` are bit-identical to the original for E = 0, 77, 255.
+  - `fb_restore.py` restores every layer that has a `done_<set>/L{L}.json` marker, not just
+    `latest_<set>.json["layers_done"]`, which is rewritten only at the end of each backup pass.
 - **If the box dies before stage 1 finishes:** the per-layer backup holds every layer that was already final.
   For missing shards, rerun stage 1 with T24's `capture_fwd_fast.py` (commit 278625d, byte-identical output,
   about 2x faster), then stage 2, which merges into the restored versions:
@@ -258,7 +262,16 @@ that kind in the same segment, 0 = none. They are exclusive under the same rule 
   (stats1) are already merged into every final layer.
 - **Budget (user rule): flashblade under 5 TB at all times.** `fb_backup19.py` lists `--budget-scope`
   (default all of `s3://annalise-shared-prod/jarrel/`) before each pass and aborts if total + still-to-upload
-  bytes ≥ `--budget-tb` (4.8). The final set is uploaded with `--bnd-max-shard 11`: boundary rows only of
+  bytes ≥ `--budget-tb`.
+  - The gate also runs per layer: under a lock, before each layer upload, it requires listed total + that
+    layer's bytes not yet on S3 + other in-flight layers' reservations < budget. This covers layers that
+    become final mid-pass.
+  - The final set ran with `--budget-tb 4.6` (the lead's cap).
+  - New S3 bytes per final layer are 45.28 GB (grams 45.1 + C_ctx/C_all/gdiag). `eval/val` and the boundary
+    rows of shards 0-11 share keys with the stats1 backup, so they are not re-uploaded.
+  - Projected jarrel/ peak is ≈ 4.52 TB.
+  - Production H/G (`glm_H`, no `bnd_w`) needs A0/A2/D0/D2/Dc, C_ctx, gdiag, scalars and meta. The blend
+    also needs sal.npy, and the T25 spot check needs `eval/matched`. The final set is uploaded with `--bnd-max-shard 11`: boundary rows only of
   chunk 0 + traces; those of shards 12-24 (≈ 14 GB/layer) are not backed up (not used by the weight-1 encode;
   recomputable by stage 1). `components_bnd` on a restored root therefore covers shards 0-11 only. The stats0
   gram objects are deleted from S3 once the final full set is verified (the local /tmp copy stays).
@@ -276,8 +289,16 @@ that kind in the same segment, 0 = none. They are exclusive under the same rule 
 - **Score:** token-weighted REAP, S_e = Σp‖y‖[all] + Σ_c (w_c − 1) Σp‖y‖[c] over the 8 boundary categories
   (sal column 4), w = d1 50, d2_4 20, d5_16 5, d17_32 2 for both think and end, 1 elsewhere. Un-normalized, so
   routing frequency counts.
-- **Set:** top 26 per layer by S_e (ties → lower id), computed on `stats1` (chunk 0 + traces).
+- **Set:** top 26 per layer (ties → lower id).
+  - The final file (2026-09-28 17:30 UTC, all 25 shards, `--stats stats --require all`) uses the v3 blend with
+    T26's vision capture: score = 0.75 S_e/Σ_e S_e + 0.25 V/Σ_e V, where V = vision Σp‖y‖
+    (`/tmp/nestquant/19-capture-mm`).
+  - It matches `nq26_blend.BlendCapture(...).fixed_set_score` on all 75 layers.
+  - The text-only stats1 version is frozen as `fixed_set_text.json`.
+  - `floating_default{L: [51 ids]}` = the top 51 NON-fixed experts by n_routed on the final text capture
+    (plain counts).
 - **Keys:** `fixed_set{L: [26 ids]}`, `S_e`, `reap_sum` (w = 1), `reap_mean` (classic REAP), `n_routed`,
   `coverage{L: {all, think, end, think_d1, end_d1}}` (share of routes landing in the set), `changed_vs_unweighted`,
-  `stats_version`, `weights`, `definition`. The sha256 and weights are recorded in `ROOT/MANIFEST.json["fixed_set"]`.
+  `stats_version`, `weights`, `definition`; with vision also `score`, `vision_sal`, `vision_n_routed`,
+  `vision_stats_version`, `changed_vs_text_only`, `coverage[L].vision`; and `floating_default`. The sha256 and weights are recorded in `ROOT/MANIFEST.json["fixed_set"]`.
 - Copy: `threads/22-boundary-experts/fixed_set.json`.
