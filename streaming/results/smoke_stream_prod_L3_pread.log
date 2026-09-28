@@ -1,0 +1,20 @@
+L3 rank0/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  table rows wrong after apply: 0
+  300 replays, 445 ops applied, worst rel err vs reference 0.00e+00 (reference repeat 0.00e+00, 0 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.451 p99 13.667 ms (254 reads, 5.67 GB/s at qd 1)
+STREAM SMOKE PASS
+L3 rank1/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  table rows wrong after apply: 0
+  300 replays, 467 ops applied, worst rel err vs reference 0.00e+00 (reference repeat 0.00e+00, 0 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.347 p99 13.706 ms (262 reads, 7.37 GB/s at qd 1)
+STREAM SMOKE PASS
+L3 rank2/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  table rows wrong after apply: 0
+  300 replays, 444 ops applied, worst rel err vs reference 0.00e+00 (reference repeat 0.00e+00, 0 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.361 p99 13.694 ms (252 reads, 7.09 GB/s at qd 1)
+STREAM SMOKE PASS
+L3 rank3/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  table rows wrong after apply: 0
+  300 replays, 455 ops applied, worst rel err vs reference 0.00e+00 (reference repeat 0.00e+00, 0 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.405 p99 13.694 ms (257 reads, 6.31 GB/s at qd 1)
+STREAM SMOKE PASS

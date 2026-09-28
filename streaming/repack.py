@@ -24,7 +24,7 @@ def main():
             t=time.time();RL=NQ.RankLayer(root,L,r,tp)
             lay=PR.layout(next(iter(RL.ex.values())),RL.H,RL.I)
             if 'rec_bytes' not in idx:idx['rec_bytes']=int(sys.argv[5]) if len(sys.argv)>5 else lay['rec_bytes'];idx['seg']=lay['seg']
-            assert lay['seg']==idx['seg'] and lay['rec_bytes']<=idx['rec_bytes'],('layout changed',L,lay,idx['seg'])
+            assert json.loads(json.dumps(lay['seg']))==idx['seg'] and lay['rec_bytes']<=idx['rec_bytes'],('layout changed',L,lay,idx['seg'])
             lay['rec_bytes']=idx['rec_bytes'];rb=lay['rec_bytes']
             fd=os.open(f'{out}/rank{r}.bin',os.O_WRONLY|os.O_CREAT,0o644)
             try:

@@ -1,0 +1,24 @@
+L10 rank0/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  engine: 253 upgrades (61 host-LRU hits), 192 posts; op end-to-end p50 0.875 p99 17.974 ms
+  table rows wrong after apply: 0
+  300 replays, 443 ops applied, worst rel err vs reference 0.00e+00 (reference repeat 0.00e+00, 0 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.727 p99 13.831 ms (192 reads, 3.52 GB/s at qd 1)
+STREAM SMOKE PASS
+L10 rank1/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  engine: 257 upgrades (67 host-LRU hits), 195 posts; op end-to-end p50 0.982 p99 16.239 ms
+  table rows wrong after apply: 0
+  300 replays, 450 ops applied, worst rel err vs reference 0.00e+00 (reference repeat 0.00e+00, 0 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.754 p99 13.801 ms (189 reads, 3.40 GB/s at qd 1)
+STREAM SMOKE PASS
+L10 rank2/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  engine: 257 upgrades (76 host-LRU hits), 198 posts; op end-to-end p50 1.012 p99 16.209 ms
+  table rows wrong after apply: 0
+  300 replays, 452 ops applied, worst rel err vs reference 3.95e-05 (reference repeat 3.80e-05, 53 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.779 p99 13.798 ms (179 reads, 3.28 GB/s at qd 1)
+STREAM SMOKE PASS
+L10 rank3/TP4: 256 experts, record 2560000 B, slots 64
+  record bytes vs resident: OK (32 experts)
+  engine: 262 upgrades (85 host-LRU hits), 202 posts; op end-to-end p50 0.827 p99 18.077 ms
+  table rows wrong after apply: 0
+  300 replays, 464 ops applied, worst rel err vs reference 4.16e-05 (reference repeat 3.89e-05, 45 steps >1e-5, 0 over the bound); O_DIRECT read p50 0.780 p99 13.863 ms (177 reads, 3.28 GB/s at qd 1)
+STREAM SMOKE PASS
