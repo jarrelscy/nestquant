@@ -231,6 +231,22 @@
    "control/routed": 10.552,
    "ood/forced": 11.51,
    "ood/routed": 10.944
+  },
+  "nq_p4126_c0i0lr/L2": {
+   "all/forced": 41.616,
+   "all/routed": 40.546,
+   "control/forced": 40.5,
+   "control/routed": 40.713,
+   "ood/forced": 43.44,
+   "ood/routed": 40.469
+  },
+  "nq_p4126_c0i0lr/L4": {
+   "all/forced": 10.916,
+   "all/routed": 10.554,
+   "control/forced": 10.525,
+   "control/routed": 10.524,
+   "ood/forced": 11.548,
+   "ood/routed": 10.567
   }
  },
  "info": {
@@ -1992,6 +2008,66 @@
   "nq_p4126_c0i0/L4": {
    "bpw": 4.126302083333333,
    "time_s": 39.65901589393616,
+   "res_K": {
+    "gate": 2.0,
+    "up": 2.0,
+    "down": 2.3125
+   },
+   "canonical": false,
+   "inner": 0,
+   "L2_equal_canonical": [
+    null,
+    null,
+    null
+   ],
+   "bitexact": [
+    {
+     "2": true,
+     "4": true
+    },
+    {
+     "2": true,
+     "4": true
+    },
+    {
+     "2": true,
+     "4": true
+    }
+   ]
+  },
+  "nq_p4126_c0i0lr/L2": {
+   "bpw": 2.021267361111111,
+   "time_s": 85.15288615226746,
+   "res_K": {
+    "gate": 2.0,
+    "up": 2.0,
+    "down": 2.3125
+   },
+   "canonical": false,
+   "inner": 0,
+   "L2_equal_canonical": [
+    null,
+    null,
+    null
+   ],
+   "bitexact": [
+    {
+     "2": true,
+     "4": true
+    },
+    {
+     "2": true,
+     "4": true
+    },
+    {
+     "2": true,
+     "4": true
+    }
+   ]
+  },
+  "nq_p4126_c0i0lr/L4": {
+   "bpw": 4.134982638888889,
+   "time_s": 85.15288615226746,
    "res_K": {
     "gate": 2.0,
     "up": 2.0,

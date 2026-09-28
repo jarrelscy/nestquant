@@ -104,6 +104,8 @@ def ext():
         if CE.CUDA_HOME is None:
             CE.CUDA_HOME = os.environ["CUDA_HOME"]
         nb = "/tmp/nestquant/12-reference-encoder/bin"                      # ninja (static binary symlink)
+        if not os.path.exists(os.path.join(nb, "ninja")):                  # /tmp wiped -> the venv's ninja
+            nb = "/home/coder/git/glm52/.venv/bin"
         if os.path.isdir(nb) and nb not in os.environ.get("PATH", ""):
             os.environ["PATH"] = nb + ":" + os.environ.get("PATH", "")
         inc = os.path.join(os.path.dirname(exllamav3.__file__), "exllamav3_ext")

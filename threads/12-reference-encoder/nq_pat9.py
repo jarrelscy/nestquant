@@ -35,9 +35,11 @@ def main():
             if f"nq_{cfg}/L4" in ev:
                 continue
             pk, ci = cfg.split("_")
+            lr = dict(NE.LR) if ci.endswith("lr") else None
+            ci = ci[:-2] if lr else ci
             canon, inner = ci[1] == "1", int(ci[3:])
             torch.cuda.synchronize(); t0 = time.time()
-            art, dense = NE.encode_expert(data.teacher, HG, res_K=PAT[pk], canonical_base=canon, inner=inner)
+            art, dense = NE.encode_expert(data.teacher, HG, res_K=PAT[pk], canonical_base=canon, inner=inner, lr=lr)
             torch.cuda.synchronize(); dt = time.time() - t0
             torch.save(art, f"{ART}/L{L}_E{E}_{cfg}.pt")
             m = art["meta"]

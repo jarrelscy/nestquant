@@ -454,7 +454,7 @@ def free(P):
 
 # ================================================================================================ production API
 PROJ = ("gate", "up", "down")
-PROD = dict(base_var="sign", lam=0.3, inner=0, canonical_base=False, K_hi=2.5, sigma={"gate": 0.5, "up": 0.5, "down": 1.0},
+PROD = dict(base_var="sign", lam=0.3, inner=0, canonical_base=False, K_hi=2.5, lr=None, sigma={"gate": 0.5, "up": 0.5, "down": 1.0},
             axis={"gate": "n", "up": "n", "down": "k"}, units_per_shard=768,
             res_K={"gate": 2.0, "up": 2.0, "down": 2.3125})   # PRODUCTION DEFAULT 4.1263 bpw, single joint pass, inner 0
 # (9-expert rule: 2/2/2.3125 single-pass passes, worst -1.43/-1.75/-0.83 %; 1.9375/1.9375/2.3125 = 4.0846 FAILS OOD)
@@ -497,7 +497,9 @@ def ocol_apply(planes, dn, W, idx):
     planes["p4"]["ocol"] = dict(d4=d4.T.contiguous().cpu())
 
 
-LR = dict(tau=0.05, rmax=4, sparse_m=8, sparse_mass=0.999)
+LR = dict(tau=0.05, rmax=4, sparse_m=0, sparse_mass=0.999)   # sparse_m 8 tested: L30 E169 L2 +6 -> +18 %, off
+PROD["lr"] = dict(LR)   # PRODUCTION (2026-09-28): low-rank plane on; lr=None = pre-lr format. tau .02 tested: L30 E169
+                        # L2 4.53 -> 2.22 (EXL3 4.26) but +0.015..0.035 bpw and L3 E60 only 20.47 -> 20.08 (EXL3 18.13)
 # low-rank plane rule (H only): top eigen-directions of H with eigenvalue share >= tau, at most rmax; a direction whose
 # top sparse_m channels carry >= sparse_mass of |v|^2 is truncated to them (sparse column case: gather, no dot)
 
@@ -566,7 +568,7 @@ def rate_rule(ref_bits, rate, K_hi=PROD["K_hi"]):
 @torch.no_grad()
 def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PROD["lam"],
                   base_var=PROD["base_var"], inner=PROD["inner"], check=True, canonical_base=PROD["canonical_base"], res_K=None,
-                  seed=91426, ocol=None, lr=None):
+                  seed=91426, ocol=None, lr=PROD["lr"]):
     """One expert -> (artifact {gate, up, down: planes, meta}, dense {2, 4: [g, u, d] fp32 [out, in]}).
     Ws: [Wg, Wu, Wd] teacher [out, in]; HG: thread-12 glm_H format {"H": [Hx, Hx, Ha], "G": [Gg, Gu, None]}
     (e.g. threads/19-full-capture/nq19_load.Capture().glm_H(L, E)).
@@ -578,11 +580,12 @@ def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PR
     if rate is None and res_K is None:
         res_K = PROD["res_K"]
     art, dense, info = {}, {2: [], 4: []}, {}
+    shareH = HG["H"][1] is HG["H"][0] or torch.equal(HG["H"][1], HG["H"][0])   # gate/up share the input Gram
     for pi, pn in enumerate(PROJ):
         oidx = ocol_detect(HG["H"][pi], **ocol) if ocol else torch.zeros(0, dtype=torch.long)
         Hq = ocol_H(HG["H"][pi], oidx)
         if lr:
-            if not (pi == 1 and HG["H"][1] is HG["H"][0]):              # gate/up share the input Gram -> same V
+            if not (pi == 1 and shareH):                                   # gate/up share the input Gram -> same V
                 Vlr = lr_detect(HG["H"][pi].cuda(), **lr)
             Hq = lr_H(HG["H"][pi].cuda(), Vlr)
         P = prep(Ws[pi], Hq, count, sigma[pn], seed=seed, G=HG["G"][pi], sigma_out=sigma_out,
@@ -603,7 +606,7 @@ def encode_expert(Ws, HG, rate=None, count=1, sigma=None, sigma_out=0.03, lam=PR
         PV.free_tmp(); h.free_scratch()
         if lr and Vlr.shape[0]:
             lr_apply(planes, dn, Ws[pi], Vlr)
-            planes["meta"]["lr"] = dict(lr, r=int(Vlr.shape[0]), shared_V=bool(pi == 1 and HG["H"][1] is HG["H"][0]),
+            planes["meta"]["lr"] = dict(lr, r=int(Vlr.shape[0]), shared_V=bool(pi == 1 and shareH),
                                         nnz=lr_nnz(Vlr))
             inf["bits"] = D.bits_per_level(planes)
         if oidx.numel():
@@ -645,6 +648,8 @@ def main():
     ap.add_argument("--out", required=True); ap.add_argument("--dense-out", help="also save internal dense {2,4}")
     ap.add_argument("--canonical", action="store_true", help="2-pass rate-canonical base (K2 reference) + inner 2 "
                                                               "(slower, ~100 s; production = single joint pass inner 0)")
+    ap.add_argument("--no-lr", action="store_true", help="no low-rank plane (pre-2026-09-28 format)")
+    ap.add_argument("--lr-tau", type=float, default=LR["tau"]); ap.add_argument("--lr-rmax", type=int, default=LR["rmax"])
     a = ap.parse_args()
     torch.cuda.set_per_process_memory_fraction(12 / 80)
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -658,7 +663,8 @@ def main():
         import nq_run
         HG = nq_run.glm_H(data, a.layer, a.expert)
     rk = dict(zip(PROJ, map(float, a.res_k.split(",")))) if a.res_k else None
-    art, dense = encode_expert(data.teacher, HG, rate=a.rate, canonical_base=a.canonical, inner=2 if a.canonical else PROD["inner"], res_K=rk)
+    art, dense = encode_expert(data.teacher, HG, rate=a.rate, canonical_base=a.canonical, inner=2 if a.canonical else PROD["inner"], res_K=rk,
+                                lr=None if a.no_lr else dict(LR, tau=a.lr_tau, rmax=a.lr_rmax))
     torch.save(art, a.out)
     if a.dense_out:
         torch.save(dense, a.dense_out)

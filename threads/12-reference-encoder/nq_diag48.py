@@ -106,7 +106,7 @@ def main():
             res["proj"][pn] = r
             print(f"[{L}:{E}] {pn} exl3 done {time.time()-t0:.0f}s", flush=True)
         for arm in a.arms.split(","):
-            kw = dict(res_K=PK, canonical_base=False, inner=0, lam=NE.PROD["lam"], base_var=NE.PROD["base_var"])
+            kw = dict(res_K=PK, canonical_base=False, inner=0, lam=NE.PROD["lam"], base_var=NE.PROD["base_var"], lr=None)
             HGa = HG
             if arm == "inner2":
                 kw["inner"] = 2
