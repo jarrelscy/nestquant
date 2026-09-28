@@ -149,6 +149,18 @@ def check_decode(root, L, n_decode=None, seed=0):
     dec = set(exps if n_decode is None else random.Random(seed * 1000 + L).sample(exps, min(n_decode, len(exps))))
     import nq_layer as NL
     have_pt = all(os.path.exists(f"{root}/L{L}/tp{s}.pt") for s in range(NSH))
+    if have_pt:          # T12's assemble torch.loads all 8 tp.pt (~5 GB) per expert: serve them from a per-layer cache
+        _load, cache = torch.load, {}              # (same objects, same T12 code path; 256x fewer unpickles)
+        tp = {os.path.realpath(f"{root}/L{L}/tp{s}.pt") for s in range(NSH)}
+
+        def cached_load(f, *a, **k):
+            rp = os.path.realpath(f) if isinstance(f, str) else None
+            if rp in tp:
+                if rp not in cache:
+                    cache[rp] = _load(f, *a, **k)
+                return cache[rp]
+            return _load(f, *a, **k)
+        torch.load = cached_load
     bad_art, bad_dec, t12_only = [], [], {}
     for E in exps:
         art = torch.load(f"{root}/L{L}/experts/E{E}.pt", weights_only=False, map_location="cpu")
@@ -167,6 +179,8 @@ def check_decode(root, L, n_decode=None, seed=0):
             for Lv in (2, 4):
                 if not all(torch.equal(x, y) for x, y in zip(D.decode_expert(art, Lv), D.decode_expert(re, Lv))):
                     bad_dec.append((E, Lv))
+    if have_pt:
+        torch.load = _load
     ok = not bad_art and not bad_dec
     print(f"[L{L}] safetensors artifact == E.pt artifact: {not bad_art} ({len(bad_art)}/{len(exps)} mismatches)", flush=True)
     if t12_only:
