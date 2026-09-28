@@ -1,0 +1,95 @@
+{
+ "_doc": "T25 production campaign definition (B3). nq25_resume.py reads this; the driver's ROOT/campaign.json and every layer manifest's campaign block carry the same config_id / code ids. status=draft until the launch gates pass; 'nq25_resume.py pin' fills code + fixed_set_sha16 at launch.",
+ "status": "draft",
+ "root": "/tmp/nestquant/nq-encode-v1",
+ "repo": "jarrelscy/GLM-5.3-NestQuant-2-4bit",
+ "frozen": {
+  "stats_root": "/tmp/nestquant/19-capture-glmfmt",
+  "stats_version": "stats",
+  "layers": "3:78",
+  "experts": "0:256",
+  "encoder": "t23b",
+  "encoder_fallback": "nq_layer",
+  "encoder_cmd": "",
+  "enc_args": "",
+  "fixed_set": "/tmp/nestquant/19-capture-glmfmt/fixed_set.json",
+  "source": "/tmp/nestquant/src/glm53-fp8",
+  "vision_root": "/tmp/nestquant/19-capture-mm",
+  "vision_version": "stats",
+  "vision_weight": 0.25,
+  "vision_args": "",
+  "spot_h_fn": ""
+ },
+ "sched": {
+  "gpus": "0,1,2,3,4,5,6,7",
+  "workers_per_gpu": 1,
+  "chunk": 16,
+  "upload": "go",
+  "max_up": 2,
+  "nq_check": "first",
+  "n_decode": 8,
+  "refcheck": true,
+  "hf_reconcile": true,
+  "code_guard": true,
+  "t23_group": 4,
+  "stats_gate": "final",
+  "gate_backup": true,
+  "remanifest": true,
+  "t23_go": "/home/coder/git/nestquant/threads/25-campaign/T23_GO"
+ },
+ "calibration": "H = 0.75 H_text/tr + 0.25 H_vision/tr (T12 nq_layer --stats-mm ROOT --mm-w 0.25 via T26 BlendCapture; per-expert w_e = w*min(1, n_v/128))",
+ "fp8_source": {
+  "repo": "zai-org/GLM-5.3",
+  "revision": "aca966e4e02791568aa6a4ced368624b3d897f42",
+  "local_dir": "/tmp/nestquant/src/glm53-fp8",
+  "bytes_approx": 755600000000,
+  "measured_MBps": 570
+ },
+ "stats_backup": {
+  "text": {
+   "prefix": "s3://annalise-shared-prod/jarrel/nestquant/19-capture-glmfmt",
+   "set": "full",
+   "bytes_approx": 3200000000000,
+   "measured_MBps": 290
+  },
+  "vision": {
+   "prefix": "s3://annalise-shared-prod/jarrel/nestquant/19-capture-mm",
+   "set": "full"
+  },
+  "tool": "threads/19-full-capture/fb_restore.py (flashblade endpoint/env from fb_backup19.py)"
+ },
+ "vision_graft": {
+  "repo": "jarrelscy/GLM-5.3-Vision-NVFP4-AQLM-hybrid",
+  "revision": "68ebfe28b961f889cb0707a3637324825414b836",
+  "local_dir": "/tmp/nestquant/vision-graft",
+  "files": {
+   "vision_tower.safetensors": {
+    "sha256": "af1c927919bd073c2ab893bf2c6d9826100a06828c3b40f0128fabb4660a610d",
+    "bytes": 833769904
+   },
+   "mm_projector.safetensors": {
+    "sha256": "e7c6ce8c27424f292e708e7bbb48ade57ea9f1aaddd28bd6a1020a860d9db80c",
+    "bytes": 99117136
+   },
+   "tokenizer.json": {
+    "sha256": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d"
+   }
+  }
+ },
+ "env": {
+  "python": "/home/coder/git/glm52/.venv/bin/python",
+  "LD_LIBRARY_PATH": "/home/coder/git/nestquant/threads/06-expert-objective/lib:/home/coder/git/glm52/artifacts/shared-bit-graphs/runtime/cuda-compat/usr/local/cuda-13.0/compat",
+  "ninja_link": [
+   "/tmp/nestquant/12-reference-encoder/bin/ninja",
+   "/home/coder/git/glm52/.venv/bin/ninja"
+  ]
+ },
+ "code": {
+  "nestquant_commit": "f128e41",
+  "files": null,
+  "code_id": null,
+  "t23_id": null,
+  "t25_id": null
+ },
+ "_gates": "Per-layer (coordinator 2026-09-29): layer L encodes once (a) T19 final text stats for L = all plan shards merged + done_full backup marker, (b) T26 vision stats for L merged, (c) T23 gate passed = T23_GO file committed next to this (t23b layers only; nq_layer fallback needs no T23 gate). fixed_set only feeds manifest default_allocation: not in config_id; manifests are refreshed + re-uploaded when fixed_set.json changes."
+}
