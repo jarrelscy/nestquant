@@ -7,9 +7,10 @@ Per layer L (ascending): the files of L whose local sha256 differs from the Hub'
 for json) -- rank{r}/L{L}.bin, res/rank{r}/L{L}.pt, layers/L{L}.json -- plus a partial index (rank{r}.json +
 manifest.json covering the layers verified on the Hub so far, + L) go in ONE commit; then the remote tree is re-listed and
 every file of L must match (size + sha). Unchanged layers are skipped, so a refit re-uploads only the layers whose content
-hash changed. Once every layer is verified: the full index + manifest (== the local ones), serving/nq_assemble.py, then
+hash changed. Once every layer is verified: the full index + manifest + artifact_stamp.json (== the local ones),
+serving/nq_assemble.py + serving/nq_verify_repack.py, then
 COMPLETE in its own last commit, then a final verify of the whole serving/tp{N}/ tree against the local build.
-Refit: if the Hub has a COMPLETE and some layer must change, COMPLETE is deleted first (the release is incomplete while
+Refit: if the Hub has a COMPLETE and some layer or index file must change, COMPLETE is deleted first (the release is incomplete while
 blocks are replaced) and rewritten at the end. Only paths under serving/ are ever added or deleted (asserted); nothing in
 layers/, README.md or the configs is touched. Upload records: OUT/serving/tp{N}/_uploads/L{L}.json (local only).
 Token: huggingface_hub default lookup (HF_TOKEN or the cached token); never printed.
@@ -22,6 +23,7 @@ from nq25_upload import remote_tree, with_retry, git_blob_sha1, sha256
 
 REPO = "jarrelscy/GLM-5.3-NestQuant-2-4bit"
 LFS_EXT = (".bin", ".pt")
+TOOLS = ("nq_assemble.py", "nq_verify_repack.py")
 
 
 def local_sha(p, rel, known=None):
@@ -85,10 +87,15 @@ def main():
     changed = [L for L in Ls if plan[L]]
     nbytes = sum(os.path.getsize(x[0]) for L in changed for x in plan[L])
     print(f"{a.repo}:{P}: {len(Ls)} layers, {len(changed)} to upload ({nbytes/1e9:.1f} GB): {changed[:10]}{'...' if len(changed) > 10 else ''}", flush=True)
+    IDX = [f"rank{r}.json" for r in range(a.tp)] + ["manifest.json", NR.STAMP]
+    idx_changed = [rel for rel in IDX if os.path.exists(f"{T}/{rel}") and
+                   not matches(rt.get(rel), "blob", git_blob_sha1(f"{T}/{rel}"), os.path.getsize(f"{T}/{rel}"))]
+    print(f"index files to update: {idx_changed}", flush=True)
     if not a.go:
         print("dry run (--go to upload)"); return
-    if changed and "COMPLETE" in rt:
-        commit([CommitOperationDelete(path_in_repo=f"{P}/COMPLETE")], f"NestQuant serving tp{a.tp}: refit of {len(changed)} layers (release incomplete until COMPLETE)")
+    if (changed or idx_changed) and "COMPLETE" in rt:
+        commit([CommitOperationDelete(path_in_repo=f"{P}/COMPLETE")], f"NestQuant serving tp{a.tp}: refit of {len(changed)} layers"
+               f"{' + index' if idx_changed else ''} (release incomplete until COMPLETE)")
         print("deleted remote COMPLETE (refit in progress)", flush=True)
     done = {int(L) for L in man["layers_present"]} - set(changed)          # verified on the Hub already (unchanged)
     stage = f"{T}/_uploads/stage"
@@ -123,12 +130,13 @@ def main():
     # full index + manifest (== local) + the assemble script, then COMPLETE alone, last
     rt = rel_tree(with_retry(lambda: remote_tree(api, a.repo, P), what="list final"))
     ops = []
-    for rel in [f"rank{r}.json" for r in range(a.tp)] + ["manifest.json"]:
-        if not matches(rt.get(rel), "blob", git_blob_sha1(f"{T}/{rel}"), os.path.getsize(f"{T}/{rel}")):
+    for rel in IDX:
+        if os.path.exists(f"{T}/{rel}") and not matches(rt.get(rel), "blob", git_blob_sha1(f"{T}/{rel}"), os.path.getsize(f"{T}/{rel}")):
             add(ops, f"{T}/{rel}", rel)
-    asm = with_retry(lambda: remote_tree(api, a.repo, "serving"), what="list serving").get("serving/nq_assemble.py")
-    if not matches(asm, "blob", git_blob_sha1(f"{HERE}/nq_assemble.py"), os.path.getsize(f"{HERE}/nq_assemble.py")):
-        ops.append(CommitOperationAdd(path_in_repo="serving/nq_assemble.py", path_or_fileobj=f"{HERE}/nq_assemble.py"))
+    srv = with_retry(lambda: remote_tree(api, a.repo, "serving"), what="list serving")
+    for tool in TOOLS:                                   # stdlib-only consumer scripts, published under serving/
+        if not matches(srv.get(f"serving/{tool}"), "blob", git_blob_sha1(f"{HERE}/{tool}"), os.path.getsize(f"{HERE}/{tool}")):
+            ops.append(CommitOperationAdd(path_in_repo=f"serving/{tool}", path_or_fileobj=f"{HERE}/{tool}"))
     if ops:
         commit(ops, f"NestQuant serving tp{a.tp}: full index + manifest")
     rt = rel_tree(with_retry(lambda: remote_tree(api, a.repo, P), what="verify all"))
@@ -138,8 +146,8 @@ def main():
             kind, dig = local_sha(lp, rel, known)
             if not matches(rt.get(rel), kind, dig, os.path.getsize(lp)):
                 bad.append(rel)
-    for rel in [f"rank{r}.json" for r in range(a.tp)] + ["manifest.json"]:
-        if not matches(rt.get(rel), "blob", git_blob_sha1(f"{T}/{rel}"), os.path.getsize(f"{T}/{rel}")):
+    for rel in IDX:
+        if os.path.exists(f"{T}/{rel}") and not matches(rt.get(rel), "blob", git_blob_sha1(f"{T}/{rel}"), os.path.getsize(f"{T}/{rel}")):
             bad.append(rel)
     if bad:
         sys.exit(f"final verify failed ({len(bad)}): {bad[:8]} -- COMPLETE not written")

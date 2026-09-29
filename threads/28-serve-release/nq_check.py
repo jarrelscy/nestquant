@@ -154,6 +154,12 @@ def check_structure(D, ref, a):
                 bad(f"rank{r} L{L}: index entry != layer block")
             if e["experts"] != list(range(NE)):
                 bad(f"rank{r} L{L}: experts != 0..NE-1")
+            src = blks.get(L, {}).get("source", {})
+            if src and e.get("source_manifest_sha256", src["manifest_sha256"]) != src["manifest_sha256"]:
+                bad(f"rank{r} L{L}: index source_manifest_sha256 != layer block")
+            for k in NR.ROT_KEYS:                        # rotation fields: index == layer block (absent on both = default)
+                if src and e.get(k) != src.get(k):
+                    bad(f"rank{r} L{L}: index {k} {e.get(k)} != layer block {src.get(k)}")
             for f, nb, h in ((e["file"], e["bytes"], e["sha256"]), (e["res"], e["res_bytes"], e["res_sha256"])):
                 p = f"{T}/{f}"
                 if not os.path.exists(p):
@@ -167,6 +173,16 @@ def check_structure(D, ref, a):
                 if os.path.getsize(p) != nb:
                     bad(f"rank{r} L{L}: {f} size {os.path.getsize(p)} != {nb}"); continue
                 files.append((p, h, f"rank{r} L{L}: {f}"))
+    sp = f"{T}/{NR.STAMP}"
+    if os.path.exists(sp):                               # artifact_stamp.json: run_c2.sh key over the source manifests
+        st = json.load(open(sp)); i0 = json.load(open(f"{T}/rank0.json"))["layers"]   # (index == blocks checked above;
+        msha = {int(L): e.get("source_manifest_sha256") for L, e in i0.items()}         #  a refit download has few blocks)
+        if st.get("key") != NR.artifact_key(msha) or {int(k): v for k, v in st.get("layers", {}).items()} != msha:
+            bad(f"{NR.STAMP} key {st.get('key')} != artifact key {NR.artifact_key(msha)} of the layer blocks")
+        if comp is not None and "stamp_sha256" in comp and NR.sha256_file(sp) != comp["stamp_sha256"]:
+            bad(f"{NR.STAMP} sha256 != COMPLETE")
+    elif comp is not None and "stamp_sha256" in comp:
+        bad(f"{NR.STAMP} missing (COMPLETE lists it)")
     if skipped[0]:
         print(f"    {skipped[0]} data files of layers outside --layers absent (partial download): not checked", flush=True)
     if a.hash == "all":

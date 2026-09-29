@@ -11,10 +11,12 @@ OUT/serving/tp{N}/                                  (N = TP degree; = an NQ_REPA
   layers/L{L}.json      per-layer block: every file's bytes + sha256, layout, default allocation, routing counts;
                         layer_hash = sha256 of this block's canonical json without the layer_hash/time fields
   rank{r}.json          streaming/stream_engine.RankFile index (format nq-p4rec-v1, rec_bytes, seg, L0, NE,
-                        layers{L: experts, rg, rd}) + per layer: file, offset, bytes, sha256, res, res_sha256, layer_hash
+                        layers{L: experts, rg, rd}) + per layer: file, offset, bytes, sha256, res, res_sha256, layer_hash,
+                        source_manifest_sha256, and in_had_down / had_sign_seed / ics_down when the layer manifest has them
   manifest.json         formats, TP, H/I, layout, per-layer layer_hash, default allocation (fixed level-4 set), floating
                         default, n_routed counts, fixed-set provenance
-  COMPLETE              written only when every layer L0..L1 is present: {L: layer_hash} (+ manifest sha256)
+  artifact_stamp.json   sm120/eval/run_c2.sh's artifact key (sha256 over layers/L{L}/manifest.json), full release only
+  COMPLETE              written only when every layer L0..L1 is present: {L: layer_hash} (+ manifest, index, stamp sha256)
 Record layout (format nq-p4rec-v1, from streaming/p4rec.py): segments gu.p4 | gu.d4 | dn.p4 | dn.d4 | lr4 (U4_g|U4_u|U4_d
 fp16 at RMAX = 4), each 256 B aligned, record rounded to 4 KiB, identical for every record of a TP degree. Any change to
 that layout must bump REC_FORMAT (nq-p4rec-v2) here and in the model card; check_layout() enforces it.
@@ -254,8 +256,10 @@ def build_index(out, tp, only=None, dest=None):
                                          offset=e["rec"]["offset"], bytes=e["rec"]["bytes"], sha256=e["rec"]["sha256"],
                                          res=e["res"]["file"], res_bytes=e["res"]["bytes"], res_sha256=e["res"]["sha256"],
                                          layer_hash=blks[L]["layer_hash"])
-            if "in_had_down" in blks[L]["source"]:
-                idx["layers"][str(L)]["in_had_down"] = blks[L]["source"]["in_had_down"]
+            idx["layers"][str(L)]["source_manifest_sha256"] = blks[L]["source"]["manifest_sha256"]
+            for k in ROT_KEYS:                           # rotation fields, only when the layer manifest has them
+                if k in blks[L]["source"]:               # (absent: in_had_down 128, no sign seed / ics override)
+                    idx["layers"][str(L)][k] = blks[L]["source"][k]
         _wjson(f"{W}/rank{r}.json", idx)
     fss = sorted({blks[L]["default_allocation"]["fixed_set_sha256"] for L in Ls})
     man = dict(format=SERVE_FORMAT, rec_format=REC_FORMAT, res_format=RES_FORMAT, source_format="nestquant-v1",
@@ -270,6 +274,7 @@ def build_index(out, tp, only=None, dest=None):
                **({} if not any("in_had_down" in blks[L]["source"] for L in Ls) else dict(
                    in_had_down={str(L): int(blks[L]["source"].get("in_had_down", 128)) for L in Ls},
                    had_sign_seed={str(L): blks[L]["source"]["had_sign_seed"] for L in Ls if "had_sign_seed" in blks[L]["source"]},
+                   ics_down={str(L): blks[L]["source"]["ics_down"] for L in Ls if "ics_down" in blks[L]["source"]},
                    rotation_note="in_had_down[L] = width of the down-projection INPUT Hadamard (k side, SwiGLU output): "
                                  "128 = blockwise Had128 (default); 512 = one sign + Sylvester Had512 block per TP4 rank "
                                  "(k = 2048 = 4 x 512; = Had4 across the rank's four 128-chunks after WHT128). Signs are "
@@ -280,8 +285,14 @@ def build_index(out, tp, only=None, dest=None):
                       "default_allocation = fixed level-4 set per layer (always resident at level 4); floating_default = "
                       "top non-fixed experts by n_routed on the text calibration capture (seeds the floating 4-bit set)",
                       "the release is complete only when COMPLETE exists and every layer_hash in it matches layers/L{L}.json"])
+    man["artifact_key"] = artifact_key({L: blks[L]["source"]["manifest_sha256"] for L in Ls})
     _wjson(f"{W}/manifest.json", man)
     full = Ls == list(range(L0, L1 + 1))
+    sp = f"{W}/{STAMP}"
+    if full:
+        _wstamp(sp, {L: blks[L]["source"]["manifest_sha256"] for L in Ls})
+    elif os.path.exists(sp):
+        os.remove(sp)
     cp = f"{W}/COMPLETE"
     if full:
         _wjson(cp, complete_doc(W, blks))
@@ -290,10 +301,36 @@ def build_index(out, tp, only=None, dest=None):
     return Ls, full
 
 
+STAMP = "artifact_stamp.json"
+STAMP_ARTIFACT = "hf://jarrelscy/GLM-5.3-NestQuant-2-4bit (layers/)"
+
+
+def artifact_key(msha):
+    """= sm120/eval/run_c2.sh's KEY, byte for byte: over the artifact's layers/L{L}/manifest.json in `sort -V` order,
+      for d in $(ls -d L* | sort -V); do echo "$d $(sha256sum $d/manifest.json | cut -c1-64)"; done | sha256sum | cut -c1-16
+    msha = {L: sha256 hex of layers/L{L}/manifest.json} (= the layer blocks' source.manifest_sha256)."""
+    return hashlib.sha256("".join(f"L{L} {msha[L]}\n" for L in sorted(msha)).encode()).hexdigest()[:16]
+
+
+def stamp_text(msha):
+    """artifact_stamp.json of an NQ_REPACK dir holding exactly the layers in msha: run_c2.sh's printf line (it greps
+    '"key": "<KEY>"'), deterministic (no time_utc: nothing reads it), + the per-layer manifest sha256 it was computed from."""
+    return json.dumps(dict(artifact=STAMP_ARTIFACT, key=artifact_key(msha), source="nq_release.py serving/tp{N}",
+                           layers={str(L): msha[L] for L in sorted(msha)})) + "\n"
+
+
+def _wstamp(p, msha):
+    s = stamp_text(msha)
+    if os.path.exists(p) and open(p).read() == s:
+        return
+    open(p + ".tmp", "w").write(s); os.replace(p + ".tmp", p)
+
+
 def complete_doc(T, blks):
     return dict(format=SERVE_FORMAT, rec_format=REC_FORMAT, layers={str(L): blks[L]["layer_hash"] for L in sorted(blks)},
                 manifest_sha256=sha256_file(f"{T}/manifest.json"),
-                index_sha256={f"rank{r}.json": sha256_file(f"{T}/rank{r}.json") for r in range(blks[min(blks)]["tp"])})
+                index_sha256={f"rank{r}.json": sha256_file(f"{T}/rank{r}.json") for r in range(blks[min(blks)]["tp"])},
+                stamp_sha256=sha256_file(f"{T}/{STAMP}"))
 
 
 def _wjson(p, d):

@@ -11,6 +11,8 @@ NestQuant releases ship pre-packed per TP degree, so consumers never run `stream
 | `nq_upload.py OUT --tp N [--go]` | uploads changed layers in order (one verified commit per layer, with a partial index), then full index + manifest + `serving/nq_assemble.py`, then `COMPLETE` last; refits delete the Hub's COMPLETE first |
 | `nq_check.py DIR [--ref ROOT] [--dev cuda]` | validator (structure, offsets, hashes, bit-exact decode of a few experts per layer) |
 | `nq_assemble.py DIR [--move]` | stdlib-only: per-layer blocks -> `rank{r}.bin` (pure byte copy + sha256), incremental; also published as `serving/nq_assemble.py` |
+| `nq_assemble.py --src DL --into RECDIR [--layers ..]` | stdlib-only: install a (refit) download into an existing record dir (the serve's `NQ_REPACK_DIR`, repack.py-built or not) in place; see below |
+| `nq_verify_repack.py --release DL --repack RECDIR` | stdlib-only, read-only: sha256 of every (layer, rank) records range + resident file of a record dir vs the release; published as `serving/nq_verify_repack.py` |
 | `nq_refit_hook.py ROOT --layers L.. [--upload]` | the refit hook: release -> check -> upload for every built TP degree |
 | `neg_test.py SRC_TPDIR REF WORK [L]` | validator negative tests on a one-layer copy |
 
@@ -37,8 +39,14 @@ Big outputs: `/tmp/nestquant/28-serve-release/out/serving/tp4/` (local build), l
   - format, rec_bytes, seg, L0, NE, `layers{L: experts, rg, rd}`
   - per layer: `file`, `offset`, `bytes`, `sha256`, `res`, `res_bytes`, `res_sha256`, `layer_hash`
   - `bin` and `bin_bytes` of the assembled file
-- `manifest.json`: formats, layout, `layer_hash` per layer, `default_allocation`, `floating_default`, `n_routed`, fixed-set sha.
-- `COMPLETE`: `{layers: {L: layer_hash}, manifest_sha256, index_sha256}`. It is uploaded last, and the release is complete only when it exists.
+  - per layer `source_manifest_sha256` and, only where the layer manifest's config has them, the rotation fields
+    `in_had_down` (absent = 128), `had_sign_seed`, `ics_down` (T30; the serve reads `in_had_down` from here)
+- `manifest.json`: formats, layout, `layer_hash` per layer, `default_allocation`, `floating_default`, `n_routed`, fixed-set sha,
+  rotation maps, `artifact_key`.
+- `artifact_stamp.json` (full release only): `{"artifact", "key", "layers": {L: manifest sha256}}`, key = `sm120/eval/run_c2.sh`'s
+  KEY (`nq_release.artifact_key`: sha256 of `"L{L} <sha256 of layers/L{L}/manifest.json>\n"` in `sort -V` order, first 16 hex),
+  so an assembled release passes run_c2's stamp check. No time field (deterministic).
+- `COMPLETE`: `{layers: {L: layer_hash}, manifest_sha256, index_sha256, stamp_sha256}`. It is uploaded last, and the release is complete only when it exists.
 
 Checked equal to the reference converter: for L3 at TP4 the records and resident files are byte-identical (`cmp`) to
 `streaming/repack.py` output. The resident .pt has to be staged under the same basename, because torch.save's zip prefix is the file name.
@@ -55,6 +63,23 @@ Checked equal to the reference converter: for L3 at TP4 the records and resident
   `rank{r}.json layers[L].file`. That needs `stream_engine.RankFile` / the nqstream `Engine` to take a per-layer fd table
   instead of one path. It is your code, so I did not edit it. The index already carries both addresses.
 - Validate a download with `nq_check.py serving/tp4 --dev cuda`. The reference is `../../layers/` of the same download.
+
+## Drop-in record dir (T30)
+
+`serving/tp4/` is a drop-in `NQ_REPACK_DIR`: `rank{r}/L{L}.bin` == the bytes `streaming/repack.py` (HEAD 750e317) writes at
+`((L-3)*256)*rec_bytes` of `rank{r}.bin`, and `res/rank{r}/L{L}.pt` == its resident file, checked by sha256 on all 4 ranks for L10
+(v1) and L3-6 (h512 refit), repack.py run on the HF-layout safetensors. `rank{r}.json` is a superset of repack.py's index; every
+reader (stream_engine.RankFile, nq_vllm.available, serve_nq.sh, eval/nqeff.py, eval/eval_fp8.py, smoke_stream.py, repack.py's
+own skip/merge) only uses repack.py's keys and ignores the rest.
+
+`nq_assemble.py --src DL --into RECDIR`: per (layer, rank) current (same layer_hash + shas) -> skip; entry without/with another
+layer_hash -> hash the region + resident file, adopt if equal, else install; absent -> install. Install = drop L from
+rank{r}.json, pwrite + fsync + read-back sha, resident tmp + sha + read-back + rename, put the release entry back (all index
+writes tmp+rename under rank{r}.lock, the lock repack.py uses). Stamp -> "updating" during, recomputed at the end (== the
+release's stamp when RECDIR holds exactly the release). Planning (incl. every needed block present) happens before any write;
+`--dry-run` prints it. Tested on a sparse repack.py-built dir (old L3-4 + L10): adopt L10, install L3-4, kill -9 mid-install
++ rerun, bad-block negative test (layer left out of the index, rerun repairs), rerun no-op, `--verify-existing`, holes of
+other layers untouched, nq_vllm.available / RankFile / resident.load read the result.
 
 ## Validator (nq_check.py)
 
