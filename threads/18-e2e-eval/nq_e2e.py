@@ -56,6 +56,9 @@ EVALSETS = f"{OUT}/evalsets"
 NQ_TRAIN = "/home/coder/git/orbit-duet/runs/glm53_training_15m_v2/tokens.npy"
 
 
+TRACE_DIR = os.environ.get("NQ_TRACE_DIR")   # T32: dump ref (ids, w, |x|^2) per sparse layer + windows manifest
+
+
 def log(m):
     print(f"[r{RANK} {time.strftime('%H:%M:%S')}] {m}", flush=True)
 
@@ -250,7 +253,7 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
             del logits
             ids_l.append(i)
             w_l.append(w)
-            if la is not None or need_act:
+            if la is not None or need_act or (TRACE_DIR and not route):
                 xn_l.append(x.float().pow(2).sum(-1))
             out[c0:c0 + chunk] = layer.mlp.shared_experts(x)
             if keep is not None:
@@ -263,6 +266,12 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
             margin = None
         own_i = torch.cat(own_l)
         del own_l
+        if TRACE_DIR and not route:              # T32: reference routing trace (PRIVATE: stays on this box)
+            os.makedirs(TRACE_DIR, exist_ok=True)
+            tf = f"{TRACE_DIR}/L{li}.r{RANK}of{WORLD}.npz"
+            np.savez(tf + ".part.npz", ids=i.to(torch.uint8).cpu().numpy(), w=w.float().cpu().numpy(),
+                     xn=torch.cat(xn_l).cpu().numpy())
+            os.rename(tf + ".part.npz", tf)
         if not route:
             ref_iw = (i, w)
         if keep is not None:                     # hidden-state dump: MoE input (post-norm), router, shared output
@@ -405,6 +414,10 @@ def cmd_run(a):
     names = a.corpora.split(",")
     seqs, groups, shas = load_windows(names, a.max_windows)
     N = seqs.shape[0]
+    if TRACE_DIR:
+        os.makedirs(TRACE_DIR, exist_ok=True)
+        json.dump({"rank": RANK, "world": WORLD, "seq": SEQ, "shard": SHARD, "windows": WIN_IDS, "corpora": names,
+                   "corpus_sha": shas}, open(f"{TRACE_DIR}/windows.r{RANK}of{WORLD}.json", "w"))
     key = hashlib.sha256(json.dumps([names, shas, nl, SEQ, WORLD, a.max_windows]).encode()
                          ).hexdigest()[:12]
     cdir = f"{OUT}/refcache/{key}"
