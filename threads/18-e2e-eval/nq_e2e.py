@@ -355,8 +355,9 @@ def cmd_run(a):
     tl = {}
     dump = set()
     if a.dump_layers:
-        lo, _, hi = a.dump_layers.partition("-")
-        dump = set(range(int(lo), int(hi or lo) + 1))
+        for part in a.dump_layers.split(","):                            # a-b[,c,d-e]
+            lo, _, hi = part.partition("-")
+            dump |= set(range(int(lo), int(hi or lo) + 1))
         from safetensors.torch import save_file
         assert getattr(qs[0], "is_ref", False), "dump needs the inline reference stream"
         sname = lambda s: "fp8" if s == 0 else qs[s].name              # noqa: E731

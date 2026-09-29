@@ -26,7 +26,8 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 export NQ_OUT=${NQ_OUT:-/tmp/nestquant/18-e2e}
 OUT=$NQ_OUT
-PD_A=$OUT/predecoded_A PD_B=$OUT/predecoded_B PD_S=$OUT/predecoded_S
+PD_A=${PD_A:-$OUT/predecoded_A} PD_B=$OUT/predecoded_B PD_S=$OUT/predecoded_S
+FH=$OUT/farm_H FA4=$OUT/farm_all4 FH4=$OUT/farm_H_all4   # h512 farms (see runH*)
 export NQ_VRAM_GB=${NQ_VRAM_GB:-11}
 MIN_FREE_MB=${MIN_FREE_MB:-14000}
 WORLD=${WORLD:-8}
@@ -95,6 +96,19 @@ case "${1:-}" in
   hdump) shift; launch ${DUMP_TAG:-hdump} run --corpora calib-fit --dump-layers ${DUMP_LAYERS:-29-32} --dump-stop \
           --dump-what x,ids,p,shared,moe_out,d_ref,h_in,h_mid,h_out --dump-dir "${DUMP_DIR:-$OUT/hdump}" --tag hdump \
           --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json" "$@" ;;
+  # T29 h512 refit of L3-6 (in_had_down 512 + flat ics on down): FH = farm of symlinks, predecoded_A + predecoded_H
+  # (nq_h512_pd.py, T29 decoder) on top; SafeIndex reads files in sorted order, so z_h512/ overrides L3-6.
+  runH1) launch runH1 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passH1 \
+          --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json" \
+          --cand "nqdef_h512=mix:lo=$FH/nq2,hi=$FH/nq4,set=$OUT/defset.json" ;;
+  runH2) launch runH2 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passH2 \
+          --cand "nqdef_e4=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json,hi_layers=3-6" \
+          --cand "nqdef_e4_h512=mix:lo=$FH/nq2,hi=$FH/nq4,set=$OUT/defset.json,hi_layers=3-6" ;;
+  runH3) launch runH3 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passH3 \
+          --cand "nq4=dir:$FA4" --cand "nq4_h512=dir:$FH4" ;;
+  runH4) export NQ_SHARD=contig; launch runH4 run --corpora ${H4_CORPORA:-wikitext} --local-err --moe-chunk $MOE_CHUNK --tag passH4 \
+          --cand "nqadapt_chain=adapt:lo=$PD_A/nq2,hi=$FA4,manifest=$SERVE_MAN,chain=1" \
+          --cand "nqadapt_chain_h512=adapt:lo=$FH/nq2,hi=$FH4,manifest=$SERVE_MAN,chain=1" ;;
   merge) "$HERE/run.sh" merge --tag "$2" ;;
   *) sed -n '2,10p' "$0"; exit 1 ;;
 esac
