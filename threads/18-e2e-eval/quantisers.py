@@ -140,9 +140,9 @@ class Dir(Base):
 
 def nq_artifact_path(root, layer, expert):
     """Thread-25 campaign layout {root}/L{L}/experts/E{E}.pt, thread-12 {root}/layer_LLL/expert_EEE.pt, or a
-    single-layer dir {root}/L{L}/E{E}.pt / {root}/E{E}.pt (tuned re-encodes for --expert-override)."""
+    single-layer dir {root}/L{L}/E{E}.pt / {root}/experts/E{E}.pt / {root}/E{E}.pt (tuned re-encodes, --expert-override)."""
     for f in (f"{root}/L{layer}/experts/E{expert}.pt", f"{root}/layer_{layer:03d}/expert_{expert:03d}.pt",
-              f"{root}/L{layer}/E{expert}.pt", f"{root}/E{expert}.pt"):
+              f"{root}/L{layer}/E{expert}.pt", f"{root}/experts/E{expert}.pt", f"{root}/E{expert}.pt"):
         if os.path.exists(f):
             return f
     return None
@@ -184,6 +184,125 @@ class Mix(Base):
             else:
                 self.n_lo += 1
         return W
+
+
+class Adapt(Base):
+    """Causal replay of the serving level scheduler (streaming/scheduler.py defaults) per layer, per sequence:
+    fixed = manifest default_allocation (always level 4); floating = n_float experts, starting at floating_default,
+    re-chosen every `refresh` tokens as the top-n_float non-fixed experts by routing counts decayed with half-life
+    `half_life` tokens (the stream's own top-8 routing), ties -> lower id (np.argsort stable).  One-refresh lag:
+    the set chosen at refresh r (score over tokens < refresh*r) serves chunk r+1; chunks 0 and 1 use floating_default.
+    Ignored vs scheduler.py: the SSD byte budget deferral (every upgrade lands exactly one refresh later) and the
+    big_frac guard (never triggers in per-token decode: 8 experts/token); downgrades are applied with the same lag.
+    adapt:lo=DIR,hi=DIR[,hi2=DIR],manifest=serving/tp4/manifest.json[,half_life=512,refresh=64,n_float=51,lag=1]
+    (hi2: second level-4 dir for experts missing from hi, e.g. the complement of a partial predecode)"""
+
+    def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256):
+        self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
+        self.lo, self.hi = Dir(lo), Dir(hi)
+        self.hi2 = Dir(hi2) if hi2 else None
+        m = json.load(open(manifest))
+        self.fixed = {int(L): sorted(map(int, v)) for L, v in m["default_allocation"].items()}
+        self.fdef = {int(L): [int(e) for e in v] for L, v in m["floating_default"].items()}
+        self.a = 0.5 ** (1 / float(half_life))
+        self.R, self.nf, self.lag, self.NE = int(refresh), int(n_float), int(lag), NE
+        assert self.lag == 1, "only the one-refresh lag is implemented"
+        self.n_hi = self.n_lo = 0
+        self.diag = {}
+
+    def begin_layer(self, layer, device):
+        self.dev = self.lo.dev = self.hi.dev = device
+        if self.hi2 is not None:
+            self.hi2.dev = device
+
+    def end_layer(self, layer):
+        Dir._cur.update(le=None, w={})
+
+    @torch.no_grad()
+    def schedule(self, layer, ids, seq, groups=None):
+        """chain=0: every window is its own sequence (state reset); chain=1: each run of consecutive windows of the
+        same corpus (groups[w]) is one sequence (needs contiguous sharding, NQ_SHARD=contig, for document order)."""
+        N = ids.shape[0] // seq
+        if not self.chain:
+            runs = [(0, N)]
+            L = seq
+        else:
+            g = list(groups) if groups is not None else [0] * N
+            runs, w0 = [], 0
+            for w in range(1, N + 1):
+                if w == N or g[w] != g[w0]:
+                    runs.append((w0, w)); w0 = w
+        hi, serves, tot = [], [], {}
+        for w0, w1 in runs:
+            h, sv, st = self._core(layer, ids[w0 * seq:w1 * seq], seq if not self.chain else (w1 - w0) * seq)
+            hi.append(h); serves.append(sv)
+            for k, v in st.items():
+                tot[k] = tot.get(k, 0) + v
+        tot["chains"] = [w1 - w0 for w0, w1 in runs] if self.chain else None
+        self.diag[layer] = tot
+        return torch.cat(hi), serves
+
+    @torch.no_grad()
+    def _core(self, layer, ids, seq):
+        """ids [T,8] (T = n*seq, sequences back to back) -> (hi [T,8] bool per routed slot, serve [n, nchunks, NE]
+        bool floating set serving each chunk, diagnostics)."""
+        dev, NE, R = ids.device, self.NE, self.R
+        T, K = ids.shape
+        N, nc = T // seq, seq // R
+        assert N * seq == T and nc * R == seq
+        c = torch.zeros(T, NE, dtype=torch.float64, device=dev)
+        c.scatter_add_(1, ids.long(), torch.ones(T, K, dtype=torch.float64, device=dev))
+        c = c.view(N, nc, R, NE)
+        wpos = self.a ** torch.arange(R - 1, -1, -1, device=dev, dtype=torch.float64)
+        C = torch.einsum("nkje,j->nke", c, wpos)
+        aR = self.a ** R
+        S = torch.zeros(N, nc + 1, NE, dtype=torch.float64, device=dev)
+        for k in range(nc):
+            S[:, k + 1] = S[:, k] * aR + C[:, k]                      # score at tok = R*(k+1)
+        fixed = torch.zeros(NE, dtype=torch.bool, device=dev)
+        fixed[self.fixed[layer]] = True
+        fdef = torch.zeros(NE, dtype=torch.bool, device=dev)
+        fdef[[e for e in self.fdef[layer] if e not in set(self.fixed[layer])][:self.nf]] = True
+        want = torch.zeros(N, nc, NE, dtype=torch.bool, device=dev)   # want[:, r] = set chosen at refresh r
+        want[:, 0] = fdef
+        sc = S[:, 1:nc].masked_fill(fixed, float("-inf"))
+        top = torch.sort(-sc, dim=-1, stable=True).indices[..., :self.nf]
+        w = torch.zeros(N, nc - 1, NE, dtype=torch.bool, device=dev)
+        w.scatter_(2, top, True)
+        has = S[:, 1:nc].sum(-1, keepdim=True) > 0                     # no counts yet -> keep the previous want
+        for r in range(1, nc):
+            want[:, r] = torch.where(has[:, r - 1], w[:, r - 1], want[:, r - 1])
+        serve = torch.empty_like(want)                                 # chunk k served by want[k - lag]
+        serve[:, :1] = fdef
+        serve[:, 1:] = want[:, :-1]
+        hi_e = serve | fixed                                           # [N, nc, NE]
+        n = torch.arange(T, device=dev) // seq
+        k = (torch.arange(T, device=dev) % seq) // R
+        hi = hi_e[n.unsqueeze(1), k.unsqueeze(1), ids.long()]
+        # diagnostics (on this stream's routing)
+        stat = fixed | fdef
+        churn = (want[:, 1:] & ~want[:, :-1]).sum(-1).double()        # experts entering the set per refresh
+        d = dict(slots=T * K, l4_slots=int(hi.sum()), fixed_slots=int(fixed[ids.long()].sum()),
+                 float0_slots=int(stat[ids.long()].sum()), churn_sum=float(churn.sum()), churn_n=int(churn.numel()),
+                 churn_first_sum=float(churn[:, 0].sum()), churn_first_n=int(churn[:, 0].numel()))
+        return hi, serve, d
+
+    def level_mask(self, layer, ids, seq, groups=None):
+        return self.schedule(layer, ids, seq, groups)[0]
+
+    def expert_level(self, layer, expert, ref, level):
+        W = (self.hi if level == 4 else self.lo).expert(layer, expert, ref)
+        if W is None and level == 4 and self.hi2 is not None:
+            W = self.hi2.expert(layer, expert, ref)
+        if W is not None:
+            if level == 4:
+                self.n_hi += 1
+            else:
+                self.n_lo += 1
+        return W
+
+    def expert(self, layer, expert, ref):
+        raise RuntimeError("Adapt needs per-token levels (moe_multi level_mask path)")
 
 
 def dir_sha(d, layer):
@@ -375,6 +494,8 @@ def make(name, spec):
             q = Dir(path)
         elif kind == "mix":
             q = Mix(**kv)
+        elif kind == "adapt":
+            q = Adapt(**kv)
         elif kind == "nestquant":
             q = NestQuant(**kv)
         elif kind == "exl3":

@@ -113,6 +113,7 @@ def cmd_prep(a):
 
 
 WIN_IDS = []
+SHARD = os.environ.get("NQ_SHARD", "stride")
 OVERRIDES = {}
 
 
@@ -123,9 +124,13 @@ def load_windows(names, max_windows):
         nw = len(ids) // SEQ
         if max_windows:
             nw = min(nw, max_windows)
-        w = torch.from_numpy(ids[: nw * SEQ].astype(np.int32)).view(nw, SEQ)[RANK::WORLD]
+        if SHARD == "contig":            # contiguous block per rank (document order; nqadapt chain=1)
+            mine = [int(x) for x in np.array_split(np.arange(nw), WORLD)[RANK]]
+        else:
+            mine = list(range(nw))[RANK::WORLD]
+        w = torch.from_numpy(ids[: nw * SEQ].astype(np.int32)).view(nw, SEQ)[mine]
         seqs.append(w)
-        WIN_IDS.append((n, list(range(nw))[RANK::WORLD]))
+        WIN_IDS.append((n, mine))
         groups += [g] * w.shape[0]
         shas.append(hashlib.sha256(ids[: nw * SEQ].tobytes()).hexdigest()[:16])
         log(f"corpus {n}: {nw} windows, rank takes {w.shape[0]}")
@@ -173,7 +178,7 @@ def ffn(x, W):
     return torch.nn.functional.linear(torch.nn.functional.silu(g) * u, W["down_proj"].to(x.dtype))
 
 
-def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None):
+def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None, seq=None, groups=None):
     """flats: per-stream [T,H] bf16 residual streams (updated in place: f += MoE(norm(f)));
     qs: per-stream quantiser (Ref for the reference).  Routing and the shared expert run in `chunk`-token
     slabs; routed experts gather + normalise their own tokens, so no [T,H] normed copy is kept and every expert's
@@ -205,7 +210,11 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
         order = torch.argsort(ids, stable=True)
         tok = torch.arange(T, device=dev).repeat_interleave(i.shape[1])[order]
         offs = [0] + torch.bincount(ids, minlength=E).cumsum(0).tolist()
-        route.append((tok, w.reshape(-1)[order], offs, i))
+        q = qs[len(route)]
+        hm = None
+        if hasattr(q, "level_mask") and getattr(q, "active", lambda _l: True)(li):   # per-token levels (adapt:)
+            hm = q.level_mask(li, i, seq, groups).reshape(-1)[order]
+        route.append((tok, w.reshape(-1)[order], offs, i, hm))
         outs.append(out)
     ref_i = route[0][3] if getattr(qs[0], "is_ref", False) else None
     for s in range(1, len(flats)):
@@ -223,10 +232,36 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
                 cache["w"] = fp8.expert(li, e, dev)
             return cache["w"]
         for s, (f, q) in enumerate(zip(flats, qs)):
-            tok, wts, offs, _ = route[s]
+            tok, wts, offs, _, hm = route[s]
             a, b = offs[e], offs[e + 1]
             if a == b:
                 continue
+            if hm is not None:                   # adapt: this expert's tokens split by their level
+                for lv, sel in ((2, ~hm[a:b]), (4, hm[a:b])):
+                    if not bool(sel.any()):
+                        continue
+                    W = q.expert_level(li, e, ref, lv)
+                    if W is None:
+                        W = ref()
+                        stats[s]["fallback"] += 1
+                    else:
+                        stats[s]["supplied"] += 1
+                    tk, pw = tok[a:b][sel], wts[a:b][sel]
+                    xe = norm(f[tk])
+                    y = ffn(xe, W)
+                    if local_err:
+                        yr = ffn(xe, ref()).float()
+                        p = pw.float()
+                        lerr[s][0] += float((p * (y.float() - yr).pow(2).sum(-1)).sum())
+                        lerr[s][1] += float((p * yr.pow(2).sum(-1)).sum())
+                    outs[s].index_add_(0, tk, (y * pw[:, None]).to(f.dtype))
+                    del xe, y
+                continue
+            if hasattr(q, "level_of") and getattr(q, "active", lambda _l: True)(li):   # L4 share of routed slots
+                st = stats[s].setdefault("l4_slots", {})
+                c = st.setdefault(li, [0, 0])
+                c[0] += (b - a) * (q.level_of(li, e) == 4)
+                c[1] += b - a
             supplied = False
             if getattr(q, "is_ref", False):
                 W = ref()
@@ -370,7 +405,7 @@ def cmd_run(a):
                         t1_ = min(t0_ + a.moe_chunk, f.shape[0])
                         f[t0_:t1_] += layer.mlp(layer.post_attention_layernorm(f[t0_:t1_]))
             else:
-                moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk, keep)
+                moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk, keep, seq=SEQ, groups=groups)
             if li in dump:
                 if keep and keep["x"]:
                     for kind, ts in keep.items():           # x / ids / p / shared / moe_out per stream
@@ -476,9 +511,10 @@ def cmd_run(a):
     for j, i in enumerate(cand):
         q = qs[i]
         res[q.name].update({"spec": q.spec, "stats": stats[i], "tokkl_groups": None,
-                            "extra": {k: getattr(q, k) for k in ("n_hi", "n_lo") if hasattr(q, k)}})
+                            "extra": {k: getattr(q, k) for k in ("n_hi", "n_lo", "diag") if hasattr(q, k)}})
         np.save(f"{rdir}/tokkl_{q.name}_r{RANK}.npy", np.concatenate(tokkl[q.name]))
     json.dump({"rank": RANK, "world": WORLD, "corpora": names, "corpus_sha": shas, "seq": SEQ,
+               "shard": SHARD, "windows": WIN_IDS,
                "n_layers": nl, "groups_per_window": groups, "ref": "cache" if use_cache else "inline",
                "ref_stats": stats[0] if not use_cache else None,
                "layer_seconds": tl, "wall_seconds": time.time() - t_start, "results": res},
