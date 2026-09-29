@@ -186,14 +186,40 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
     norm, E = layer.post_attention_layernorm, layer.mlp.gate.num_experts
     T = flats[0].shape[0]
     route, outs = [], []
+    gate = layer.mlp.gate
+    margin = None
+    if getattr(qs[0], "is_ref", False) and os.environ.get("NQ_ROUTER_MARGIN"):
+        margin = {"n": 0, "lt1e-2": 0, "lt1e-3": 0, "hist": torch.zeros(140, dtype=torch.long)}
+    ref_iw = None                                # (ids, weights) of the reference stream, for oracle routing
     for f in flats:
-        ids_l, w_l = [], []
+        ids_l, w_l, own_l = [], [], []
         out = torch.empty_like(f)
         if keep is not None:
             kx = torch.empty(f.shape, dtype=f.dtype, pin_memory=True)
+        rmode = getattr(qs[len(route)], "route_mode", None) if route else None
+        assert rmode in (None, "oracle", "oracle_ids"), rmode
+        assert rmode is None or ref_iw is not None, "route=oracle needs the inline reference stream"
         for c0 in range(0, T, chunk):
             x = norm(f[c0:c0 + chunk])
-            _, w, i = layer.mlp.gate(x)
+            logits, w, i = gate(x)
+            own_l.append(i)
+            if not route and margin is not None:  # FP8 router margin: 8th - 9th noaux_tc selection score
+                sc = torch.topk(logits.sigmoid() + gate.e_score_correction_bias, 9, dim=-1).values
+                g = (sc[:, 7] - sc[:, 8]).float()
+                margin["n"] += g.numel()
+                margin["lt1e-2"] += int((g < 1e-2).sum())
+                margin["lt1e-3"] += int((g < 1e-3).sum())
+                margin["hist"] += torch.histc(torch.log10(g.clamp_min(1e-7)), bins=140, min=-7.0, max=0.0).long().cpu()
+                del sc, g
+            if rmode == "oracle":                # FP8 reference's top-8 ids and gate weights
+                i, w = ref_iw[0][c0:c0 + chunk], ref_iw[1][c0:c0 + chunk]
+            elif rmode == "oracle_ids":          # FP8 ids, weights from this stream's own router at those ids
+                i = ref_iw[0][c0:c0 + chunk]
+                w = logits.sigmoid().gather(1, i)
+                if gate.norm_topk_prob:
+                    w = w / (w.sum(-1, keepdim=True) + 1e-20)
+                w = w * gate.routed_scaling_factor
+            del logits
             ids_l.append(i)
             w_l.append(w)
             out[c0:c0 + chunk] = layer.mlp.shared_experts(x)
@@ -201,6 +227,14 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
                 kx[c0:c0 + chunk] = x.cpu()
             del x
         i, w = torch.cat(ids_l), torch.cat(w_l)
+        if margin is not None and not route:
+            m = dict(margin, hist=margin["hist"].tolist())
+            stats[0].setdefault("router_margin", {})[li] = m
+            margin = None
+        own_i = torch.cat(own_l)
+        del own_l
+        if not route:
+            ref_iw = (i, w)
         if keep is not None:                     # hidden-state dump: MoE input (post-norm), router, shared output
             keep["x"].append(kx)
             keep["ids"].append(i.to(torch.uint8).cpu())
@@ -214,13 +248,16 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
         hm = None
         if hasattr(q, "level_mask") and getattr(q, "active", lambda _l: True)(li):   # per-token levels (adapt:)
             hm = q.level_mask(li, i, seq, groups).reshape(-1)[order]
-        route.append((tok, w.reshape(-1)[order], offs, i, hm))
+        route.append((tok, w.reshape(-1)[order], offs, i, hm, own_i))
         outs.append(out)
     ref_i = route[0][3] if getattr(qs[0], "is_ref", False) else None
     for s in range(1, len(flats)):
-        if ref_i is not None:                    # router top-8 set agreement vs reference stream
-            same = (route[s][3].unsqueeze(-1) == ref_i.unsqueeze(-2)).any(-1).float().mean()
-            stats[s]["route_agree"][li] = float(same)
+        if ref_i is not None:                    # router top-8 agreement vs reference, on the stream's OWN routing
+            hit = (ref_i.unsqueeze(-1) == route[s][5].unsqueeze(-2)).any(-1)        # [T,8] ref slot also chosen
+            stats[s]["route_agree"][li] = float(hit.float().mean())
+            rw = ref_iw[1].float()                                                  # FP8 gate-weight mass shared
+            stats[s].setdefault("route_agree_w", {})[li] = float((rw * hit).sum() / rw.sum())
+    route = [r[:5] for r in route]
     lerr = [[0.0, 0.0] for _ in flats]
     for e in range(E):
         if all(r[2][e] == r[2][e + 1] for r in route):
@@ -278,6 +315,14 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
                     supplied = True
             xe = norm(f[tok[a:b]])
             y = ffn(xe, W)
+            sig = getattr(q, "out_noise", None)
+            if sig:                              # noise floor arm: relative Gaussian noise on the expert output
+                gen = torch.Generator(device=y.device).manual_seed(q.seed * 1000003 + li * 1009 + e)
+                yf = y.float()
+                yf = yf + sig * yf.pow(2).mean(-1, keepdim=True).sqrt() * torch.randn(yf.shape, generator=gen,
+                                                                                       device=y.device)
+                y = yf.to(y.dtype)
+                del yf
             if local_err and supplied:          # routed-expert output error, supplied experts only
                 yr = ffn(xe, ref()).float()
                 p = wts[a:b].float()
@@ -766,10 +811,10 @@ def cmd_merge(a):
                   f"{row['kld']:9.5f} {row['kld_se']:8.5f} {row['kld_p99']:7.3f} {row['top1']:7.3f} {fb:7d}")
         # per-layer stats, averaged over ranks (each rank holds ~1/WORLD of every corpus)
         per = {}
-        for key in ("rel_div", "route_agree", "local_rel_l2"):
+        for key in ("rel_div", "route_agree", "local_rel_l2", "route_agree_w"):
             acc = {}
             for p in parts:
-                for l, v in p["results"][cand]["stats"][key].items():
+                for l, v in p["results"][cand]["stats"].get(key, {}).items():
                     acc.setdefault(int(l), []).append(v)
             per[key] = {l: float(np.mean(v)) for l, v in sorted(acc.items())}
         if per["rel_div"] or per["route_agree"]:
@@ -780,7 +825,11 @@ def cmd_merge(a):
             for b, rg in bands.items():
                 ra = [per["route_agree"][l] for l in rg if l in per["route_agree"]]
                 le = [per["local_rel_l2"][l] for l in rg if l in per["local_rel_l2"]]
+                rw = [per["route_agree_w"][l] for l in rg if l in per["route_agree_w"]]
+                rv = [rd[l] for l in rg if l in rd]
                 bs[b] = {"route_top8_agree": float(np.mean(ra)) if ra else None,
+                         "route_top8_agree_fp8_weighted": float(np.mean(rw)) if rw else None,
+                         "rel_div_mean": float(np.mean(rv)) if rv else None,
                          "local_rel_l2_mean": float(np.mean(le)) if le else None,
                          "rel_div_increment_sum": float(sum(inc[l] for l in rg if l in inc))}
             top = sorted(inc, key=lambda l: -inc[l])[:10]
@@ -792,6 +841,38 @@ def cmd_merge(a):
                 f"lerr {v['local_rel_l2_mean'] if v['local_rel_l2_mean'] is None else round(v['local_rel_l2_mean'], 4)} "
                 f"dDiv {v['rel_div_increment_sum']:.3f}" for b, v in bs.items()))
             print(f"   {cand} largest divergence increments: " + " ".join(f"L{l}:+{inc[l]:.3f}" for l in top))
+    rm = {}                                      # FP8 router margin (NQ_ROUTER_MARGIN=1 runs), summed over ranks
+    for p in parts:
+        for l, m in ((p.get("ref_stats") or {}).get("router_margin") or {}).items():
+            acc = rm.setdefault(int(l), {"n": 0, "lt1e-2": 0, "lt1e-3": 0, "hist": np.zeros(140, np.int64)})
+            for k in ("n", "lt1e-2", "lt1e-3"):
+                acc[k] += m[k]
+            acc["hist"] += np.array(m["hist"], np.int64)
+    if rm:
+        def med(h):                              # median from the log10 histogram (bin centre, 0.05 dex bins)
+            c = np.cumsum(h); j = int(np.searchsorted(c, c[-1] / 2))
+            return float(10 ** (-7.0 + (j + 0.5) * 0.05))
+        per_l = {l: {"median_gap": med(v["hist"]), "frac_lt_1e-2": v["lt1e-2"] / v["n"],
+                     "frac_lt_1e-3": v["lt1e-3"] / v["n"], "n": v["n"]} for l, v in sorted(rm.items())}
+        bands = {"L3-6": range(3, 7), "L7-40": range(7, 41), "L41-77": range(41, 78)}
+        bs = {}
+        for b, rg in bands.items():
+            h = sum((rm[l]["hist"] for l in rg if l in rm), np.zeros(140, np.int64))
+            n = sum(rm[l]["n"] for l in rg if l in rm)
+            if n:
+                bs[b] = {"median_gap": med(h), "frac_lt_1e-2": sum(rm[l]["lt1e-2"] for l in rg if l in rm) / n,
+                         "frac_lt_1e-3": sum(rm[l]["lt1e-3"] for l in rg if l in rm) / n}
+        out["router_margin"] = {"definition": "FP8 reference stream, per token: 8th - 9th largest of sigmoid(logits) + "
+                                "e_score_correction_bias (noaux_tc selection score; n_group = 1)",
+                                "per_layer": per_l, "bands": bs}
+        for b, v in bs.items():
+            print(f"   router margin {b}: median {v['median_gap']:.4f}  <1e-2 {100 * v['frac_lt_1e-2']:.1f}%  "
+                  f"<1e-3 {100 * v['frac_lt_1e-3']:.2f}%")
+        for l in (10, 30, 50, 70):
+            if l in per_l:
+                v = per_l[l]
+                print(f"   router margin L{l}: median {v['median_gap']:.4f}  <1e-2 {100 * v['frac_lt_1e-2']:.1f}%  "
+                      f"<1e-3 {100 * v['frac_lt_1e-3']:.2f}%")
     json.dump(out, open(f"{OUT}/results/{a.tag}.json", "w"), indent=1)
     print(f"-> {OUT}/results/{a.tag}.json")
 

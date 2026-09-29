@@ -32,6 +32,7 @@ Optional ``layers=a-b`` in any spec restricts quantisation to those layers (othe
 import importlib
 import importlib.util
 import json
+import numpy as np
 import os
 import sys
 
@@ -186,6 +187,18 @@ class Mix(Base):
         return W
 
 
+class Noise(Base):
+    """FP8 reference weights; nq_e2e.moe_multi adds N(0, sigma * rms(y)) per element to every routed-expert output y
+    (fp32, then rounded to the activation dtype like any expert output).  Noise floor for route agreement / KLD.
+    noise:sigma=1e-3[,seed=0]"""
+
+    def __init__(self, sigma="1e-3", seed="0"):
+        self.out_noise, self.seed = float(sigma), int(seed)
+
+    def expert(self, layer, expert, ref):
+        return ref() if self.active(layer) else None
+
+
 class Adapt(Base):
     """Causal replay of the serving level scheduler (streaming/scheduler.py defaults) per layer, per sequence:
     fixed = manifest default_allocation (always level 4); floating = n_float experts, starting at floating_default,
@@ -197,8 +210,11 @@ class Adapt(Base):
     adapt:lo=DIR,hi=DIR[,hi2=DIR],manifest=serving/tp4/manifest.json[,half_life=512,refresh=64,n_float=51,lag=1]
     (hi2: second level-4 dir for experts missing from hi, e.g. the complement of a partial predecode)"""
 
-    def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256):
+    def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
+                 predictor="ema", hm=0.5):
         self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
+        self.predictor, self.hm = predictor, float(hm)   # gbdt: streaming/gbdt_predictor.GBDTPredictor (see _core_gbdt)
+        assert predictor in ("ema", "gbdt"), predictor
         self.lo, self.hi = Dir(lo), Dir(hi)
         self.hi2 = Dir(hi2) if hi2 else None
         m = json.load(open(manifest))
@@ -242,10 +258,62 @@ class Adapt(Base):
         self.diag[layer] = tot
         return torch.cat(hi), serves
 
+    def _core_gbdt(self, layer, ids, seq):
+        """predictor=gbdt: SM120's production floating-set predictor (streaming/gbdt_predictor.py, commit 3f7dcda,
+        mode next_refresh, hysteresis hm, 16-token blocks) driven token by token exactly as scheduler.Scheduler does
+        with an unbounded byte budget: the level of token t's slots is fixed before its counts are seen; when
+        P.step() applies a new score matrix, want = P.target(resident = current floating set) and every upgrade lands
+        before the next token (downgrades too).  One predictor per sequence (chain: per run of windows).  token_ids
+        None (plain-text corpora: think/answer state stays 'think')."""
+        if "/home/coder/git/nestquant/streaming" not in sys.path:
+            sys.path.insert(0, "/home/coder/git/nestquant/streaming")
+        from gbdt_predictor import GBDTPredictor
+        dev, NE = ids.device, self.NE
+        T, K = ids.shape
+        N = T // seq
+        G = 16
+        fixed = np.zeros(NE, bool); fixed[self.fixed[layer]] = True
+        fdef = np.zeros(NE, bool)
+        fdef[[e for e in self.fdef[layer] if e not in set(self.fixed[layer])][:self.nf]] = True
+        idn = ids.long().cpu().numpy()
+        serve = np.zeros((N, seq // G, NE), bool)
+        churn = []
+        for n in range(N):
+            P = GBDTPredictor([layer], {layer: self.fixed[layer]}, n_float=self.nf, hm=self.hm, mode="next_refresh",
+                              num_threads=int(os.environ.get("NQ_GBDT_THREADS", "4")))
+            want = fdef.copy()
+            try:
+                for t in range(seq):
+                    if t % G == 0:
+                        serve[n, t // G] = want
+                    c = np.bincount(idn[n * seq + t], minlength=NE).astype(np.float64)[None]
+                    if P.step(c, 1, None, t == 0):
+                        w = P.target(want[None])
+                        if w is not None:
+                            nw = w[0] & ~fixed
+                            churn.append(int((nw & ~want).sum()))
+                            want = nw
+                        assert t % G == G - 1
+            finally:
+                P.close()
+        serve_t = torch.from_numpy(serve).to(dev)
+        hi_e = serve_t | torch.from_numpy(fixed).to(dev)
+        nn = torch.arange(T, device=dev) // seq
+        kk = (torch.arange(T, device=dev) % seq) // G
+        hi = hi_e[nn.unsqueeze(1), kk.unsqueeze(1), ids.long()]
+        stat = torch.from_numpy(fixed | fdef).to(dev)
+        fx = torch.from_numpy(fixed).to(dev)
+        d = dict(slots=T * K, l4_slots=int(hi.sum()), fixed_slots=int(fx[ids.long()].sum()),
+                 float0_slots=int(stat[ids.long()].sum()), churn_sum=float(sum(churn)), churn_n=len(churn),
+                 churn_first_sum=0.0, churn_first_n=0)
+        return hi, serve_t, d
+
     @torch.no_grad()
     def _core(self, layer, ids, seq):
         """ids [T,8] (T = n*seq, sequences back to back) -> (hi [T,8] bool per routed slot, serve [n, nchunks, NE]
         bool floating set serving each chunk, diagnostics)."""
+        if self.predictor == "gbdt":
+            return self._core_gbdt(layer, ids, seq)
         dev, NE, R = ids.device, self.NE, self.R
         T, K = ids.shape
         N, nc = T // seq, seq // R
@@ -486,6 +554,7 @@ def make(name, spec):
             path, _, tail = rest.partition(",")
             kv = _kv(tail)
         only = _layers(kv)
+        route = kv.pop("route", None)            # oracle | oracle_ids: FP8 reference routing (nq_e2e.moe_multi)
         if kind == "ref":
             q = Ref()
         elif kind == "rtn":
@@ -496,6 +565,8 @@ def make(name, spec):
             q = Mix(**kv)
         elif kind == "adapt":
             q = Adapt(**kv)
+        elif kind == "noise":
+            q = Noise(**kv)
         elif kind == "nestquant":
             q = NestQuant(**kv)
         elif kind == "exl3":
@@ -507,6 +578,7 @@ def make(name, spec):
     q.name = name
     q.spec = spec
     q.only_layers = only
+    q.route_mode = locals().get("route")
     for m in ("begin_layer", "end_layer"):
         if not hasattr(q, m):
             setattr(q, m, (lambda *a, **k: None))

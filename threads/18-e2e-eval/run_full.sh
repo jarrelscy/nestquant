@@ -20,6 +20,8 @@
 #                           ref + nqdef + nqfloat0 + nqdef128: eval-token level-4 share of routed slots per static arm
 #   ./run_full.sh hdump     T27 PV-pilot dump: ref(fp8) + nqdef on calib-fit, L29-32 (EXTRA args e.g. --expert-override,
 #                           --dump-streams nqdef; env DUMP_LAYERS, DUMP_DIR, DUMP_TAG = log name for concurrent dumps)
+#   WORLD=16 ./run_full.sh runR1 / runR2 / runG1   routing attribution (oracle / oracle_ids / FP8 noise floor,
+#                           FP8 router margin) and GBDT-vs-EMA residency predictor; h512 L3-6 build
 #   ./run_full.sh merge TAG
 # Every stage: 8 ranks, one per GPU, NQ_VRAM_GB cap, launch refused if a GPU has < MIN_FREE_MB free.
 set -euo pipefail
@@ -99,16 +101,28 @@ case "${1:-}" in
   # T29 h512 refit of L3-6 (in_had_down 512 + flat ics on down): FH = farm of symlinks, predecoded_A + predecoded_H
   # (nq_h512_pd.py, T29 decoder) on top; SafeIndex reads files in sorted order, so z_h512/ overrides L3-6.
   runH1) launch runH1 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passH1 \
-          --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json" \
+          --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_S/nq4,set=$OUT/defset.json" \
           --cand "nqdef_h512=mix:lo=$FH/nq2,hi=$FH/nq4,set=$OUT/defset.json" ;;
   runH2) launch runH2 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passH2 \
-          --cand "nqdef_e4=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json,hi_layers=3-6" \
+          --cand "nqdef_e4=mix:lo=$PD_A/nq2,hi=$FA4,set=$OUT/defset.json,hi_layers=3-6" \
           --cand "nqdef_e4_h512=mix:lo=$FH/nq2,hi=$FH/nq4,set=$OUT/defset.json,hi_layers=3-6" ;;
   runH3) launch runH3 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passH3 \
           --cand "nq4=dir:$FA4" --cand "nq4_h512=dir:$FH4" ;;
   runH4) export NQ_SHARD=contig; launch runH4 run --corpora ${H4_CORPORA:-wikitext} --local-err --moe-chunk $MOE_CHUNK --tag passH4 \
           --cand "nqadapt_chain=adapt:lo=$PD_A/nq2,hi=$FA4,manifest=$SERVE_MAN,chain=1" \
           --cand "nqadapt_chain_h512=adapt:lo=$FH/nq2,hi=$FH4,manifest=$SERVE_MAN,chain=1" ;;
+  # routing attribution (h512 L3-6 build throughout).  WORLD=16 keeps 4 streams per rank under NQ_VRAM_GB.
+  runR1) export NQ_ROUTER_MARGIN=1; launch runR1 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passR1 \
+          --cand "nq2=dir:$FH/nq2" --cand "nq2_oracle=dir:$FH/nq2,route=oracle" \
+          --cand "nq2_oracle_ids=dir:$FH/nq2,route=oracle_ids" ;;
+  runR2) launch runR2 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passR2 \
+          --cand "nqdef=mix:lo=$FH/nq2,hi=$FH/nq4,set=$OUT/defset.json" \
+          --cand "nqdef_oracle=mix:lo=$FH/nq2,hi=$FH/nq4,set=$OUT/defset.json,route=oracle" \
+          --cand "fp8noise=noise:sigma=${NOISE_SIGMA:-1e-3}" ;;
+  # SM120 GBDT residency predictor (streaming/gbdt_predictor.py, next_refresh, hm 0.5) vs EMA, chained, h512 build
+  runG1) export NQ_SHARD=contig; launch runG1 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passG1 \
+          --cand "nqadapt_chain_h512=adapt:lo=$FH/nq2,hi=$FH4,manifest=$SERVE_MAN,chain=1" \
+          --cand "nqgbdt_chain_h512=adapt:lo=$FH/nq2,hi=$FH4,manifest=$SERVE_MAN,chain=1,predictor=gbdt" ;;
   merge) "$HERE/run.sh" merge --tag "$2" ;;
   *) sed -n '2,10p' "$0"; exit 1 ;;
 esac

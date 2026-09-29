@@ -6,4 +6,5 @@ export LD_LIBRARY_PATH=/home/coder/git/nestquant/threads/06-expert-objective/lib
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8} MKL_NUM_THREADS=8
 export NQ_FP8=${NQ_FP8:-/tmp/nestquant/src/glm53-fp8} NQ_OUT=${NQ_OUT:-/tmp/nestquant/18-e2e}
 HERE=$(cd "$(dirname "$0")" && pwd)
+export PYTHONPATH=${NQ_PYLIB:-/tmp/nestquant/18-e2e/pylib}${PYTHONPATH:+:$PYTHONPATH}   # lightgbm 4.7.0 + narwhals (adapt predictor=gbdt)
 exec /home/coder/git/glm52/.venv/bin/python "$HERE/nq_e2e.py" "$@"
