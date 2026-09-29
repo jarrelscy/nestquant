@@ -232,7 +232,11 @@ class Adapt(Base):
     def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
                  predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
                  oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None,
-                 gbdt_scale=None, fb=0):
+                 gbdt_scale=None, fb=0, gmode="next_refresh", grlo=20, grhi=121, salstat=0):
+        # T32: gmode=sync (score of block k applied at its end) | next_refresh (serve default, one-block lag);
+        # grlo/grhi: GBDT candidate band over EMA256 ranks (default 20..120 + forced top-20; grlo=0,grhi=256: all)
+        self.gmode, self.grlo, self.grhi = gmode, int(grlo), int(grhi)
+        assert gmode in ("next_refresh", "sync"), gmode
         self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
         self.predictor, self.hm = predictor, float(hm)   # gbdt: streaming/gbdt_predictor.GBDTPredictor (see _core_gbdt)
         assert predictor in ("ema", "gbdt"), predictor
@@ -282,8 +286,10 @@ class Adapt(Base):
         # fb=d (ahead arms, SM120 d039002 parity): the first d MoE layers have no lookahead source and take their
         # upgrades from the previous chunk's actual routing (chunk 0: none)
         self.fb = int(fb)
+        # T32 salstat=1: diag also gets l4_sal / sal_tot = sum w^2|x|^2 over hot / all slots of the stream's routing
+        self.salstat = int(salstat)
         self.needs_act = score != "count" or oracle is not None or gscale is not None or self.gbdt_v2 or \
-            gbdt_scale is not None or self.fb > 0
+            gbdt_scale is not None or self.fb > 0 or self.salstat > 0
         self.act_full = None
         self.la_full = None
         self.lo, self.hi = Dir(lo), Dir(hi)
@@ -325,6 +331,11 @@ class Adapt(Base):
             self._la = None if self.la_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.la_full)
             self._act = None if self.act_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.act_full)
             h, sv, st = self._core(layer, ids[w0 * seq:w1 * seq], seq if not self.chain else (w1 - w0) * seq)
+            if getattr(self, "salstat", 0) and self._act is not None:
+                ai, aw, ax = self._act
+                assert torch.equal(ai.long(), ids[w0 * seq:w1 * seq].long()), "act routing != scheduled routing"
+                v = aw.double().pow(2) * ax.double()[:, None]
+                st = dict(st, sal_tot=float(v.sum()), l4_sal=float((v * h.to(v.device).double()).sum()))
             hi.append(h); serves.append(sv)
             for k, v in st.items():
                 if isinstance(v, dict):          # histograms {value: count}
@@ -434,11 +445,14 @@ class Adapt(Base):
         for n in range(N):
             if v2:
                 P = GBDTPredictorV2([layer], {layer: self.fixed[layer]}, model_path=self.gbdt_model,
-                                    scale=self.gbdt_scale, n_float=self.nf, hm=self.hm, mode="next_refresh",
+                                    scale=self.gbdt_scale, n_float=self.nf, hm=self.hm,
+                                    mode=getattr(self, "gmode", "next_refresh"), rlo=getattr(self, "grlo", 20),
+                                    rhi=getattr(self, "grhi", 121),
                                     num_threads=int(os.environ.get("NQ_GBDT_THREADS", "4")))
             else:
                 P = GBDTPredictor([layer], {layer: self.fixed[layer]}, model_path=getattr(self, "gbdt_model", None),
-                              n_float=self.nf, hm=self.hm, mode="next_refresh",
+                              n_float=self.nf, hm=self.hm, mode=getattr(self, "gmode", "next_refresh"),
+                              rlo=getattr(self, "grlo", 20), rhi=getattr(self, "grhi", 121),
                               num_threads=int(os.environ.get("NQ_GBDT_THREADS", "4")))
             want = fdef.copy()
             try:

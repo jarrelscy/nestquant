@@ -22,7 +22,7 @@ V2 = f"{T.OUT}/models/v2_sal_tweedie1.5.txt"
 NBC = T.CHAIN * T.SEQ // T.G
 
 
-def ema_serve(ids, fx, fd, half_life=512, refresh=16):
+def ema_serve(ids, fx, fd, half_life=512, refresh=16, lag=0):
     """scheduler.Scheduler predictor='ema': per-token score = score * a + counts, every `refresh` tokens the top-51
     non-fixed by score become the target (layers with no counts yet keep floating_default); applies from the next token."""
     a = 0.5 ** (1 / half_life)
@@ -35,13 +35,19 @@ def ema_serve(ids, fx, fd, half_life=512, refresh=16):
     serve = np.zeros((nb, T.NE), bool)
     rb = refresh // T.G
     for c0 in range(0, nb, NBC):
-        s = np.zeros(T.NE); want = fd.copy()
+        s = np.zeros(T.NE); want = fd.copy(); pend = fd.copy()
         for k in range(c0, min(c0 + NBC, nb)):
             serve[k] = want
             s = s * a ** T.G + wc[k]
-            if (k - c0 + 1) % rb == 0 and s.sum() > 0:
-                sc = np.where(fx, -np.inf, s)
-                want = np.zeros(T.NE, bool); want[np.argsort(-sc, kind="stable")[:51]] = True
+            if (k - c0 + 1) % rb == 0:
+                nw = pend
+                if s.sum() > 0:
+                    sc = np.where(fx, -np.inf, s)
+                    nw = np.zeros(T.NE, bool); nw[np.argsort(-sc, kind="stable")[:51]] = True
+                if lag:                                   # quantisers.Adapt: set of refresh r serves chunk r+1
+                    want, pend = pend, nw
+                else:
+                    want = nw
     return serve
 
 
@@ -77,6 +83,7 @@ def job(L):
     sets = {
         "ema_r16": ema_serve(ids, fx, fd, refresh=16),
         "ema_r64": ema_serve(ids, fx, fd, refresh=64),
+        "ema_nqadapt_r64_lag1": ema_serve(ids, fx, fd, refresh=64, lag=1),
         "gbdt_nr": T.sim_layer(S_old, fixed[L], fdef[L], lag=1),
         "gbdt_sync": T.sim_layer(S_old, fixed[L], fdef[L], lag=0),
         "gbdt_x_mps_nr": T.sim_layer(S_mps, fixed[L], fdef[L], lag=1),
