@@ -11,6 +11,8 @@ DIR/../../ = the repo root of an HF download, whose layers/ are the reference sa
      truncation), floating_default disjoint from it, n_routed has NE counts. An assembled rank{r}.bin, if present, must
      have the index's bin_bytes and hold each checked record at its offset.
  (2) hashes: sha256 of every record block and resident file (--hash all, threaded) vs the index.
+     With --layers (a partial download), data files absent for layers outside --layers are reported and skipped; the
+     metadata of every layer and every data file that is present are still checked.
  (3) decode, a few experts per layer (seeded; one fixed-set expert, one lr-rank-0 expert when present, the rest random),
      on rank L % N (--ranks rot) or every rank (--ranks all):
      (a) record bytes == p4rec.pack of the reference expert (nqload.RankLayer on the reference shards), byte-exact
@@ -127,7 +129,7 @@ def check_structure(D, ref, a):
             except FileNotFoundError:
                 if L in sel_layers(a, Ls):
                     bad(f"L{L}: reference layer missing")
-    rb = lay["rec_bytes"]; files = []
+    rb = lay["rec_bytes"]; files = []; sel = set(sel_layers(a, Ls)); skipped = [0]
     for r in range(tp):
         idx = json.load(open(f"{T}/rank{r}.json"))
         if idx["rec_bytes"] != rb or idx["seg"] != lay["seg"] or idx["L0"] != L0 or idx["NE"] != NE or idx["tp"] != tp \
@@ -155,12 +157,18 @@ def check_structure(D, ref, a):
             for f, nb, h in ((e["file"], e["bytes"], e["sha256"]), (e["res"], e["res_bytes"], e["res_sha256"])):
                 p = f"{T}/{f}"
                 if not os.path.exists(p):
-                    if not (f == e["file"] and os.path.exists(binp)):   # blocks may be --moved into rank{r}.bin
+                    if f == e["file"] and os.path.exists(binp):          # blocks may be --moved into rank{r}.bin
+                        pass
+                    elif a.layers and L not in sel:                      # partial download: only --layers need data
+                        skipped[0] += 1
+                    else:
                         bad(f"rank{r} L{L}: {f} missing")
                     continue
                 if os.path.getsize(p) != nb:
                     bad(f"rank{r} L{L}: {f} size {os.path.getsize(p)} != {nb}"); continue
                 files.append((p, h, f"rank{r} L{L}: {f}"))
+    if skipped[0]:
+        print(f"    {skipped[0]} data files of layers outside --layers absent (partial download): not checked", flush=True)
     if a.hash == "all":
         t = time.time()
         with ThreadPoolExecutor(a.jobs) as ex:
