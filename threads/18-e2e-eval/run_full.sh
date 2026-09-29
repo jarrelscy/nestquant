@@ -1,9 +1,12 @@
 #!/bin/bash
 # Thread 18 full-model NestQuant eval (nq2 / nqdef / nq4 + L3-6 attribution arms), two passes to keep /tmp use
-# at ~1.7 TB peak (one full fp16 level on disk at a time).
+# at ~1.7 TB peak (one full fp16 level on disk at a time).  Order used: decB (CPU head start) -> runB -> delete
+# predecoded_B -> snap -> decA -> runA1, runA2 (reference is inline in both; the second compares bitwise to the first).
 #   ./run_full.sh snap      snapshot the default 4-bit set (manifests) -> $OUT/defset.json, $OUT/l4sub.json
 #   ./run_full.sh decA      predecode nq2 (all) + nq4 (default set + all of L3-6)   -> $PD_A/{nq2,nq4}
-#   ./run_full.sh runA      ref + nq2 + nqdef + nq2_early (nq2 on L3-6 only) + nqdef_e4 (nqdef, L3-6 all 4-bit)
+#   ./run_full.sh runA1     ref + nq2 + nqdef
+#   ./run_full.sh runA2     ref + nq2_early (nq2 on L3-6 only) + nqdef_e4 (nqdef with L3-6 all 4-bit)
+#   (3 streams per run: hidden + MoE output buffer per stream ~2 GB at 39 windows/rank, under the 11 GB cap)
 #   ./run_full.sh decB      predecode nq4 (all)                                      -> $PD_B/nq4
 #   ./run_full.sh runB      ref + nq4
 #   ./run_full.sh merge TAG
@@ -17,7 +20,7 @@ export NQ_VRAM_GB=${NQ_VRAM_GB:-11}
 MIN_FREE_MB=${MIN_FREE_MB:-14000}
 WORLD=8
 CORPORA=nq-tail,vllm-docs,wikitext,github
-MOE_CHUNK=${MOE_CHUNK:-40960}
+MOE_CHUNK=${MOE_CHUNK:-16384}
 LOGS=$OUT/logs; mkdir -p "$LOGS"
 
 gpu_check() {
@@ -51,13 +54,14 @@ case "${1:-}" in
     /home/coder/git/glm52/.venv/bin/python "$HERE/nq_defset.py" --from-json "$OUT/defset.json" --extra-layers 3-6 \
         --out "$OUT/l4sub.json" ;;
   decA) launch decA predecode-nq --levels 2,4 --l4-set "$OUT/l4sub.json" --out "$PD_A" ;;
-  runA) launch runA run --corpora $CORPORA --local-err --save-ref --moe-chunk $MOE_CHUNK --tag passA \
+  runA1) launch runA1 run --corpora $CORPORA --local-err --save-ref --moe-chunk $MOE_CHUNK --tag passA1 \
           --cand "nq2=dir:$PD_A/nq2" \
-          --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json" \
+          --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json" ;;
+  runA2) launch runA2 run --corpora $CORPORA --local-err --save-ref --moe-chunk $MOE_CHUNK --tag passA2 \
           --cand "nq2_early=dir:$PD_A/nq2,layers=3-6" \
           --cand "nqdef_e4=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json,hi_layers=3-6" ;;
   decB) launch decB predecode-nq --levels 4 --l4-set all --out "$PD_B" ;;
-  runB) launch runB run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passB \
+  runB) launch runB run --corpora $CORPORA --local-err --save-ref --moe-chunk $MOE_CHUNK --tag passB \
           --cand "nq4=dir:$PD_B/nq4" ;;
   merge) "$HERE/run.sh" merge --tag "$2" ;;
   *) sed -n '2,10p' "$0"; exit 1 ;;

@@ -159,27 +159,37 @@ def ffn(x, W):
     return torch.nn.functional.linear(torch.nn.functional.silu(g) * u, W["down_proj"].to(x.dtype))
 
 
-def moe_multi(layer, li, xs, qs, fp8, dev, stats, local_err):
-    """xs: per-stream [T,H] bf16 MoE inputs; qs: per-stream quantiser (Ref for the reference).
-    Returns per-stream [T,H] MoE outputs (routed + shared)."""
-    E = layer.mlp.gate.num_experts
-    route = []
-    for x in xs:
-        _, w, i = layer.mlp.gate(x)
+def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk):
+    """flats: per-stream [T,H] bf16 residual streams (updated in place: f += MoE(norm(f)));
+    qs: per-stream quantiser (Ref for the reference).  Routing and the shared expert run in `chunk`-token
+    slabs; routed experts gather + normalise their own tokens, so no [T,H] normed copy is kept and every expert's
+    weights are transferred once per layer (for all streams).  Extra memory: one [T,H] output buffer per stream."""
+    norm, E = layer.post_attention_layernorm, layer.mlp.gate.num_experts
+    T = flats[0].shape[0]
+    route, outs = [], []
+    for f in flats:
+        ids_l, w_l = [], []
+        out = torch.empty_like(f)
+        for c0 in range(0, T, chunk):
+            x = norm(f[c0:c0 + chunk])
+            _, w, i = layer.mlp.gate(x)
+            ids_l.append(i)
+            w_l.append(w)
+            out[c0:c0 + chunk] = layer.mlp.shared_experts(x)
+            del x
+        i, w = torch.cat(ids_l), torch.cat(w_l)
         ids = i.reshape(-1)
         order = torch.argsort(ids, stable=True)
-        tok = torch.arange(x.shape[0], device=dev).repeat_interleave(i.shape[1])[order]
-        cnt = torch.bincount(ids, minlength=E)
-        offs = [0] + cnt.cumsum(0).tolist()
+        tok = torch.arange(T, device=dev).repeat_interleave(i.shape[1])[order]
+        offs = [0] + torch.bincount(ids, minlength=E).cumsum(0).tolist()
         route.append((tok, w.reshape(-1)[order], offs, i))
-    outs = [torch.zeros_like(x) for x in xs]
+        outs.append(out)
     ref_i = route[0][3] if getattr(qs[0], "is_ref", False) else None
-    for s in range(len(xs)):
-        st = stats[s]
-        if ref_i is not None and s > 0:          # router top-8 set agreement vs reference stream
+    for s in range(1, len(flats)):
+        if ref_i is not None:                    # router top-8 set agreement vs reference stream
             same = (route[s][3].unsqueeze(-1) == ref_i.unsqueeze(-2)).any(-1).float().mean()
-            st["route_agree"][li] = float(same)
-    lerr = [[0.0, 0.0] for _ in xs]
+            stats[s]["route_agree"][li] = float(same)
+    lerr = [[0.0, 0.0] for _ in flats]
     for e in range(E):
         if all(r[2][e] == r[2][e + 1] for r in route):
             continue
@@ -189,7 +199,7 @@ def moe_multi(layer, li, xs, qs, fp8, dev, stats, local_err):
             if "w" not in cache:
                 cache["w"] = fp8.expert(li, e, dev)
             return cache["w"]
-        for s, (x, q) in enumerate(zip(xs, qs)):
+        for s, (f, q) in enumerate(zip(flats, qs)):
             tok, wts, offs, _ = route[s]
             a, b = offs[e], offs[e + 1]
             if a == b:
@@ -197,7 +207,7 @@ def moe_multi(layer, li, xs, qs, fp8, dev, stats, local_err):
             supplied = False
             if getattr(q, "is_ref", False):
                 W = ref()
-            elif not getattr(q, "active", lambda _l: True)(li):               # layers= restriction: reference by design, not a fallback
+            elif not getattr(q, "active", lambda _l: True)(li):   # layers= restriction: reference by design
                 W = ref()
                 stats[s]["ref_by_design"] = stats[s].get("ref_by_design", 0) + 1
             else:
@@ -208,20 +218,21 @@ def moe_multi(layer, li, xs, qs, fp8, dev, stats, local_err):
                 else:
                     stats[s]["supplied"] += 1
                     supplied = True
-            xe = x[tok[a:b]]
+            xe = norm(f[tok[a:b]])
             y = ffn(xe, W)
             if local_err and supplied:          # routed-expert output error, supplied experts only
                 yr = ffn(xe, ref()).float()
                 p = wts[a:b].float()
                 lerr[s][0] += float((p * (y.float() - yr).pow(2).sum(-1)).sum())
                 lerr[s][1] += float((p * yr.pow(2).sum(-1)).sum())
-            outs[s].index_add_(0, tok[a:b], (y * wts[a:b, None]).to(x.dtype))
+            outs[s].index_add_(0, tok[a:b], (y * wts[a:b, None]).to(f.dtype))
+            del xe, y
         cache.clear()
-    for s, x in enumerate(xs):
+    for s, f in enumerate(flats):
         if lerr[s][1] > 0:
             stats[s]["local_rel_l2"][li] = math.sqrt(lerr[s][0] / lerr[s][1])
-        outs[s] += layer.mlp.shared_experts(x)
-    return outs
+        f += outs[s]
+    del outs
 
 
 # ------------------------------------------------------------------------------------------ run
@@ -294,14 +305,7 @@ def cmd_run(a):
                         t1_ = min(t0_ + a.moe_chunk, f.shape[0])
                         f[t0_:t1_] += layer.mlp(layer.post_attention_layernorm(f[t0_:t1_]))
             else:
-                T = N * SEQ
-                for t0_ in range(0, T, a.moe_chunk):
-                    t1_ = min(t0_ + a.moe_chunk, T)
-                    xs = [layer.post_attention_layernorm(f[t0_:t1_]) for f in flats]
-                    ys = moe_multi(layer, li, xs, qs, fp8, dev, stats, a.local_err)
-                    for f, y in zip(flats, ys):
-                        f[t0_:t1_] += y
-                    del xs, ys
+                moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk)
             if not use_cache:
                 r = hid[0].float()
                 den = float(r.pow(2).sum())
@@ -596,7 +600,7 @@ def main():
     r.add_argument("--save-ref", action="store_true")
     r.add_argument("--local-err", action="store_true")
     r.add_argument("--attn-chunk", type=int, default=4)
-    r.add_argument("--moe-chunk", type=int, default=1 << 30, help="tokens per MoE slab (per stream)")
+    r.add_argument("--moe-chunk", type=int, default=16384, help="tokens per router/shared-expert slab")
     r.add_argument("--pos-chunk", type=int, default=512)
     r.add_argument("--tag", default="run")
     m = sub.add_parser("merge")

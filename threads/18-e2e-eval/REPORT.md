@@ -1,48 +1,96 @@
-# Thread 18: end-to-end KLD / top-1 eval for GLM-5.3 (written by the lead from the agent's final message)
+# Thread 18: full-model KLD / top-1 eval of the NestQuant GLM-5.3 encode
 
-## Verdict
-Harness built and smoke-tested on all 78 layers. NestQuant (thread 12 nq_decode), EXL3 and NVFP4 plug in through one interface; EXL3/NVFP4 decodes are bit-identical to thread 05's loaders. Blocked on data: full-model calibration capture and the 75 x 256 expert encodes (plus same-H EXL3/NVFP4 full fits).
+## Verdict (2026-09-29, first full-model measurement)
+- Every expert at level 4 (nq4) comes within about 0.02-0.03 nats of FP8. In-domain perplexity moves by less than 0.4%, wikitext by 1%, and top-1 agreement is 94-96.5%.
+- Every expert at level 2 (nq2) costs about 0.10-0.14 nats in-domain and 0.31 on wikitext. Perplexity rises 7% in-domain and 23% on wikitext.
+- The manifest default mix (nqdef) puts 26 experts per layer at level 4 (1950 of 19200, about 10%) and leaves the rest at level 2. It removes about a quarter of the nq2 KLD in-domain (0.130 -> 0.096 on nq-tail) and 20% on github, but only 7% on wikitext.
+- L3-L6 are not what limits the mix at full-model level:
+  - L3-L6 at level 2 on their own, with everything else FP8 (nq2_early), give 0.014-0.015 KLD.
+  - Moving all of L3-L6 to level 4 inside the mix (nqdef_e4) changes nqdef's KLD by at most 0.0007, which is within the standard error. Errors from different layers do not add up.
+- There were no fallbacks: every expert call in every candidate used its decoded weights.
 
-## Files
-nq_e2e.py (prep / run / merge / predecode), quantisers.py (plug-in interface), nq_io.py (low-memory safetensors + FP8 dequant), make_dir_cand.py, run.sh. Scratch /tmp/nestquant/18-e2e.
+## Results (KLD in nats vs the FP8 reference; ppl ref is FP8)
+| cand | corpus | tokens | ppl ref | ppl cand | KLD mean | ± se | p99 | top-1 agree |
+|---|---|---|---|---|---|---|---|---|
+| nq4 | nq-tail | 262016 | 2.3009 | 2.3069 | 0.0227 | 0.0019 | 0.389 | 96.53% |
+| nq4 | vllm-docs | 161713 | 2.5817 | 2.5897 | 0.0242 | 0.0012 | 0.305 | 95.43% |
+| nq4 | wikitext | 135102 | 2.9398 | 2.9687 | 0.0334 | 0.0015 | 0.461 | 94.35% |
+| nq4 | github | 51175 | 2.7390 | 2.7350 | 0.0202 | 0.0012 | 0.251 | 95.83% |
+| nqdef | nq-tail | 262016 | 2.3009 | 2.4070 | 0.0965 | 0.0081 | 1.810 | 92.21% |
+| nqdef | vllm-docs | 161713 | 2.5817 | 2.7139 | 0.1114 | 0.0069 | 1.489 | 90.23% |
+| nqdef | wikitext | 135102 | 2.9398 | 3.5556 | 0.2874 | 0.0139 | 3.443 | 82.80% |
+| nqdef | github | 51175 | 2.7390 | 2.7680 | 0.0807 | 0.0051 | 1.020 | 91.80% |
+| nq2 | nq-tail | 262016 | 2.3009 | 2.4582 | 0.1305 | 0.0105 | 2.311 | 90.62% |
+| nq2 | vllm-docs | 161713 | 2.5817 | 2.7598 | 0.1392 | 0.0084 | 1.784 | 89.08% |
+| nq2 | wikitext | 135102 | 2.9398 | 3.6223 | 0.3105 | 0.0148 | 3.609 | 81.95% |
+| nq2 | github | 51175 | 2.7390 | 2.7856 | 0.1016 | 0.0073 | 1.307 | 90.93% |
+
+The two attribution arms below both concern L3-L6:
+- nq2_early: L3-L6 at level 2, all other layers exact FP8.
+- nqdef_e4: nqdef with all of L3-L6 moved to level 4.
+
+| cand | corpus | ppl cand | KLD mean | ± se | p99 | top-1 agree |
+|---|---|---|---|---|---|---|
+| nq2_early | nq-tail | 2.3023 | 0.0149 | 0.0016 | 0.218 | 97.25% |
+| nq2_early | vllm-docs | 2.5809 | 0.0147 | 0.0005 | 0.171 | 96.40% |
+| nq2_early | wikitext | 2.9446 | 0.0136 | 0.0006 | 0.174 | 96.29% |
+| nq2_early | github | 2.7368 | 0.0141 | 0.0008 | 0.161 | 96.65% |
+| nqdef_e4 | nq-tail | 2.4064 | 0.0958 | 0.0080 | 1.779 | 92.21% |
+| nqdef_e4 | vllm-docs | 2.7177 | 0.1110 | 0.0069 | 1.483 | 90.24% |
+| nqdef_e4 | wikitext | 3.5547 | 0.2878 | 0.0139 | 3.428 | 82.74% |
+| nqdef_e4 | github | 2.7692 | 0.0807 | 0.0049 | 1.017 | 91.80% |
+
+## Router and per-layer divergence, by layer band
+The columns are:
+- route: router top-8 agreement with the FP8 stream at the same layer, over all tokens.
+- local err: relative L2 error of the routed-expert output on the candidate's own input.
+- dDiv: growth of the relative hidden-state divergence across the band.
+
+| cand | L3-6 route / local err / dDiv | L7-40 | L41-77 |
+|---|---|---|---|
+| nq4 | 99.27% / 0.039 / 0.013 | 93.75% / 0.071 / 0.111 | 85.68% / 0.086 / 0.065 |
+| nqdef | 98.35% / 0.166 / 0.036 | 87.92% / 0.270 / 0.185 | 75.76% / 0.306 / 0.127 |
+| nq2 | 98.03% / 0.185 / 0.041 | 86.79% / 0.298 / 0.201 | 73.38% / 0.348 / 0.140 |
+| nq2_early | 98.03% / 0.185 / 0.041 | 93.49% / (ref) / 0.080 | 87.19% / (ref) / 0.044 |
+| nqdef_e4 | 99.27% / 0.039 / 0.013 | 88.27% / 0.270 / 0.210 | 75.79% / 0.306 / 0.124 |
+
+Layers contributing most divergence (largest per-layer increments):
+- nq2: L30, L7, L32, L37, L38, L6, L45, L39, L42, L31. Each adds +0.013 to +0.018.
+- nqdef: L30, L7, L37, L45, L32, L38, L42, L39, L6, L47.
+- nq4: L29 (+0.012), L45, L30, L47, L42, L37, L38, L39, L32, L43.
+
+Readings:
+- L29-L32, L37-L39, L42 and L45/L47 appear in every candidate, so they are the consistently sensitive layers.
+- At level 2, L6 and L7 also stand out. The L7 step sits right after the weak L3-L6 block.
+- Router agreement falls steadily with depth (73% by L41-77 at level 2). Most of that fall is downstream drift, not router error at each layer: nq2_early, with FP8 experts from L7 on, still loses 13 points of routing by L41-77.
+
+## Default 4-bit set used
+- The manifests' default_allocation.level4_experts at run time: "top 26 experts per layer by token-weighted REAP", 26 per layer for L3-L77, 1950 in total.
+- Snapshot sha256 051853ffac7b0dfd..., stored in results/defset.json with the per-layer manifest shas.
+- Thread 25's v3 global rescore (16-128 per layer) had not been written to the manifests, so it was not evaluated. The harness re-snapshots with `./run_full.sh snap` and is ready for it.
 
 ## Method
-- Reference: FP8 dequantised to bf16, bf16 math, fp32 head. Earlier campaign's eval3_kld protocol: non-overlapping 2048-token windows, DSA indexer skipped (exact because window = index_topk), windows split over 8 GPUs, each GPU streams 78 layers (MTP excluded). Only routed experts differ.
-- One pass carries the reference and several candidates, each with its own residual stream and routing; backbone and FP8 experts read once per layer.
-- Metrics per candidate and corpus: KLD mean/stderr/p50/p90/p99, top-1 agreement, ppl ref/candidate, fallback count; per layer residual divergence, router top-8 agreement, optional local routed-expert error.
-- Interface: expert(layer, e, ref) -> {gate_proj, up_proj, down_proj} [out, in] un-rotated, or None for reference. Specs: ref, rtn:, dir:, nestquant:root=,level=2|4, exl3:root=,bits=, nvfp4:root=, py:file:Class, optional layers=a-b.
+- Reference:
+  - FP8 weights dequantised to bf16, bf16 math, fp32 head.
+  - Non-overlapping 2048-token windows over all 78 layers (MTP excluded). The DSA indexer is skipped, which is exact because window = index_topk.
+  - Windows are split win[RANK::8] over 8 independent GPUs, with no NCCL.
+- Only routed experts differ. Each candidate carries its own residual stream and routing, with several candidates per pass.
+- The inline reference was bitwise equal to the cached pass-B reference on every rank in both A passes.
+- Candidate weights:
+  - thread-12 nq_decode (rotated_levels -> decode_matrix -> apply_ocol, which includes the low-rank term), from /tmp/nestquant/nq-encode-v1/L{L}/experts/E{E}.pt;
+  - predecoded to fp16 safetensors. fp16 storage adds about 2e-4 relative weight error, negligible next to level-2's 0.19 and level-4's 0.058.
+- Held-out:
+  - The calibration corpus (glm53_calib_glmfmt_v1) drops the nq-tail documents and is 13-gram decontaminated against all eval texts and GPQA.
+  - The 4 corpora are disjoint and reported separately. Token counts are listed in the Results table; the corpus manifest shas are in /tmp/nestquant/18-e2e/corpora/manifest.json.
+- MoE path (nq_e2e.moe_multi):
+  - Routing and shared experts run in 16k-token slabs.
+  - Each routed expert gathers its own tokens across the whole window set, and each expert's weights are read once per layer.
+- Resources: peak VRAM 8.1-9.0 GB and host RSS about 2.7 GB per process. Each pass took about 25-40 min, bound by disk. Predecode ran at about 50 s per (layer, rank) file of 32 experts and is CPU-bound in nq_decode.
 
-## Corpora (report separately)
-| name | tokens / windows | role |
-|---|---|---|
-| nq-tail | 262,144 / 128 | in-distribution, tail of the 15M calibration corpus |
-| vllm-docs | 162,942 / 79 | code/docs held-out from earlier campaign |
-| wikitext | 136,733 / 66 | OOD prose, calibration-bias canary |
-| github | 52,528 / 25 | OOD code after model cutoff |
-Fits must use only 512-token windows with index < 28784 of the 15M corpus (or declare another disjoint split).
+## Files
+- Code: nq_e2e.py (prep / run / merge / predecode-nq), quantisers.py (plug-ins incl. `mix:`), nq_defset.py (default-set snapshot), run_full.sh (staged full run), nq_io.py, run.sh.
+- results/: passB.json (nq4), passA1.json (nq2, nqdef), passA2.json (nq2_early, nqdef_e4), defset.json. Each pass file holds the per-corpus tables and the per-layer rel_div, route agreement, local error and band stats.
+- Scratch: /tmp/nestquant/18-e2e.
 
-## Memory/time (8x A100, 8 independent processes, no NCCL)
-~1 GB backbone + 3.8 GB fp32 head + ~3 GB per stream; host RSS <1 GB per process. NestQuant decode is Python-bound (0.37 s/expert rotation + 0.02 s/level), so pre-decode to fp16 (1.45 TB per level, ~16 min per level on 8 GPUs). Estimates for 298 windows: ref + 1 candidate 10-15 min; ref + 5 candidates one pass 30-50 min; plus pre-decode ~30 min; total ~1-1.5 h.
-
-## Smoke results
-- Layers 0-5: identity KLD 0 / 100% top-1; cached-ref rerun bitwise equal to inline.
-- All 78 layers, one window per corpus:
-
-| cand | corpus | ppl ref | ppl cand | KLD | top-1 |
-|---|---|---|---|---|---|
-| rtn4 | nq-tail | 2.147 | 2.132 | 0.0110 | 96.6% |
-| rtn4 | wikitext | 1.597 | 1.660 | 0.0567 | 94.6% |
-| rtn4 | github | 2.529 | 2.519 | 0.0254 | 95.6% |
-| rtn2 | nq-tail | 2.147 | 2.443 | 0.218 | 84.8% |
-| rtn2 | wikitext | 1.597 | 4.553 | 1.111 | 68.3% |
-| rtn2 | github | 2.529 | 3.131 | 0.304 | 84.6% |
-
-- Pilot artifacts (3 experts) local routed-expert error: L16 nq2 0.354 / exl3_2 0.399 / nq4 0.096 / exl3_4 0.104 / nvfp4 0.123; L49 0.343 / 0.406 / 0.093 / 0.106 / 0.117. (Lead's note: the EXL3 pilot files may use the original calibration, so this is not the fair same-H comparison.) With only 3 experts replaced every candidate sits on a ~0.04 KLD floor, so few-expert e2e can't rank quantisers.
-
-## Needs from thread 12 / the full run
-1. All 75 x 256 artifacts at ROOT/layer_{L:03d}/expert_{E:03d}.pt (nq_run.nq_variant(..., keep_artifact=True)), ~19 MB each, ~366 GB.
-2. Full-model calibration capture (Hessians exist only for L16/32/49/66) and same-H full EXL3-2/4 and NVFP4 fits.
-3. Held-out discipline as above. 4. Zero fallbacks in merge. 5. Optional batched rotated_levels to skip pre-decode.
-
-## How to run
-See the agent's command block: predecode nq2/nq4 on 8 ranks, then one `run.sh run` per GPU with --corpora nq-tail,vllm-docs,wikitext,github --local-err --save-ref --tag full and candidates nq2, nq4, exl3_2, exl3_4, nvfp4, then `run.sh merge --tag full`. Go signal: NestQuant wins in-distribution without a worse wikitext/in-distribution ratio than EXL3.
+## Earlier smoke results (kept for reference)
+Identity KLD was 0 and top-1 100% on L0-5, and the cached-ref rerun was bitwise equal to the inline one. With only 3 experts replaced, every quantiser sat on a ~0.04 KLD floor, so few-expert end-to-end runs can't rank quantisers.
