@@ -14,6 +14,28 @@ import os
 import time
 
 
+def topk(a):
+    fs = json.load(open(a.score_json))
+    layers, shas = {}, {}
+    for L in range(a.first, a.last + 1):
+        sc = fs["score"][str(L)]
+        rank = sorted(range(len(sc)), key=lambda e: (-sc[e], e))
+        da = json.load(open(f"{a.root}/L{L}/manifest.json")).get("default_allocation") or {}
+        cur = sorted(int(e) for e in da.get("level4_experts") or [])
+        assert sorted(rank[:len(cur)]) == cur, (L, "manifest set is not the top of the score ranking")
+        layers[str(L)] = sorted(rank[:a.topk])
+        shas[str(L)] = da.get("sha256")
+    canon = json.dumps(layers, sort_keys=True).encode()
+    out = {"layers": layers, "per_layer_sha256": shas, "rules": {f"top {a.topk} per layer by fixed_set.json score "
+           f"(blended boundary-weighted REAP, ties -> lower id); nested over the manifest top-{len(cur)}": list(layers)},
+           "missing_layers": [], "n_total": sum(len(v) for v in layers.values()), "extra_layers": "",
+           "sha256": hashlib.sha256(canon).hexdigest(), "source": a.score_json,
+           "score_json_sha256": hashlib.sha256(open(a.score_json, "rb").read()).hexdigest(),
+           "time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()), "derived_from": None}
+    json.dump(out, open(a.out, "w"), indent=1)
+    print(f"{a.out}: top-{a.topk}, {len(layers)} layers, {out['n_total']} level-4 experts, sha256 {out['sha256'][:16]}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="/tmp/nestquant/nq-encode-v1")
@@ -22,7 +44,12 @@ def main():
     ap.add_argument("--last", type=int, default=77)
     ap.add_argument("--extra-layers", default="")
     ap.add_argument("--from-json", help="start from an earlier snapshot instead of re-reading the manifests")
+    ap.add_argument("--topk", type=int, help="extend the ranking instead: top-K per layer by the fixed_set.json 'score' "
+                                             "(ties -> lower id); asserts its top-|manifest set| equals the manifest set")
+    ap.add_argument("--score-json", default="/tmp/nestquant/nq-encode-v1/_stats/fixed_set.json")
     a = ap.parse_args()
+    if a.topk:
+        return topk(a)
     layers, shas, rules, missing = {}, {}, {}, []
     if a.from_json:
         d = json.load(open(a.from_json))

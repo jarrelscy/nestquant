@@ -1,0 +1,48 @@
+{
+ "layers": {
+  "3": {
+   "experts": 42,
+   "matrices": 252,
+   "mismatches": [],
+   "perm_mismatches": [],
+   "perm_experts": [
+    5,
+    11
+   ],
+   "lr_planes": 126,
+   "fast_s_per_expert": 0.06139435654594785,
+   "ref_s_per_expert": 2.576735093480065
+  },
+  "30": {
+   "experts": 42,
+   "matrices": 252,
+   "mismatches": [],
+   "perm_mismatches": [],
+   "perm_experts": [
+    5,
+    11
+   ],
+   "lr_planes": 94,
+   "fast_s_per_expert": 0.039222921643938334,
+   "ref_s_per_expert": 2.5765891075134277
+  },
+  "77": {
+   "experts": 42,
+   "matrices": 252,
+   "mismatches": [],
+   "perm_mismatches": [],
+   "perm_experts": [
+    5,
+    11
+   ],
+   "lr_planes": 126,
+   "fast_s_per_expert": 0.039650917053222656,
+   "ref_s_per_expert": 2.5759481532233104
+  }
+ },
+ "batch": 4,
+ "batch_had": true,
+ "part": 5,
+ "nparts": 6,
+ "peak_vram_gb": 4.99416971206665
+}

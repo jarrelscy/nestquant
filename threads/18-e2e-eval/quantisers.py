@@ -139,8 +139,10 @@ class Dir(Base):
 
 
 def nq_artifact_path(root, layer, expert):
-    """Thread-25 campaign layout {root}/L{L}/experts/E{E}.pt, else thread-12 {root}/layer_LLL/expert_EEE.pt."""
-    for f in (f"{root}/L{layer}/experts/E{expert}.pt", f"{root}/layer_{layer:03d}/expert_{expert:03d}.pt"):
+    """Thread-25 campaign layout {root}/L{L}/experts/E{E}.pt, thread-12 {root}/layer_LLL/expert_EEE.pt, or a
+    single-layer dir {root}/L{L}/E{E}.pt / {root}/E{E}.pt (tuned re-encodes for --expert-override)."""
+    for f in (f"{root}/L{layer}/experts/E{expert}.pt", f"{root}/layer_{layer:03d}/expert_{expert:03d}.pt",
+              f"{root}/L{layer}/E{expert}.pt", f"{root}/E{expert}.pt"):
         if os.path.exists(f):
             return f
     return None
@@ -168,6 +170,9 @@ class Mix(Base):
     def end_layer(self, layer):
         Dir._cur.update(le=None, w={})
 
+    def level_of(self, layer, expert):
+        return 4 if (layer in self.hi_layers or expert in self.l4.get(layer, ())) else 2
+
     def expert(self, layer, expert, ref):
         if not self.active(layer):
             return None
@@ -179,6 +184,82 @@ class Mix(Base):
             else:
                 self.n_lo += 1
         return W
+
+
+def dir_sha(d, layer):
+    """sha256 over (name, sha256(file)) of every artifact E{E}.pt this layer would read from d."""
+    import hashlib
+    h = hashlib.sha256()
+    for e in range(256):
+        f = nq_artifact_path(d, layer, e)
+        if f is None:
+            continue
+        fh = hashlib.sha256()
+        with open(f, "rb") as x:
+            for b in iter(lambda: x.read(1 << 24), b""):
+                fh.update(b)
+        h.update(f"{os.path.basename(f)}:{fh.hexdigest()}\n".encode())
+    return h.hexdigest()
+
+
+class Override(Base):
+    """Wraps a stream: for layers in `dirs`, routed experts come from DIR's E{E}.pt artifacts (tuned re-encodes),
+    decoded with the batched nq_fastdec decoder at the level the wrapped stream would use (inner.level_of, e.g. Mix),
+    rounded to fp16 like the predecode.  Other layers pass through to the wrapped stream."""
+
+    def __init__(self, inner, dirs, batch=4):
+        self.inner, self.dirs, self.batch = inner, dirs, batch
+        self.name, self.spec = inner.name, inner.spec + f" +override{sorted(dirs)}"
+        self.only_layers = getattr(inner, "only_layers", None)
+        self.n_override = 0
+        self.cache = {}
+        if not hasattr(inner, "level_of"):
+            raise SystemExit(f"--expert-override: stream {inner.name} has no per-expert level (use a mix: stream)")
+
+    def __getattr__(self, k):                    # n_hi / n_lo / active ... of the wrapped stream
+        return getattr(self.__dict__["inner"], k)
+
+    def begin_layer(self, layer, device):
+        self.dev = device
+        self.inner.begin_layer(layer, device)
+        self.cache = {}
+
+    def end_layer(self, layer):
+        self.cache = {}
+        self.inner.end_layer(layer)
+
+    def expert(self, layer, expert, ref):
+        if layer not in self.dirs:
+            return self.inner.expert(layer, expert, ref)
+        if expert not in self.cache:
+            import nq_fastdec as F
+            self.cache = {}
+            chunk = [e for e in range(expert, min(expert + self.batch, 256))]
+            arts = {}
+            for e in chunk:
+                f = nq_artifact_path(self.dirs[layer], layer, e)
+                if f is None:
+                    raise SystemExit(f"override: missing E{e} for L{layer} under {self.dirs[layer]}")
+                arts[e] = torch.load(f, map_location="cpu", weights_only=False)
+            for lv in (2, 4):
+                es = [e for e in chunk if self.inner.level_of(layer, e) == lv]
+                if not es:
+                    continue
+                perms = [arts[e].get("meta", {}).get("inter_perm") for e in es]
+                out = F.decode_experts([arts[e] for e in es], (lv,), self.dev, batch_had=True, perms=perms)[lv]
+                for e, W in zip(es, out):
+                    self.cache[e] = {pn: w.half() for pn, w in zip(PROJ, W)}
+            if self.inner.level_of(layer, expert) == 4:
+                self.inner.n_hi += 1
+            else:
+                self.inner.n_lo += 1
+        else:
+            if self.inner.level_of(layer, expert) == 4:
+                self.inner.n_hi += 1
+            else:
+                self.inner.n_lo += 1
+        self.n_override += 1
+        return self.cache[expert]
 
 
 def set_from_range(s):

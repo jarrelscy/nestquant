@@ -81,7 +81,14 @@ def cmd_prep(a):
     tok = None
     man = {}
     for name, src in items.items():
-        if src.startswith("npytail:"):
+        if src.startswith("npywin:"):            # npywin:/path/tokens.npy:lo:hi:n  (n evenly spaced rows of [lo, hi))
+            _, path, lo, hi, nn = src.split(":")
+            t = np.load(path, mmap_mode="r")
+            rows = np.linspace(int(lo), int(hi) - 1, int(nn)).round().astype(int)
+            assert len(set(rows.tolist())) == len(rows) and t.shape[1] == SEQ
+            ids = np.asarray(t[rows], dtype=np.int32).reshape(-1)
+            man_rows = rows.tolist()
+        elif src.startswith("npytail:"):
             _, path, n = src.split(":")
             t = np.load(path, mmap_mode="r").reshape(-1)
             ids = np.asarray(t[len(t) - int(n):], dtype=np.int32)
@@ -94,6 +101,8 @@ def cmd_prep(a):
         np.save(f"{OUT}/corpora/{name}.npy", ids)
         man[name] = {"src": src, "tokens": int(len(ids)), "windows": int(len(ids) // SEQ),
                      "sha256": hashlib.sha256(ids.tobytes()).hexdigest()}
+        if src.startswith("npywin:"):
+            man[name]["rows"] = man_rows
         log(f"{name}: {len(ids)} tokens, {len(ids)//SEQ} windows of {SEQ}")
     old = {}
     mp = f"{OUT}/corpora/manifest.json"
@@ -101,6 +110,10 @@ def cmd_prep(a):
         old = json.load(open(mp))
     old.update(man)
     json.dump(old, open(mp, "w"), indent=1)
+
+
+WIN_IDS = []
+OVERRIDES = {}
 
 
 def load_windows(names, max_windows):
@@ -112,6 +125,7 @@ def load_windows(names, max_windows):
             nw = min(nw, max_windows)
         w = torch.from_numpy(ids[: nw * SEQ].astype(np.int32)).view(nw, SEQ)[RANK::WORLD]
         seqs.append(w)
+        WIN_IDS.append((n, list(range(nw))[RANK::WORLD]))
         groups += [g] * w.shape[0]
         shas.append(hashlib.sha256(ids[: nw * SEQ].tobytes()).hexdigest()[:16])
         log(f"corpus {n}: {nw} windows, rank takes {w.shape[0]}")
@@ -159,7 +173,7 @@ def ffn(x, W):
     return torch.nn.functional.linear(torch.nn.functional.silu(g) * u, W["down_proj"].to(x.dtype))
 
 
-def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk):
+def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None):
     """flats: per-stream [T,H] bf16 residual streams (updated in place: f += MoE(norm(f)));
     qs: per-stream quantiser (Ref for the reference).  Routing and the shared expert run in `chunk`-token
     slabs; routed experts gather + normalise their own tokens, so no [T,H] normed copy is kept and every expert's
@@ -170,14 +184,23 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk):
     for f in flats:
         ids_l, w_l = [], []
         out = torch.empty_like(f)
+        if keep is not None:
+            kx = torch.empty(f.shape, dtype=f.dtype, pin_memory=True)
         for c0 in range(0, T, chunk):
             x = norm(f[c0:c0 + chunk])
             _, w, i = layer.mlp.gate(x)
             ids_l.append(i)
             w_l.append(w)
             out[c0:c0 + chunk] = layer.mlp.shared_experts(x)
+            if keep is not None:
+                kx[c0:c0 + chunk] = x.cpu()
             del x
         i, w = torch.cat(ids_l), torch.cat(w_l)
+        if keep is not None:                     # hidden-state dump: MoE input (post-norm), router, shared output
+            keep["x"].append(kx)
+            keep["ids"].append(i.to(torch.uint8).cpu())
+            keep["p"].append(w.float().cpu())
+            keep["shared"].append(out.cpu())
         ids = i.reshape(-1)
         order = torch.argsort(ids, stable=True)
         tok = torch.arange(T, device=dev).repeat_interleave(i.shape[1])[order]
@@ -232,6 +255,8 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk):
         if lerr[s][1] > 0:
             stats[s]["local_rel_l2"][li] = math.sqrt(lerr[s][0] / lerr[s][1])
         f += outs[s]
+        if keep is not None:                     # hidden-state dump: MoE block output (routed + shared)
+            keep["moe_out"].append(outs[s].cpu())
     del outs
 
 
@@ -260,6 +285,17 @@ def cmd_run(a):
         qs.append(quantisers.make(n, spec))
     for q in qs:
         q.dev = dev
+    if a.expert_override:
+        tgt = set(a.override_streams.split(",")) if a.override_streams else {q.name for q in qs[1:]}
+        ov = dict(x.split("=", 1) for x in a.expert_override)
+        ov = {int(k): v for k, v in ov.items()}
+        for i, q in enumerate(qs):
+            if q.name in tgt:
+                qs[i] = quantisers.Override(q, ov)
+                qs[i].dev = dev
+        OVERRIDES.update({"streams": sorted(tgt), "layers": {L: {"dir": d, "sha256": quantisers.dir_sha(d, L)}
+                                                            for L, d in ov.items()}})
+        log(f"expert overrides {OVERRIDES}")
     stats = [{"fallback": 0, "supplied": 0, "route_agree": {}, "local_rel_l2": {},
               "rel_div": {}} for _ in qs]
     log(f"{N} windows x {SEQ}; streams {[q.name for q in qs]}; layers {nl}; "
@@ -282,9 +318,32 @@ def cmd_run(a):
 
     t_start = time.time()
     tl = {}
+    dump = set()
+    if a.dump_layers:
+        lo, _, hi = a.dump_layers.partition("-")
+        dump = set(range(int(lo), int(hi or lo) + 1))
+        from safetensors.torch import save_file
+        assert getattr(qs[0], "is_ref", False), "dump needs the inline reference stream"
+        sname = lambda s: "fp8" if s == 0 else qs[s].name              # noqa: E731
+        want = set(a.dump_what.split(","))
+
+        def dsave(li, kind, s, t):
+            if kind not in want:
+                return
+            d = f"{a.dump_dir}/L{li}"
+            os.makedirs(d, exist_ok=True)
+            nm = f"{kind}_{sname(s)}"
+            f = f"{d}/{nm}.r{RANK}of{WORLD}.safetensors"
+            t = t.reshape(N * SEQ, -1).contiguous().cpu()
+            save_file({nm: t}, f + ".part", metadata={"layer": str(li), "kind": kind, "stream": sname(s),
+                                                       "spec": qs[s].spec})
+            os.rename(f + ".part", f)
     for li in range(nl):
         t0 = time.time()
         layer, sparse = bb.build(li)
+        if li in dump:
+            for s_ in range(len(hid)):
+                dsave(li, "h_in", s_, hid[s_])              # residual entering layer li
         for q in qs:
             q.begin_layer(li, dev)
         with torch.no_grad():
@@ -299,13 +358,31 @@ def cmd_run(a):
                     h[s0:s1] += att
                     del att
             flats = [h.view(N * SEQ, -1) for h in hid]
+            keep = hmid = None
+            if li in dump:
+                hmid = [h.cpu() for h in hid]               # residual after attention (MoE block input, pre-norm)
+                for s_ in range(len(hid)):
+                    dsave(li, "h_mid", s_, hmid[s_])
+                keep = {k: [] for k in ("x", "ids", "p", "shared", "moe_out")}
             if not sparse:
                 for f in flats:
                     for t0_ in range(0, f.shape[0], a.moe_chunk):
                         t1_ = min(t0_ + a.moe_chunk, f.shape[0])
                         f[t0_:t1_] += layer.mlp(layer.post_attention_layernorm(f[t0_:t1_]))
             else:
-                moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk)
+                moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk, keep)
+            if li in dump:
+                if keep and keep["x"]:
+                    for kind, ts in keep.items():           # x / ids / p / shared / moe_out per stream
+                        for s_, t in enumerate(ts):
+                            dsave(li, kind, s_, t)
+                for s_ in range(len(hid)):
+                    dsave(li, "h_out", s_, hid[s_])         # residual leaving layer li
+                for s_ in range(1, len(hid)):               # FP8 layer output minus this stream's post-attn residual
+                    d = (hid[0].float() - hmid[s_].to(dev).float()).to(torch.bfloat16)
+                    dsave(li, "d_ref", s_, d)
+                    del d
+                del keep, hmid
             if not use_cache:
                 r = hid[0].float()
                 den = float(r.pow(2).sum())
@@ -320,6 +397,25 @@ def cmd_run(a):
         msg = " ".join(f"{q.name}:div={stats[s]['rel_div'].get(li, 0):.4f}"
                        for s, q in enumerate(qs) if s > 0 or use_cache)
         log(f"layer {li} {tl[li]:.1f}s peakVRAM {torch.cuda.max_memory_allocated()/2**30:.1f}G {msg}")
+        if dump and li >= max(dump) and a.dump_stop:
+            break
+    if dump:
+        json.dump({"rank": RANK, "world": WORLD, "seq": SEQ, "tokens": N * SEQ, "windows": WIN_IDS,
+                   "corpora": names, "corpus_sha": shas, "streams": {q.name: q.spec for q in qs},
+                   "layers": sorted(dump), "what": sorted(want), "overrides": OVERRIDES,
+                   "dtype": "bfloat16 (ids uint8 [T,8], p float32 [T,8] incl. routed_scaling_factor)",
+                   "layout": "[windows*SEQ, ...], rank-local windows in order (manifest windows)",
+                   "definitions": {"h_in": "residual entering the layer", "h_mid": "residual after attention",
+                                   "x": "post_attention_layernorm(h_mid) = MoE input", "ids/p": "router top-8 / weights",
+                                   "shared": "shared-expert output on x", "moe_out": "shared + routed output",
+                                   "h_out": "residual leaving the layer (= h_mid + moe_out, bf16 add)",
+                                   "d_ref_S": "fp32(h_out_fp8) - fp32(h_mid_S), stored bf16"},
+                   "stats": [{k: v for k, v in st.items() if k in ("fallback", "supplied", "ref_by_design")}
+                             for st in stats], "time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())},
+                  open(f"{a.dump_dir}/manifest.r{RANK}of{WORLD}.json", "w"), indent=1)
+        if a.dump_stop:
+            log(f"dump done -> {a.dump_dir}")
+            return
 
     # ---- reference cache
     if use_cache:
@@ -454,6 +550,25 @@ def cmd_predecode(a):
         log(f"WARNING: {lossy} fp32 tensors were not fp16-exact -> stored bf16")
 
 
+def st_same(f, g, blk=1 << 26):
+    """safetensors files equal: identical data section bytes (everything after the header) and equal header JSON.
+    The header is compared parsed because safetensors serialises the __metadata__ map in hash order (differs between
+    processes for the same dict), so raw header bytes are not reproducible even for the same writer."""
+    import struct
+    with open(f, "rb") as x, open(g, "rb") as y:
+        nx, ny = struct.unpack("<Q", x.read(8))[0], struct.unpack("<Q", y.read(8))[0]
+        if nx != ny or json.loads(x.read(nx)) != json.loads(y.read(ny)):
+            return False
+        if os.fstat(x.fileno()).st_size != os.fstat(y.fileno()).st_size:
+            return False
+        while True:
+            bx, by = x.read(blk), y.read(blk)
+            if bx != by:
+                return False
+            if not bx:
+                return True
+
+
 def cmd_predecode_nq(a):
     """NestQuant-specific predecode: one rotated_levels() per expert serves both levels.  Writes
     {out}/nq2/layer_LLL.rRofW.safetensors (every expert, if 2 in --levels) and {out}/nq4/... (experts in --l4-set,
@@ -474,6 +589,12 @@ def cmd_predecode_nq(a):
     for lv in levels:
         os.makedirs(f"{a.out}/nq{lv}", exist_ok=True)
     nexp = {lv: 0 for lv in levels}
+    writer = None
+    verify = {lv: [0, 0] for lv in levels}
+    werr = []
+    if a.fast:
+        import nq_fastdec as F
+    t_all = time.time()
     for li in layers:
         want = {}
         for lv in levels:
@@ -487,6 +608,55 @@ def cmd_predecode_nq(a):
         t0 = time.time()
         todo = sorted(set().union(*[v[1] for v in want.values()]))
         tens = {lv: {} for lv in want}
+        if a.fast:                                   # batched GPU decoder from the TP shard files (nq_fastdec)
+            if writer is not None:
+                writer.join()                        # at most one layer of fp16 tensors in RAM besides the current one
+            if werr:
+                raise werr[0]
+            ls = F.LayerShards(a.root, li)
+            for i in range(0, len(todo), a.batch):
+                chunk = todo[i:i + a.batch]
+                lvs = tuple(lv for lv in want if any(e in want[lv][1] for e in chunk))
+                out = F.decode_experts([ls.art(e) for e in chunk], lvs, dev, batch_had=True)
+                for lv in lvs:
+                    for k, e in enumerate(chunk):
+                        if e not in want[lv][1]:
+                            continue
+                        for pn, w in zip(quantisers.PROJ, out[lv][k]):
+                            assert torch.isfinite(w).all() and float(w.abs().max()) < 6e4, (li, e, pn)
+                            tens[lv][f"model.layers.{li}.mlp.experts.{e}.{pn}.weight"] = w.half().contiguous().cpu()
+                        nexp[lv] += 1
+                del out
+            t_dec = time.time() - t0
+
+            def write(tens=tens, want=want, li=li, t_dec=t_dec, t0=t0, n=len(todo)):
+                t_w = time.time()
+                for lv, (f, ex) in want.items():
+                    save_file(tens[lv], f + ".part", metadata={"root": a.root, "level": str(lv)})
+                    os.rename(f + ".part", f)
+                t_w = time.time() - t_w
+                ver = ""
+                if a.verify_against:                 # byte-for-byte vs an earlier predecode, then drop our copy
+                    for lv, (f, ex) in want.items():
+                        ref = f"{a.verify_against}/nq{lv}/{os.path.basename(f)}"
+                        same = os.path.exists(ref) and st_same(f, ref)
+                        verify[lv][0 if same else 1] += 1
+                        ver += f" nq{lv}:{'IDENTICAL' if same else 'DIFFERENT'}"
+                        if same:
+                            os.remove(f)
+                log(f"L{li}: decoded {n} experts in {t_dec:.1f}s, wrote " +
+                    " ".join(f"nq{lv}:{len(tens[lv]) // 3}" for lv in want) + f" in {t_w:.1f}s{ver}")
+            import threading
+
+            def guarded(write=write):
+                try:
+                    write()
+                except BaseException as ex:          # surfaced by the main thread after join
+                    werr.append(ex)
+            writer = threading.Thread(target=guarded)
+            writer.start()
+            del tens
+            continue
         for e in todo:
             f = quantisers.nq_artifact_path(a.root, li, e)
             if f is None:
@@ -512,7 +682,12 @@ def cmd_predecode_nq(a):
         log(f"L{li}: decoded {len(todo)} experts, wrote " +
             " ".join(f"nq{lv}:{len(tens[lv]) // 3}" for lv in want) + f" in {time.time() - t0:.1f}s")
         del tens
-    log(f"done: experts written {nexp}")
+    if writer is not None:
+        writer.join()
+    if werr:
+        raise werr[0]
+    log(f"done: experts written {nexp} in {time.time() - t_all:.1f}s" +
+        (f"; byte-compare [identical, different] per level {verify}" if a.verify_against else ""))
 
 
 def cmd_merge(a):
@@ -603,6 +778,15 @@ def main():
     r.add_argument("--moe-chunk", type=int, default=16384, help="tokens per router/shared-expert slab")
     r.add_argument("--pos-chunk", type=int, default=512)
     r.add_argument("--tag", default="run")
+    r.add_argument("--dump-layers", help="a-b: save h_in / h_mid / moe_out / h_out of every stream at these layers")
+    r.add_argument("--dump-dir", default=f"{OUT}/hdump")
+    r.add_argument("--dump-stop", action="store_true", help="stop after the last dump layer (no metrics)")
+    r.add_argument("--dump-what", default="x,ids,p,shared,moe_out,d_ref,h_in,h_out",
+                   help="subset of h_in,h_mid,x,ids,p,shared,moe_out,h_out,d_ref (files L{L}/{kind}_{stream}.rRofW)")
+    r.add_argument("--expert-override", action="append", default=[],
+                   help="L=DIR: layer L's routed experts decoded (nq_fastdec) from DIR's E{E}.pt artifacts, at the "
+                        "level the stream's mix picks; applies to --override-streams")
+    r.add_argument("--override-streams", default="", help="comma list of candidate names (default: all candidates)")
     m = sub.add_parser("merge")
     m.add_argument("--tag", default="run")
     d = sub.add_parser("predecode")
@@ -615,6 +799,10 @@ def main():
     n.add_argument("--l4-set", default="all", help="nq_defset.py JSON (level-4 subset) or 'all'")
     n.add_argument("--layers", default="3-77")
     n.add_argument("--out", default=f"{OUT}/predecoded")
+    n.add_argument("--fast", action="store_true", help="batched GPU decoder (nq_fastdec) from the tp*.safetensors")
+    n.add_argument("--batch", type=int, default=4, help="--fast: experts per decode call")
+    n.add_argument("--verify-against", help="--fast: compare each written file byte-for-byte with DIR/nq{lv}/same name, "
+                                            "delete ours if identical (keeps different ones for inspection)")
     a = ap.parse_args()
     {"prep": cmd_prep, "run": cmd_run, "merge": cmd_merge, "predecode": cmd_predecode,
      "predecode-nq": cmd_predecode_nq}[a.cmd](a)
