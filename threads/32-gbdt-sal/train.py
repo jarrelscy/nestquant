@@ -15,7 +15,7 @@ import t32lib as T
 FEATS = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16"]
 
 
-def rows(corpus, target, feats, layers=T.LAYERS, m=None, band=""):
+def rows(corpus, target, feats, layers=T.LAYERS, m=None, band="", sub=1):
     Xs, ys, gs = [], [], []
     mL = {}
     for L in layers:
@@ -31,6 +31,7 @@ def rows(corpus, target, feats, layers=T.LAYERS, m=None, band=""):
             mL[L] = float(d["slot_sal_sum"] / d["slots"]) if m is None else m[L]
             y = y / mL[L]
         keep = np.isfinite(y).all(1)                         # longer horizons: drop blocks whose horizon leaves chain
+        keep &= np.arange(len(keep)) % sub == 0              # --sub: every sub-th valid block (lambdarank cost)
         y = y[keep].ravel()
         X = X.reshape(int(v.sum()), -1, len(feats))[keep].reshape(-1, len(feats))
         v = np.zeros(int(keep.sum()), bool) | True
@@ -53,6 +54,7 @@ def main():
     ap.add_argument("--v2", action="store_true", help="+ salience features t32lib.FEATS_V2 (serve change)")
     ap.add_argument("--v3", action="store_true", help="+ router-prob features t32lib.FEATS_V3 (build_v3.py)")
     ap.add_argument("--band", default="", help="rows band ('' = EMA256 ranks 20-120, all, all20; build.py T32_BAND)")
+    ap.add_argument("--sub", type=int, default=1, help="train on every sub-th valid block only")
     ap.add_argument("--nbins", type=int, default=8, help="lambdarank: graded salience bins (0 = y==0, rest by "
                     "train quantiles of y>0; label_gain = bin mean y / top bin mean * 31)")
     ap.add_argument("--feats", default="", help="explicit comma list of feature names (overrides --v2/--v3)")
@@ -62,7 +64,7 @@ def main():
     feats = FEATS + (list(T.FEATS_V2) if a.v2 else []) + (list(T.FEATS_V3) if a.v3 else [])
     if a.feats:
         feats = a.feats.split(",")
-    Xt, yt, m, gt = rows(a.train, a.target, feats, band=a.band)
+    Xt, yt, m, gt = rows(a.train, a.target, feats, band=a.band, sub=a.sub)
     Xv, yv, _, gv = rows(a.valid, a.target, feats, m=m if a.target.startswith("sal") else None, band=a.band)
     print(f"rows train {len(yt)} valid {len(yv)}  load {time.time() - t0:.0f}s  y mean {yt.mean():.4f} "
           f"zero frac {(yt == 0).mean():.3f}", flush=True)
@@ -93,7 +95,7 @@ def main():
     bst.save_model(a.out, num_iteration=bi)
     meta = dict(features=feats, target=a.target, obj=a.obj, params=p, best_iteration=bi, iters_cap=a.iters,
                 valid_curve=ev["heldout"][list(ev["heldout"])[0]], train=a.train, valid=a.valid, band=a.band,
-                n_train=int(len(yt)), n_valid=int(len(yv)), sal_norm_mL=m if a.target.startswith("sal") else None, rank=rank,
+                n_train=int(len(yt)), sub=a.sub, n_valid=int(len(yv)), sal_norm_mL=m if a.target.startswith("sal") else None, rank=rank,
                 wall_s=time.time() - t0)
     json.dump(meta, open(a.out + ".meta.json", "w"), indent=1)
     print(f"saved {a.out} best_iter {bi} {time.time() - t0:.0f}s", flush=True)
