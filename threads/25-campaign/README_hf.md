@@ -49,3 +49,16 @@ At 2 bit, layers 3-6 are the weakest (mean +10% vs EXL3); layers 7-77 average +1
 ## Default 4-bit set
 
 `manifest.json` lists 26 experts per layer that are kept at 4 bit by default. They were chosen by usage on the calibration data (boundary-weighted REAP), weighted towards tokens just before the end of reasoning and the end of each turn, blended 75% text and 25% vision. The rest can be upgraded to 4 bit at runtime.
+
+## Serving layout
+
+`serving/tp4/` holds the same experts pre-packed for the NestQuant streaming server at tensor parallel 4, so the server does not have to repack anything at startup. The files, per rank r (0-3) and layer L (3-77):
+
+- `rank{r}/L{L}.bin`: the 256 level-4 records of layer L. Each record is 2,560,000 bytes (a multiple of 4 KiB) and holds, in order, gate|up P4, gate|up block words, down P4, down block words and the rank-4 fp16 low-rank U4 plane. Every segment starts on a 256-byte boundary. Record format `nq-p4rec-v1`.
+- `res/rank{r}/L{L}.pt`: the resident planes of the layer (2-bit base, sign variant, scales, low-rank V/U2). Format `nq-res-v1`.
+- `layers/L{L}.json`: the per-layer block. It has the size and sha256 of every file, the record layout, the default 4-bit set, the floating default and routing counts, and a `layer_hash`.
+- `rank{r}.json`: the index. It gives rec_bytes, segment offsets, L0=3 and NE=256, plus the file, offset, bytes and sha256 of each layer.
+- `manifest.json`: formats, the layout, the per-layer hashes, the default allocation (`default_allocation`, 26 experts per layer), `floating_default`, and the per-layer `n_routed` counts.
+- `COMPLETE`: every layer and its hash. It is written last. The release is complete only when this file exists.
+
+The server reads one record file per rank, with the record of (L, E) at ((L - 3) * 256 + E) * rec_bytes. `serving/nq_assemble.py` copies the per-layer blocks into `serving/tp4/rank{r}.bin` at those offsets. It is a pure byte copy with sha256 checks (a few minutes on an SSD; `--move` deletes each block after copying it). After that, `serving/tp4/` can be used directly as the server's record directory. When layers are re-fitted, only their blocks and index entries change. The record format name changes if the layout ever changes.
