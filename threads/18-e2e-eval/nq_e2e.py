@@ -363,7 +363,7 @@ def cmd_run(a):
         want = set(a.dump_what.split(","))
 
         def dsave(li, kind, s, t):
-            if kind not in want:
+            if kind not in want or (a.dump_streams and sname(s) not in a.dump_streams.split(",")):
                 return
             d = f"{a.dump_dir}/L{li}"
             os.makedirs(d, exist_ok=True)
@@ -819,6 +819,7 @@ def main():
     r.add_argument("--dump-stop", action="store_true", help="stop after the last dump layer (no metrics)")
     r.add_argument("--dump-what", default="x,ids,p,shared,moe_out,d_ref,h_in,h_out",
                    help="subset of h_in,h_mid,x,ids,p,shared,moe_out,h_out,d_ref (files L{L}/{kind}_{stream}.rRofW)")
+    r.add_argument("--dump-streams", default="", help="comma list of stream names to dump (fp8 = reference); default all")
     r.add_argument("--expert-override", action="append", default=[],
                    help="L=DIR: layer L's routed experts decoded (nq_fastdec) from DIR's E{E}.pt artifacts, at the "
                         "level the stream's mix picks; applies to --override-streams")

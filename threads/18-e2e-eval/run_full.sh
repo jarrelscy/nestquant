@@ -18,7 +18,8 @@
 #                           (state carried across the rank's consecutive windows of a corpus, document order)
 #   WORLD=16 GPUS="0 0 0 3 3 4 4 4 5 5 6 6 6 7 7 7" ./run_full.sh runS4
 #                           ref + nqdef + nqfloat0 + nqdef128: eval-token level-4 share of routed slots per static arm
-#   ./run_full.sh hdump     T27 PV-pilot dump: ref(fp8) + nqdef on calib-fit, L29-32 (EXTRA args e.g. --expert-override)
+#   ./run_full.sh hdump     T27 PV-pilot dump: ref(fp8) + nqdef on calib-fit, L29-32 (EXTRA args e.g. --expert-override,
+#                           --dump-streams nqdef; env DUMP_LAYERS, DUMP_DIR, DUMP_TAG = log name for concurrent dumps)
 #   ./run_full.sh merge TAG
 # Every stage: 8 ranks, one per GPU, NQ_VRAM_GB cap, launch refused if a GPU has < MIN_FREE_MB free.
 set -euo pipefail
@@ -91,7 +92,7 @@ case "${1:-}" in
           --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json" \
           --cand "nqfloat0=mix:lo=$PD_A/nq2,hi=$PD_S/nq4,set=$OUT/defset_float0.json" \
           --cand "nqdef128=mix:lo=$PD_A/nq2,hi=$PD_S/nq4,set=$OUT/defset_top128.json" ;;
-  hdump) shift; launch hdump run --corpora calib-fit --dump-layers ${DUMP_LAYERS:-29-32} --dump-stop \
+  hdump) shift; launch ${DUMP_TAG:-hdump} run --corpora calib-fit --dump-layers ${DUMP_LAYERS:-29-32} --dump-stop \
           --dump-what x,ids,p,shared,moe_out,d_ref,h_in,h_mid,h_out --dump-dir "${DUMP_DIR:-$OUT/hdump}" --tag hdump \
           --cand "nqdef=mix:lo=$PD_A/nq2,hi=$PD_A/nq4,set=$OUT/defset.json" "$@" ;;
   merge) "$HERE/run.sh" merge --tag "$2" ;;
