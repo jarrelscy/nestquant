@@ -35,6 +35,8 @@ services:
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_GBDT_MODE: ${NQ_GBDT_MODE:-next_refresh}
       NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
+      NQ_GBDT_SCALE: ${NQ_GBDT_SCALE:-none}
+      NQ_GBDT_BAND: ${NQ_GBDT_BAND:-ema256}
       NQ_PF: ${NQ_PF:-1}                      # prefill path (moe.MoELayer.prefill) for >= NQ_PF_MIN tokens
       NQ_PF_MIN: ${NQ_PF_MIN:-384}
       NQ_PF_ROWS: ${NQ_PF_ROWS:-8192}

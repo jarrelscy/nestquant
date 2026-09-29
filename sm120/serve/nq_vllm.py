@@ -15,7 +15,8 @@ Per worker process (one TP rank):
 Env: NQ_HOME (repo, default /nq), NQ_REPACK (record + resident dir), NQ_SLOTS_PER_LAYER (56), NQ_CAP_GBPS (0 = uncapped: drive and slot pool limit; else aggregate GB/s over the TP ranks),
 NQ_TOK_PER_S (111), NQ_STREAM (1; 0 = fixed set only, no streaming), NQ_POLL_MS (4), NQ_LAYERS (e.g. 3-18, default all
 present), NQ_PREDICTOR (floating-set predictor: ema | gbdt, default scheduler.DEFAULT_PREDICTOR; only the scheduling rank
-runs it), NQ_LGB_PATH (dir with lightgbm + narwhals + scipy, appended to sys.path; serve_nq.sh mounts it at /nqlgb). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
+runs it; NQ_GBDT_MODE / NQ_GBDT_SCALE / NQ_GBDT_BAND see streaming/scheduler.py; NQ_GBDT_SCALE=mps makes rank 0 export per-expert decode
+salience w^2*|x|^2 via nqsal.cu, rsf = hf routed_scaling_factor or NQ_SAL_RSF), NQ_LGB_PATH (dir with lightgbm + narwhals + scipy, appended to sys.path; serve_nq.sh mounts it at /nqlgb). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
 differ by a step between ranks, so for a short while an expert can be at level 4 on some ranks and level 2 on others;
 each rank's shard is a valid level-2 or level-4 weight either way)."""
 import os,sys,json,time,threading,logging
@@ -38,6 +39,7 @@ NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
 PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384'));PF_OFF=os.environ.get('NQ_PF_OFF','/dev/shm/nq_pf_off')
 # prefill expert-level adaptation (NQ_PREFILL_ADAPT=lookahead|chunk, NQ_LA_MEASURE=1): see nq_lookahead.py
 import nq_lookahead as LAH
+RSF=None          # routed_scaling_factor the MoE runner applies after the experts (topk_weights here exclude it); set in create_weights
 if LAH.MODE or LAH.MEAS:LAH.install()
 ARVQ_NAMES=('hyb_kind',)+tuple(f'arvq_{p}_{k}' for p in ('w13','w2') for k in ('packed','scales','codebooks','global'))+\
     tuple(f'nvfp4_{p}_{k}' for p in ('w13','w2') for k in ('packed','bscale','scale2'))
@@ -78,7 +80,7 @@ class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
-        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None
+        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -143,6 +145,13 @@ class Runtime:
             s.log=OL.OpLog(f'/dev/shm/nq_oplog_{pp}_{st}.bin',writer=s.rank==0)
             if s.rank:s.F=OL.Follower(s.X,s.log);s.F.busy.update(init)
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
+        if s.F is None and s.S.wants_sal:        # GBDT x mps128: rank 0 exports per-expert decode salience next to the hits
+            import build as BLD
+            s.SAL=BLD.get_sal();rsf=float(os.environ.get('NQ_SAL_RSF') or RSF or 1.0)
+            for L in L_:
+                d=s.lay[L];d['sal_acc']=torch.zeros(NE,dtype=torch.float64,device=dev)
+                d['sal_host']=torch.zeros(NE,dtype=torch.float64).pin_memory();d['sal_rsf']=rsf
+            log.info('NestQuant rank %d: decode salience export on (%s, rsf %.3f)',s.rank,s.S.predictor_name,rsf)
         _gate_captures(s)
         if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
@@ -158,6 +167,7 @@ class Runtime:
             torch.cuda.set_device(s.dev);ms=float(os.environ.get('NQ_POLL_MS','4'))/1e3
             issue=os.environ.get('NQ_ISSUE','1')!='0'    # 0: schedule but never issue ops (level set stays floating_default; A/B only)
             H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time();tb=0.;nit=0;s4=st=0
+            SH=[s.lay[L]['sal_host'].numpy() for L in s.L_] if 'sal_host' in s.lay[s.L_[0]] else None;sprev=np.zeros((len(s.L_),NE))
             while not s.stop:
                 s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
                 with s.cv:s.in_iter=True;cap=s.ncap>0
@@ -171,8 +181,10 @@ class Runtime:
                     if s.F is None and not cap:        # hits counted during a capture are dropped with it (warmup inputs)
                         cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
                         if ntok>0:
+                            sal=None
+                            if SH is not None:scur=np.stack(SH);sal=np.maximum(scur-sprev,0.);sprev=scur   # cumulative fp64, diffed like the hits
                             lv=s.S.fixed|(s.S.state==2);s4+=int(c[lv].sum());st+=int(c.sum())   # share at the levels served this step
-                            ups,downs=s.S.step(c,ntok)
+                            ups,downs=s.S.step(c,ntok,sal=sal)
                             if issue:
                                 s.X.apply(ups,downs,s.S)
                                 if s.log is not None:s.log.put(ups,downs)
@@ -239,13 +251,17 @@ def forward(L,x,topk_weights,topk_ids):
     if CHECK and not torch.cuda.is_current_stream_capturing():
         try:torch.cuda.synchronize()
         except Exception as e:raise RuntimeError(f'NestQuant mailbox.apply faulted (L{L})') from e
-    if T<=BMAX:return M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T]).to(x.dtype)
+    sh=d.get('sal_host')
+    if T<=BMAX:
+        if sh is not None:RT.SAL.sal(x if x.stride(-1)==1 and x.dtype in (torch.bfloat16,torch.float16) else xh,w,ids,d['sal_rsf'],d['sal_acc'],sh.data_ptr())
+        return M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T]).to(x.dtype)
     if PF and T>=PF_MIN and not torch.cuda.is_current_stream_capturing() and not os.path.exists(PF_OFF):
         if RT.LA is not None:RT.LA.pre(L,x,ids,w,M.table)   # rank 0: router of L+d on x -> level ops (streaming thread)
         return M.prefill(xh,ids,w).to(x.dtype)   # each routed expert decoded once at its live table level + grouped GEMMs
     out=torch.empty(T,x.shape[1],dtype=torch.float32,device=x.device)
     for i in range(0,T,BMAX):
         j=min(T,i+BMAX);M(xh[i:j],ids[i:j],w[i:j],out=out[i:j],cfg_gu=CFG_GU[j-i],cfg_dn=CFG_DN[j-i])
+        if sh is not None and T<=16:RT.SAL.sal(xh[i:j],w[i:j],ids[i:j],d['sal_rsf'],d['sal_acc'],sh.data_ptr())   # steps > 16 tok = prefill, ignored by the predictor
         if CHECK and not torch.cuda.is_current_stream_capturing():_check_tables(L,i,xh[i:j],ids[i:j],w[i:j])
     return out.to(x.dtype)
 
@@ -275,6 +291,12 @@ def make_method(base_cls):
         def __init__(s,*a,nq_layer,**k):
             super().__init__(*a,**k);s.nq_layer=nq_layer;RT.expect_layer(nq_layer)
         def create_weights(s,layer,num_experts,hidden_size,intermediate_size_per_partition,params_dtype,**extra):
+            global RSF
+            if RSF is None:
+                try:
+                    from vllm.config import get_current_vllm_config
+                    RSF=float(getattr(get_current_vllm_config().model_config.hf_config,'routed_scaling_factor',1.0) or 1.0)
+                except Exception:RSF=None
             assert num_experts==NE and intermediate_size_per_partition*s._tp==2048,(num_experts,intermediate_size_per_partition)
             for n in ARVQ_NAMES:
                 p=torch.nn.Parameter(torch.empty(0,dtype=torch.uint8),requires_grad=False)

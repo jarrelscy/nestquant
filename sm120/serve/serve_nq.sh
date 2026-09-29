@@ -3,7 +3,7 @@
 #   sm120/serve/serve_nq.sh [up|down|logs|smoke]
 # Env: NQ_REPACK_DIR (records + resident planes from streaming/repack.py, default /home/jarrelscy/nq-p4rec/hf = full 75-layer repack),
 #      NQ_LAYERS (e.g. 3-18; default every layer in the repack), NQ_STREAM (0 = fixed set only), NQ_MAXLEN, NQ_UTIL,
-#      NQ_SLOTS_PER_LAYER, NQ_CAP_GBPS (upgrade budget, aggregate GB/s over the 4 ranks, default 0 = uncapped), NQ_PREDICTOR (ema | gbdt, default streaming/scheduler.py DEFAULT_PREDICTOR), NQ_SERVED_NAME (default glm-5.3-nq; alias "local" always works).
+#      NQ_SLOTS_PER_LAYER, NQ_CAP_GBPS (upgrade budget, aggregate GB/s over the 4 ranks, default 0 = uncapped), NQ_PREDICTOR (ema | gbdt, default streaming/scheduler.py DEFAULT_PREDICTOR), NQ_GBDT_MODE (next_refresh | sync), NQ_GBDT_SCALE (none | mps), NQ_GBDT_BAND (ema256 | all), NQ_SERVED_NAME (default glm-5.3-nq; alias "local" always works).
 # Layers missing from the repack serve with the production ARVQ experts.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd);HA=${HA:-/home/jarrelscy/homeassistant}
@@ -25,7 +25,7 @@ up)
   docker run --rm --gpus '"device=0"' --entrypoint bash -e NQ_BUILD=/nqbuild -e LIBURING=/data/Jarrel/liburing \
     -e CUDA_HOME=/opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13 -v "${NQ_REPO:-/data/Jarrel/nestquant}":/nq:ro \
     -v /data/Jarrel/nq-build-container:/nqbuild -v /data/Jarrel/liburing:/data/Jarrel/liburing:ro $IMG \
-    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod()"'
+    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod()"'
   docker compose --profile glm5.3-hybrid-1m up -d
   echo "waiting for /v1/models (loading takes a while) ..."
   for i in $(seq 1 360); do
