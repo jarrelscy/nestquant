@@ -123,6 +123,12 @@ case "${1:-}" in
   runG1) export NQ_SHARD=contig; launch runG1 run --corpora $CORPORA --local-err --moe-chunk $MOE_CHUNK --tag passG1 \
           --cand "nqadapt_chain_h512=adapt:lo=$FH/nq2,hi=$FH4,manifest=$SERVE_MAN,chain=1" \
           --cand "nqgbdt_chain_h512=adapt:lo=$FH/nq2,hi=$FH4,manifest=$SERVE_MAN,chain=1,predictor=gbdt" ;;
+  # T27 PV-tuned single-layer overrides (lp_ref L10 / L50 / L70), each its own stream vs the h512 nqdef baseline.
+  # O_CORPORA / O_TAG: wikitext first (passOw), then the other three (passOr).
+  runO) LP=${LP:-/tmp/nestquant/27-pv-tune/band/lp_ref}; ND="mix:lo=$FH/nq2,hi=$FH/nq4,set=$OUT/defset.json"
+        launch ${O_TAG:-passO} run --corpora ${O_CORPORA:-$CORPORA} --local-err --moe-chunk $MOE_CHUNK --tag ${O_TAG:-passO} \
+          --cand "nqdef=$ND" --cand "nqdef_o10=$ND" --cand "nqdef_o50=$ND" --cand "nqdef_o70=$ND" \
+          --expert-override "nqdef_o10:10=$LP" --expert-override "nqdef_o50:50=$LP" --expert-override "nqdef_o70:70=$LP" ;;
   merge) "$HERE/run.sh" merge --tag "$2" ;;
   *) sed -n '2,10p' "$0"; exit 1 ;;
 esac

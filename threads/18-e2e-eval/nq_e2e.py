@@ -367,14 +367,23 @@ def cmd_run(a):
         q.dev = dev
     if a.expert_override:
         tgt = set(a.override_streams.split(",")) if a.override_streams else {q.name for q in qs[1:]}
-        ov = dict(x.split("=", 1) for x in a.expert_override)
-        ov = {int(k): v for k, v in ov.items()}
+        ov, per = {}, {}                         # L=DIR -> all --override-streams;  STREAM:L=DIR -> that stream only
+        for x in a.expert_override:
+            k, d = x.split("=", 1)
+            if ":" in k:
+                sn, L = k.split(":", 1)
+                per.setdefault(sn, {})[int(L)] = d
+            else:
+                ov[int(k)] = d
         for i, q in enumerate(qs):
-            if q.name in tgt:
-                qs[i] = quantisers.Override(q, ov)
+            m = {**(ov if q.name in tgt else {}), **per.get(q.name, {})}
+            if m:
+                qs[i] = quantisers.Override(q, m)
                 qs[i].dev = dev
-        OVERRIDES.update({"streams": sorted(tgt), "layers": {L: {"dir": d, "sha256": quantisers.dir_sha(d, L)}
-                                                            for L, d in ov.items()}})
+        OVERRIDES.update({"streams": sorted(tgt) if ov else [], "layers": {L: {"dir": d, "sha256": quantisers.dir_sha(d, L)}
+                                                                          for L, d in ov.items()},
+                          "per_stream": {sn: {L: {"dir": d, "sha256": quantisers.dir_sha(d, L)} for L, d in m.items()}
+                                         for sn, m in per.items()}})
         log(f"expert overrides {OVERRIDES}")
     stats = [{"fallback": 0, "supplied": 0, "route_agree": {}, "local_rel_l2": {},
               "rel_div": {}} for _ in qs]
@@ -904,7 +913,7 @@ def main():
     r.add_argument("--dump-streams", default="", help="comma list of stream names to dump (fp8 = reference); default all")
     r.add_argument("--expert-override", action="append", default=[],
                    help="L=DIR: layer L's routed experts decoded (nq_fastdec) from DIR's E{E}.pt artifacts, at the "
-                        "level the stream's mix picks; applies to --override-streams")
+                        "level the stream's mix picks; applies to --override-streams.  STREAM:L=DIR: that stream only")
     r.add_argument("--override-streams", default="", help="comma list of candidate names (default: all candidates)")
     m = sub.add_parser("merge")
     m.add_argument("--tag", default="run")
