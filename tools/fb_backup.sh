@@ -8,11 +8,13 @@ EP=https://fb.harrisonai.io
 DST=s3://annalise-shared-prod/jarrel/nestquant
 SRC=/tmp/nestquant
 LOG=$SRC/fb_backup.log
+# 18-e2e bulk (farm_*, predecoded_{A,B,S,S2}, hdump*) is regenerable and excluded (5 TB bucket cap)
+EXCL=(--exclude "farm_*" --exclude "predecoded_A/*" --exclude "predecoded_B/*" --exclude "predecoded_S/*" --exclude "predecoded_S2/*" --exclude "hdump*")
 DIRS="corpus 21-traces trace-survey 02-feedback-conflict 04-decode-kernel 12-reference-encoder 13-moe-layer-kernel 14-level4-floor 15-level4-decode 16-bit-allocation 17-level2-margin 18-e2e glm53-fp8-experts"
 once() {
   for d in $DIRS; do
     [ -d $SRC/$d ] || continue
-    aws s3 sync --only-show-errors --endpoint-url $EP $SRC/$d $DST/$d >>$LOG 2>&1 \
+    aws s3 sync --only-show-errors "${EXCL[@]}" --endpoint-url $EP $SRC/$d $DST/$d >>$LOG 2>&1 \
       && echo "$(date -u +%FT%TZ) ok $d" >>$LOG || echo "$(date -u +%FT%TZ) FAIL $d" >>$LOG
   done
   # corpus tokens are small: also keep a copy on the home volume
