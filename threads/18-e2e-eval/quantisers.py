@@ -232,7 +232,7 @@ class Adapt(Base):
     def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
                  predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
                  oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None,
-                 gbdt_scale=None):
+                 gbdt_scale=None, fb=0):
         self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
         self.predictor, self.hm = predictor, float(hm)   # gbdt: streaming/gbdt_predictor.GBDTPredictor (see _core_gbdt)
         assert predictor in ("ema", "gbdt"), predictor
@@ -279,8 +279,11 @@ class Adapt(Base):
         self.delta = self.dtab.get("delta")
         if rank == "salrel" and ahead is not None:
             self.delta = self.dtab["drel"]
+        # fb=d (ahead arms, SM120 d039002 parity): the first d MoE layers have no lookahead source and take their
+        # upgrades from the previous chunk's actual routing (chunk 0: none)
+        self.fb = int(fb)
         self.needs_act = score != "count" or oracle is not None or gscale is not None or self.gbdt_v2 or \
-            gbdt_scale is not None
+            gbdt_scale is not None or self.fb > 0
         self.act_full = None
         self.la_full = None
         self.lo, self.hi = Dir(lo), Dir(hi)
@@ -530,12 +533,15 @@ class Adapt(Base):
         k = (torch.arange(T, device=dev) % seq) // R
         upg = None
         if self.ahead is not None:                                     # per-chunk upgrades from lookahead / oracle
-            li_, lw, lx = self._la
+            fbl = self.fb > 0 and layer < min(self.fixed) + self.fb
+            li_, lw, lx = self._act if fbl else self._la
             li_ = li_.long()
             v = self._slot_value(layer, self.rank, li_, lw, lx)
             sc = torch.zeros(N * nc, NE, dtype=torch.float64, device=dev)
             sc.index_put_(((n * nc + k)[:, None].expand_as(li_), li_), v, accumulate=True)
             sc = sc.view(N, nc, NE).masked_fill(fixed, 0.0)
+            if fbl:                                                    # previous chunk's routing
+                sc = torch.cat([torch.zeros_like(sc[:, :1]), sc[:, :-1]], 1)
             top = torch.sort(-sc, dim=-1, stable=True).indices[..., :self.up]
             U = torch.zeros_like(serve)
             U.scatter_(2, top, True)
