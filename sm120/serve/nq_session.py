@@ -38,7 +38,7 @@ try:
     from vllm.logger import init_logger;log=init_logger('vllm.nestquant')
 except Exception:log=logging.getLogger('nestquant')
 
-DEFAULT_ON='0'
+DEFAULT_ON='1'
 ON=os.environ.get('NQ_SESSION_RESTORE',DEFAULT_ON)=='1'
 CTL=os.environ.get('NQ_SR_CTL','/dev/shm/nq_sr_ctl')
 ASSISTANT=154828
@@ -128,7 +128,9 @@ class SessionRestore:
                     A['pf'].append((e[3],e[2]));A['rem']=e[2]
                     (t0,r0),(t1,r1)=A['pf'][0],A['pf'][-1]
                     if t1>t0 and r0>r1:A['tps']=(r0-r1)/(t1-t0)
-                    if A['pend_start'] and s._due(A,X):s._start(S,X,oplog)
+                    if A['pend_start']:
+                        A['ndiff']=int((A['tgt']['set']&(S.state==0)&~S.fixed).sum())   # live diff: prefill lookahead moves the set
+                        if s._due(A,X):s._start(S,X,oplog)
             elif k=='decode':
                 A=s.A
                 if A is not None and A['rid']==e[1] and A['t_dec'] is None:
@@ -158,7 +160,7 @@ class SessionRestore:
                 while len(s.store)>LRU:s.store.popitem(last=False)
             A['tgt']=s.store[key] if known else out
             A['own']=out              # the outgoing session's state (the unknown-session fallback restores this one)
-            T=A['tgt']['set'];A['ndiff']=int((T&(S.state==0)).sum());A['pend_start']=True
+            T=A['tgt']['set'];A['ndiff']=int((T&(S.state==0)&~S.fixed).sum());A['pend_start']=True
             if s._due(A,X):s._start(S,X,oplog)
         s.cur=key
     def _due(s,A,X):
