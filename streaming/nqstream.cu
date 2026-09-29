@@ -47,6 +47,9 @@ struct Engine {
     std::mutex mu; std::condition_variable cv; std::deque<Op*> q; std::vector<Op*> reading, copying;
     std::vector<std::tuple<int64_t, bool, double, double>> done; std::thread th; std::atomic<bool> stop{false};
     int64_t n_up = 0, n_post = 0, n_hit = 0, bytes = 0, n_inflight_read = 0;
+    // fault injection (C3 tests only): NQ_FAULT_READ_MS = minimum spacing between SSD reads (a slow drive, cap =
+    // rec_bytes / spacing), NQ_FAULT_FAIL_PPM = share of completed reads reported as failed (a failing drive)
+    double fault_gap = 0, next_ok = 0; int64_t fault_ppm = 0, n_fault = 0; uint64_t frng = 88172645463325252ull;
 
     Engine(std::string path, int64_t rec_bytes, int64_t n_host, int64_t qd_, int64_t device) : dev(device), qd(qd_), rb(rec_bytes), nh(n_host)
     {
@@ -60,6 +63,8 @@ struct Engine {
         ent_rec.assign(nh, -1); ent_pin.assign(nh, 0); lru_it.resize(nh);
         for (int i = 0; i < nh; ++i) { lru.push_back(i); lru_it[i] = std::prev(lru.end()); }
         TORCH_CHECK(io_uring_queue_init(qd, &ring, 0) == 0, "io_uring_queue_init");
+        if (const char* v = getenv("NQ_FAULT_READ_MS")) fault_gap = atof(v) * 1e-3;
+        if (const char* v = getenv("NQ_FAULT_FAIL_PPM")) fault_ppm = atoll(v);
         th = std::thread([this] { loop(); });
     }
     ~Engine() { close(); }
@@ -93,7 +98,7 @@ struct Engine {
     {
         std::lock_guard<std::mutex> g(mu); py::dict d;
         d["upgrades"] = n_up; d["posts"] = n_post; d["host_hits"] = n_hit; d["bytes_read"] = bytes;
-        d["queued"] = (int64_t)q.size(); d["reading"] = (int64_t)reading.size(); d["copying"] = (int64_t)copying.size();
+        d["fault_injected"] = n_fault; d["queued"] = (int64_t)q.size(); d["reading"] = (int64_t)reading.size(); d["copying"] = (int64_t)copying.size();
         return d;
     }
     // ---- worker thread ----
@@ -144,19 +149,20 @@ struct Engine {
                 delete o; copying[i] = copying.back(); copying.pop_back();
             }
             // start ops in arrival order (per-expert order matters: the host keeps one outstanding op per expert)
-            bool sub = false;
+            bool sub = false, throttled = false;
             while (!ready.empty() && !ring_free.empty()) { issue_copies(ready.front()); ready.pop_front(); }
             while (ready.empty() && !wait_entry.empty() && !ring_free.empty())
             {
                 Op* o = wait_entry.front();
                 if (!o->read) { wait_entry.pop_front(); o->t_rd = o->t0; issue_copies(o); n_post++; continue; }
                 if ((int)reading.size() >= qd) break;
+                if (fault_gap > 0 && !where.count(o->rec) && now() < next_ok) { throttled = true; break; }
                 bool hit; int e = take_entry(o->rec, hit); if (e < 0) break;
                 wait_entry.pop_front(); o->entry = e; o->hit = hit; n_up++;
                 if (hit) { n_hit++; o->t_rd = now(); issue_copies(o); continue; }
                 io_uring_sqe* sqe = io_uring_get_sqe(&ring);
                 io_uring_prep_read(sqe, fd, host + (size_t)e * rb, rb, (uint64_t)o->rec * rb);
-                io_uring_sqe_set_data(sqe, o); reading.push_back(o); sub = true;
+                io_uring_sqe_set_data(sqe, o); reading.push_back(o); sub = true; if (fault_gap > 0) next_ok = now() + fault_gap;
             }
             if (sub) io_uring_submit(&ring);
             // reap reads
@@ -167,7 +173,9 @@ struct Engine {
             {
                 Op* o = (Op*)io_uring_cqe_get_data(cqe); ++n;
                 for (size_t i = 0; i < reading.size(); ++i) if (reading[i] == o) { reading[i] = reading.back(); reading.pop_back(); break; }
-                if (cqe->res != (int)rb)
+                bool inj = false;
+                if (fault_ppm) { frng ^= frng << 13; frng ^= frng >> 7; frng ^= frng << 17; inj = (int64_t)(frng % 1000000) < fault_ppm; n_fault += inj; }
+                if (cqe->res != (int)rb || inj)
                 {   // failed read: the expert stays at level 2 (row never posted); report with t_read < 0
                     ent_pin[o->entry]--; std::lock_guard<std::mutex> g(mu); done.emplace_back(o->tag, false, (double)std::min(cqe->res, -1), -1.0); delete o; continue;
                 }
@@ -176,6 +184,7 @@ struct Engine {
             }
             if (n) io_uring_cq_advance(&ring, n);
             if (!n && reading.empty() && !copying.empty()) usleep(20);   // copies in flight only: don't spin a core
+            if (throttled && !n) usleep(200);
         }
         // drain
         while (!reading.empty()) { io_uring_cqe* c; if (io_uring_wait_cqe(&ring, &c)) break; Op* o = (Op*)io_uring_cqe_get_data(c); io_uring_cqe_seen(&ring, c);
