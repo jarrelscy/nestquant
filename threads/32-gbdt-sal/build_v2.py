@@ -7,12 +7,14 @@ from multiprocessing import Pool  # noqa: E402
 import numpy as np  # noqa: E402
 import t32lib as T  # noqa: E402
 corpus = sys.argv[1]
-out = f"{T.OUT}/rows_v2/{corpus}"
+band = os.environ.get("T32_BAND", "")
+sfx = "_band" + band if band else ""
+out = f"{T.OUT}/rows_v2{sfx}/{corpus}"
 os.makedirs(out, exist_ok=True)
 
 
 def job(L):
-    d = np.load(f"{T.OUT}/rows/{corpus}/L{L}.npz")
+    d = np.load(f"{T.OUT}/rows{sfx}/{corpus}/L{L}.npz")
     np.savez(f"{out}/L{L}.npz", X2=T.v2_features(d["bcnt"], d["bsal"], d["cand"]))
     return L
 

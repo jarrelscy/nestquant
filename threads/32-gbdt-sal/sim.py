@@ -35,7 +35,8 @@ def oracle_serve(M, fx, nbc):
 
 def job(L):
     import lightgbm as lgb
-    d = np.load(f"{T.OUT}/rows/{corpus}/L{L}.npz")
+    band = os.environ.get("T32_BAND", "")
+    d = np.load(f"{T.OUT}/rows{'_band' + band if band else ''}/{corpus}/L{L}.npz")
     fx = np.zeros(256, bool); fx[fixed[L]] = True
     bc, bs = d["bcnt"].astype(np.float64), d["bsal"].astype(np.float64)
     nf = ~fx
@@ -48,16 +49,16 @@ def job(L):
         scale = path.endswith("@mps")            # gbdt x EMA128 salience/hit (D3 gbdt_x_sal analogue, no delta)
         path = path.removesuffix("@mps")
         b = lgb.Booster(model_file=path)
-        if b.num_feature() > 5 or scale:
-            if X2 is None:
-                X2 = np.load(f"{T.OUT}/rows_v2/{corpus}/L{L}.npz")["X2"]
-        Xm = np.concatenate([d["X"], X2[..., :b.num_feature() - 5]], -1).reshape(-1, b.num_feature()) \
-            if b.num_feature() > 5 else X
+        if scale and X2 is None:
+            X2 = np.load(f"{T.OUT}/rows_v2{'_band' + band if band else ''}/{corpus}/L{L}.npz")["X2"]
+        names = b.feature_name()
+        Xm = X if tuple(names) == T.FEATS5 else T.feature_matrix(names, corpus, L, band=band, d=d)
         pred = b.predict(Xm, num_threads=1)
         if scale:
             pred = pred * X2[..., 3].ravel()
         S = T.score_blocks(pred, d["cand"], d["top"], d["e256"])
-        sets[name] = T.sim_layer(S, fixed[L], fdef[L])
+        sets[name] = T.sim_layer(S, fixed[L], fdef[L], hm=float(os.environ.get("T32_HM", "0.5")),
+                                   lag=int(os.environ.get("T32_LAG", "1")))
     if oracles:
         nbc = T.CHAIN * T.SEQ // T.G
         sets["orc_count"] = oracle_serve(bc, fx, nbc)
@@ -77,4 +78,4 @@ if __name__ == "__main__":
         print(f"{n:20s} nonfixed-sal covered {summ[n]['sal']:.4f}  hits covered {summ[n]['cnt']:.4f}  "
               f"churn/refresh {summ[n]['churn']:.2f}")
     json.dump({"corpus": corpus, "models": models, "summary": summ, "per_layer": res},
-              open(f"{T.OUT}/sim_{corpus}.json", "w"), indent=1)
+              open(f"{T.OUT}/sim_{corpus}{os.environ.get('T32_TAG', '')}.json", "w"), indent=1)

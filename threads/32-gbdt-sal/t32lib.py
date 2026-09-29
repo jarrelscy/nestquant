@@ -95,9 +95,9 @@ def block_mats(ids, w, xn, seg):
     return cnt, cnta, nans, sal, seg_last
 
 
-def chain_features(L, fixed, cnt, cnta, nans, seg_last):
+def chain_features(L, fixed, cnt, cnta, nans, seg_last, rlo=20, rhi=121):
     """drive GBDTPredictor's own block code over one chain -> X [nb, 101, 5], cand [nb,101], top [nb,20], e256top."""
-    P = GBDTPredictor([L], {L: fixed[L]}, mode="sync", num_threads=1)
+    P = GBDTPredictor([L], {L: fixed[L]}, mode="sync", num_threads=1, rlo=rlo, rhi=rhi)
     nb = cnt.shape[0]
     Xs, Cs, Ts, Es = [], [], [], []
     for k in range(nb):
@@ -105,7 +105,7 @@ def chain_features(L, fixed, cnt, cnta, nans, seg_last):
         P.seg = int(seg_last[k])
         P._close_block()
         X, cand, top, e256 = P._features()
-        Xs.append(X); Cs.append(cand[0]); Ts.append(top[0]); Es.append(e256[0, top[0]])
+        Xs.append(X); Cs.append(cand[0]); Ts.append(top[0]); Es.append(e256[0, top[0]] if top.shape[1] else e256[0, :0])
     P.close()
     return (np.stack(Xs).reshape(nb, -1, 5), np.stack(Cs).astype(np.uint8), np.stack(Ts).astype(np.uint8),
             np.stack(Es).astype(np.float32))
@@ -123,7 +123,7 @@ def future_sum(M, nb_chain):
     return F
 
 
-def build_layer(L, corpus, fixed, out_dir):
+def build_layer(L, corpus, fixed, out_dir, rlo=20, rhi=121):
     ids, w, xn = load_layer(L, corpus)
     T = ids.shape[0]
     tok = tokens(corpus, T // SEQ)
@@ -133,7 +133,7 @@ def build_layer(L, corpus, fixed, out_dir):
     res = {k: [] for k in ("X", "cand", "top", "e256", "ycnt", "ysal", "valid", "bcnt", "bsal")}
     for c0 in range(0, cnt.shape[0], nbc):
         s = slice(c0, min(c0 + nbc, cnt.shape[0]))
-        X, cand, top, e = chain_features(L, fixed, cnt[s], cnta[s], nans[s], seg_last[s])
+        X, cand, top, e = chain_features(L, fixed, cnt[s], cnta[s], nans[s], seg_last[s], rlo, rhi)
         Fc, Fs = future_sum(cnt[s], cnt[s].shape[0]), future_sum(sal[s], sal[s].shape[0])
         res["X"].append(X); res["cand"].append(cand); res["top"].append(top); res["e256"].append(e)
         res["ycnt"].append(np.take_along_axis(Fc, cand.astype(np.int64), 1).astype(np.float32))
@@ -149,7 +149,7 @@ def build_layer(L, corpus, fixed, out_dir):
 
 
 # --------------------------------------------------------------------------------------------- offline sim
-def sim_layer(S_blocks, fixed_L, fdef_L, nf=51, hm=0.5, nbc=CHAIN * SEQ // G):
+def sim_layer(S_blocks, fixed_L, fdef_L, nf=51, hm=0.5, nbc=CHAIN * SEQ // G, lag=1):
     """exact replay of Adapt._core_gbdt (next_refresh, hysteresis) from precomputed per-block score matrices.
     S_blocks [nb, NE] float32 = GBDTPredictor._score output at the end of block b.  -> serve [nb, NE] bool (floating
     set serving block k; fixed excluded)."""
@@ -161,8 +161,8 @@ def sim_layer(S_blocks, fixed_L, fdef_L, nf=51, hm=0.5, nbc=CHAIN * SEQ // G):
         want = fd.copy()
         for k in range(c0, min(c0 + nbc, nb)):
             serve[k] = want
-            if k - c0 >= 1:                             # block k closes: apply S of block k-1
-                S = S_blocks[k - 1]
+            if k - c0 >= lag:                           # block k closes: apply S of block k-1 (lag 0: sync, S of k)
+                S = S_blocks[k - lag]
                 v = np.where(fixed, -np.inf, S).astype(np.float32)
                 r = want & ~fixed
                 v = np.where(r, v * np.float32(1 + hm), v)
@@ -215,3 +215,32 @@ def v2_features(bcnt, bsal, cand, nbc=CHAIN * SEQ // G):
             h = Ec[1][ci]
             out[k, :, 3] = np.where(h > 1e-3, Es[1][ci] / np.maximum(h, 1e-30) / norm, 1.0)
     return out
+
+
+FEATS5 = ("ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16")
+FEATS_V3 = ("pema32", "pema128", "p16", "nmema32", "nmema128", "nm16", "mgema32", "mg16")   # build_v3.py
+
+
+def feature_matrix(names, corpus, L, band="", valid=False, d=None):
+    """[rows, len(names)] float32 in the named order from rows / rows_v2 / rows_v3 (all [nb, ncand, k])."""
+    sfx = "_band" + band if band else ""
+    d = d if d is not None else np.load(f"{OUT}/rows{sfx}/{corpus}/L{L}.npz")
+    src = {}
+    for i, n in enumerate(FEATS5):
+        src[n] = ("X", i)
+    for i, n in enumerate(FEATS_V2):
+        src[n] = ("X2", i)
+    for i, n in enumerate(FEATS_V3):
+        src[n] = ("X3", i)
+    need = {src[n][0] for n in names}
+    arr = {"X": d["X"]}
+    if "X2" in need:
+        arr["X2"] = np.load(f"{OUT}/rows_v2{sfx}/{corpus}/L{L}.npz")["X2"]
+    if "X3" in need:
+        assert not band, "rows_v3 only on the default band"
+        arr["X3"] = np.load(f"{OUT}/rows_v3/{corpus}/L{L}.npz")["X3"]
+    cols = [arr[src[n][0]][..., src[n][1]] for n in names]
+    M = np.stack(cols, -1)
+    if valid:
+        M = M[d["valid"]]
+    return M.reshape(-1, len(names)).astype(np.float32)

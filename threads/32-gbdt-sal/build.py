@@ -12,13 +12,15 @@ import t32lib as T  # noqa: E402
 corpus = sys.argv[1]
 nproc = int(sys.argv[2]) if len(sys.argv) > 2 else 38
 fixed, _ = T.serve_sets()
-out = f"{T.OUT}/rows/{corpus}"
+band = os.environ.get("T32_BAND", "")            # "all": score every non-fixed expert (rlo 0: nothing forced),
+RLO, RHI = {"": (20, 121), "all": (0, 256), "all20": (20, 256)}[band]   # all20: forced top-20 + rest scored
+out = f"{T.OUT}/rows{'_band' + band if band else ''}/{corpus}"
 
 
 def job(L):
     if os.path.exists(f"{out}/L{L}.npz"):
         return L, "exists"
-    return T.build_layer(L, corpus, fixed, out)
+    return T.build_layer(L, corpus, fixed, out, RLO, RHI)
 
 
 if __name__ == "__main__":
