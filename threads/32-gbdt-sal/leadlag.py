@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """T32 cross-layer lead-lag (Granger-style) test: does routing drift show up in some layer bands before others?
-Per layer L, per 16-token block t (within chain), salience share histogram s_L(t) (bsal row-normalised):
-  recent change  r_L(t) = mean s_L(t-3..t) - mean s_L(t-7..t-4)                (last 64 vs previous 64 tokens)
-  future change  f_L(t) = mean s_L(t+a..t+b) - mean s_L(t-7..t)                 (near: blocks t+1..t+2;
+Per layer L, per 16-token block t (within chain), salience share histogram s_L(t) (bsal row-normalised),
+causal EMAs e64 / e1024 (half-life 64 / 1024 tokens, chain reset):
+  recent change  r_L(t) = e64(t) - e64(t-4)                                      (drift over the last 64 tokens)
+  level          v_L(t) = e64(t) - e1024(t)                                      (deviation from the long mean)
+  future change  f_L(t) = mean s_L(t+a..t+b) - e64(t)                            (near: blocks t+1..t+2;
                                                                                  far: t+5..t+8; all: t+1..t+8)
-Per layer PCA-16 bases of r and f fitted on calib-fit.  For target layer L in band B, ridge regressions (fit calib-fit,
-R^2 on glm52-heldout, of the 16 f-components, variance-weighted):
-  own     : r of layer L itself
-  own+A   : + r of every layer in band A (A != B: other band; A = B: the rest of B)
-  A only  : r of band A layers only
+Per layer PCA-K bases of r, v, f fitted on calib-fit.  For target layer L in band B, ridge regressions (lambda by
+chain-parity CV on calib-fit; fit calib-fit, R^2 on glm52-heldout, of the K f-components, variance-weighted):
+  own     : (r, v) of layer L itself
+  own+A   : + (r, v) of every layer in band A (A != B: other band; A = B: the rest of B)
+  A only  : (r, v) of band A layers only
 lead of A on B = R^2(own+A) - R^2(own)  (> 0 = A's recent change carries information about B's future drift beyond
 B's own recent change).  Output $OUT/leadlag.json + table."""
 import json
@@ -24,8 +26,8 @@ NBC = T.CHAIN * T.SEQ // T.G
 BANDS = {"L3-6": range(3, 7), "L7-20": range(7, 21), "L21-40": range(21, 41), "L41-60": range(41, 61),
          "L61-77": range(61, 78)}
 HZ = {"near": (1, 2), "far": (5, 8), "all": (1, 8)}
-K = 16
-LAM = float(os.environ.get("LAM", "10.0"))
+K = int(os.environ.get("K", "8"))
+LAMS = (1e-3, 1e-2, 1e-1, 1.0, 10.0)
 
 
 def shares(corpus, L):
@@ -49,11 +51,26 @@ def win_mean(S, a, b):
     return out
 
 
+def cema(S, h):
+    from scipy.signal import lfilter
+    a = 0.5 ** (T.G / h)
+    E = np.empty(S.shape)
+    for c0 in range(0, S.shape[0], NBC):
+        x = S[c0:c0 + NBC]
+        z = lfilter([1 - a], [1.0, -a], x - x[0], axis=0) + x[0]       # start at the first block (no zero bias)
+        E[c0:c0 + NBC] = z
+    return E
+
+
 def changes(corpus, L):
     s = shares(corpus, L)
-    r = win_mean(s, -3, 0) - win_mean(s, -7, -4)
-    past = win_mean(s, -7, 0)
-    f = {h: win_mean(s, a, b) - past for h, (a, b) in HZ.items()}
+    e64, e1024 = cema(s, 64), cema(s, 1024)
+    lag = np.full(s.shape, np.nan)
+    for c0 in range(0, s.shape[0], NBC):
+        n = min(NBC, s.shape[0] - c0)
+        lag[c0 + 4:c0 + n] = e64[c0:c0 + n - 4]
+    r = np.hstack([e64 - lag, e64 - e1024])          # [nb, 2*NE]: drift, level
+    f = {h: win_mean(s, a, b) - e64 for h, (a, b) in HZ.items()}
     return r, f
 
 
@@ -64,13 +81,26 @@ def pca(X):
     return mu, Vt[:K].T
 
 
-def ridge_r2(Xtr, Ytr, Xte, Yte):
-    mx, my = Xtr.mean(0), Ytr.mean(0)
-    sx = Xtr.std(0) + 1e-12
-    A = (Xtr - mx) / sx; B = (Xte - mx) / sx
-    W = np.linalg.solve(A.T @ A + LAM * len(A) / 1000 * np.eye(A.shape[1]), A.T @ (Ytr - my))
-    P = B @ W + my
-    return 1.0 - ((Yte - P) ** 2).sum() / ((Yte - Yte.mean(0)) ** 2).sum()
+def _fits(A, Y, lams):
+    """ridge for several lambdas sharing one Gram matrix -> list of predictors."""
+    mx, my = A.mean(0), Y.mean(0)
+    sx = A.std(0) + 1e-12
+    Z = (A - mx) / sx
+    G, b = Z.T @ Z, Z.T @ (Y - my)
+    Ws = [np.linalg.solve(G + lam * len(Z) * np.eye(G.shape[0]), b) for lam in lams]
+    return [(lambda B, W=W: ((B - mx) / sx) @ W + my) for W in Ws]
+
+
+def _r2(Y, P):
+    return 1.0 - ((Y - P) ** 2).sum() / ((Y - Y.mean(0)) ** 2).sum()
+
+
+def ridge_r2(Xtr, Ytr, Xte, Yte, par):
+    sc = np.zeros(len(LAMS))
+    for f in (0, 1):
+        for j, p in enumerate(_fits(Xtr[par != f], Ytr[par != f], LAMS)):
+            sc[j] += _r2(Ytr[par == f], p(Xtr[par == f]))
+    return _r2(Yte, _fits(Xtr, Ytr, [LAMS[int(np.argmax(sc))]])[0](Xte))
 
 
 if __name__ == "__main__":
@@ -78,10 +108,12 @@ if __name__ == "__main__":
     F = {c: {} for c in R}
     for L in T.LAYERS:
         rc, fc = changes("calib-fit", L)
-        mu_r, V_r = pca(rc)
-        R["calib-fit"][L] = (rc - mu_r) @ V_r
         rh, fh = changes("glm52-heldout", L)
-        R["glm52-heldout"][L] = (rh - mu_r) @ V_r
+        parts_c, parts_h = [], []
+        for sl in (slice(0, T.NE), slice(T.NE, 2 * T.NE)):
+            mu_r, V_r = pca(rc[:, sl])
+            parts_c.append((rc[:, sl] - mu_r) @ V_r); parts_h.append((rh[:, sl] - mu_r) @ V_r)
+        R["calib-fit"][L] = np.hstack(parts_c); R["glm52-heldout"][L] = np.hstack(parts_h)
         for h in HZ:
             mu_f, V_f = pca(fc[h])
             F["calib-fit"].setdefault(h, {})[L] = (fc[h] - mu_f) @ V_f
@@ -98,6 +130,7 @@ if __name__ == "__main__":
     res = {}
     for h in HZ:
         mtr, mte = valid("calib-fit", h), valid("glm52-heldout", h)
+        par = ((np.arange(len(mtr)) // NBC) % 2)[mtr]
         for bn, bl in BANDS.items():
             for an, al in BANDS.items():
                 own, both, only = [], [], []
@@ -107,9 +140,9 @@ if __name__ == "__main__":
                     Xo_tr, Xo_te = R["calib-fit"][L][mtr], R["glm52-heldout"][L][mte]
                     Xa_tr = np.hstack([R["calib-fit"][J][mtr] for J in src])
                     Xa_te = np.hstack([R["glm52-heldout"][J][mte] for J in src])
-                    own.append(ridge_r2(Xo_tr, Ytr, Xo_te, Yte))
-                    both.append(ridge_r2(np.hstack([Xo_tr, Xa_tr]), Ytr, np.hstack([Xo_te, Xa_te]), Yte))
-                    only.append(ridge_r2(Xa_tr, Ytr, Xa_te, Yte))
+                    own.append(ridge_r2(Xo_tr, Ytr, Xo_te, Yte, par))
+                    both.append(ridge_r2(np.hstack([Xo_tr, Xa_tr]), Ytr, np.hstack([Xo_te, Xa_te]), Yte, par))
+                    only.append(ridge_r2(Xa_tr, Ytr, Xa_te, Yte, par))
                 res[f"{h}|{an}->{bn}"] = dict(own=float(np.mean(own)), own_plus_A=float(np.mean(both)),
                                               A_only=float(np.mean(only)), lead=float(np.mean(both) - np.mean(own)))
             print(h, bn, "own R2 %.4f" % res[f"{h}|{bn}->{bn}"]["own"], flush=True)
