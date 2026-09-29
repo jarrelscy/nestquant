@@ -102,6 +102,11 @@ def job(L):
         arms[f"orc_h{16 * n}"] = replay(O[n], fx, fd)
     for n in (1, 4, 16):
         arms[f"past_h{16 * n}"] = replay(past(bs, n), fx, fd)
+    # local-rate oracles: true salience in a window centred on the served blocks (rate knowledge, less realisation
+    # noise of the specific next tokens): past 128 + next 128 / past 512 + next 512
+    arms["orc_c256"] = replay(past(bs, 8) + O[8], fx, fd)
+    arms["orc_c1024"] = replay(past(bs, 32) + fut(bs, 32), fx, fd)
+    arms["orc_h64_hm_cap3"] = replay(O[4], fx, fd, hm=0.5, cap=3)
     # refresh timing (decision every r blocks; oracle window = max(r, 4) blocks ahead)
     for r in (2, 4, 8):
         arms[f"orc_r{16 * r}"] = replay(O[max(r, 4)] if r <= 4 else O[r], fx, fd, r=r)
