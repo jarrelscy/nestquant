@@ -11,7 +11,7 @@ tags:
 
 GLM-5.3 with its routed experts quantized to NestQuant, a nested 2/4-bit format. Every expert has a 2-bit base and an optional 4-bit residual plane. At serving time an expert can be switched from 2 bit to 4 bit by loading its residual plane on top of the base. The base bytes do not change.
 
-**Status: encoding in progress.** Layers are uploaded as they finish. This repo cannot be loaded with stock vLLM or transformers yet; a serving kernel and loader will be published separately.
+**Status: encoding complete (all 75 expert layers, 19,200 experts).** This repo cannot be loaded with stock vLLM or transformers yet; a serving kernel and loader will be published separately.
 
 ## Contents
 
@@ -37,14 +37,14 @@ Files:
 
 ## Quality
 
-Relative output error of individual experts against FP8, compared with EXL3 on the same calibration data (48 experts across layers 3-77; negative is better):
+Relative output error of individual experts against FP8, compared with EXL3 on the same calibration data (150 experts, two per layer across layers 3-77: one from the default 4-bit set and one other; negative is better):
 
 | Level | Mean vs EXL3 | Worst expert |
 |---|---|---|
-| 4 bit | -5.3% | +2.9% |
-| 2 bit | +2.0% | +16% |
+| 4 bit | -5.1% | +6.6% |
+| 2 bit | +1.5% | +18% |
 
-End-to-end model evaluations will be added when encoding is complete.
+At 2 bit, layers 3-6 are the weakest (mean +10% vs EXL3); layers 7-77 average +1.0%. End-to-end model evaluations are in progress and will be added here.
 
 ## Default 4-bit set
 
