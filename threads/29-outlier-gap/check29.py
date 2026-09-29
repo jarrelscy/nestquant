@@ -90,9 +90,16 @@ def main():
     # (m) metadata, every layer present
     for L in man["layers_present"]:
         blk = json.load(open(f"{T}/layers/L{L}.json"))
-        _, rman, _ = NR.layer_src(ref, L)
-        want = int(rman["config"].get("in_had_down", 128))
         got_m = int(man.get("in_had_down", {}).get(str(L), 128)); got_b = int(blk["source"].get("in_had_down", 128))
+        try:
+            _, rman, _ = NR.layer_src(ref, L)
+        except FileNotFoundError:            # partial download: reference layer absent -> serving manifest vs block only
+            if L in Ls:
+                bad(f"L{L}: reference layer manifest missing under {ref}")
+            elif got_m != got_b:
+                bad(f"L{L}: (m) in_had_down serving manifest {got_m} / layer block {got_b}")
+            continue
+        want = int(rman["config"].get("in_had_down", 128))
         if not (want == got_m == got_b):
             bad(f"L{L}: (m) in_had_down reference {want} / serving manifest {got_m} / layer block {got_b}")
     print(f"(m) in_had_down metadata checked on {len(man['layers_present'])} layers "
