@@ -230,10 +230,13 @@ class Adapt(Base):
 
     def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
                  predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
-                 oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128):
+                 oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None):
         self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
         self.predictor, self.hm = predictor, float(hm)   # gbdt: streaming/gbdt_predictor.GBDTPredictor (see _core_gbdt)
         assert predictor in ("ema", "gbdt"), predictor
+        # T32: gbdt_model=PATH swaps the LightGBM tree file (same 5 features; e.g. the salience-target retrain)
+        self.gbdt_model = gbdt_model
+        assert gbdt_model is None or (predictor == "gbdt" and os.path.exists(gbdt_model)), gbdt_model
         if chunk is not None:            # chunked prefill: tokens [kC,(k+1)C) served by the EMA set through chunk k-1
             refresh, lag = int(chunk), 0
         # per-chunk upgrades (chunked-prefill lookahead arms): chunk k additionally serves at level 4 the top-`up`
@@ -402,7 +405,8 @@ class Adapt(Base):
             del sv, hv, Cs, Ch
         churn = []
         for n in range(N):
-            P = GBDTPredictor([layer], {layer: self.fixed[layer]}, n_float=self.nf, hm=self.hm, mode="next_refresh",
+            P = GBDTPredictor([layer], {layer: self.fixed[layer]}, model_path=getattr(self, "gbdt_model", None),
+                              n_float=self.nf, hm=self.hm, mode="next_refresh",
                               num_threads=int(os.environ.get("NQ_GBDT_THREADS", "4")))
             want = fdef.copy()
             try:
