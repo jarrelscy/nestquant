@@ -49,11 +49,10 @@ def job(L):
         scale = path.endswith("@mps")            # gbdt x EMA128 salience/hit (D3 gbdt_x_sal analogue, no delta)
         path = path.removesuffix("@mps")
         b = lgb.Booster(model_file=path)
-        if b.num_feature() > 5 or scale:
-            if X2 is None:
-                X2 = np.load(f"{T.OUT}/rows_v2{'_band' + band if band else ''}/{corpus}/L{L}.npz")["X2"]
-        Xm = np.concatenate([d["X"], X2[..., :b.num_feature() - 5]], -1).reshape(-1, b.num_feature()) \
-            if b.num_feature() > 5 else X
+        if scale and X2 is None:
+            X2 = np.load(f"{T.OUT}/rows_v2{'_band' + band if band else ''}/{corpus}/L{L}.npz")["X2"]
+        names = b.feature_name()
+        Xm = X if tuple(names) == T.FEATS5 else T.feature_matrix(names, corpus, L, band=band, d=d)
         pred = b.predict(Xm, num_threads=1)
         if scale:
             pred = pred * X2[..., 3].ravel()

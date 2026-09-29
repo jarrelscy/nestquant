@@ -215,3 +215,32 @@ def v2_features(bcnt, bsal, cand, nbc=CHAIN * SEQ // G):
             h = Ec[1][ci]
             out[k, :, 3] = np.where(h > 1e-3, Es[1][ci] / np.maximum(h, 1e-30) / norm, 1.0)
     return out
+
+
+FEATS5 = ("ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16")
+FEATS_V3 = ("pema32", "pema128", "p16", "nmema32", "nmema128", "nm16", "mgema32", "mg16")   # build_v3.py
+
+
+def feature_matrix(names, corpus, L, band="", valid=False, d=None):
+    """[rows, len(names)] float32 in the named order from rows / rows_v2 / rows_v3 (all [nb, ncand, k])."""
+    sfx = "_band" + band if band else ""
+    d = d if d is not None else np.load(f"{OUT}/rows{sfx}/{corpus}/L{L}.npz")
+    src = {}
+    for i, n in enumerate(FEATS5):
+        src[n] = ("X", i)
+    for i, n in enumerate(FEATS_V2):
+        src[n] = ("X2", i)
+    for i, n in enumerate(FEATS_V3):
+        src[n] = ("X3", i)
+    need = {src[n][0] for n in names}
+    arr = {"X": d["X"]}
+    if "X2" in need:
+        arr["X2"] = np.load(f"{OUT}/rows_v2{sfx}/{corpus}/L{L}.npz")["X2"]
+    if "X3" in need:
+        assert not band, "rows_v3 only on the default band"
+        arr["X3"] = np.load(f"{OUT}/rows_v3/{corpus}/L{L}.npz")["X3"]
+    cols = [arr[src[n][0]][..., src[n][1]] for n in names]
+    M = np.stack(cols, -1)
+    if valid:
+        M = M[d["valid"]]
+    return M.reshape(-1, len(names)).astype(np.float32)

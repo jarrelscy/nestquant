@@ -117,6 +117,7 @@ def cmd_prep(a):
 
 
 WIN_IDS = []
+CORPUS_DIR = os.environ.get("NQ_CORPUS_DIR", f"{OUT}/corpora")   # T32: private token-id corpora outside NQ_OUT
 SHARD = os.environ.get("NQ_SHARD", "stride")
 OVERRIDES = {}
 
@@ -124,7 +125,7 @@ OVERRIDES = {}
 def load_windows(names, max_windows):
     seqs, groups, shas = [], [], []
     for g, n in enumerate(names):
-        ids = np.load(f"{OUT}/corpora/{n}.npy")
+        ids = np.load(f"{CORPUS_DIR}/{n}.npy")
         nw = len(ids) // SEQ
         if max_windows:
             nw = min(nw, max_windows)
