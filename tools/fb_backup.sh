@@ -1,17 +1,21 @@
 #!/bin/bash
 # NestQuant restart insurance: mirror small/medium /tmp/nestquant state to flashblade S3.
 # Capture outputs (19-capture*) are backed up per completed layer by thread 19, not here.
-# GLM FP8 source (src/) is not backed up: re-download with hf download zai-org/GLM-5.3-FP8.
+# GLM FP8 source (src/) is not backed up: re-download with hf download zai-org/GLM-5.3 --revision aca966e4e02791568aa6a4ced368624b3d897f42.
 # Usage: fb_backup.sh [--loop]   (loop = every 30 min, single owner via flock)
 export PATH=$HOME/.local/bin:$PATH AWS_PROFILE=flashblade AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 EP=https://fb.harrisonai.io
 DST=s3://annalise-shared-prod/jarrel/nestquant
 SRC=/tmp/nestquant
 LOG=$SRC/fb_backup.log
+# 32-gbdt-sal holds PRIVATE traces: flashblade (internal) only, user OK 2026-09-30; rows_* regenerable, excluded
 # 18-e2e bulk (farm_*, predecoded_{A,B,S,S2}, hdump*) is regenerable and excluded (5 TB bucket cap)
-EXCL=(--exclude "farm_*" --exclude "predecoded_A/*" --exclude "predecoded_B/*" --exclude "predecoded_S/*" --exclude "predecoded_S2/*" --exclude "hdump*")
-DIRS="corpus 21-traces trace-survey 02-feedback-conflict 04-decode-kernel 12-reference-encoder 13-moe-layer-kernel 14-level4-floor 15-level4-decode 16-bit-allocation 17-level2-margin 18-e2e glm53-fp8-experts"
+EXCL=(--exclude "farm_*" --exclude "predecoded_A/*" --exclude "predecoded_B/*" --exclude "predecoded_S/*" --exclude "predecoded_S2/*" --exclude "hdump*" --exclude "rows_*" --exclude "*.tmp")
+DIRS="corpus 21-traces trace-survey 02-feedback-conflict 04-decode-kernel 12-reference-encoder 13-moe-layer-kernel 14-level4-floor 15-level4-decode 16-bit-allocation 17-level2-margin 18-e2e glm53-fp8-experts 32-gbdt-sal"
 once() {
+  # 5 TB bucket cap (user 2026-09-29): skip the round if the bucket is already over 4.8 TB
+  tot=$(aws s3 ls --recursive --summarize --endpoint-url $EP $DST/ 2>/dev/null | awk '/Total Size/{print $3}')
+  if [ -n "$tot" ] && [ "$tot" -gt 4800000000000 ]; then echo "$(date -u +%FT%TZ) SKIP bucket at $tot bytes" >>$LOG; return; fi
   for d in $DIRS; do
     [ -d $SRC/$d ] || continue
     aws s3 sync --only-show-errors "${EXCL[@]}" --endpoint-url $EP $SRC/$d $DST/$d >>$LOG 2>&1 \
