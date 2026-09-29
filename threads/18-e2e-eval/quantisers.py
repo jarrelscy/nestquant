@@ -230,13 +230,25 @@ class Adapt(Base):
 
     def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
                  predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
-                 oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None):
+                 oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None,
+                 gbdt_scale=None):
         self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
         self.predictor, self.hm = predictor, float(hm)   # gbdt: streaming/gbdt_predictor.GBDTPredictor (see _core_gbdt)
         assert predictor in ("ema", "gbdt"), predictor
         # T32: gbdt_model=PATH swaps the LightGBM tree file (same 5 features; e.g. the salience-target retrain)
         self.gbdt_model = gbdt_model
         assert gbdt_model is None or (predictor == "gbdt" and os.path.exists(gbdt_model)), gbdt_model
+        # T32 v2 (streaming/gbdt_predictor_v2.py): 9-feature salience model, or gbdt_scale=mps (hits x EMA128 sal/hit);
+        # fed per-step sal[e] = sum w^2 |x|^2 from the stream's own routing (act_full)
+        self.gbdt_v2 = False
+        if gbdt_model is not None:
+            with open(gbdt_model) as fh:
+                for ln in fh:
+                    if ln.startswith("feature_names="):
+                        self.gbdt_v2 = len(ln.split("=", 1)[1].split()) > 5
+                        break
+        self.gbdt_scale = gbdt_scale
+        assert gbdt_scale in (None, "mps") and (gbdt_scale is None or predictor == "gbdt"), gbdt_scale
         if chunk is not None:            # chunked prefill: tokens [kC,(k+1)C) served by the EMA set through chunk k-1
             refresh, lag = int(chunk), 0
         # per-chunk upgrades (chunked-prefill lookahead arms): chunk k additionally serves at level 4 the top-`up`
@@ -266,7 +278,8 @@ class Adapt(Base):
         self.delta = self.dtab.get("delta")
         if rank == "salrel" and ahead is not None:
             self.delta = self.dtab["drel"]
-        self.needs_act = score != "count" or oracle is not None or gscale is not None
+        self.needs_act = score != "count" or oracle is not None or gscale is not None or self.gbdt_v2 or \
+            gbdt_scale is not None
         self.act_full = None
         self.la_full = None
         self.lo, self.hi = Dir(lo), Dir(hi)
@@ -403,9 +416,20 @@ class Adapt(Base):
             mean_sal = torch.where(Ch > 0, Cs / Ch.clamp_min(1e-30), prior)          # [N, nblk, NE] through block b
             mean_sal = (mean_sal * self.dtab["delta" if self.gscale == "sal" else "drel"][layer].to(ids.device)).cpu().numpy()
             del sv, hv, Cs, Ch
+        v2 = getattr(self, "gbdt_v2", False) or getattr(self, "gbdt_scale", None) is not None
+        if v2:
+            from gbdt_predictor_v2 import GBDTPredictorV2
+            ids_, w_, xn_ = self._act
+            assert torch.equal(ids_.long(), ids.long()), "act_full routing != scheduled routing"
+            sv_ = (w_.double().pow(2) * xn_.double()[:, None]).cpu().numpy()
         churn = []
         for n in range(N):
-            P = GBDTPredictor([layer], {layer: self.fixed[layer]}, model_path=getattr(self, "gbdt_model", None),
+            if v2:
+                P = GBDTPredictorV2([layer], {layer: self.fixed[layer]}, model_path=self.gbdt_model,
+                                    scale=self.gbdt_scale, n_float=self.nf, hm=self.hm, mode="next_refresh",
+                                    num_threads=int(os.environ.get("NQ_GBDT_THREADS", "4")))
+            else:
+                P = GBDTPredictor([layer], {layer: self.fixed[layer]}, model_path=getattr(self, "gbdt_model", None),
                               n_float=self.nf, hm=self.hm, mode="next_refresh",
                               num_threads=int(os.environ.get("NQ_GBDT_THREADS", "4")))
             want = fdef.copy()
@@ -414,7 +438,9 @@ class Adapt(Base):
                     if t % G == 0:
                         serve[n, t // G] = want
                     c = np.bincount(idn[n * seq + t], minlength=NE).astype(np.float64)[None]
-                    if P.step(c, 1, None, t == 0):
+                    kw = {"sal": np.bincount(idn[n * seq + t], weights=sv_[n * seq + t], minlength=NE)[None]} \
+                        if v2 else {}
+                    if P.step(c, 1, None, t == 0, **kw):
                         if self.gscale is None:
                             w = P.target(want[None])
                         else:

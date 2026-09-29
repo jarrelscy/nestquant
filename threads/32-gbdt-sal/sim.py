@@ -43,8 +43,19 @@ def job(L):
     out = {}
     X = d["X"].reshape(-1, 5)
     sets = {}
+    X2 = None
     for name, path in models.items():
-        pred = lgb.Booster(model_file=path).predict(X, num_threads=1)
+        scale = path.endswith("@mps")            # gbdt x EMA128 salience/hit (D3 gbdt_x_sal analogue, no delta)
+        path = path.removesuffix("@mps")
+        b = lgb.Booster(model_file=path)
+        if b.num_feature() > 5 or scale:
+            if X2 is None:
+                X2 = np.load(f"{T.OUT}/rows_v2/{corpus}/L{L}.npz")["X2"]
+        Xm = np.concatenate([d["X"], X2[..., :b.num_feature() - 5]], -1).reshape(-1, b.num_feature()) \
+            if b.num_feature() > 5 else X
+        pred = b.predict(Xm, num_threads=1)
+        if scale:
+            pred = pred * X2[..., 3].ravel()
         S = T.score_blocks(pred, d["cand"], d["top"], d["e256"])
         sets[name] = T.sim_layer(S, fixed[L], fdef[L])
     if oracles:

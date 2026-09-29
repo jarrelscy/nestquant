@@ -182,3 +182,36 @@ def score_blocks(pred, cand, top, e256):
     np.put_along_axis(S, cand.astype(np.int64), pred.reshape(nb, -1).astype(np.float32), 1)
     np.put_along_axis(S, top.astype(np.int64), (1e3 + e256).astype(np.float32), 1)
     return S
+
+
+# --------------------------------------------------------------------------------------------- v2 salience features
+FEATS_V2 = ("sema32", "sema128", "sal16", "mps128")
+
+
+def v2_features(bcnt, bsal, cand, nbc=CHAIN * SEQ // G):
+    """causal salience features at each block end (same block cadence / decays as the serve's ema32/ema128), reset
+    per chain.  Scale-free per layer: salience is divided by the layer's causal salience per routed slot
+    (sum_e EMA256 sal / sum_e EMA256 hits), so values are in hit-equivalents like the count features.
+      sema32, sema128  per-token EMA rates of normalised w^2|x|^2 (half-life 32 / 128 tokens)
+      sal16            normalised salience in the last 16-token block (hits16 analogue)
+      mps128           EMA128 salience per hit / layer salience per hit (1.0 when the expert has no recent hits)
+    -> [nb, ncand, 4] float32"""
+    nb = bcnt.shape[0]
+    ag = [0.5 ** (G / h) for h in (32, 128, 256)]
+    out = np.zeros((nb, cand.shape[1], 4), np.float32)
+    c = bcnt.astype(np.float64); s = bsal.astype(np.float64)
+    for c0 in range(0, nb, nbc):
+        Es = [np.zeros(NE) for _ in ag]; Ec = [np.zeros(NE) for _ in ag]
+        for k in range(c0, min(c0 + nbc, nb)):
+            for j, a in enumerate(ag):
+                Es[j] = Es[j] * a + s[k]; Ec[j] = Ec[j] * a + c[k]
+            norm = Es[2].sum() / max(Ec[2].sum(), 1e-30)
+            if norm <= 0:
+                norm = 1.0
+            ci = cand[k].astype(np.int64)
+            out[k, :, 0] = Es[0][ci] * ((1 - ag[0]) / G) / norm
+            out[k, :, 1] = Es[1][ci] * ((1 - ag[1]) / G) / norm
+            out[k, :, 2] = s[k][ci] / norm
+            h = Ec[1][ci]
+            out[k, :, 3] = np.where(h > 1e-3, Es[1][ci] / np.maximum(h, 1e-30) / norm, 1.0)
+    return out
