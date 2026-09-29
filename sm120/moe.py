@@ -1,6 +1,6 @@
 """NestQuant grouped MoE layer: pools, device table, launch wrapper, dense reference decode (thread 15 RM_P spec).
 Plane layout: see nqmoe.cu header."""
-import torch,numpy as np
+import os,torch,numpy as np
 from build import get
 M=get()
 TBL_W=20
@@ -220,6 +220,72 @@ class MoELayer:
         s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
                       cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr,s.zd,s.cnt_h)
         return out
+
+_PF={}
+def pf_scratch(dev,H,I,R,G):
+    """Prefill scratch shared by every layer on `dev` (fixed size, allocated on first use so vLLM's profile run counts it):
+    W_gu/W_dn fp16 for G experts (G*3*H*I*2 B) + per-pair rows (R rows: xg|xu fp16 = y fp32 2H*2 B, acc_g|acc_u fp32 2I*4 B,
+    h fp16 I*2 B, z_gu/z_dn 32 B)."""
+    k=(str(dev),H,I,R,G)
+    if k not in _PF:
+        f16,f32=torch.float16,torch.float32
+        xy=torch.empty(2*R*H,dtype=f16,device=dev)   # xg | xu, then (after the gate|up GEMMs and pf_mid) reused as y fp32 [R][H]
+        _PF[k]=dict(Wgu=torch.empty(G*2*I*H,dtype=f16,device=dev),Wdn=torch.empty(G*H*I,dtype=f16,device=dev),
+                    xg=xy[:R*H].view(R,H),xu=xy[R*H:].view(R,H),y=xy.view(f32).view(R,H),acc=torch.empty(2,R,I,dtype=f32,device=dev),
+                    h=torch.empty(R,I,dtype=f16,device=dev),z=torch.empty(2,R,4,dtype=f32,device=dev))
+    return _PF[k]
+def pf_bytes(H,I,R,G):return G*3*H*I*2+R*(4*H+8*I+2*I+32)
+
+PF_BM=int(os.environ.get('NQ_PF_BM','64'))
+PG=None
+if os.environ.get('NQ_PF_GEMM','triton')=='triton':
+    try:import pf_gemm as PG
+    except Exception:PG=None   # no triton: per-expert cuBLAS calls
+def prefill(s,x,sel,rw,out=None,R=None,G=None):
+    """T > Bmax tokens: each routed expert decoded once (level from the live device table row, after the mailbox apply),
+    then grouped fp16 GEMMs with fp32 outputs; same math as moe_forward (fp32 accumulation order differs). One host sync
+    (expert counts). Not graph-capturable. Exports routing hits like the decode kernel (picks with rw != 0)."""
+    assert x.dtype==torch.float16 and rw.dtype==torch.float16 and sel.dtype==torch.int64,(x.dtype,rw.dtype,sel.dtype)
+    T,k=sel.shape;H,I,E=s.H,s.I,s.E;dev=x.device;M=s.M
+    R=R or int(os.environ.get('NQ_PF_ROWS','8192'));G=G or int(os.environ.get('NQ_PF_G','16'))
+    S=pf_scratch(dev,H,I,R,G)
+    out=torch.zeros(T,H,dtype=torch.float32,device=dev) if out is None else out.zero_()
+    flat=sel.reshape(-1);rwf=rw.reshape(-1)
+    order=torch.argsort(flat,stable=True)
+    pe=flat[order].int();pt=(order//k).int();prw=rwf[order].contiguous()
+    one=torch.ones_like(flat,dtype=torch.int32)
+    cnt=torch.zeros(E,dtype=torch.int32,device=dev).scatter_add_(0,flat,one)   # (torch.bincount would sync on its max)
+    if s.hits_ptr:M.pf_hits(torch.zeros(E+1,dtype=torch.int32,device=dev).scatter_add_(0,torch.where(rwf!=0,flat,E),one)[:E],s.hits_ptr)
+    cnt=cnt.cpu().tolist()
+    ex=[e for e in range(E) if cnt[e]];start=[0]*E;o=0
+    for e in range(E):start[e]=o;o+=cnt[e]
+    exl=torch.tensor(ex,dtype=torch.int32).to(dev,non_blocking=True)
+    Wgu=S['Wgu'].view(G,2*I,H);Wdn=S['Wdn'].view(G,H,I);f32=torch.float32
+    mmo=torch.ops.aten.mm.dtype_out
+    for g0 in range(0,len(ex),G):
+        grp=ex[g0:g0+G];M.pf_decode(s.table,exl[g0:g0+len(grp)],S['Wgu'],S['Wdn'],H,I,s.nm_gu,s.nm_dn)
+        a=start[grp[0]];b=start[grp[-1]]+cnt[grp[-1]]
+        for c in range(a,b,R):
+            d=min(b,c+R);n=d-c;pts,pes,prws=pt[c:d],pe[c:d],prw[c:d]
+            xg,xu,y=S['xg'][:n],S['xu'][:n],S['y'][:n];ag,au=S['acc'][0,:n],S['acc'][1,:n];h=S['h'][:n];zg,zd=S['z'][0,:n],S['z'][1,:n]
+            M.pf_pre(x,pts,pes,s.table,S['xg'],S['xu'],zg,I)
+            segs=[]
+            for j,e in enumerate(grp):
+                u=max(start[e],c)-c;v=min(start[e]+cnt[e],d)-c
+                if v>u:segs.append((j,u,v))
+            if PG:
+                tt,nt=PG.tiles(segs,PF_BM,dev)
+                PG.gmm(xg,Wgu[:,:I],ag,tt,nt,I,H,BM=PF_BM);PG.gmm(xu,Wgu[:,I:],au,tt,nt,I,H,BM=PF_BM)
+            else:
+                for j,u,v in segs:
+                    mmo(xg[u:v],Wgu[j,:I].t(),f32,out=ag[u:v]);mmo(xu[u:v],Wgu[j,I:].t(),f32,out=au[u:v])
+            M.pf_mid(ag,au,zg,pes,s.table,h,zd,H,I)
+            if PG:PG.gmm(h,Wdn,y,tt,nt,H,I,BM=PF_BM)
+            else:
+                for j,u,v in segs:mmo(h[u:v],Wdn[j].t(),f32,out=y[u:v])
+            M.pf_post(y,zd,pts,pes,prws,s.table,out,I)
+    return out
+MoELayer.prefill=prefill
 
 class Mailbox:
     """Graph-safe table updates: call .apply() inside the captured graph before the layer; stage from a side stream."""

@@ -938,4 +938,358 @@ int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
 // compiled residual K codes per kernel (bit c = code c): {gate|up, down}. Codes outside a mask silently decode as code 0,
 // so hosts must check (MoELayer.set does).
 std::vector<int64_t> rk_codes() { return {(NQ_RK_GU & NQ_RK_CODES) | 1, (NQ_RK_DN & NQ_RK_CODES) | 1}; }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("rk_codes", &rk_codes); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump); }
+
+// ============================== prefill (T > BMAX): dense decode + grouped GEMM =================================
+// The decode kernels above re-decode every routed expert once per <= 8-token call. For prefill, forward() instead
+//   pf_decode : decodes each routed expert of a group once (level from the live table row: 2 = base, 4 = base + the
+//               residual record in its slot), bit-exact nqdec values, into fp16 W_gu [G][2I][H] / W_dn [G][H][I];
+//   pf_pre    : per routed pair (sorted by expert): xg/xu = fp16(WHT128(x * su_g/su_u)) and z_gu = x V_gu^T (== K1 prologue);
+//   torch.mm  : acc_g/acc_u = xg/xu @ W^T, fp32 out (cuBLAS), per expert;
+//   pf_mid    : WHT128, *sv, + z (U2 [+U4]), SwiGLU, z_dn = sw V_dn^T, *su_d, WHT128 (+ Sylvester to in_had_down) -> h fp16 (== K1 finisher);
+//   torch.mm  : y = h @ W_dn^T, fp32 out;
+//   pf_post   : WHT128(y) * sv_o + z_dn (U2_d [+U4_d]), * rw -> atomic add into out[token] fp32 (== K2 combine).
+// Every table read happens on device after the layer's mailbox apply (stream order), as in moe_forward, so the
+// prefill path sees exactly the level/slot state the decode kernels would. Pairs with rw == 0 or level 0 add nothing.
+#define PF_TS 68   // smem tile row stride in 32-bit words (64 + 4 pad: conflict-free fragment stores, 16 B aligned rows)
+template <bool RES, int RC>
+__device__ __forceinline__ void chunk_dec(const uint32_t* w, const uint32_t* r, uint32_t dl, uint32_t sgm, uint32_t* tile, int lane)
+{
+    const int g = lane >> 2, t4 = lane & 3;
+    Consts k{};
+    if constexpr (RES)
+    {
+        const uint32_t Mb = dl & 0xFF, N = (dl >> 8) & 0xFF;
+        k.Mrep = Mb * 0x01010101u; k.Nrep = N * 0x01010101u;
+        const float rc = c_rcp[Mb];
+        const half Ah = __float2half_rn(__fmul_rn(1.732421875f, rc));
+        const float C = __fsub_rn(__fadd_rn(__fmul_rn(__fmul_rn((float)N, rc), -3.453125f), -3.453125f), __fmul_rn(1024.f, __half2float(Ah)));
+        half2 a2 = __half2half2(Ah), c2 = __half2half2(__float2half_rn(C));
+        k.Ah = *(uint32_t*)&a2 ^ sgm; k.Ch = *(uint32_t*)&c2 ^ sgm;
+    }
+    else { k.Ah = MUL1_A ^ sgm; k.Ch = MUL1_B ^ sgm; }
+    #pragma unroll
+    for (int t = 0; t < 8; ++t)
+    {
+        uint32_t a[4];
+        switch (t)
+        {
+#define KT(T) case T: a[0] = dec_pair<RES, RC, 4 * T>(w, r, k); a[1] = dec_pair<RES, RC, 4 * T + 1>(w, r, k); \
+                      a[2] = dec_pair<RES, RC, 4 * T + 2>(w, r, k); a[3] = dec_pair<RES, RC, 4 * T + 3>(w, r, k); break;
+            KT(0) KT(1) KT(2) KT(3) KT(4) KT(5) KT(6) default: KT(7)
+#undef KT
+        }
+        #pragma unroll
+        for (int q = 0; q < 4; ++q) tile[(g + (q & 1) * 8) * PF_TS + (t * 16 + t4 * 2 + (q >> 1) * 8) / 2] = a[q];
+    }
+}
+// one 16x128 unit (strip, ch) of one projection -> smem tile (fp16 pairs, row stride PF_TS words)
+template <int LV, int RC>
+__device__ __forceinline__ void unit_dec(const Planes& P, int strip, int ch, int C, int NS, int nm, uint32_t* tile, int lane)
+{
+    Ctx X; X.strip = strip; X.C = C; X.nm = nm; X.fl = 0;
+    X.nrec_r = (size_t)NS * (LV == 5 ? nm : C) * 32;
+    if constexpr (LV == 5) X.fl = __ldg((const unsigned long long*)P.flags + strip);
+    Stage<LV, 1, RC> S;
+    load_stage<LV, 1, RC>(S, P, X, ch, lane);
+    const int src = ring_src<4>(lane);
+    constexpr int NWR = RKB<RC>::NW;
+    uint32_t w[6], r[NWR + 2];
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) w[i] = S.wb[0][i];
+    ext_words<128, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
+    const uint32_t sgm = ((S.on >> 16) & 1u) * 0x80008000u;
+    if constexpr (LV == 2) chunk_dec<false, RC>(w, r, 0, sgm, tile, lane);
+    else
+    {
+        const bool on = LV == 4 || (S.on & 1u);
+        #pragma unroll
+        for (int i = 0; i < NWR; ++i) r[i] = S.wr[0][i];
+        ext_words<RKB<RC>::BITS, NWR>(r, __shfl_sync(0xffffffffu, r[0], src));   // whole warp (on is warp-uniform)
+        if (on) chunk_dec<true, RC>(w, r, S.dl[0], sgm, tile, lane);
+        else chunk_dec<false, RC>(w, r, 0, sgm, tile, lane);
+    }
+}
+// grid (ceil(units/8), G, 2 = gate|up, down), 256 threads; warp = one unit. W_gu [G][2I][H], W_dn [G][H][I] fp16.
+__global__ void __launch_bounds__(256) nq_pf_decode(const int64_t* table, const int* experts, half* Wgu, half* Wdn, int H, int I,
+                                                    int nm_gu, int nm_dn)
+{
+    __shared__ __align__(16) uint32_t tiles[8][16 * PF_TS];
+    const int MODE = blockIdx.z, gi = blockIdx.y, lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    const int N = MODE == 0 ? 2 * I : H, K = MODE == 0 ? H : I, C = K / 128, NS = N / 16;
+    const int unit = blockIdx.x * 8 + warp;
+    if (unit >= NS * C) return;   // warp-uniform
+    const int strip = unit / C, ch = unit % C;
+    const int64_t* ent = table + (int64_t)experts[gi] * TBL_W;
+    const int lv = (int)ent[0];
+    uint32_t* tile = tiles[warp];
+    half* Wout = (MODE == 0 ? Wgu : Wdn) + (size_t)gi * N * K + (size_t)strip * 16 * K + (size_t)ch * 128;
+    if (lv <= 0)
+    {
+        for (int i = lane; i < 256; i += 32) *(uint4*)(Wout + (size_t)(i >> 4) * K + (i & 15) * 8) = make_uint4(0, 0, 0, 0);
+        return;
+    }
+    const Planes P = planes_of(ent, MODE == 0 ? 1 : 5);
+    const int nm = MODE == 0 ? nm_gu : nm_dn, rc = (int)ent[10 + MODE];
+#define UD(LVv, RCv) unit_dec<LVv, RCv>(P, strip, ch, C, NS, nm, tile, lane)
+#ifdef NQ_NO_MASK
+#define UD45(RCv) UD(4, RCv)
+#else
+#define UD45(RCv) { if (P.flags) UD(5, RCv); else UD(4, RCv); }
+#endif
+    // same compiled code set as the decode kernels (a code outside the kernel's mask decodes as code 0 there too)
+    const unsigned RKM = ((MODE == 0 ? NQ_RK_GU : NQ_RK_DN) & NQ_RK_CODES) | 1;
+    const int rcm = (RKM >> rc) & 1 ? rc : 0;
+    if (lv == 2) UD(2, 0);
+    else switch (rcm)
+    {
+#if NQ_RK_CODES & 2
+        case 1: UD45(1); break;
+#endif
+#if NQ_RK_CODES & 4
+        case 2: UD45(2); break;
+#endif
+#if NQ_RK_CODES & 8
+        case 3: UD45(3); break;
+#endif
+#if NQ_RK_CODES & 16
+        case 4: UD45(4); break;
+#endif
+#if NQ_RK_CODES & 32
+        case 5: UD45(5); break;
+#endif
+#if NQ_RK_CODES & 64
+        case 6: UD45(6); break;
+#endif
+#if NQ_RK_CODES & 128
+        case 7: UD45(7); break;
+#endif
+#if NQ_RK_CODES & 256
+        case 8: UD45(8); break;
+#endif
+        default: UD45(0); break;
+    }
+#undef UD
+#undef UD45
+    __syncwarp();
+    #pragma unroll
+    for (int j = 0; j < 8; ++j)
+    {
+        const int i = lane + 32 * j, row = i >> 4, c8 = i & 15;   // 16 rows x 16 uint4
+        *(uint4*)(Wout + (size_t)row * K + c8 * 8) = *(const uint4*)(tile + row * PF_TS + c8 * 4);
+    }
+}
+// per pair p (block, 256 threads): xg/xu [R][H] fp16, zg [R][4] f32. pe = expert, pt = token of pair p.
+__global__ void __launch_bounds__(256) nq_pf_pre(const half* x, const int* pt, const int* pe, const int64_t* table, half* xg, half* xu,
+                                                 float* zg, int H, int I)
+{
+    const int p = blockIdx.x, lane = threadIdx.x & 31, warp = threadIdx.x >> 5, SB = blockDim.x >> 5;
+    const int64_t* ent = table + (int64_t)pe[p] * TBL_W;
+    if (ent[0] <= 0) return;
+    const half* signs = (const half*)ent[9];
+    const half* xr = x + (size_t)pt[p] * H;
+    const int ng = H / 128;
+    for (int task = warp; task < 2 * ng; task += SB)
+    {
+        const int up = task / ng, k = (task % ng) * 128 + lane * 4;
+        const half* su = up ? signs + 2 * H + 3 * I : signs;
+        float f[4], s[4]; ld4h(xr + k, f); ld4h(su + k, s);
+        float v[4] = {f[0] * s[0], f[1] * s[1], f[2] * s[2], f[3] * s[3]};
+        wht128_warp(v, lane);
+        st4h((up ? xu : xg) + (size_t)p * H + k, v);
+    }
+    const half* lrp = (const half*)ent[14];
+    const int rg = lrp ? (int)ent[16] : 0;
+    if (warp < 4)
+    {
+        float d = 0.f;
+        if (warp < rg)
+        {
+            for (int k = lane * 4; k < H; k += 128)
+            {
+                float f[4], v[4]; ld4h(xr + k, f); ld4h(lrp + (size_t)warp * H + k, v);
+                d += f[0] * v[0] + f[1] * v[1] + f[2] * v[2] + f[3] * v[3];
+            }
+            #pragma unroll
+            for (int o = 16; o; o >>= 1) d += __shfl_xor_sync(0xffffffffu, d, o);
+        }
+        if (lane == 0) zg[(size_t)p * 4 + warp] = d;
+    }
+}
+// per pair p (block, 128 threads; dynamic smem I floats): acc_g/acc_u [R][I] f32 -> h [R][I] fp16, zd [R][4] f32
+__global__ void __launch_bounds__(128) nq_pf_mid(const float* acc_g, const float* acc_u, const float* zg, const int* pe, const int64_t* table,
+                                                 half* h, float* zd, int H, int I)
+{
+    extern __shared__ float swb[];   // [I] fp32 WHT128(sw * su_d) staging (in_had_down > 128)
+    __shared__ float zp[64][4];      // down lr partials per 128-column group
+    const int p = blockIdx.x, lane = threadIdx.x & 31, warp = threadIdx.x >> 5, SB = blockDim.x >> 5, ng = I / 128;
+    const int64_t* ent = table + (int64_t)pe[p] * TBL_W;
+    if (ent[0] <= 0) return;
+    const int lv = (int)ent[0];
+    const half* signs = (const half*)ent[9];
+    const half* sv_g = signs + H; const half* sv_u = sv_g + I; const half* su_d = sv_u + I;
+    const half* lrp = (const half*)ent[14];
+    const int rg = lrp ? (int)ent[16] : 0, rd = lrp ? (int)ent[17] : 0;
+    const half* U4 = lv == 4 ? (const half*)ent[15] : nullptr;
+    const int hw = (int)ent[18];
+    float zs[4];
+    #pragma unroll
+    for (int r = 0; r < 4; ++r) zs[r] = zg[(size_t)p * 4 + r];
+    for (int grp = warp; grp < ng; grp += SB)
+    {
+        const int col = grp * 128 + lane * 4;
+        float gu[2][4];
+        #pragma unroll
+        for (int up = 0; up < 2; ++up)
+        {
+            const float4 f = *(const float4*)((up ? acc_u : acc_g) + (size_t)p * I + col);
+            float v[4] = {f.x, f.y, f.z, f.w}, s[4];
+            wht128_warp(v, lane);
+            ld4h((up ? sv_u : sv_g) + col, s);
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) v[i] *= s[i];
+            for (int r = 0; r < rg; ++r)
+            {
+                const float z = zs[r]; float u2[4], u4[4] = {0, 0, 0, 0};
+                const size_t o = (size_t)rg * H + (size_t)(up * rg + r) * I + col;
+                ld4h(lrp + o, u2); if (U4) ld4h(U4 + (o - (size_t)rg * H), u4);
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) v[i] += z * u2[i] + z * u4[i];
+            }
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) gu[up][i] = v[i];
+        }
+        float v[4], s[4]; ld4h(su_d + col, s);
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) { const float gg = gu[0][i], uu = gu[1][i]; v[i] = gg / (1.f + __expf(-gg)) * uu; }
+        for (int r = 0; r < rd; ++r)
+        {
+            float vd[4]; ld4h(lrp + (size_t)rg * H + 2 * (size_t)rg * I + (size_t)r * I + col, vd);
+            float d = v[0] * vd[0] + v[1] * vd[1] + v[2] * vd[2] + v[3] * vd[3];
+            #pragma unroll
+            for (int o = 16; o; o >>= 1) d += __shfl_xor_sync(0xffffffffu, d, o);
+            if (lane == 0) zp[grp][r] = d;
+        }
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) v[i] *= s[i];
+        wht128_warp(v, lane);
+        if (hw <= 128) st4h(h + (size_t)p * I + col, v);
+        else *(float4*)(swb + col) = make_float4(v[0], v[1], v[2], v[3]);
+    }
+    __syncthreads();
+    if (threadIdx.x < 4)   // z_dn summed over the column groups in order (== K2 combine)
+    {
+        float z = 0.f;
+        if ((int)threadIdx.x < rd) for (int gq = 0; gq < ng; ++gq) z += zp[gq][threadIdx.x];
+        zd[(size_t)p * 4 + threadIdx.x] = z;
+    }
+    if (hw > 128)
+    {
+        const int nb = hw / 128; const float rs = rsqrtf((float)nb);
+        for (int ob_all = warp; ob_all < ng; ob_all += SB)
+        {
+            const int b0 = ob_all / nb * nb, ob = ob_all % nb;
+            float o[4] = {0, 0, 0, 0};
+            for (int b = 0; b < nb; ++b)
+            {
+                const float4 f = *(const float4*)(swb + (b0 + b) * 128 + lane * 4);
+                const float sgn = (__popc(ob & b) & 1) ? -1.f : 1.f;
+                o[0] += sgn * f.x; o[1] += sgn * f.y; o[2] += sgn * f.z; o[3] += sgn * f.w;
+            }
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) o[i] *= rs;
+            st4h(h + (size_t)p * I + (b0 + ob) * 128 + lane * 4, o);
+        }
+    }
+}
+// per pair p (block, 256 threads): y [R][H] f32 -> out[pt[p]] += rw[p] * (WHT128(y) * sv_o + z_dn (U2_d [+U4_d]))
+__global__ void __launch_bounds__(256) nq_pf_post(const float* y, const float* zd, const int* pt, const int* pe, const half* prw,
+                                                  const int64_t* table, float* out, int H, int I)
+{
+    const int p = blockIdx.x, lane = threadIdx.x & 31, warp = threadIdx.x >> 5, SB = blockDim.x >> 5;
+    const int64_t* ent = table + (int64_t)pe[p] * TBL_W;
+    const float w = __half2float(prw[p]);
+    if (ent[0] <= 0 || w == 0.f) return;
+    const int lv = (int)ent[0];
+    const half* sv_o = (const half*)ent[9] + H + 3 * I;
+    const half* lrp = (const half*)ent[14];
+    const int rd = lrp ? (int)ent[17] : 0, rg = lrp ? (int)ent[16] : 0;
+    const size_t ou = (size_t)rg * H + 2 * (size_t)rg * I + (size_t)rd * I;
+    const half* U4 = lv == 4 ? (const half*)ent[15] : nullptr;
+    float z[4];
+    #pragma unroll
+    for (int r = 0; r < 4; ++r) z[r] = zd[(size_t)p * 4 + r];
+    float* op = out + (size_t)pt[p] * H;
+    for (int grp = warp; grp < H / 128; grp += SB)
+    {
+        const int col = grp * 128 + lane * 4;
+        const float4 f = *(const float4*)(y + (size_t)p * H + col);
+        float v[4] = {f.x, f.y, f.z, f.w}, sg[4];
+        wht128_warp(v, lane);
+        ld4h(sv_o + col, sg);
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) v[i] *= sg[i];
+        for (int r = 0; r < rd; ++r)
+        {
+            float u2[4], u4[4] = {0, 0, 0, 0}; const size_t o = (size_t)r * H + col;
+            ld4h(lrp + ou + o, u2); if (U4) ld4h(U4 + 2 * (size_t)rg * I + o, u4);
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) v[i] += z[r] * u2[i] + z[r] * u4[i];
+        }
+        atomicAdd((float4*)(op + col), make_float4(w * v[0], w * v[1], w * v[2], w * v[3]));
+    }
+}
+__global__ void nq_pf_hits(const int* counts, int* hits, int E)
+{
+    const int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e < E && counts[e]) atomicAdd(hits + e, counts[e]);
+}
+// experts [G] int32 (device), Wgu [>=G*2I*H] fp16, Wdn [>=G*H*I] fp16
+void pf_decode(torch::Tensor table, torch::Tensor experts, torch::Tensor Wgu, torch::Tensor Wdn, int64_t H, int64_t I, int64_t nm_gu, int64_t nm_dn)
+{
+    const int G = experts.numel();
+    TORCH_CHECK(experts.scalar_type() == at::kInt && Wgu.scalar_type() == at::kHalf && Wdn.scalar_type() == at::kHalf && table.scalar_type() == at::kLong);
+    TORCH_CHECK(Wgu.numel() >= (int64_t)G * 2 * I * H && Wdn.numel() >= (int64_t)G * H * I && H % 128 == 0 && I % 128 == 0, "pf_decode sizes");
+    if (!G) return;
+    const int units = std::max((int)(2 * I / 16 * (H / 128)), (int)(H / 16 * (I / 128)));
+    nq_pf_decode<<<dim3((units + 7) / 8, G, 2), 256, 0, at::cuda::getCurrentCUDAStream()>>>((const int64_t*)table.data_ptr(),
+        (const int*)experts.data_ptr(), (half*)Wgu.data_ptr(), (half*)Wdn.data_ptr(), H, I, nm_gu, nm_dn);
+    cudaError_t e = cudaGetLastError(); TORCH_CHECK(e == cudaSuccess, "pf_decode: ", cudaGetErrorString(e));
+}
+void pf_pre(torch::Tensor x, torch::Tensor pt, torch::Tensor pe, torch::Tensor table, torch::Tensor xg, torch::Tensor xu, torch::Tensor zg, int64_t I)
+{
+    const int R = pt.numel(), H = x.size(1);
+    TORCH_CHECK(x.scalar_type() == at::kHalf && x.is_contiguous() && pt.scalar_type() == at::kInt && pe.scalar_type() == at::kInt);
+    TORCH_CHECK(xg.numel() >= (int64_t)R * H && xu.numel() >= (int64_t)R * H && zg.numel() >= (int64_t)R * 4 && zg.scalar_type() == at::kFloat);
+    if (!R) return;
+    nq_pf_pre<<<R, 256, 0, at::cuda::getCurrentCUDAStream()>>>((const half*)x.data_ptr(), (const int*)pt.data_ptr(), (const int*)pe.data_ptr(),
+        (const int64_t*)table.data_ptr(), (half*)xg.data_ptr(), (half*)xu.data_ptr(), (float*)zg.data_ptr(), H, I);
+    cudaError_t e = cudaGetLastError(); TORCH_CHECK(e == cudaSuccess, "pf_pre: ", cudaGetErrorString(e));
+}
+void pf_mid(torch::Tensor acc_g, torch::Tensor acc_u, torch::Tensor zg, torch::Tensor pe, torch::Tensor table, torch::Tensor h, torch::Tensor zd, int64_t H, int64_t I)
+{
+    const int R = pe.numel();
+    TORCH_CHECK(acc_g.scalar_type() == at::kFloat && acc_u.scalar_type() == at::kFloat && h.scalar_type() == at::kHalf && I / 128 <= 64);
+    TORCH_CHECK(acc_g.numel() >= (int64_t)R * I && acc_u.numel() >= (int64_t)R * I && h.numel() >= (int64_t)R * I && zd.numel() >= (int64_t)R * 4);
+    if (!R) return;
+    nq_pf_mid<<<R, 128, I * 4, at::cuda::getCurrentCUDAStream()>>>((const float*)acc_g.data_ptr(), (const float*)acc_u.data_ptr(),
+        (const float*)zg.data_ptr(), (const int*)pe.data_ptr(), (const int64_t*)table.data_ptr(), (half*)h.data_ptr(), (float*)zd.data_ptr(), H, I);
+    cudaError_t e = cudaGetLastError(); TORCH_CHECK(e == cudaSuccess, "pf_mid: ", cudaGetErrorString(e));
+}
+void pf_post(torch::Tensor y, torch::Tensor zd, torch::Tensor pt, torch::Tensor pe, torch::Tensor prw, torch::Tensor table, torch::Tensor out, int64_t I)
+{
+    const int R = pt.numel(), H = out.size(1);
+    TORCH_CHECK(y.scalar_type() == at::kFloat && out.scalar_type() == at::kFloat && out.is_contiguous() && prw.scalar_type() == at::kHalf);
+    TORCH_CHECK(y.numel() >= (int64_t)R * H && zd.numel() >= (int64_t)R * 4 && prw.numel() >= R);
+    if (!R) return;
+    nq_pf_post<<<R, 256, 0, at::cuda::getCurrentCUDAStream()>>>((const float*)y.data_ptr(), (const float*)zd.data_ptr(), (const int*)pt.data_ptr(),
+        (const int*)pe.data_ptr(), (const half*)prw.data_ptr(), (const int64_t*)table.data_ptr(), (float*)out.data_ptr(), H, I);
+    cudaError_t e = cudaGetLastError(); TORCH_CHECK(e == cudaSuccess, "pf_post: ", cudaGetErrorString(e));
+}
+void pf_hits(torch::Tensor counts, int64_t hits_ptr)
+{
+    if (!hits_ptr) return;
+    const int E = counts.numel(); TORCH_CHECK(counts.scalar_type() == at::kInt);
+    nq_pf_hits<<<(E + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream()>>>((const int*)counts.data_ptr(), (int*)hits_ptr, E);
+}
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("rk_codes", &rk_codes); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump);
+    m.def("pf_decode", &pf_decode); m.def("pf_pre", &pf_pre); m.def("pf_mid", &pf_mid); m.def("pf_post", &pf_post); m.def("pf_hits", &pf_hits); }
