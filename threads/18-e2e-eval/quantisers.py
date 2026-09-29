@@ -199,6 +199,24 @@ class Noise(Base):
         return ref() if self.active(layer) else None
 
 
+DELTA_DEFAULT = "/tmp/nestquant/31-delta/delta_table.json"
+
+
+def load_delta(path, col="delta"):
+    """T31 per-expert salience factor: nq-delta-v1 json {'per_layer': {L: {col: [256]}}} (col delta = drel * G | drel)
+    or legacy {'delta': {L: [256]} | [[256] per layer]} -> {int L: tensor float64}."""
+    j = json.load(open(path or DELTA_DEFAULT))
+    if "per_layer" in j:
+        return {int(L): torch.tensor(v[col], dtype=torch.float64) for L, v in j["per_layer"].items()}
+    assert col == "delta", col
+    d = j["delta"]
+    it = d.items() if isinstance(d, dict) else enumerate(d)
+    return {int(L): torch.tensor(v, dtype=torch.float64) for L, v in it if v is not None}
+
+
+KINDS = ("count", "w", "sal", "salrel", "cntdelta")   # per-slot value: 1 | gate w | w^2|x|^2 delta_e | w^2|x|^2 drel_e | delta_e
+
+
 class Adapt(Base):
     """Causal replay of the serving level scheduler (streaming/scheduler.py defaults) per layer, per sequence:
     fixed = manifest default_allocation (always level 4); floating = n_float experts, starting at floating_default,
@@ -211,10 +229,43 @@ class Adapt(Base):
     (hi2: second level-4 dir for experts missing from hi, e.g. the complement of a partial predecode)"""
 
     def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
-                 predictor="ema", hm=0.5):
+                 predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
+                 oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128):
         self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
         self.predictor, self.hm = predictor, float(hm)   # gbdt: streaming/gbdt_predictor.GBDTPredictor (see _core_gbdt)
         assert predictor in ("ema", "gbdt"), predictor
+        if chunk is not None:            # chunked prefill: tokens [kC,(k+1)C) served by the EMA set through chunk k-1
+            refresh, lag = int(chunk), 0
+        # per-chunk upgrades (chunked-prefill lookahead arms): chunk k additionally serves at level 4 the top-`up`
+        # non-fixed experts of chunk k ranked by `rank` (count | w = sum of gate weights | sal = sum w^2 |x|^2 delta_e)
+        # from the router lookahead `ahead` layers back (1 | 2; set by nq_e2e.moe_multi as self.la_full) or, ahead=0,
+        # from the chunk's actual routing (oracle upper bound).  Resident floating set = the chunk-lag set.
+        self.ahead = None if ahead is None else int(ahead)
+        self.up, self.rank = int(up), rank
+        assert rank in KINDS, rank
+        # decode salience arms (own routing via moe_multi -> self.act_full = (ids, w, |x|^2 of the normalised input)):
+        #  score=K     EMA scheduler scores per-token value K instead of counts (ema_sal: K = sal)
+        #  oracle=K    floating set of each `block`-token block = top-n_float non-fixed by ACTUAL value K summed over
+        #              the next `horizon` tokens from the block start (causal ceiling; no lag, no hysteresis)
+        #  gscale=K    predictor=gbdt: GBDT predicted next-64 hits x delta_K,e x EMA(sal_hl) of the expert's mean
+        #              w^2 |x|^2 per hit, then the predictor's own hysteresis/top-51 (gkeep=1: keep the always-kept
+        #              EMA256 top-20 forced; else they get 64 x their EMA256 rate as predicted hits)
+        self.score, self.oracle, self.H, self.B = score, oracle, int(horizon), int(block)
+        self.gscale, self.gkeep, self.sal_a = gscale, int(gkeep), 0.5 ** (1 / float(sal_hl))
+        for k in (score, oracle or "count", gscale or "count"):
+            assert k in KINDS, k
+        assert gscale is None or predictor == "gbdt"
+        kinds = {rank if ahead is not None else None, score, oracle, gscale}
+        self.dfile = delta
+        self.dtab = {c: load_delta(delta, c) for k, c in (("sal", "delta"), ("salrel", "drel")) if k in kinds}
+        if "cntdelta" in kinds and "delta" not in self.dtab:
+            self.dtab["delta"] = load_delta(delta, "delta")
+        self.delta = self.dtab.get("delta")
+        if rank == "salrel" and ahead is not None:
+            self.delta = self.dtab["drel"]
+        self.needs_act = score != "count" or oracle is not None or gscale is not None
+        self.act_full = None
+        self.la_full = None
         self.lo, self.hi = Dir(lo), Dir(hi)
         self.hi2 = Dir(hi2) if hi2 else None
         m = json.load(open(manifest))
@@ -222,7 +273,8 @@ class Adapt(Base):
         self.fdef = {int(L): [int(e) for e in v] for L, v in m["floating_default"].items()}
         self.a = 0.5 ** (1 / float(half_life))
         self.R, self.nf, self.lag, self.NE = int(refresh), int(n_float), int(lag), NE
-        assert self.lag == 1, "only the one-refresh lag is implemented"
+        assert self.lag in (0, 1), "lag 0 (chunked prefill) or 1 (decode refresh) only"
+        assert self.ahead is None or self.lag == 0, "lookahead upgrades are per prefill chunk (chunk=C)"
         self.n_hi = self.n_lo = 0
         self.diag = {}
 
@@ -250,13 +302,68 @@ class Adapt(Base):
                     runs.append((w0, w)); w0 = w
         hi, serves, tot = [], [], {}
         for w0, w1 in runs:
+            self._la = None if self.la_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.la_full)
+            self._act = None if self.act_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.act_full)
             h, sv, st = self._core(layer, ids[w0 * seq:w1 * seq], seq if not self.chain else (w1 - w0) * seq)
             hi.append(h); serves.append(sv)
             for k, v in st.items():
-                tot[k] = tot.get(k, 0) + v
+                if isinstance(v, dict):          # histograms {value: count}
+                    h_ = tot.setdefault(k, {})
+                    for kk, vv in v.items():
+                        h_[kk] = h_.get(kk, 0) + vv
+                else:
+                    tot[k] = tot.get(k, 0) + v
         tot["chains"] = [w1 - w0 for w0, w1 in runs] if self.chain else None
         self.diag[layer] = tot
         return torch.cat(hi), serves
+
+    def _slot_value(self, layer, kind, ids, w=None, xn=None):
+        """per routed slot [T, 8] float64 value of `kind` (see KINDS)."""
+        if kind == "count":
+            return torch.ones(ids.shape, dtype=torch.float64, device=ids.device)
+        if w is None:
+            ids_, w, xn = self._act
+            assert torch.equal(ids_.long(), ids.long()), "act_full routing != scheduled routing"
+        if kind == "w":
+            return w.double()
+        if kind == "cntdelta":
+            return self.dtab["delta"][layer].to(ids.device)[ids.long()]
+        D = self.dtab["delta" if kind == "sal" else "drel"][layer].to(ids.device)
+        return w.double().pow(2) * xn.double()[:, None] * D[ids.long()]
+
+    def _tok_matrix(self, ids, v):
+        c = torch.zeros(ids.shape[0], self.NE, dtype=torch.float64, device=ids.device)
+        c.scatter_add_(1, ids.long(), v)
+        return c
+
+    def _core_oracle(self, layer, ids, seq):
+        dev, NE, B, H = ids.device, self.NE, self.B, self.H
+        T, K = ids.shape
+        N, nb = T // seq, seq // B
+        assert N * seq == T and nb * B == seq
+        c = self._tok_matrix(ids, self._slot_value(layer, self.oracle, ids)).view(N, seq, NE)
+        cs = torch.zeros(N, seq + 1, NE, dtype=torch.float64, device=dev)
+        cs[:, 1:] = c.cumsum(1)
+        s0 = torch.arange(nb, device=dev) * B
+        s1 = (s0 + H).clamp_max(seq)
+        sc = (cs[:, s1] - cs[:, s0])                                   # [N, nb, NE] actual value in [s, s + H)
+        fixed = torch.zeros(NE, dtype=torch.bool, device=dev)
+        fixed[self.fixed[layer]] = True
+        sc = sc.masked_fill(fixed, float("-inf"))
+        top = torch.sort(-sc, dim=-1, stable=True).indices[..., :self.nf]
+        want = torch.zeros(N, nb, NE, dtype=torch.bool, device=dev)
+        want.scatter_(2, top, True)
+        n = torch.arange(T, device=dev) // seq
+        k = (torch.arange(T, device=dev) % seq) // B
+        hi = (want | fixed)[n.unsqueeze(1), k.unsqueeze(1), ids.long()]
+        fdef = torch.zeros(NE, dtype=torch.bool, device=dev)
+        fdef[[e for e in self.fdef[layer] if e not in set(self.fixed[layer])][:self.nf]] = True
+        stat = fixed | fdef
+        churn = (want[:, 1:] & ~want[:, :-1]).sum(-1).double()
+        d = dict(slots=T * K, l4_slots=int(hi.sum()), fixed_slots=int(fixed[ids.long()].sum()),
+                 float0_slots=int(stat[ids.long()].sum()), churn_sum=float(churn.sum()), churn_n=int(churn.numel()),
+                 churn_first_sum=0.0, churn_first_n=0)
+        return hi, want, d
 
     def _core_gbdt(self, layer, ids, seq):
         """predictor=gbdt: SM120's production floating-set predictor (streaming/gbdt_predictor.py, commit 3f7dcda,
@@ -277,6 +384,22 @@ class Adapt(Base):
         fdef[[e for e in self.fdef[layer] if e not in set(self.fixed[layer])][:self.nf]] = True
         idn = ids.long().cpu().numpy()
         serve = np.zeros((N, seq // G, NE), bool)
+        if self.gscale == "cntdelta":            # predicted hits x delta_e only
+            mean_sal = self.dtab["delta"][layer].numpy()[None, None].repeat(N, 0).repeat(seq // G, 1)
+        elif self.gscale is not None:            # causal per-expert mean w^2|x|^2 per hit, EMA over tokens, at block ends
+            ids_, w_, xn_ = self._act
+            sv = self._tok_matrix(ids, w_.double().pow(2) * xn_.double()[:, None]).view(N, seq // G, G, NE)
+            hv = self._tok_matrix(ids, torch.ones(ids.shape, dtype=torch.float64, device=ids.device)).view(sv.shape)
+            wpos = self.sal_a ** torch.arange(G - 1, -1, -1, device=ids.device, dtype=torch.float64)
+            Cs, Ch = torch.einsum("nkje,j->nke", sv, wpos), torch.einsum("nkje,j->nke", hv, wpos)
+            aG = self.sal_a ** G
+            for b in range(1, Cs.shape[1]):
+                Cs[:, b] += Cs[:, b - 1] * aG
+                Ch[:, b] += Ch[:, b - 1] * aG
+            prior = Cs.sum(-1, keepdim=True) / Ch.sum(-1, keepdim=True).clamp_min(1e-30)
+            mean_sal = torch.where(Ch > 0, Cs / Ch.clamp_min(1e-30), prior)          # [N, nblk, NE] through block b
+            mean_sal = (mean_sal * self.dtab["delta" if self.gscale == "sal" else "drel"][layer].to(ids.device)).cpu().numpy()
+            del sv, hv, Cs, Ch
         churn = []
         for n in range(N):
             P = GBDTPredictor([layer], {layer: self.fixed[layer]}, n_float=self.nf, hm=self.hm, mode="next_refresh",
@@ -288,7 +411,10 @@ class Adapt(Base):
                         serve[n, t // G] = want
                     c = np.bincount(idn[n * seq + t], minlength=NE).astype(np.float64)[None]
                     if P.step(c, 1, None, t == 0):
-                        w = P.target(want[None])
+                        if self.gscale is None:
+                            w = P.target(want[None])
+                        else:
+                            w = self._gbdt_scaled_target(P, want, mean_sal[n, t // G], fixed)
                         if w is not None:
                             nw = w[0] & ~fixed
                             churn.append(int((nw & ~want).sum()))
@@ -308,19 +434,38 @@ class Adapt(Base):
                  churn_first_sum=0.0, churn_first_n=0)
         return hi, serve_t, d
 
+    def _gbdt_scaled_target(self, P, resident, ms, fixed):
+        """P.target with the applied score matrix rescaled: predicted hits x delta_e x mean sal per hit."""
+        if P.S is None:
+            return None
+        S = P.S[0].astype(np.float64)
+        forced = S >= 1e3
+        hits = np.where(forced, 64.0 * (S - 1e3), S)
+        v = hits * ms
+        if self.gkeep:
+            v = np.where(forced, 1e30 + v, v)
+        v = np.where(fixed, -np.inf, v)
+        r = resident & ~fixed
+        v = np.where(r, v * (1 + P.hm), v)
+        if np.where(fixed, 0, np.maximum(S, 0)).sum() <= 0:
+            return r[None]
+        want = np.zeros(self.NE, bool)
+        want[np.argsort(-v, kind="stable")[:self.nf]] = True
+        return want[None]
+
     @torch.no_grad()
     def _core(self, layer, ids, seq):
         """ids [T,8] (T = n*seq, sequences back to back) -> (hi [T,8] bool per routed slot, serve [n, nchunks, NE]
         bool floating set serving each chunk, diagnostics)."""
         if self.predictor == "gbdt":
             return self._core_gbdt(layer, ids, seq)
+        if self.oracle is not None:
+            return self._core_oracle(layer, ids, seq)
         dev, NE, R = ids.device, self.NE, self.R
         T, K = ids.shape
         N, nc = T // seq, seq // R
         assert N * seq == T and nc * R == seq
-        c = torch.zeros(T, NE, dtype=torch.float64, device=dev)
-        c.scatter_add_(1, ids.long(), torch.ones(T, K, dtype=torch.float64, device=dev))
-        c = c.view(N, nc, R, NE)
+        c = self._tok_matrix(ids, self._slot_value(layer, self.score, ids)).view(N, nc, R, NE)
         wpos = self.a ** torch.arange(R - 1, -1, -1, device=dev, dtype=torch.float64)
         C = torch.einsum("nkje,j->nke", c, wpos)
         aR = self.a ** R
@@ -340,19 +485,46 @@ class Adapt(Base):
         has = S[:, 1:nc].sum(-1, keepdim=True) > 0                     # no counts yet -> keep the previous want
         for r in range(1, nc):
             want[:, r] = torch.where(has[:, r - 1], w[:, r - 1], want[:, r - 1])
-        serve = torch.empty_like(want)                                 # chunk k served by want[k - lag]
-        serve[:, :1] = fdef
-        serve[:, 1:] = want[:, :-1]
-        hi_e = serve | fixed                                           # [N, nc, NE]
+        if self.lag == 1:                                              # chunk k served by want[k - 1]
+            serve = torch.empty_like(want)
+            serve[:, :1] = fdef
+            serve[:, 1:] = want[:, :-1]
+        else:                                                          # lag 0: want[k] = EMA through chunk k-1
+            serve = want.clone()
         n = torch.arange(T, device=dev) // seq
         k = (torch.arange(T, device=dev) % seq) // R
+        upg = None
+        if self.ahead is not None:                                     # per-chunk upgrades from lookahead / oracle
+            li_, lw, lx = self._la
+            li_ = li_.long()
+            if self.rank == "count":
+                v = torch.ones(li_.shape, dtype=torch.float64, device=dev)
+            elif self.rank == "w":
+                v = lw.double()
+            else:
+                v = self._slot_value(layer, self.rank, li_, lw, lx) if self.rank == "cntdelta" else \
+                lw.double().pow(2) * lx.double()[:, None] * self.delta[layer].to(dev)[li_]
+            sc = torch.zeros(N * nc, NE, dtype=torch.float64, device=dev)
+            sc.index_put_(((n * nc + k)[:, None].expand_as(li_), li_), v, accumulate=True)
+            sc = sc.view(N, nc, NE).masked_fill(fixed, 0.0)
+            top = torch.sort(-sc, dim=-1, stable=True).indices[..., :self.up]
+            U = torch.zeros_like(serve)
+            U.scatter_(2, top, True)
+            U &= sc > 0                                                # never upgrade an expert with no score
+            upg = (U & ~serve).sum(-1)                                 # upgrades beyond the resident set per chunk
+            serve = serve | U
+        hi_e = serve | fixed                                           # [N, nc, NE]
         hi = hi_e[n.unsqueeze(1), k.unsqueeze(1), ids.long()]
         # diagnostics (on this stream's routing)
         stat = fixed | fdef
         churn = (want[:, 1:] & ~want[:, :-1]).sum(-1).double()        # experts entering the set per refresh
+        hist = lambda t: {int(a): int(b) for a, b in zip(*torch.unique(t.long(), return_counts=True))}  # noqa: E731
         d = dict(slots=T * K, l4_slots=int(hi.sum()), fixed_slots=int(fixed[ids.long()].sum()),
                  float0_slots=int(stat[ids.long()].sum()), churn_sum=float(churn.sum()), churn_n=int(churn.numel()),
-                 churn_first_sum=float(churn[:, 0].sum()), churn_first_n=int(churn[:, 0].numel()))
+                 churn_first_sum=float(churn[:, 0].sum()), churn_first_n=int(churn[:, 0].numel()),
+                 churn_hist=hist(churn.flatten()) if churn.numel() else {})
+        if upg is not None:
+            d.update(upg_hist=hist(upg.flatten()), upg_sum=float(upg.sum()), upg_n=int(upg.numel()))
         return hi, serve, d
 
     def level_mask(self, layer, ids, seq, groups=None):

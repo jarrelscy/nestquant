@@ -178,7 +178,34 @@ def ffn(x, W):
     return torch.nn.functional.linear(torch.nn.functional.silu(g) * u, W["down_proj"].to(x.dtype))
 
 
-def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None, seq=None, groups=None):
+def la_route(norm, gate, f, chunk):
+    """Router lookahead: `gate`(`norm`(f)) in chunks -> (ids int16 [T,8], weights fp32 [T,8], |x|^2 fp32 [T])."""
+    ids, ws, xn = [], [], []
+    for c0 in range(0, f.shape[0], chunk):
+        x = norm(f[c0:c0 + chunk])
+        _, w, i = gate(x)
+        ids.append(i.to(torch.int16)); ws.append(w.float()); xn.append(x.float().pow(2).sum(-1))
+        del x
+    return torch.cat(ids), torch.cat(ws), torch.cat(xn)
+
+
+def la_chunk_vectors(src, seq, NE):
+    """(ids, w, xn2) -> per-window (C = seq) expert score vectors [3, N, NE] fp32: count, sum w, sum w^2 |x|^2."""
+    i, w, xn = src
+    i = i.long()
+    T = i.shape[0]
+    N = T // seq
+    win = (torch.arange(T, device=i.device) // seq)[:, None].expand_as(i)
+    out = torch.zeros(3, N, NE, dtype=torch.float64, device=i.device)
+    for k, v in enumerate((torch.ones_like(w, dtype=torch.float64), w.double(), w.double().pow(2) * xn.double()[:, None])):
+        out[k].index_put_((win, i), v, accumulate=True)
+    return out.float().cpu().numpy()
+
+
+def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None, seq=None, groups=None, la=None,
+              la_rec=None):
+    """la: {stream: {1: (ids, w, xn2) router lookahead from h_out(li-1), 2: ... from h_out(li-2)}} (NQ_LOOKAHEAD /
+    adapt:ahead= arms); la_rec: {stream: {}} -> per-window score vectors of actual / 1-ahead / 2-ahead routing."""
     """flats: per-stream [T,H] bf16 residual streams (updated in place: f += MoE(norm(f)));
     qs: per-stream quantiser (Ref for the reference).  Routing and the shared expert run in `chunk`-token
     slabs; routed experts gather + normalise their own tokens, so no [T,H] normed copy is kept and every expert's
@@ -192,11 +219,12 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
         margin = {"n": 0, "lt1e-2": 0, "lt1e-3": 0, "hist": torch.zeros(140, dtype=torch.long)}
     ref_iw = None                                # (ids, weights) of the reference stream, for oracle routing
     for f in flats:
-        ids_l, w_l, own_l = [], [], []
+        ids_l, w_l, own_l, xn_l = [], [], [], []
         out = torch.empty_like(f)
         if keep is not None:
             kx = torch.empty(f.shape, dtype=f.dtype, pin_memory=True)
         rmode = getattr(qs[len(route)], "route_mode", None) if route else None
+        need_act = bool(getattr(qs[len(route)], "needs_act", False))   # adapt: salience / oracle decode arms
         assert rmode in (None, "oracle", "oracle_ids"), rmode
         assert rmode is None or ref_iw is not None, "route=oracle needs the inline reference stream"
         for c0 in range(0, T, chunk):
@@ -222,6 +250,8 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
             del logits
             ids_l.append(i)
             w_l.append(w)
+            if la is not None or need_act:
+                xn_l.append(x.float().pow(2).sum(-1))
             out[c0:c0 + chunk] = layer.mlp.shared_experts(x)
             if keep is not None:
                 kx[c0:c0 + chunk] = x.cpu()
@@ -245,9 +275,31 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
         tok = torch.arange(T, device=dev).repeat_interleave(i.shape[1])[order]
         offs = [0] + torch.bincount(ids, minlength=E).cumsum(0).tolist()
         q = qs[len(route)]
+        s_ = len(route)
+        if la is not None or need_act:
+            act = (i, w.float(), torch.cat(xn_l))
+            del xn_l
+        if need_act:
+            q.act_full = act                     # own routing (ids, w, |x|^2 of the normalised MoE input)
+        if la is not None:
+            pr = la.get(s_, {})
+            for k_, p_ in pr.items():            # per-token top-8 recall of the lookahead
+                if p_ is not None:
+                    rec = (i.unsqueeze(-1) == p_[0].long().unsqueeze(-2)).any(-1).float().mean()
+                    stats[s_].setdefault(f"la{k_}_tok_recall", {})[li] = float(rec)
+            if la_rec is not None and s_ in la_rec:
+                la_rec[s_][li] = {"act": la_chunk_vectors(act, seq, E),
+                                  **{f"p{k_}": la_chunk_vectors(p_, seq, E) for k_, p_ in pr.items() if p_ is not None}}
+            if getattr(q, "ahead", None) is not None:
+                q.la_full = act if q.ahead == 0 else pr.get(q.ahead)
+                assert q.la_full is not None, f"{q.name}: no {q.ahead}-ahead prediction at layer {li}"
         hm = None
         if hasattr(q, "level_mask") and getattr(q, "active", lambda _l: True)(li):   # per-token levels (adapt:)
             hm = q.level_mask(li, i, seq, groups).reshape(-1)[order]
+            if getattr(q, "la_full", None) is not None:
+                q.la_full = None
+            if need_act:
+                q.act_full = None
         route.append((tok, w.reshape(-1)[order], offs, i, hm, own_i))
         outs.append(out)
     ref_i = route[0][3] if getattr(qs[0], "is_ref", False) else None
@@ -407,6 +459,15 @@ def cmd_run(a):
 
     t_start = time.time()
     tl = {}
+    # router lookahead (chunked-prefill predictor reference): NQ_LOOKAHEAD=1 records accuracy for NQ_LA_STREAMS
+    la_names = set(os.environ.get("NQ_LA_STREAMS", "ref,nqdef").split(",")) if os.environ.get("NQ_LOOKAHEAD") else set()
+    la_acc = [s for s, q in enumerate(qs) if q.name in la_names]
+    la_need = sorted(set(la_acc) | {s for s, q in enumerate(qs) if getattr(q, "ahead", None) in (1, 2)})
+    la_rec = {s: {} for s in la_acc}
+    la_any = bool(la_need) or any(getattr(q, "ahead", None) is not None for q in qs)
+    P2 = {}                                             # 2-ahead predictions for the current layer (from li-2)
+    if la_any:
+        log(f"lookahead: accuracy streams {[qs[s].name for s in la_acc]}, predictions for {[qs[s].name for s in la_need]}")
     dump = set()
     if a.dump_layers:
         for part in a.dump_layers.split(","):                            # a-b[,c,d-e]
@@ -436,6 +497,29 @@ def cmd_run(a):
                 dsave(li, "h_in", s_, hid[s_])              # residual entering layer li
         for q in qs:
             q.begin_layer(li, dev)
+        la = None
+        if la_any:
+            with torch.no_grad():                           # router lookahead on h_in(li) = h_out(li-1)
+                la = {s: {1: None, 2: P2.get(s)} for s in range(len(qs))}
+                if sparse:
+                    for s in la_need:
+                        la[s][1] = la_route(layer.post_attention_layernorm, layer.mlp.gate,
+                                            hid[s].view(N * SEQ, -1), a.moe_chunk)
+                P2 = {}
+                if li + 1 < nl and cfg.mlp_layer_types[li + 1] == "sparse" and la_need:
+                    from transformers.models.glm_moe_dsa.modeling_glm_moe_dsa import GlmMoeDsaTopkRouter
+                    nx = GlmMoeDsaRMSNorm(cfg.hidden_size, cfg.rms_norm_eps)
+                    nx.load_state_dict({"weight": fp8.tensor(f"model.layers.{li + 1}.post_attention_layernorm.weight",
+                                                             dev)}, assign=True)
+                    with torch.device("meta"):
+                        gx = GlmMoeDsaTopkRouter(cfg)
+                    gx.load_state_dict({"weight": fp8.tensor(f"model.layers.{li + 1}.mlp.gate.weight", dev),
+                                        "e_score_correction_bias":
+                                            fp8.tensor(f"model.layers.{li + 1}.mlp.gate.e_score_correction_bias", dev)},
+                                       assign=True)
+                    for s in la_need:
+                        P2[s] = la_route(nx, gx, hid[s].view(N * SEQ, -1), a.moe_chunk)
+                    del nx, gx
         with torch.no_grad():
             for h in hid:                                   # attention, per stream
                 for s0 in range(0, N, a.attn_chunk):
@@ -460,7 +544,9 @@ def cmd_run(a):
                         t1_ = min(t0_ + a.moe_chunk, f.shape[0])
                         f[t0_:t1_] += layer.mlp(layer.post_attention_layernorm(f[t0_:t1_]))
             else:
-                moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk, keep, seq=SEQ, groups=groups)
+                moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk, keep, seq=SEQ, groups=groups,
+                          la=la, la_rec=la_rec if la_acc else None)
+            del la
             if li in dump:
                 if keep and keep["x"]:
                     for kind, ts in keep.items():           # x / ids / p / shared / moe_out per stream
@@ -568,6 +654,9 @@ def cmd_run(a):
         res[q.name].update({"spec": q.spec, "stats": stats[i], "tokkl_groups": None,
                             "extra": {k: getattr(q, k) for k in ("n_hi", "n_lo", "diag") if hasattr(q, k)}})
         np.save(f"{rdir}/tokkl_{q.name}_r{RANK}.npy", np.concatenate(tokkl[q.name]))
+    for s, rec in la_rec.items():                       # lookahead per-window expert score vectors (private: stays here)
+        arr = {f"L{li}_{src}": v for li, d in rec.items() for src, v in d.items()}
+        np.savez_compressed(f"{rdir}/la_{qs[s].name}_r{RANK}.npz", **arr)
     json.dump({"rank": RANK, "world": WORLD, "corpora": names, "corpus_sha": shas, "seq": SEQ,
                "shard": SHARD, "windows": WIN_IDS,
                "n_layers": nl, "groups_per_window": groups, "ref": "cache" if use_cache else "inline",
