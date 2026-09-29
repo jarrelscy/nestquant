@@ -1,0 +1,98 @@
+[
+ {
+  "L": 10,
+  "B": 1,
+  "n4": 26,
+  "share4": 0.134,
+  "defs": [
+   "NQ_PDL"
+  ],
+  "base_us": 37.38,
+  "var_us": 36.97,
+  "gain_pct": 1.08,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 2.6703237381298095e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 4,
+  "n4": 26,
+  "share4": 0.134,
+  "defs": [
+   "NQ_PDL"
+  ],
+  "base_us": 74.24,
+  "var_us": 73.34,
+  "gain_pct": 1.21,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 3.123618080280721e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 8,
+  "n4": 26,
+  "share4": 0.134,
+  "defs": [
+   "NQ_PDL"
+  ],
+  "base_us": 128.26,
+  "var_us": 126.46,
+  "gain_pct": 1.4,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 2.1963705876260065e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 1,
+  "n4": 128,
+  "share4": 0.607,
+  "defs": [
+   "NQ_PDL"
+  ],
+  "base_us": 48.13,
+  "var_us": 49.66,
+  "gain_pct": -3.19,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 2.2005659047863446e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 4,
+  "n4": 128,
+  "share4": 0.607,
+  "defs": [
+   "NQ_PDL"
+  ],
+  "base_us": 93.44,
+  "var_us": 92.8,
+  "gain_pct": 0.68,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 1.3499758097168524e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 8,
+  "n4": 128,
+  "share4": 0.607,
+  "defs": [
+   "NQ_PDL"
+  ],
+  "base_us": 181.95,
+  "var_us": 181.5,
+  "gain_pct": 0.25,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 1.8787322915159166e-05,
+  "match": false
+ }
+]

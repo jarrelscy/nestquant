@@ -1,0 +1,98 @@
+[
+ {
+  "L": 10,
+  "B": 1,
+  "n4": 26,
+  "share4": 0.134,
+  "defs": [
+   "NQ_PREFETCH"
+  ],
+  "base_us": 37.12,
+  "var_us": 37.12,
+  "gain_pct": 0.0,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 4.012823774246499e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 4,
+  "n4": 26,
+  "share4": 0.134,
+  "defs": [
+   "NQ_PREFETCH"
+  ],
+  "base_us": 75.77,
+  "var_us": 75.78,
+  "gain_pct": -0.01,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 2.3993099603103474e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 8,
+  "n4": 26,
+  "share4": 0.134,
+  "defs": [
+   "NQ_PREFETCH"
+  ],
+  "base_us": 134.66,
+  "var_us": 135.29,
+  "gain_pct": -0.47,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 2.118999145750422e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 1,
+  "n4": 128,
+  "share4": 0.607,
+  "defs": [
+   "NQ_PREFETCH"
+  ],
+  "base_us": 48.64,
+  "var_us": 48.64,
+  "gain_pct": 0.0,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 2.5797469788813032e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 4,
+  "n4": 128,
+  "share4": 0.607,
+  "defs": [
+   "NQ_PREFETCH"
+  ],
+  "base_us": 97.54,
+  "var_us": 96.51,
+  "gain_pct": 1.05,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 1.5489318684558384e-05,
+  "match": false
+ },
+ {
+  "L": 10,
+  "B": 8,
+  "n4": 128,
+  "share4": 0.607,
+  "defs": [
+   "NQ_PREFETCH"
+  ],
+  "base_us": 194.94,
+  "var_us": 193.53,
+  "gain_pct": 0.72,
+  "bitwise": false,
+  "base_repeatable": false,
+  "max_rel": 2.253898674098309e-05,
+  "match": false
+ }
+]
