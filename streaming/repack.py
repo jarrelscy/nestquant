@@ -4,7 +4,7 @@ OUT/rank{r}.bin: record of (L, E) at ((L - L0) * 256 + E) * rec_bytes, rec_bytes
 aligned, = the slot size), so layers can be written in any order as the fit lands them. OUT/rank{r}.json: layout,
 per-layer written flag and per-expert lr ranks. The resident planes (base, scales, lr) go to OUT/res/rank{r}/L{L}.pt
 (resident.py, loaded at serve startup). Layers already written are skipped; rerun to pick up new ones."""
-import os,sys,json,time,torch
+import os,sys,json,time,fcntl,torch
 HERE=os.path.dirname(os.path.abspath(__file__));sys.path[:0]=[HERE,HERE+'/../sm120']
 import nqload as NQ,p4rec as PR,resident as RS
 NE=256;L0=3
@@ -36,8 +36,12 @@ def main():
                 for E,ex in RL.ex.items():os.pwrite(fd,PR.pack(ex,lay),((L-L0)*NE+E)*rb)
                 os.fsync(fd)
             finally:os.close(fd)
-            idx['layers'][str(L)]=dict(experts=RL.experts,rg={E:RL.ex[E].rg for E in RL.experts},rd={E:RL.ex[E].rd for E in RL.experts})
-            json.dump(idx,open(ip+'.tmp','w'));os.replace(ip+'.tmp',ip)
+            ent=dict(experts=RL.experts,rg={E:RL.ex[E].rg for E in RL.experts},rd={E:RL.ex[E].rd for E in RL.experts})
+            with open(f'{out}/rank{r}.lock','w') as lk:  # several repacks may run at once (one per layer): merge under a lock
+                fcntl.flock(lk,fcntl.LOCK_EX)
+                if os.path.exists(ip):cur=json.load(open(ip));cur.setdefault('rec_bytes',idx['rec_bytes']);cur.setdefault('seg',idx['seg']);idx=cur
+                idx['layers'][str(L)]=ent
+                json.dump(idx,open(f'{ip}.{os.getpid()}.tmp','w'));os.replace(f'{ip}.{os.getpid()}.tmp',ip)
             print(f'L{L} rank{r}: {len(RL.experts)} records x {rb} B in {time.time()-t:.1f}s',flush=True)
             del RL;torch.cuda.empty_cache()
 

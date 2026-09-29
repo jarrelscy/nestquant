@@ -98,7 +98,11 @@ def load_part(d,i):
     if os.path.exists(f'{d}/tp{i}.pt'):return torch.load(f'{d}/tp{i}.pt',weights_only=False)
     T25=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','threads','25-campaign')
     if T25 not in sys.path:sys.path.append(T25)
-    import nq25_st;return nq25_st.load_shard(f'{d}/tp{i}.safetensors')
+    import nq25_st,struct,json,safetensors.torch as ST
+    # = nq25_st.load_shard, but one sequential read: safe_open's mmap turns into small random reads (~20 MB/s on the HDD)
+    b=open(f'{d}/tp{i}.safetensors','rb').read();n=struct.unpack('<Q',b[:8])[0];m=json.loads(b[8:8+n])['__metadata__']
+    assert m.get('format')==nq25_st.FORMAT,m.get('format');t=ST.load(b);del b
+    return nq25_st._untree(json.loads(m['tree']),t.__getitem__)
 
 class RankLayer:
     """One MoE layer for rank `rank` of a TP=tp run, from root/L{L}/tp{s}.pt (or root/layers/L{L}/tp{s}.safetensors)."""
