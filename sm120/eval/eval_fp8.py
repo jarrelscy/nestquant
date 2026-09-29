@@ -116,13 +116,17 @@ def ffn(x,g,u,d):
     return torch.nn.functional.linear(torch.nn.functional.silu(torch.nn.functional.linear(x,g))*torch.nn.functional.linear(x,u),d)
 
 # ------------------------------------------------------------------------------------------------ dyn scheduler
-def sim_dyn(ids,L,fixed,dflt,rb_tp,step_tok,land_steps=1,n_float=51,slots=56,cap=6.0,tps=111.0,nl=75,predictor='ema'):
+def sim_dyn(ids,L,fixed,dflt,rb_tp,step_tok,land_steps=1,n_float=51,slots=56,cap=6.0,tps=111.0,nl=75,predictor='ema',gkw=None,sv=None):
     """ids [T,8] (global token order) -> lv4 [T,8] bool + stats. One Scheduler per layer with 1/nl of the byte budget.
     predictor 'ema' (EMA512 / refresh 64) or 'gbdt' (GBDT p64, 16-token refresh, next_refresh mode, 1 thread, no token
     ids = segment state stays 'think', as in the serve). The GBDT features carry no layer id, so a per-layer predictor
-    is the same model the serve runs over all layers."""
+    is the same model the serve runs over all layers.
+    gkw: GBDT kwargs (mode next_refresh|sync, scale None|mps, band ema256|all); sv [T,8] per-slot salience w^2*|x|^2
+    (w = final combine weight incl. routed_scaling_factor, x = post_attention_layernorm output, fp32), summed per expert
+    per step and passed to Scheduler.step(sal=) exactly as the serve does. next_refresh: the worker's score matrix is
+    applied at the NEXT 16-token boundary (the sim blocks on it there, so the one-block lag is exact and deterministic)."""
     S=SC.Scheduler([L],{L:fixed},{L:dflt},rb_tp,NE=NE,n_float=n_float,slots=slots,cap_GBps=cap/nl,tok_per_s=tps,
-                   predictor=predictor,predictor_kw=dict(num_threads=1,mode='next_refresh') if predictor=='gbdt' else None)
+                   predictor=predictor,predictor_kw=dict(dict(num_threads=1,mode='next_refresh',scale='none'),**(gkw or {})) if predictor=='gbdt' else None)
     for e in dflt:
         if e not in fixed:S.state[0,e]=2                     # floating_default is preloaded at startup
     T=ids.shape[0];lv4=np.zeros(ids.shape,bool);pend=[];fx=S.fixed[0]
@@ -130,7 +134,8 @@ def sim_dyn(ids,L,fixed,dflt,rb_tp,step_tok,land_steps=1,n_float=51,slots=56,cap
     for t0 in range(0,T,step_tok):
         t1=min(T,t0+step_tok);r=ids[t0:t1];lvl=fx|(S.state[0]==2);lv4[t0:t1]=lvl[r]
         c=np.bincount(r.reshape(-1),minlength=NE)[None]
-        ups,downs=S.step(c,t1-t0)
+        sal=None if sv is None else np.bincount(r.reshape(-1),weights=sv[t0:t1].reshape(-1),minlength=NE)[None]
+        ups,downs=S.step(c,t1-t0,sal=sal)
         for L_,e in downs:S.released(L_,e)
         pend.append(ups)
         if len(pend)>land_steps:
@@ -140,23 +145,37 @@ def sim_dyn(ids,L,fixed,dflt,rb_tp,step_tok,land_steps=1,n_float=51,slots=56,cap
         r=ids[b0:b0+blk];c=np.bincount(r.reshape(-1),minlength=NE).astype(float);cf=c.copy();cf[fx]=-1
         top=np.argsort(-cf,kind='stable')[:n_float];orc[0]+=c[fx].sum()+c[top].sum();orc[1]+=c.sum()
     S.close()
-    return lv4,dict(tokens=T,share4=float(lv4.mean()),oracle_block64_share4=orc[0]/max(orc[1],1),**{k:int(v) for k,v in S.stats.items()})
+    pst=getattr(S.P,'stats',None) or {}
+    return lv4,dict(tokens=T,share4=float(lv4.mean()),oracle_block64_share4=orc[0]/max(orc[1],1),**{k:int(v) for k,v in S.stats.items()},
+                    **{f'p_{k}':int(v) for k,v in pst.items()})
 
 def K(s):return 'dyn' if s.startswith('dyn') else s   # dyn_shuf / dyn_reset / dyn_gbdt* are dyn streams (other chaining / predictor)
-DYN=('dyn','dyn_shuf','dyn_reset','dyn_gbdt','dyn_gbdt_shuf','dyn_gbdt_reset')
-def dyn_levels(g,variant,nw,seed,**kw):
+def _gbdt_variant(v):
+    """dyn_gbdt[_mps][_sync][_all][_shuf|_reset] -> GBDT kwargs (default next_refresh, scale none, band ema256)"""
+    t=v[len('dyn_gbdt'):].split('_')[1:];t=[x for x in t if x not in ('shuf','reset')]
+    assert set(t)<=_GB_TOK and len(set(t))==len(t),v
+    return dict(mode='sync' if 'sync' in t else 'next_refresh',scale='mps' if 'mps' in t else 'none',band='all' if 'all' in t else 'ema256')
+_GB_TOK={'mps','sync','all'}
+DYN=('dyn','dyn_shuf','dyn_reset')+tuple('dyn_gbdt'+m+y+b+o for m in ('','_mps') for y in ('','_sync') for b in ('','_all') for o in ('','_shuf','_reset'))
+def needs_sal(s):return s.startswith('dyn_gbdt') and _gbdt_variant(s)['scale']=='mps'
+def dyn_levels(g,variant,nw,seed,sv=None,**kw):
     """g [nw*SEQ,8] routing ids in global window order -> lv4 in the same order + stats.
       dyn        windows chained in corpus order (one long session; serving never resets the score)
       dyn_shuf   windows chained in a seeded random order (no warming on one document)
       dyn_reset  every window starts from a fresh Scheduler (floating_default, zero score) = one window per fresh boot
-      dyn_gbdt, dyn_gbdt_shuf, dyn_gbdt_reset: the same with the GBDT p64 predictor instead of EMA512"""
+      dyn_gbdt, dyn_gbdt_shuf, dyn_gbdt_reset: the same with the GBDT p64 predictor instead of EMA512
+      dyn_gbdt modifiers (any order after dyn_gbdt, before _shuf/_reset): _mps = hits x mps128 (GBDTPredictorV2, needs sv),
+      _sync = score inline at the boundary (default next_refresh = applied one 16-token block late), _all = score every
+      non-fixed EMA256 rank >= 20 (default 20..120)"""
     g=g.reshape(nw,SEQ,TOPK);kw['predictor']='gbdt' if variant.startswith('dyn_gbdt') else 'ema'
+    if kw['predictor']=='gbdt':kw['gkw']=_gbdt_variant(variant)
+    if sv is not None:sv=sv.reshape(nw,SEQ,TOPK)
     if variant.endswith('_reset'):
-        out=[sim_dyn(g[w],**kw) for w in range(nw)];lv=np.stack([o[0] for o in out]).reshape(-1,TOPK)
+        out=[sim_dyn(g[w],sv=None if sv is None else sv[w],**kw) for w in range(nw)];lv=np.stack([o[0] for o in out]).reshape(-1,TOPK)
         st={k:(float(np.mean([o[1][k] for o in out])) if isinstance(out[0][1][k],float) else int(sum(o[1][k] for o in out))) for k in out[0][1]}
         return lv,dict(st,order='per-window reset')
     shuf=variant.endswith('_shuf');order=np.random.default_rng(seed+2).permutation(nw) if shuf else np.arange(nw)
-    l4,st=sim_dyn(g[order].reshape(-1,TOPK),**kw);lv=np.empty((nw,SEQ,TOPK),bool);lv[order]=l4.reshape(nw,SEQ,TOPK)
+    l4,st=sim_dyn(g[order].reshape(-1,TOPK),sv=None if sv is None else sv[order].reshape(-1,TOPK),**kw);lv=np.empty((nw,SEQ,TOPK),bool);lv[order]=l4.reshape(nw,SEQ,TOPK)
     return lv.reshape(-1,TOPK),dict(st,order=f'shuffled (seed {seed+2})' if shuf else 'corpus')
 
 # ------------------------------------------------------------------------------------------------ run
@@ -244,7 +263,11 @@ def main():
                             g_np=gi[si].cpu().numpy()[tok_perm]          # global token order, the dyn stream's own routing
                             if a.dump_routing and RANK==0 and s==[x for x in streams if K(x)=='dyn'][0]:
                                 os.makedirs(f'{a.out}/results/{tag}_routing',exist_ok=True);np.save(f'{a.out}/results/{tag}_routing/L{li}.npy',g_np.astype(np.uint8))
-                            l4,st=dyn_levels(g_np,s,NW,a.seed,L=li,fixed=fx[li],dflt=dflt[li],rb_tp=rb_tp,step_tok=a.step_tok,cap=a.gbdt_cap if ('gbdt' in s and a.gbdt_cap is not None) else a.dyn_cap);dynst[s][li]=st
+                            sv_np=None
+                            if needs_sal(s):   # per-slot salience w^2*|x|^2 (w incl. routed_scaling_factor; x = post-LN MoE input, fp32)
+                                xn_=torch.cat([gx[si][c0:c0+8192].float().pow(2).sum(-1) for c0 in range(0,T,8192)]).double()   # chunked: no [T,H] fp32 temp
+                                sv_np=(gw[si].double().pow(2)*xn_[:,None]).cpu().numpy()[tok_perm];del xn_
+                            l4,st=dyn_levels(g_np,s,NW,a.seed,sv=sv_np,L=li,fixed=fx[li],dflt=dflt[li],rb_tp=rb_tp,step_tok=a.step_tok,cap=a.gbdt_cap if ('gbdt' in s and a.gbdt_cap is not None) else a.dyn_cap);dynst[s][li]=st
                             back=np.empty_like(l4);back[tok_perm]=l4;lv4[s]=torch.from_numpy(back).to(dev)
                     lv4a={}
                     for s in HYB:     # ARVQ / AQLM: hot (NVFP4) share of the stream's own routed slots
@@ -453,13 +476,14 @@ def merge(a,tag,allr,streams,names,cman,PL,dynst,tl,nq_layers,fx,fsrc,rj,wall,nl
     for s,b in bpe.items():md.append(f"| {s} | {b['resident']:.3f} | {b['served']:.3f} | {b.get('share4_routed',float('nan')):.3f} |")
     if dynst:     # streamed bytes (rec_bytes x tp per upgrade, the serve's budget unit) summed over layers, per token
         md+=['','Scheduler traffic (sum over NQ layers; bytes = rec_bytes x tp per upgrade, GB/s at 111 tok/s)','',
-             '| stream | order | cap GB/s | upgrades | MB/token | GB/s @111 | deferred steps | big steps |','|---|---|---|---|---|---|---|---|']
+             '| stream | order | cap GB/s | upgrades | ups /1k tok /layer | MB/token | GB/s @111 | deferred steps | big steps | GBDT late waits |','|---|---|---|---|---|---|---|---|---|---|']
         for s,d in dynst.items():
             if not d:continue
             tk=max(x['tokens'] for x in d.values());by=sum(x['bytes'] for x in d.values());ups=sum(x['ups'] for x in d.values())
-            out['traffic']=out.get('traffic',{});out['traffic'][s]=dict(upgrades=ups,bytes=by,tokens=tk,MB_per_token=by/tk/1e6,GBps_at_111=by/tk*111/1e9)
+            out['traffic']=out.get('traffic',{});upk=ups/tk/len(d)*1e3;lw=sum(x.get('p_late_waits',0) for x in d.values())
+            out['traffic'][s]=dict(upgrades=ups,bytes=by,tokens=tk,MB_per_token=by/tk/1e6,GBps_at_111=by/tk*111/1e9,ups_per_1k_tok_per_layer=upk,gbdt_late_waits=lw,downs=sum(x['downs'] for x in d.values()))
             cp=a.gbdt_cap if ('gbdt' in s and a.gbdt_cap is not None) else a.dyn_cap;out['traffic'][s]['cap_GBps']=cp
-            md.append(f"| {s} | {next(iter(d.values()))['order']} | {cp:g} | {ups} | {by/tk/1e6:.3f} | {by/tk*111/1e9:.3f} | {sum(x['deferred_steps'] for x in d.values())} | {sum(x['big_steps'] for x in d.values())} |")
+            md.append(f"| {s} | {next(iter(d.values()))['order']} | {cp:g} | {ups} | {upk:.2f} | {by/tk/1e6:.3f} | {by/tk*111/1e9:.3f} | {sum(x['deferred_steps'] for x in d.values())} | {sum(x['big_steps'] for x in d.values())} | {lw} |")
         json.dump(out,open(f'{a.out}/results/{tag}.json','w'),indent=1)
     open(f'{a.out}/results/{tag}.md','w').write('\n'.join(md)+'\n');print('\n'.join(md),flush=True)
 

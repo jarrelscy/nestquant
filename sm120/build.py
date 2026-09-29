@@ -10,4 +10,8 @@ def get(defs=None):
     tag=('_'+'_'.join(d.replace('=','') for d in defs)) if defs else ''
     b=os.environ.get('NQ_BUILD','/data/Jarrel/nq-build')+'/sm120'+tag;os.makedirs(b,exist_ok=True)
     return load('nqmoe120'+tag,[os.path.join(D,'nqmoe.cu')],extra_cuda_cflags=['-O3','--use_fast_math','-lineinfo']+['-D'+d for d in defs],build_directory=b,verbose=False)
+def get_sal():
+    """nqsal.cu: decode salience export (GBDT x mps128 predictor); own module / build dir, independent of nqmoe."""
+    b=os.environ.get('NQ_BUILD','/data/Jarrel/nq-build')+'/sm120_sal';os.makedirs(b,exist_ok=True)
+    return load('nqsal120',[os.path.join(D,'nqsal.cu')],extra_cuda_cflags=['-O3','-lineinfo'],build_directory=b,verbose=False)
 if __name__=='__main__':get();print('built')

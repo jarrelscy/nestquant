@@ -20,18 +20,34 @@ p64 model, 16-token refresh, next_refresh mode; see sm120/eval/PREDICTOR.md). De
 DEFAULT_PREDICTOR). With gbdt the EMA score is still kept (kv_pressure, and candidate order until the first GBDT score
 matrix exists); the target set and the upgrade order come from the predictor, and the budget / big-step guard / slots /
 executor feedback are unchanged. step(..., token_ids=None, new_request=False) feeds the think/answer segment state
-(None = segment stays 'think'). A predictor object with the GBDTPredictor interface can be passed instead of a name."""
+(None = segment stays 'think'). A predictor object with the GBDTPredictor interface can be passed instead of a name.
+GBDT env: NQ_GBDT_MODE=next_refresh|sync, NQ_GBDT_SCALE=none|mps (mps = predicted hits x mps128, needs step(..., sal=)),
+NQ_GBDT_BAND=ema256|all (all = score every non-fixed expert from EMA256 rank 20 on, not 20..120), NQ_GBDT_MODEL (a 9-feature
+v2 model also selects GBDTPredictorV2), NQ_GBDT_THREADS."""
 import os
 import numpy as np
 
 DEFAULT_PREDICTOR='gbdt'
-def make_predictor(name,layers,fixed,n_float=51,**kw):
+def _nfeat(path):
+    with open(path) as f:
+        for ln in f:
+            if ln.startswith('feature_names='):return len(ln.split('=',1)[1].split())
+    return None
+def make_predictor(name,layers,fixed,n_float=51,NE=256,**kw):
     if name in (None,'ema'):return None
     if name=='gbdt':
-        from gbdt_predictor import GBDTPredictor
         kw.setdefault('num_threads',int(os.environ.get('NQ_GBDT_THREADS','4')))
         kw.setdefault('mode',os.environ.get('NQ_GBDT_MODE','next_refresh'))
-        return GBDTPredictor(layers,fixed,model_path=os.environ.get('NQ_GBDT_MODEL') or None,n_float=n_float,**kw)
+        scale=kw.pop('scale',os.environ.get('NQ_GBDT_SCALE','none'));scale=None if scale in (None,'','none') else scale
+        band=kw.pop('band',os.environ.get('NQ_GBDT_BAND','ema256'))   # ema256 = score EMA256 ranks 20..120; all = every non-fixed rank >= 20
+        assert band in ('ema256','all'),band
+        if band=='all':kw.setdefault('rhi',NE)
+        mp=kw.pop('model_path',None) or os.environ.get('NQ_GBDT_MODEL') or None
+        from gbdt_predictor import GBDTPredictor
+        if scale is None and (mp is None or _nfeat(mp)==5):
+            return GBDTPredictor(layers,fixed,model_path=mp,n_float=n_float,**kw)
+        from gbdt_predictor_v2 import GBDTPredictorV2     # salience inputs: step(..., sal=[NL,NE])
+        return GBDTPredictorV2(layers,fixed,model_path=mp,scale=scale,n_float=n_float,**kw)
     raise ValueError(f'unknown predictor {name!r}')
 
 class Scheduler:
@@ -53,14 +69,17 @@ class Scheduler:
         s.tok=0;s.next_refresh=refresh;s.stats=dict(ups=0,downs=0,deferred_steps=0,big_steps=0,bytes=0)
         if predictor is None:predictor=os.environ.get('NQ_PREDICTOR') or DEFAULT_PREDICTOR
         s.predictor_name=predictor if isinstance(predictor,str) else type(predictor).__name__
-        s.P=make_predictor(predictor,s.layers,fixed,n_float,**(predictor_kw or {})) if isinstance(predictor,str) else predictor
-    def step(s,counts,ntok=1,token_ids=None,new_request=False):
+        s.P=make_predictor(predictor,s.layers,fixed,n_float,NE=NE,**(predictor_kw or {})) if isinstance(predictor,str) else predictor
+        s.wants_sal=s.P is not None and hasattr(s.P,'bs')              # GBDTPredictorV2 accumulates salience
+    def step(s,counts,ntok=1,token_ids=None,new_request=False,sal=None):
+        """sal: optional [len(layers),NE] per-step salience (sum over the step's routed slots of w^2*|x|^2), forwarded
+        to predictors that take it (GBDTPredictorV2); ignored otherwise."""
         c=np.asarray(counts,np.float64)
         s.score=s.score*s.a**ntok+c;s.tok+=ntok
         s.budget=min(s.cap,s.budget+s.per_tok*ntok)
         osc=None
         if s.P is not None:
-            if s.P.step(c,ntok,token_ids,new_request):
+            if (s.P.step(c,ntok,token_ids,new_request,sal=sal) if s.wants_sal else s.P.step(c,ntok,token_ids,new_request)):
                 res=np.isin(s.state,(1,2));w=s.P.target(res)
                 if w is not None:s.want=w&~s.fixed
         elif s.tok>=s.next_refresh:
