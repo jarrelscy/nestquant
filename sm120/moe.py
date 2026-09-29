@@ -137,10 +137,14 @@ def dense_W(p,level,G=4,dtype=torch.float32):
         W[rows,ks]=f[...,j]
     return W.to(dtype)
 
-def H128(dev='cuda'):
+def H128(dev='cuda',n=128):
+    """normalized Sylvester Hadamard of order n (default 128)"""
     H=torch.ones(1,1)
-    while H.shape[0]<128:H=torch.cat([torch.cat([H,H],1),torch.cat([H,-H],1)],0)
-    return (H/128**0.5).to(dev)
+    while H.shape[0]<n:H=torch.cat([torch.cat([H,H],1),torch.cat([H,-H],1)],0)
+    return (H/n**0.5).to(dev)
+def had_dn(ex):
+    """down-projection input Hadamard width (threads/29 in_had_down; absent = 128)"""
+    return int(getattr(ex,'had_dn',128) or 128)
 
 class Expert:
     def __init__(s,H,I,seed,nm_gu=None,nm_dn=None,dev='cuda',rk_gu=0,rk_dn=0,mbn='rand',var=False):
@@ -163,7 +167,8 @@ class Expert:
         return b
     def ref(s,x,level,G=4):
         """x [T,H] fp32 -> [T,H] fp32, through the dense-decoded weights."""
-        H,I=s.H,s.I;Hm=H128(x.device);wht=lambda v:(v.view(*v.shape[:-1],-1,128)@Hm).view(v.shape)
+        H,I=s.H,s.I;Hm=H128(x.device);wht=lambda v,M=Hm:(v.view(*v.shape[:-1],-1,M.shape[0])@M).view(v.shape)
+        Hd=H128(x.device,had_dn(s))
         sg=s.signs.float();su,svg,svu,sud,svo,suu=sg[:H],sg[H:H+I],sg[H+I:H+2*I],sg[H+2*I:H+3*I],sg[H+3*I:2*H+3*I],sg[2*H+3*I:]
         Wg=dense_W(s.gu,level,G);Wd=dense_W(s.dn,level,G)
         xg=wht(x*su).half().float();xu=wht(x*suu).half().float();a=torch.cat([xg@Wg[:I].T,xu@Wg[I:].T],1)
@@ -172,7 +177,7 @@ class Expert:
             Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d=[t.float() for t in s.lrT];z=x@Vg.T
             g=g+z@U2g+(z@U4g if level==4 else 0);u=u+z@U2u+(z@U4u if level==4 else 0)
         sw=torch.nn.functional.silu(g)*u
-        h=wht(sw*sud).half().float();y=wht(h@Wd.T)*svo
+        h=wht(sw*sud,Hd).half().float();y=wht(h@Wd.T)*svo
         if s.lr is not None:z=sw@Vd.T;y=y+z@U2d+(z@U4d if level==4 else 0)
         return y
 
@@ -187,6 +192,7 @@ def entry(ex,level):
         v=getattr(p,'var',None);e[i]=0 if v is None else v.data_ptr()
     lr=getattr(ex,'lr',None)
     if lr is not None:e[14]=lr.data_ptr();e[15]=ex.lr4.data_ptr();e[16]=ex.rg;e[17]=ex.rd
+    w=had_dn(ex);e[18]=0 if w==128 else w
     return e
 
 class MoELayer:
@@ -198,10 +204,11 @@ class MoELayer:
         S=Bmax*topk
         s.acc_gu=torch.zeros(S,2*I,dtype=torch.float32,device=dev);s.h=torch.zeros(S,I,dtype=torch.float16,device=dev);s.acc_d=torch.zeros(S,H,dtype=torch.float32,device=dev)
         s.cnt_gu=torch.zeros(S*(I//128),dtype=torch.int32,device=dev);s.cnt_d=torch.zeros(H//128,dtype=torch.int32,device=dev);s.wq=torch.zeros(4,dtype=torch.int32,device=dev)
-        s.zd=torch.zeros(S*(I//128)*4,dtype=torch.float32,device=dev)
+        s.zd=torch.zeros(S*(I//128)*4,dtype=torch.float32,device=dev);s.cnt_h=torch.zeros(S*(I//128),dtype=torch.int32,device=dev)
         s.out=torch.zeros(Bmax,H,dtype=torch.float32,device=dev)
         s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2];s.hits_ptr=0   # set to a (host-mapped) int32 [E] pointer to export routing hits
     def set(s,e,ex,level):
+        w=had_dn(ex);assert w in (128,512) and s.I%w==0,f'in_had_down {w} must be 128 or 512 and divide I={s.I}'
         if getattr(ex,'lr',None) is not None:assert ex.rg<=4 and ex.rd<=4 and ex.lr.dtype==torch.float16
         if level==4:
             if not hasattr(s,'rkm'):s.rkm=s.M.rk_codes() if hasattr(s.M,'rk_codes') else [255,255]
@@ -211,7 +218,7 @@ class MoELayer:
         assert x.dtype==torch.float16 and rw.dtype==torch.float16 and sel.dtype==torch.int64,(x.dtype,rw.dtype,sel.dtype)
         out=s.out[:x.shape[0]] if out is None else out
         s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
-                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr,s.zd)
+                      cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr,s.zd,s.cnt_h)
         return out
 
 class Mailbox:
