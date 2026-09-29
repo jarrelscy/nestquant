@@ -24,6 +24,9 @@ for _p in (NQ_HOME+'/streaming',NQ_HOME+'/sm120'):
 try:
     from vllm.logger import init_logger;log=init_logger('vllm.nestquant')
 except Exception:log=logging.getLogger('nestquant')
+# kernel tiling per token count (sm120/bench_real.py on real layers: best cfg per B, 2-11% over one fixed cfg)
+CFG_GU=[None,[1,8,4],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,12],[1,8,12]]
+CFG_DN=[None,[1,8,4],[1,8,2],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4]]
 NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
 ARVQ_NAMES=('hyb_kind',)+tuple(f'arvq_{p}_{k}' for p in ('w13','w2') for k in ('packed','scales','codebooks','global'))+\
     tuple(f'nvfp4_{p}_{k}' for p in ('w13','w2') for k in ('packed','bscale','scale2'))
@@ -86,47 +89,83 @@ class Runtime:
         fx,src,_=FS.load(layers=L_)
         # fixed set: records -> resident pool, level 4 rows
         nfix=sum(len(fx[L]) for L in L_);s.fixpool=torch.empty(nfix,rb,dtype=torch.uint8,device=dev)
-        buf=torch.empty(rb,dtype=torch.uint8).pin_memory();fd=os.open(rf.path,os.O_RDONLY);i=0;t=time.time()
+        buf=torch.empty(rb,dtype=torch.uint8).pin_memory();fd=os.open(rf.path,os.O_RDONLY);i=0;t=time.time();bad=set()
         try:
             for L in L_:
                 d=s.lay[L]
                 for E in fx[L]:
-                    n=os.preadv(fd,[memoryview(buf.numpy())],rf.rec(L,E)*rb);assert n==rb,(L,E,n)
+                    try:n=os.preadv(fd,[memoryview(buf.numpy())],rf.rec(L,E)*rb)
+                    except OSError:n=-1
+                    if n!=rb:bad.add((L,E));i+=1;continue      # SSD unreadable / short: the expert stays at level 2
                     s.fixpool[i].copy_(buf);d['M'].table[E].copy_(PR.row(d['ex'][E],rf.lay,s.fixpool[i].data_ptr(),entry));i+=1
         finally:os.close(fd)
         torch.cuda.synchronize(dev)
+        if bad:
+            log.warning('NestQuant rank %d: %d fixed-set records unreadable, those experts stay at level 2',s.rank,len(bad))
+            fx={L:[E for E in fx[L] if (L,E) not in bad] for L in fx};nfix-=len(bad)
         for L in L_:s.lay[L]['table0']=s.lay[L]['M'].table.clone()
         log.info('NestQuant rank %d: %d layers, fixed set (%s) %d experts at level 4 (%.1f GiB) in %.1fs',
                  s.rank,len(L_),src,nfix,nfix*rb/2**30,time.time()-t)
-        if os.environ.get('NQ_STREAM','1')=='0':return
+        if os.environ.get('NQ_STREAM','1')=='0':
+            s.L_=L_;fm=np.zeros((len(L_),NE),bool)
+            for i,L in enumerate(L_):fm[i,list(fx[L])]=True
+            s.thread=threading.Thread(target=s.share_loop,args=(fm,),name='nq-share',daemon=True);s.thread.start();return
         nslot=int(os.environ.get('NQ_SLOTS_PER_LAYER','56'))*len(L_)
         T22=NQ_HOME+'/threads/22-boundary-experts/fixed_set.json';fj=json.load(open(T22))
         dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in L_}
         s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=NF,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','6')),
                          tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')))
-        s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=64,qd=8,device=dev.index)
+        s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=64,qd=8,device=dev.index,
+                               shadow=os.environ.get('NQ_SHADOW','0')=='1')
         init=[(L,E) for L in L_ for E in dflt[L] if E not in fx[L]][:nslot]
         for L,E in init:s.S.state[s.S.li[L],E]=1
         s.X.apply(init,[],s.S)
+        s.F=s.log=None
+        if os.environ.get('NQ_LEADER','1')!='0' and s.tp>1:     # rank 0 schedules, the other ranks replay its ops
+            import oplog as OL
+            s.log=OL.OpLog(f'/dev/shm/nq_oplog_{os.getppid()}.bin',writer=s.rank==0)
+            if s.rank:s.F=OL.Follower(s.X,s.log);s.F.busy.update(init)
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
         _gate_captures(s)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
+    def share_loop(s,lv4):
+        """NQ_STREAM=0: log the level-4 share of routed slots of the fixed set (same format as the streaming loop)."""
+        H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.stack(H).astype(np.int64);s4=st=0;n=0
+        while not s.stop:
+            time.sleep(1.);n+=1;cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;s4+=int(c[lv4].sum());st+=int(c.sum())
+            if st and n%60==0:
+                log.info('NestQuant rank %d: level-4 hit share %.4f (%d/%d routed slots)',s.rank,s4/st,s4,st);s4=st=0
     def loop(s):
         try:
             torch.cuda.set_device(s.dev);ms=float(os.environ.get('NQ_POLL_MS','4'))/1e3
-            H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time()
+            issue=os.environ.get('NQ_ISSUE','1')!='0'    # 0: schedule but never issue ops (level set stays floating_default; A/B only)
+            H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time();tb=0.;nit=0;s4=st=0
             while not s.stop:
                 time.sleep(ms)
                 with s.cv:s.in_iter=True;cap=s.ncap>0
+                t0=time.perf_counter()
                 try:
-                    s.X.poll(s.S,issue=not cap)
-                    if not cap:        # hits counted during a capture are dropped with it (warmup inputs)
+                    if s.F is not None:
+                        s.X.poll(s.F,issue=not cap);s.F.step(issue=issue and not cap)
+                    else:
+                        s.X.poll(s.S,issue=not cap)
+                    if s.F is None and not cap:        # hits counted during a capture are dropped with it (warmup inputs)
                         cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
-                        if ntok>0:ups,downs=s.S.step(c,ntok);s.X.apply(ups,downs,s.S)
+                        if ntok>0:
+                            lv=s.S.fixed|(s.S.state==2);s4+=int(c[lv].sum());st+=int(c.sum())   # share at the levels served this step
+                            ups,downs=s.S.step(c,ntok)
+                            if issue:
+                                s.X.apply(ups,downs,s.S)
+                                if s.log is not None:s.log.put(ups,downs)
                 finally:
                     with s.cv:s.in_iter=False;s.cv.notify_all()
+                    tb+=time.perf_counter()-t0;nit+=1
                 if time.time()-last>60:
                     last=time.time();lv=s.S.level()
+                    if s.F is not None:
+                        log.info('NestQuant rank %d: follower, level-4 floating %d, stats %s, backlog %d',s.rank,s.F.level_count(),s.F.stats,len(s.F.q))
+                    if st:log.info('NestQuant rank %d: level-4 hit share %.4f (%d/%d routed slots)',s.rank,s4/st,s4,st);s4=st=0
+                    log.info('NestQuant rank %d: host loop %.0f us/iter x %d iters (%.1f%% of wall)',s.rank,tb/max(nit,1)*1e6,nit,tb/60*100);tb=0.;nit=0
                     log.info('NestQuant rank %d: level-4 experts %d/%d, ups %d downs %d, read errors %d, op p50 %.1f ms',s.rank,
                              int((lv==4).sum()),lv.size,s.S.stats['ups'],s.S.stats['downs'],s.S.stats.get('read_errors',0),
                              float(np.median(s.X.lat[-256:]))*1e3 if s.X.lat else -1)
@@ -180,10 +219,10 @@ def forward(L,x,topk_weights,topk_ids):
     if CHECK and not torch.cuda.is_current_stream_capturing():
         try:torch.cuda.synchronize()
         except Exception as e:raise RuntimeError(f'NestQuant mailbox.apply faulted (L{L})') from e
-    if T<=BMAX:return M(xh,ids,w).to(x.dtype)
+    if T<=BMAX:return M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T]).to(x.dtype)
     out=torch.empty(T,x.shape[1],dtype=torch.float32,device=x.device)
     for i in range(0,T,BMAX):
-        j=min(T,i+BMAX);M(xh[i:j],ids[i:j],w[i:j],out=out[i:j])
+        j=min(T,i+BMAX);M(xh[i:j],ids[i:j],w[i:j],out=out[i:j],cfg_gu=CFG_GU[j-i],cfg_dn=CFG_DN[j-i])
         if CHECK and not torch.cuda.is_current_stream_capturing():_check_tables(L,i,xh[i:j],ids[i:j],w[i:j])
     return out.to(x.dtype)
 
