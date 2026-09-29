@@ -1,0 +1,19 @@
+{
+ "layer": 30,
+ "dump": "/tmp/nestquant/18-e2e/hdump_ovr29_ref",
+ "n_tokens": 26624,
+ "l4_experts": 26,
+ "rel_drift_held": 0.521304190158844,
+ "base/mix/same": 0.23243199288845062,
+ "base/mix/ref": 0.5569334626197815,
+ "base/2/same": 0.26599109172821045,
+ "base/2/ref": 0.5681798458099365,
+ "base/4/same": 0.06076941266655922,
+ "base/4/ref": 0.5237688422203064,
+ "band_ref/mix/same": 0.22844499349594116,
+ "band_ref/mix/ref": 0.5553552508354187,
+ "band_ref/2/same": 0.2612415850162506,
+ "band_ref/2/ref": 0.5661289691925049,
+ "band_ref/4/same": 0.060867805033922195,
+ "band_ref/4/ref": 0.5234885811805725
+}

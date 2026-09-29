@@ -1,0 +1,13 @@
+{
+ "layer": 29,
+ "dump": "/tmp/nestquant/18-e2e/hdump",
+ "n_tokens": 26624,
+ "l4_experts": 26,
+ "rel_drift_held": 0.5282095670700073,
+ "base/mix/same": 0.22751452028751373,
+ "base/mix/ref": 0.5605074763298035,
+ "base/2/same": 0.27279040217399597,
+ "base/2/ref": 0.5743806958198547,
+ "base/4/same": 0.06167810782790184,
+ "base/4/ref": 0.5306093096733093
+}
