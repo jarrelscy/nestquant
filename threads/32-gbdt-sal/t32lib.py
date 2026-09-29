@@ -221,6 +221,16 @@ FEATS5 = ("ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16")
 FEATS_V3 = ("pema32", "pema128", "p16", "nmema32", "nmema128", "nm16", "mgema32", "mg16")   # build_v3.py
 
 
+FEATS_X = ("cx_e32", "cx_e128", "cx_s32", "cx_s128", "co_e32", "co_s32", "ema512", "ema2048", "sema512", "sema2048",
+           "tc_word", "tc_num", "tc_code", "tc_punct", "tc_ws", "pos",
+           "mtp1_cnt", "mtp1_sal", "mtp2_cnt", "mtp2_sal", "mtp4_cnt", "mtp4_sal")    # build_x.py (band all)
+FEATS_LH = ("ema8192", "sema8192", "cum_rate", "cum_srate", "pers8", "pers32", "pers128", "gap_mean", "gap_cv",
+            "dom_max", "dom_busy", "dom_smax")                                        # build_lh.py (band all)
+FEATS_M1 = ("m1_topic", "m1_joint", "m1_state", "m2_ent16", "m2_p1_16", "m2_ent_last")  # build_m1.py (band all)
+FEATS_DX = ("dx_lo", "dx_hi", "dx_self")                                              # build_dx.py (band all)
+FEATS_T1 = ("t1_e16", "t1_e64", "t1b_e16", "t1f_e16", "t1f_last", "t2_n16", "t2_n64")  # build_t1.py (band all)
+
+
 def feature_matrix(names, corpus, L, band="", valid=False, d=None):
     """[rows, len(names)] float32 in the named order from rows / rows_v2 / rows_v3 (all [nb, ncand, k])."""
     sfx = "_band" + band if band else ""
@@ -232,13 +242,37 @@ def feature_matrix(names, corpus, L, band="", valid=False, d=None):
         src[n] = ("X2", i)
     for i, n in enumerate(FEATS_V3):
         src[n] = ("X3", i)
+    for i, n in enumerate(FEATS_X):
+        src[n] = ("F", i)
+    for i, n in enumerate(FEATS_LH):
+        src[n] = ("LH", i)
+    for i, n in enumerate(FEATS_T1):
+        src[n] = ("T1", i)
+    for i, n in enumerate(FEATS_DX):
+        src[n] = ("DX", i)
+    for i, n in enumerate(FEATS_M1):
+        src[n] = ("M1", i)
     need = {src[n][0] for n in names}
     arr = {"X": d["X"]}
     if "X2" in need:
         arr["X2"] = np.load(f"{OUT}/rows_v2{sfx}/{corpus}/L{L}.npz")["X2"]
     if "X3" in need:
-        assert not band, "rows_v3 only on the default band"
-        arr["X3"] = np.load(f"{OUT}/rows_v3/{corpus}/L{L}.npz")["X3"]
+        arr["X3"] = np.load(f"{OUT}/rows_v3{sfx}/{corpus}/L{L}.npz")["X3"]
+    if "F" in need:
+        assert band == "all", "rows_x only on band all"
+        arr["F"] = np.load(f"{OUT}/rows_x/{corpus}/L{L}.npz")["F"]
+    if "LH" in need:
+        assert band == "all", "rows_lh only on band all"
+        arr["LH"] = np.load(f"{OUT}/rows_lh/{corpus}/L{L}.npz")["F"]
+    if "T1" in need:
+        assert band == "all", "rows_t1 only on band all"
+        arr["T1"] = np.load(f"{OUT}/rows_t1/{corpus}/L{L}.npz")["F"]
+    if "DX" in need:
+        assert band == "all", "rows_dx only on band all"
+        arr["DX"] = np.load(f"{OUT}/rows_dx/{corpus}/L{L}.npz")["F"]
+    if "M1" in need:
+        assert band == "all", "rows_m1 only on band all"
+        arr["M1"] = np.load(f"{OUT}/rows_m1/{corpus}/L{L}.npz")["F"]
     cols = [arr[src[n][0]][..., src[n][1]] for n in names]
     M = np.stack(cols, -1)
     if valid:

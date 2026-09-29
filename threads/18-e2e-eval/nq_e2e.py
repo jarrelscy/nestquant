@@ -58,6 +58,32 @@ NQ_TRAIN = "/home/coder/git/orbit-duet/runs/glm53_training_15m_v2/tokens.npy"
 
 TRACE_DIR = os.environ.get("NQ_TRACE_DIR")   # T32: dump ref (ids, w, |x|^2) per sparse layer + windows manifest
 TRACE_PROBS = bool(os.environ.get("NQ_TRACE_PROBS"))   # T32: + full 256-way router scores (fp16 raw sigmoid, +bias)
+# T32 M1/M2 (reference stream only, needs NQ_TRACE_DIR; PRIVATE):
+#   NQ_TRACE_HID=10,40,70  residual leaving those layers, per-token RMS-normalised (no weight).  Without
+#     NQ_TRACE_HID_PCA: accumulate sum x / x^T x (fp64) -> TRACE_DIR/hidcov_L{li}.r{R}of{W}.npz (aggregate only);
+#     with NQ_TRACE_HID_PCA=DIR (pca_L{li}.npz: mean [H], V [H,k]): per-token PCA projection (x-mean) @ V, fp16 ->
+#     TRACE_DIR/hid_L{li}.r{R}of{W}.npz.  Raw hidden states are never written.
+#   NQ_TRACE_HEAD=1  per-token reference lm_head entropy (nats) + top-1 prob -> TRACE_DIR/head.r{R}of{W}.npz
+TRACE_HID = [int(x) for x in os.environ.get("NQ_TRACE_HID", "").split(",") if x]
+TRACE_HID_PCA = os.environ.get("NQ_TRACE_HID_PCA")
+TRACE_HEAD = bool(os.environ.get("NQ_TRACE_HEAD"))
+
+
+def trace_hid(li, h):
+    """h [N, SEQ, H] reference residual leaving layer li."""
+    x = h.reshape(-1, h.shape[-1]).float()
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6)
+    f = f"{TRACE_DIR}/hid{'' if TRACE_HID_PCA else 'cov'}_L{li}.r{RANK}of{WORLD}.npz"
+    if TRACE_HID_PCA:
+        z = np.load(f"{TRACE_HID_PCA}/pca_L{li}.npz")
+        mu = torch.from_numpy(z["mean"]).to(x.device).float(); V = torch.from_numpy(z["V"]).to(x.device).float()
+        np.savez(f + ".part.npz", z=((x - mu) @ V).half().cpu().numpy())
+    else:
+        xd = x.double()
+        np.savez(f + ".part.npz", n=np.int64(x.shape[0]), s=xd.sum(0).cpu().numpy(), ss=(xd.T @ xd).cpu().numpy())
+        del xd
+    os.rename(f + ".part.npz", f)
+    del x
 
 
 def log(m):
@@ -576,6 +602,8 @@ def cmd_run(a):
                 moe_multi(layer, li, flats, qs, fp8, dev, stats, a.local_err, a.moe_chunk, keep, seq=SEQ, groups=groups,
                           la=la, la_rec=la_rec if la_acc else None)
             del la
+            if TRACE_DIR and li in TRACE_HID:
+                trace_hid(li, hid[0])
             if li in dump:
                 if keep and keep["x"]:
                     for kind, ts in keep.items():           # x / ids / p / shared / moe_out per stream
@@ -649,6 +677,7 @@ def cmd_run(a):
            for i, q in enumerate(qs) if i in cand}
     tokkl = {qs[i].name: [] for i in cand}
     P = a.pos_chunk
+    head_ent, head_p1 = [], []                           # T32 NQ_TRACE_HEAD (reference, per window [SEQ])
     with torch.no_grad():
         for w in range(N):
             g = groups[w]
@@ -659,6 +688,8 @@ def cmd_run(a):
             for p0 in range(0, SEQ - 1, P):
                 p1 = min(p0 + P, SEQ - 1)
                 lr = torch.log_softmax(hr[p0:p1].float() @ head.T, -1)
+                if TRACE_DIR and TRACE_HEAD:
+                    head_ent.append(-(lr.exp() * lr).sum(-1).cpu()); head_p1.append(lr.max(-1).values.exp().cpu())
                 ce_r = float(-lr.gather(1, tgt[p0:p1, None]).sum())
                 am_r = lr.argmax(-1)
                 for j, i in enumerate(cand):
@@ -676,6 +707,11 @@ def cmd_run(a):
                 del lr
             for j, i in enumerate(cand):
                 res[qs[i].name]["groups"][g]["win_kl"].append(wk[j] / (SEQ - 1))
+    if TRACE_DIR and TRACE_HEAD:                        # positions 0..SEQ-2 of each window (last: no logits here)
+        hf = f"{TRACE_DIR}/head.r{RANK}of{WORLD}.npz"
+        np.savez(hf + ".part.npz", ent=torch.cat(head_ent).reshape(N, SEQ - 1).numpy(),
+                 p1=torch.cat(head_p1).reshape(N, SEQ - 1).numpy())
+        os.rename(hf + ".part.npz", hf)
     rdir = f"{OUT}/results/{a.tag}"
     os.makedirs(rdir, exist_ok=True)
     for j, i in enumerate(cand):
