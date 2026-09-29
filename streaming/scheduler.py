@@ -71,6 +71,7 @@ class Scheduler:
         s.predictor_name=predictor if isinstance(predictor,str) else type(predictor).__name__
         s.P=make_predictor(predictor,s.layers,fixed,n_float,NE=NE,**(predictor_kw or {})) if isinstance(predictor,str) else predictor
         s.wants_sal=s.P is not None and hasattr(s.P,'bs')              # GBDTPredictorV2 accumulates salience
+        s.pin=None          # optional [len(layers), NE] bool: floating experts kept wanted (never downed) while set (session restore)
     def step(s,counts,ntok=1,token_ids=None,new_request=False,sal=None):
         """sal: optional [len(layers),NE] per-step salience (sum over the step's routed slots of w^2*|x|^2), forwarded
         to predictors that take it (GBDTPredictorV2); ignored otherwise."""
@@ -87,6 +88,7 @@ class Scheduler:
             has=s.score.sum(1)>0                           # layers with no counts keep floating_default
             sc=np.where(s.fixed,-np.inf,s.score);top=np.argsort(-sc,1,kind='stable')[:,:s.nf]
             w=np.zeros_like(s.want);np.put_along_axis(w,top,True,1);s.want[has]=w[has]
+        if s.pin is not None:s.want|=s.pin&~s.fixed
         downs=[(s.layers[i],int(e)) for i,e in zip(*np.nonzero((s.state==2)&~s.want))]
         for L,e in downs:s.state[s.li[L],e]=3
         ups=[]

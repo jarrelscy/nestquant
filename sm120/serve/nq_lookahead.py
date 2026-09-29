@@ -38,6 +38,7 @@ assert MODE in (None,'lookahead','chunk'),MODE
 D=int(os.environ.get('NQ_LA_D','1'));BUDGET=int(os.environ.get('NQ_LA_BUDGET','45'))
 RANK=os.environ.get('NQ_PF_RANK','gate');assert RANK in ('gate','count','salience'),RANK
 MEAS=os.environ.get('NQ_LA_MEASURE','0')=='1'
+SRB=int(os.environ.get('NQ_SR_LA_BUDGET','8'))   # per-layer ups per chunk while session-restore reads are in flight
 CTL=os.environ.get('NQ_LA_CTL','/dev/shm/nq_la_ctl')
 RANK_ROW={'count':0,'gate':1,'salience':3}
 DT=os.environ.get('NQ_DELTA_TABLE','');OUT=os.environ.get('NQ_LA_OUT','/dbg/la_stats.json')
@@ -201,6 +202,10 @@ class LA:
         i=S.li[Lt];fx=S.fixed[i];st=S.state[i]
         sc=np.where(fx|(b<=0),-np.inf,b);o=np.argsort(-sc,kind='stable');top=[int(e) for e in o[:S.nf] if sc[e]>-np.inf]
         want=np.zeros(NE,bool);want[top]=True
+        pin=getattr(S,'pin',None);pin=None if pin is None else pin[i]&~fx      # session restore: pinned experts stay
+        if pin is not None:
+            want|=pin
+            if s.rt is not None and getattr(s.rt,'SR',None) is not None and s.rt.SR.restoring():budget=min(budget,SRB)
         if len(top)<S.nf:                           # fill with experts already at (or on the way to) level 4: no churn
             keep=[int(e) for e in np.nonzero(np.isin(st,(1,2))&~want&~fx)[0]]
             keep.sort(key=lambda e:-S.score[i,e]);want[keep[:S.nf-len(top)]]=True

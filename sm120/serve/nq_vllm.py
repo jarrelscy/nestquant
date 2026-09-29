@@ -16,10 +16,10 @@ Env: NQ_HOME (repo, default /nq), NQ_REPACK (record + resident dir), NQ_SLOTS_PE
 NQ_TOK_PER_S (111), NQ_STREAM (1; 0 = fixed set only, no streaming), NQ_POLL_MS (4), NQ_LAYERS (e.g. 3-18, default all
 present), NQ_PREDICTOR (floating-set predictor: ema | gbdt, default scheduler.DEFAULT_PREDICTOR; only the scheduling rank
 runs it; NQ_GBDT_MODE / NQ_GBDT_SCALE / NQ_GBDT_BAND see streaming/scheduler.py; NQ_GBDT_SCALE=mps makes rank 0 export per-expert decode
-salience w^2*|x|^2 via nqsal.cu, rsf = hf routed_scaling_factor or NQ_SAL_RSF), NQ_LGB_PATH (dir with lightgbm + narwhals + scipy, appended to sys.path; serve_nq.sh mounts it at /nqlgb). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
+salience w^2*|x|^2 via nqsal.cu, rsf = hf routed_scaling_factor or NQ_SAL_RSF), NQ_SESSION_RESTORE / NQ_SR_* (per-session floating-set restore for interleaved sessions, rank 0 decides, see nq_session.py; hooks Worker.execute_model for request arrival), NQ_LGB_PATH (dir with lightgbm + narwhals + scipy, appended to sys.path; serve_nq.sh mounts it at /nqlgb). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
 differ by a step between ranks, so for a short while an expert can be at level 4 on some ranks and level 2 on others;
 each rank's shard is a valid level-2 or level-4 weight either way)."""
-import os,sys,json,time,threading,logging
+import os,sys,json,time,threading,logging,functools
 import numpy as np,torch
 NQ_HOME=os.environ.get('NQ_HOME','/nq')
 for _p in (NQ_HOME+'/streaming',NQ_HOME+'/sm120'):
@@ -38,7 +38,7 @@ NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
 # in vLLM's profile run, so the KV budget accounts for it.
 PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384'));PF_OFF=os.environ.get('NQ_PF_OFF','/dev/shm/nq_pf_off')
 # prefill expert-level adaptation (NQ_PREFILL_ADAPT=lookahead|chunk, NQ_LA_MEASURE=1): see nq_lookahead.py
-import nq_lookahead as LAH
+import nq_lookahead as LAH,nq_session as SRM
 RSF=None          # routed_scaling_factor the MoE runner applies after the experts (topk_weights here exclude it); set in create_weights
 if LAH.MODE or LAH.MEAS:LAH.install()
 ARVQ_NAMES=('hyb_kind',)+tuple(f'arvq_{p}_{k}' for p in ('w13','w2') for k in ('packed','scales','codebooks','global'))+\
@@ -80,7 +80,7 @@ class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
-        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None
+        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -154,7 +154,13 @@ class Runtime:
             log.info('NestQuant rank %d: decode salience export on (%s, rsf %.3f)',s.rank,s.S.predictor_name,rsf)
         _gate_captures(s)
         if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
+        if s.F is None and s.rank==0:s.SR=SRM.SessionRestore(s);_hook_sched(s)   # per-session floating-set restore (nq_session.py)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
+    def _sr(s,f,*a,dflt=None):
+        """session restore is an optimization: any error turns it off (pin dropped), streaming goes on"""
+        try:return f(*a)
+        except Exception:
+            log.exception('NestQuant session restore failed, turned off');s.SR=None;s.S.pin=None;return dflt
     def share_loop(s,lv4):
         """NQ_STREAM=0: log the level-4 share of routed slots of the fixed set (same format as the streaming loop)."""
         H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.stack(H).astype(np.int64);s4=st=0;n=0
@@ -178,12 +184,14 @@ class Runtime:
                     else:
                         s.X.poll(s.S,issue=not cap)
                     if s.LA is not None and s.F is None and not cap and issue:s.LA.service(s.S,s.X,s.log)
+                    if s.SR is not None and not cap and issue:s._sr(s.SR.service,s.S,s.X,s.log)
                     if s.F is None and not cap:        # hits counted during a capture are dropped with it (warmup inputs)
                         cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
                         if ntok>0:
                             sal=None
                             if SH is not None:scur=np.stack(SH);sal=np.maximum(scur-sprev,0.);sprev=scur   # cumulative fp64, diffed like the hits
                             lv=s.S.fixed|(s.S.state==2);s4+=int(c[lv].sum());st+=int(c.sum())   # share at the levels served this step
+                            if s.SR is not None and issue:ntok=s._sr(s.SR.on_counts,s.S,c,ntok,lv,dflt=ntok)   # handover / prefill residue / window share
                             ups,downs=s.S.step(c,ntok,sal=sal)
                             if issue:
                                 s.X.apply(ups,downs,s.S)
@@ -203,6 +211,22 @@ class Runtime:
                     if s.F is None and s.S.P is not None:log.info('NestQuant rank %d: predictor %s stats %s',s.rank,s.S.predictor_name,s.S.P.stats)
         except Exception as e:           # streaming stops; every expert keeps its current (valid) row
             s.err=e;log.exception('NestQuant streaming thread stopped')
+
+def _hook_sched(rt):
+    """Worker.execute_model(scheduler_output) -> rt.SR.on_sched first (request arrival = its first step, before the
+    step's LMCache load and forward): the session key is known as early as the worker can see the request"""
+    try:from vllm.v1.worker import gpu_worker as GW
+    except Exception as e:log.warning('NestQuant session restore: no gpu_worker (%s), off',e);rt.SR=None;return
+    W=GW.Worker
+    if getattr(W,'_nq_sr',False):return
+    ex0=W.execute_model
+    def execute_model(self,scheduler_output,*a,**k):
+        sr=RT.SR
+        if sr is not None:
+            try:sr.on_sched(scheduler_output)
+            except Exception:log.exception('NestQuant session restore: hook failed, off');RT.SR=None
+        return ex0(self,scheduler_output,*a,**k)
+    functools.update_wrapper(execute_model,ex0);W.execute_model=execute_model;W._nq_sr=True
 
 def _gate_captures(rt):
     """The engine thread calls cudaEventQuery / cudaMemcpyAsync while it has ops in flight; any of those during a
