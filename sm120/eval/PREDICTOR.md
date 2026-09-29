@@ -25,9 +25,9 @@ level 4 (2-bit base + 2-bit residual streamed from NVMe). The predictor decides 
 4. **Downgrades** (experts that left the target) are immediate: the kernel switches back to the resident level-2 rows,
    with no I/O.
 5. **Upgrades** (experts that joined the target) are issued highest score first under a byte budget of
-   `NQ_CAP_GBPS` = 6 GB/s at an assumed 111 tok/s, accrued per token and capped at a 64-token burst. The rest wait at
+   `NQ_CAP_GBPS` GB/s (12 since 2026-09-29, 6 before; see the GBDT section) at an assumed 111 tok/s, accrued per token and capped at a 64-token burst. The rest wait at
    level 2 and are retried on the next step. Each upgrade reads one 2.56 MB record on every rank and is charged
-   rec_bytes x tp = 10.24 MB, so the 6 GB/s is aggregate over the 4 ranks (1.5 GB/s per rank). (This file said
+   rec_bytes x tp = 10.24 MB, so the cap is aggregate over the 4 ranks (6 GB/s = 1.5 GB/s per rank). (This file said
    "6 GB/s per rank" before 2026-09-29; the code has always charged the aggregate.)
 6. **Guard**: no upgrades in a step that touches more than half of a layer's experts (prefill-sized steps), so a long
    prompt updates the scores without flooding the SSD.
@@ -131,6 +131,50 @@ steps) through `scheduler.Scheduler` itself (`/tmp/nq_gapcheck.py`, slots 56 x 7
   vs 0.6527 at lead 13). Feeding token ids (think/answer state): 0.6740 vs 0.6737. Landing 4 steps late (~lead 13):
   GBDT 0.6658 vs EMA 0.6530 at 24 GB/s, still +1.3 pt. Fixed experts are excluded in both.
 - (c) On the NQ routing of C2 the same happens: dyn_gbdt uses 5.97 of the 6 GB/s with deferred upgrades in most steps
-  (table above). `c2-gbdt-cap24` (dyn vs dyn_gbdt at `--dyn-cap 24`, routing dumped for offline replay) and a serve A/B
-  at `NQ_CAP_GBPS=24` measure whether a larger budget recovers the offline gain on NQ routing.
+  (table above). With a larger budget the offline gain comes back on NQ routing (next section), so the ARVQ-to-NQ
+  routing shift is not what held it back.
+
+### Budget raised: NQ_CAP_GBPS 6 -> 12 (2026-09-29)
+
+C2 `c2-gbdt24-aqlm-v1` (dyn EMA at 6, dyn_gbdt at `--gbdt-cap 24`; C2 emulation, one Scheduler per layer with cap/75):
+
+| stream | cap GB/s | KLD id | KLD wikitext | KLD code | share4 id / wiki / code | GB/s used |
+|---|---|---|---|---|---|---|
+| dyn (EMA) | 6 | 0.21950 | 0.07444 | 0.04255 | 0.599 / 0.678 / 0.564 | 3.84 |
+| dyn_gbdt | 24 | 0.21358 (-2.7%) | 0.06962 (-6.5%) | 0.04182 (-1.7%) | 0.630 / 0.688 / 0.580 | 11.2 |
+
+Serve at `NQ_CAP_GBPS=24` (`q5b-*`): GBDT 28.36 / 28.43 ms/step, 95.3 / 93.6 tok/s, rank-0 hit share 0.414 / 0.403,
+op p50 104-105 ms; EMA 28.37 / 28.42 ms/step, hit share 0.410 / 0.393. Read errors 0, backlog 0, coherence pass. The
+serve made about as many upgrades at 24 as at 6 (35.2K vs 35.4K per run), so its effective budget was already looser
+than the nominal 6 (not investigated).
+
+Record store measured directly (2.56 MB O_DIRECT random reads over rank0-3.bin, root Samsung 9100 PRO, measured by the
+coordinator during a C2 run): 11.6 GB/s at 4 concurrent reads (p50 0.9 ms), 10.7 GB/s at 16-64 (p50 3.8-10.8 ms,
+p99 up to 50 ms). About 11 GB/s aggregate is the practical ceiling, so 24 would promise more than the drive delivers,
+and C2 (upgrades land one step later whatever the volume) can't model saturation: treat the 24 GB/s C2 row as an upper
+bound. The production default is therefore `NQ_CAP_GBPS=12`: the replay above gives GBDT 0.6710 at 12 vs 0.6737 at
+24, with 17% of steps deferring. The serve op p50 of ~105-115 ms is ~100x the raw read latency, so it is pipeline
+overhead, not the drive.
+
+## Comparison: AQLM hybrid (prod glm-5.3 checkpoint)
+
+`aqlm` stream = the production GLM-5.3-Vision-NVFP4-AQLM-hybrid-1m experts (`nvfp4_aqlm_hybrid`: hot experts donor
+NVFP4, cold 2-bit AQLM 1x16 codebook, group 8, PV-tuned), weights only, dequantised by `aqlmeff.py` exactly as the vLLM
+kernels do (cold path bitwise equal to `nvfp4_aqlm_hybrid._dequant_reference`; hot bytes identical to the ARVQ
+checkpoint's hot experts). Level 4 = the static hot NVFP4 set (30% of experts resident). Same 64 windows and FP8
+reference; the NQ and ARVQ rows are from c2-full-v1 / c2-gbdt24-aqlm-v1 (not rerun).
+
+| stream | KLD id | KLD wikitext | KLD code | level-4 share (routed) | bits/expert resident / served | weight rel. error |
+|---|---|---|---|---|---|---|
+| all4 (NQ 4-bit everywhere) | 0.17225 | 0.03057 | 0.02322 | 1.000 | 4.334 / 4.334 | 0.068 |
+| dyn_gbdt @24 (NQ) | 0.21358 | 0.06962 | 0.04182 | 0.632 | 2.818 / 3.536 | |
+| dyn EMA @6 (NQ) | 0.21950 | 0.07444 | 0.04255 | 0.610 | 2.818 / 3.488 | |
+| fixed (NQ, no streaming) | 0.28426 | 0.26862 | 0.08081 | 0.120 | 2.386 / 2.427 | |
+| all2 (NQ 2-bit everywhere) | 0.31648 | 0.28652 | 0.10108 | 0.000 | 2.165 / 2.165 | 0.265 |
+| AQLM hybrid (prod) | 0.32280 | 0.36022 | 0.06888 | 0.346 | 2.753 / 2.870 | 0.253 (all experts) |
+| ARVQ hybrid | 0.43643 | 0.78450 | 0.10607 | 0.349 | 2.792 / 2.912 | 0.349 (all experts) |
+
+AQLM cold 2.007 bpw incl. codebooks, hot 4.5. AQLM beats ARVQ on every corpus (KLD -26% id, -54% wikitext, -35% code),
+but NQ dyn beats AQLM on every corpus (-32% id, -79% wikitext, -38% code) at about the same resident bits.
+Full tables: `sm120/results/c2/c2-gbdt24-aqlm-v1.md`.
 
