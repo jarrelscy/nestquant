@@ -26,9 +26,9 @@ for a in arms:
             d = np.array(wd[g]); A["corpora"][n].update(dKLD=d.mean(), se=d.std(ddof=1) / np.sqrt(len(d)), win_better=float((d < 0).mean()))
     sl = l4 = ch = 0; nl = set()
     for p in parts:
-        for L, d in p["results"][a]["extra"]["diag"].items():
+        for L, d in (p["results"][a].get("extra") or {}).get("diag", {}).items():
             sl += d["slots"]; l4 += d["l4_slots"]; ch += d["churn_sum"]; nl.add(L)
-    A["l4_share"] = l4 / sl; A["swaps_per_1k_tok_layer"] = 1000 * ch / (sl / 8)
+    A["l4_share"] = l4 / sl if sl else float("nan"); A["swaps_per_1k_tok_layer"] = 1000 * ch / (sl / 8) if sl else float("nan")
     out["arms"][a] = A
     print(f"{a:14s} l4 {A['l4_share']*100:5.1f}% swaps/1k {A['swaps_per_1k_tok_layer']:6.1f} | " + " | ".join(
         f"{n} KLD {v['KLD']:.5f} top1 {v['top1']*100:.2f}" + (f" d {v['dKLD']:+.5f}±{v['se']:.5f}" if "dKLD" in v else "")

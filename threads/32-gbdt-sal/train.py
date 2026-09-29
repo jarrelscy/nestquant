@@ -22,20 +22,26 @@ def rows(corpus, target, feats, layers=T.LAYERS, m=None, band=""):
         d = np.load(f"{T.OUT}/rows{'_band' + band if band else ''}/{corpus}/L{L}.npz")
         v = d["valid"]
         X = T.feature_matrix(feats, corpus, L, band=band, valid=True, d=d)
-        yx = np.load(f"{T.OUT}/rows_x/{corpus}/L{L}.npz") if target.endswith("32") else d   # H=32 targets
-        if target.startswith("cnt"):
-            y = yx["y" + target.replace("32", "") + ("32" if target.endswith("32") else "")][v].ravel()
-        else:
+        kind, hz = target[:3], target[3:]                  # e.g. sal, sal32 (rows_x), sal128 / sal256 (rows_lh)
+        yx = {"": d, "32": None, "128": None, "256": None}[hz]
+        if yx is None:
+            yx = np.load(f"{T.OUT}/rows_{'x' if hz == '32' else 'lh'}/{corpus}/L{L}.npz")
+        y = yx["y" + kind + hz][v]
+        if kind == "sal":
             mL[L] = float(d["slot_sal_sum"] / d["slots"]) if m is None else m[L]
-            y = yx["ysal" + ("32" if target.endswith("32") else "")][v].ravel() / mL[L]
-        assert np.isfinite(y).all(), (corpus, L, target)
+            y = y / mL[L]
+        keep = np.isfinite(y).all(1)                         # longer horizons: drop blocks whose horizon leaves chain
+        y = y[keep].ravel()
+        X = X.reshape(int(v.sum()), -1, len(feats))[keep].reshape(-1, len(feats))
+        v = np.zeros(int(keep.sum()), bool) | True
         Xs.append(X); ys.append(y.astype(np.float32)); gs.append(np.full(int(v.sum()), X.shape[0] // int(v.sum())))
     return np.concatenate(Xs), np.concatenate(ys), mL, np.concatenate(gs)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", choices=["cnt", "sal", "cnt32", "sal32"], required=True)
+    ap.add_argument("--target", required=True,
+                    choices=["cnt", "sal", "cnt32", "sal32", "cnt128", "sal128", "cnt256", "sal256"])
     ap.add_argument("--obj", default="poisson")
     ap.add_argument("--iters", type=int, default=60)
     ap.add_argument("--lr", type=float, default=0.3)

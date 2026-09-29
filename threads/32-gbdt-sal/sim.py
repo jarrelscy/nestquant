@@ -63,19 +63,52 @@ def job(L):
         nbc = T.CHAIN * T.SEQ // T.G
         sets["orc_count"] = oracle_serve(bc, fx, nbc)
         sets["orc_sal"] = oracle_serve(bs, fx, nbc)
+    extra = {}
+    if os.environ.get("T32_EXTRA"):                  # long-horizon analysis (build_lh.py rows; pooled num/den)
+        lh = np.load(f"{T.OUT}/rows_lh/{corpus}/L{L}.npz")
+        nbc = T.CHAIN * T.SEQ // T.G
+        q = np.zeros_like(lh["qp"]); q[1:] = lh["qp"][:-1]; q[::nbc] = False    # decided at end of k-1, serves k
+        q &= nf
+        pos = np.arange(bs.shape[0]) % nbc
+        R = {G: lh[f"ret{G}_sal"].astype(np.float64) for G in (256, 1024)}
+        Rc = {G: lh[f"ret{G}_cnt"].astype(np.float64) for G in (256, 1024)}
+        extra["_den"] = dict(qp=float((bs * q).sum()), nonfixed=float(tot_s), all=float(bs.sum()),
+                             **{f"ret{G}": float(R[G].sum()) for G in R}, **{f"ret{G}_n": float(Rc[G].sum()) for G in R},
+                             **{f"pos{a}": float((bs * nf)[(pos >= a) & (pos < b)].sum())
+                                for a, b in ((0, 128), (128, 256), (256, 512))})
     for name, sv in sets.items():
         out[name] = dict(sal=float((bs * sv).sum() / tot_s), cnt=float((bc * sv).sum() / tot_c),
                          churn=float((sv[1:] & ~sv[:-1]).sum(1).mean()))
+        if extra:
+            hot = sv | fx
+            out[name]["_num"] = dict(qp=float((bs * q * sv).sum()), nonfixed=float((bs * sv).sum()),
+                                     **{f"ret{G}": float((R[G] * hot).sum()) for G in R},
+                                     **{f"ret{G}_n": float((Rc[G] * hot).sum()) for G in R},
+                                     **{f"pos{a}": float((bs * sv)[(pos >= a) & (pos < b)].sum())
+                                        for a, b in ((0, 128), (128, 256), (256, 512))})
+    if extra:
+        out["_den"] = extra["_den"]
     return L, out
 
 
 if __name__ == "__main__":
     with Pool(int(os.environ.get("NPROC", "38"))) as p:
         res = dict(p.map(job, T.LAYERS))
-    names = list(res[T.LAYERS[0]])
+    names = [n for n in res[T.LAYERS[0]] if n != "_den"]
     summ = {n: {k: float(np.mean([res[L][n][k] for L in T.LAYERS])) for k in ("sal", "cnt", "churn")} for n in names}
+    if "_den" in res[T.LAYERS[0]]:                 # pooled over layers: qp / pos* = floating coverage of non-fixed
+        den = {k: sum(res[L]["_den"][k] for L in T.LAYERS) for k in res[T.LAYERS[0]]["_den"]}   # ret* = all-slot hot
+        summ["_share"] = {"qp_of_nonfixed": den["qp"] / den["nonfixed"], "ret256_of_all": den["ret256"] / den["all"],
+                          "ret1024_of_all": den["ret1024"] / den["all"], "ret256_n": den["ret256_n"],
+                          "ret1024_n": den["ret1024_n"]}
+        for n in names:
+            num = {k: sum(res[L][n]["_num"][k] for L in T.LAYERS) for k in res[T.LAYERS[0]][n]["_num"]}
+            summ[n].update({f"x_{k}": num[k] / max(den[k], 1e-30) for k in num})
     for n in names:
         print(f"{n:20s} nonfixed-sal covered {summ[n]['sal']:.4f}  hits covered {summ[n]['cnt']:.4f}  "
-              f"churn/refresh {summ[n]['churn']:.2f}")
+              f"churn/refresh {summ[n]['churn']:.2f}  " +
+              " ".join(f"{k[2:]} {v:.4f}" for k, v in summ[n].items() if k.startswith("x_")))
+    if "_share" in summ:
+        print("shares", {k: round(v, 5) for k, v in summ["_share"].items()})
     json.dump({"corpus": corpus, "models": models, "summary": summ, "per_layer": res},
               open(f"{T.OUT}/sim_{corpus}{os.environ.get('T32_TAG', '')}.json", "w"), indent=1)

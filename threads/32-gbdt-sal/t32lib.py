@@ -224,6 +224,8 @@ FEATS_V3 = ("pema32", "pema128", "p16", "nmema32", "nmema128", "nm16", "mgema32"
 FEATS_X = ("cx_e32", "cx_e128", "cx_s32", "cx_s128", "co_e32", "co_s32", "ema512", "ema2048", "sema512", "sema2048",
            "tc_word", "tc_num", "tc_code", "tc_punct", "tc_ws", "pos",
            "mtp1_cnt", "mtp1_sal", "mtp2_cnt", "mtp2_sal", "mtp4_cnt", "mtp4_sal")    # build_x.py (band all)
+FEATS_LH = ("ema8192", "sema8192", "cum_rate", "cum_srate", "pers8", "pers32", "pers128", "gap_mean", "gap_cv",
+            "dom_max", "dom_busy", "dom_smax")                                        # build_lh.py (band all)
 
 
 def feature_matrix(names, corpus, L, band="", valid=False, d=None):
@@ -239,6 +241,8 @@ def feature_matrix(names, corpus, L, band="", valid=False, d=None):
         src[n] = ("X3", i)
     for i, n in enumerate(FEATS_X):
         src[n] = ("F", i)
+    for i, n in enumerate(FEATS_LH):
+        src[n] = ("LH", i)
     need = {src[n][0] for n in names}
     arr = {"X": d["X"]}
     if "X2" in need:
@@ -248,6 +252,9 @@ def feature_matrix(names, corpus, L, band="", valid=False, d=None):
     if "F" in need:
         assert band == "all", "rows_x only on band all"
         arr["F"] = np.load(f"{OUT}/rows_x/{corpus}/L{L}.npz")["F"]
+    if "LH" in need:
+        assert band == "all", "rows_lh only on band all"
+        arr["LH"] = np.load(f"{OUT}/rows_lh/{corpus}/L{L}.npz")["F"]
     cols = [arr[src[n][0]][..., src[n][1]] for n in names]
     M = np.stack(cols, -1)
     if valid:
