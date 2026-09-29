@@ -36,6 +36,9 @@ NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
 # loop runs (in-boot A/B). Scratch (moe.pf_scratch, NQ_PF_ROWS x NQ_PF_G) is allocated on the first prefill call, i.e.
 # in vLLM's profile run, so the KV budget accounts for it.
 PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384'));PF_OFF=os.environ.get('NQ_PF_OFF','/dev/shm/nq_pf_off')
+# prefill expert-level adaptation (NQ_PREFILL_ADAPT=lookahead|chunk, NQ_LA_MEASURE=1): see nq_lookahead.py
+import nq_lookahead as LAH
+if LAH.MODE or LAH.MEAS:LAH.install()
 ARVQ_NAMES=('hyb_kind',)+tuple(f'arvq_{p}_{k}' for p in ('w13','w2') for k in ('packed','scales','codebooks','global'))+\
     tuple(f'nvfp4_{p}_{k}' for p in ('w13','w2') for k in ('packed','bscale','scale2'))
 
@@ -75,7 +78,7 @@ class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
-        s.cv=threading.Condition();s.ncap=0;s.in_iter=False
+        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -141,6 +144,7 @@ class Runtime:
             if s.rank:s.F=OL.Follower(s.X,s.log);s.F.busy.update(init)
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
         _gate_captures(s)
+        if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
     def share_loop(s,lv4):
         """NQ_STREAM=0: log the level-4 share of routed slots of the fixed set (same format as the streaming loop)."""
@@ -155,7 +159,7 @@ class Runtime:
             issue=os.environ.get('NQ_ISSUE','1')!='0'    # 0: schedule but never issue ops (level set stays floating_default; A/B only)
             H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time();tb=0.;nit=0;s4=st=0
             while not s.stop:
-                time.sleep(ms)
+                s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
                 with s.cv:s.in_iter=True;cap=s.ncap>0
                 t0=time.perf_counter()
                 try:
@@ -163,6 +167,7 @@ class Runtime:
                         s.X.poll(s.F,issue=not cap);s.F.step(issue=issue and not cap)
                     else:
                         s.X.poll(s.S,issue=not cap)
+                    if s.LA is not None and s.F is None and not cap and issue:s.LA.service(s.S,s.X,s.log)
                     if s.F is None and not cap:        # hits counted during a capture are dropped with it (warmup inputs)
                         cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
                         if ntok>0:
@@ -236,6 +241,7 @@ def forward(L,x,topk_weights,topk_ids):
         except Exception as e:raise RuntimeError(f'NestQuant mailbox.apply faulted (L{L})') from e
     if T<=BMAX:return M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T]).to(x.dtype)
     if PF and T>=PF_MIN and not torch.cuda.is_current_stream_capturing() and not os.path.exists(PF_OFF):
+        if RT.LA is not None:RT.LA.pre(L,x,ids,w,M.table)   # rank 0: router of L+d on x -> level ops (streaming thread)
         return M.prefill(xh,ids,w).to(x.dtype)   # each routed expert decoded once at its live table level + grouped GEMMs
     out=torch.empty(T,x.shape[1],dtype=torch.float32,device=x.device)
     for i in range(0,T,BMAX):

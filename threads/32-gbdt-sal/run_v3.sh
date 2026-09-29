@@ -1,24 +1,24 @@
 #!/bin/bash
-# T32 (a): after recapture.sh releases the GPUs: v3 router-prob rows -> train (sal/cnt, v2+p and p-only) -> heldout sim.
+# T32 (a): after recapture.sh releases the GPUs: v3 = 5 count + 4 salience (v2) + 8 router-prob features, salience
+# target (Tweedie 1.5).  Held-out sim vs gbdt_old in the default mode (band EMA256 20-120, next_refresh) and in
+# sync + band all (every expert scored, nothing forced; model trained on band-all rows).
 set -euo pipefail
 O32=/tmp/nestquant/32-gbdt-sal; M=$O32/models; OLD=/home/coder/git/nestquant/streaming/gbdt_p64_s5.txt
 export PYTHONPATH=/tmp/nestquant/18-e2e/pylib; PY=/home/coder/git/glm52/.venv/bin/python
 cd "$(dirname "$0")"
-until grep -q "release GPUs" $O32/logs/recapture.out 2>/dev/null; do sleep 30; done
+until grep -q "release GPUs" $O32/logs/recapture.out 2>/dev/null; do sleep 20; done
 for c in glm52-heldout calib-fit; do $PY build_v3.py $c 12; done
-$PY train.py --v2 --v3 --target sal --obj tweedie:1.5 --threads 32 --out $M/v3_sal_tweedie1.5.txt
-$PY train.py --v2 --v3 --target cnt --obj poisson --threads 32 --out $M/v3_cnt_poisson.txt
-$PY train.py --v3 --target sal --obj tweedie:1.5 --threads 32 --out $M/p_sal_tweedie1.5.txt
-$PY train.py --v3 --target cnt --obj poisson --threads 32 --out $M/p_cnt_poisson.txt
-for lag in 1 0; do
-  T32_LAG=$lag T32_TAG=_v3_lag$lag NPROC=12 $PY sim.py glm52-heldout gbdt_old=$OLD gbdt_x_mps=$OLD@mps \
-    v2_sal=$M/v2_sal_tweedie1.5.txt v3_sal=$M/v3_sal_tweedie1.5.txt v3_cnt=$M/v3_cnt_poisson.txt \
-    v3_cnt_x_mps=$M/v3_cnt_poisson.txt@mps p_sal=$M/p_sal_tweedie1.5.txt p_cnt=$M/p_cnt_poisson.txt \
-    p_cnt_x_mps=$M/p_cnt_poisson.txt@mps
-done
+$PY train.py --threads 32 --v2 --v3 --target sal --obj tweedie:1.5 --out $M/v3_sal_tweedie1.5.txt
+T32_LAG=1 T32_TAG=_v3_default NPROC=12 $PY sim.py glm52-heldout gbdt_old=$OLD v3_sal=$M/v3_sal_tweedie1.5.txt
+echo DEFAULT_DONE
+until grep -q "^77$" $O32/logs/band_all_calib.log 2>/dev/null; do sleep 20; done
+for c in glm52-heldout calib-fit; do T32_BAND=all $PY build_v3.py $c 12; done
+$PY train.py --threads 32 --band all --v2 --v3 --target sal --obj tweedie:1.5 --out $M/ba_v3_sal_tweedie1.5.txt
+T32_BAND=all T32_LAG=0 T32_TAG=_v3_bandall_sync NPROC=12 $PY sim.py glm52-heldout gbdt_old=$OLD \
+  v3_sal=$M/v3_sal_tweedie1.5.txt ba_v3_sal=$M/ba_v3_sal_tweedie1.5.txt
 $PY - <<'P'
 import lightgbm as lgb
-for n in ("v3_sal_tweedie1.5", "v3_cnt_poisson", "p_sal_tweedie1.5", "p_cnt_poisson"):
+for n in ("v3_sal_tweedie1.5", "ba_v3_sal_tweedie1.5"):
     b = lgb.Booster(model_file=f"/tmp/nestquant/32-gbdt-sal/models/{n}.txt")
     g = b.feature_importance("gain"); s = b.feature_importance("split"); tot = g.sum()
     print(n, " ".join(f"{f}:{si}/{gi / tot:.3f}" for f, si, gi in sorted(zip(b.feature_name(), s, g), key=lambda x: -x[2])))

@@ -41,6 +41,14 @@ services:
       NQ_PF_G: ${NQ_PF_G:-16}
       NQ_PF_GEMM: ${NQ_PF_GEMM:-triton}
       MAX_NUM_BATCHED_TOKENS: ${NQ_MNBT:-4096}
+      NQ_PREFILL_ADAPT: ${NQ_PREFILL_ADAPT:-lookahead}   # 0 | lookahead | chunk (nq_lookahead.py); gated ON 2026-09-29
+      NQ_LA_D: ${NQ_LA_D:-1}
+      NQ_LA_BUDGET: ${NQ_LA_BUDGET:-45}
+      NQ_PF_RANK: ${NQ_PF_RANK:-gate}          # gate | salience | count
+      NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
+      NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
+      NQ_DELTA_TABLE: /nqpred/delta_table.json
+      NQ_LA_OUT: /dbg/la_stats.json
       NQ_LGB_PATH: /nqlgb
       LIBURING: /data/Jarrel/liburing
       CUDA_HOME: /opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13
@@ -52,5 +60,6 @@ services:
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
     - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
     - /data/Jarrel/nq-serve/dbg:/dbg
+    - /data/Jarrel/nq-serve/predictor:/nqpred:ro
     - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro     # lightgbm + narwhals + scipy for NQ_PREDICTOR=gbdt (serve_nq.sh installs it)
     - ${NQ_REPO:-/data/Jarrel/nestquant}/sm120/serve/overlay/nvfp4_arvq_hybrid.py:/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro

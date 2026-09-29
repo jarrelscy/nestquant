@@ -15,13 +15,13 @@ import t32lib as T
 FEATS = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16"]
 
 
-def rows(corpus, target, feats, layers=T.LAYERS, m=None):
+def rows(corpus, target, feats, layers=T.LAYERS, m=None, band=""):
     Xs, ys = [], []
     mL = {}
     for L in layers:
-        d = np.load(f"{T.OUT}/rows/{corpus}/L{L}.npz")
+        d = np.load(f"{T.OUT}/rows{'_band' + band if band else ''}/{corpus}/L{L}.npz")
         v = d["valid"]
-        X = T.feature_matrix(feats, corpus, L, valid=True, d=d)
+        X = T.feature_matrix(feats, corpus, L, band=band, valid=True, d=d)
         if target == "cnt":
             y = d["ycnt"][v].ravel()
         else:
@@ -44,6 +44,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--v2", action="store_true", help="+ salience features t32lib.FEATS_V2 (serve change)")
     ap.add_argument("--v3", action="store_true", help="+ router-prob features t32lib.FEATS_V3 (build_v3.py)")
+    ap.add_argument("--band", default="", help="rows band ('' = EMA256 ranks 20-120, all, all20; build.py T32_BAND)")
     ap.add_argument("--feats", default="", help="explicit comma list of feature names (overrides --v2/--v3)")
     a = ap.parse_args()
     import lightgbm as lgb
@@ -51,8 +52,8 @@ def main():
     feats = FEATS + (list(T.FEATS_V2) if a.v2 else []) + (list(T.FEATS_V3) if a.v3 else [])
     if a.feats:
         feats = a.feats.split(",")
-    Xt, yt, m = rows(a.train, a.target, feats)
-    Xv, yv, _ = rows(a.valid, a.target, feats, m=m if a.target == "sal" else None)
+    Xt, yt, m = rows(a.train, a.target, feats, band=a.band)
+    Xv, yv, _ = rows(a.valid, a.target, feats, m=m if a.target == "sal" else None, band=a.band)
     print(f"rows train {len(yt)} valid {len(yv)}  load {time.time() - t0:.0f}s  y mean {yt.mean():.4f} "
           f"zero frac {(yt == 0).mean():.3f}", flush=True)
     obj, _, pw = a.obj.partition(":")
@@ -70,7 +71,7 @@ def main():
     bi = bst.best_iteration or a.iters
     bst.save_model(a.out, num_iteration=bi)
     meta = dict(features=feats, target=a.target, obj=a.obj, params=p, best_iteration=bi, iters_cap=a.iters,
-                valid_curve=ev["heldout"][list(ev["heldout"])[0]], train=a.train, valid=a.valid,
+                valid_curve=ev["heldout"][list(ev["heldout"])[0]], train=a.train, valid=a.valid, band=a.band,
                 n_train=int(len(yt)), n_valid=int(len(yv)), sal_norm_mL=m if a.target == "sal" else None,
                 wall_s=time.time() - t0)
     json.dump(meta, open(a.out + ".meta.json", "w"), indent=1)

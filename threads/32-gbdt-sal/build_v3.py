@@ -22,7 +22,9 @@ FEATS_V3 = ("pema32", "pema128", "p16", "nmema32", "nmema128", "nm16", "mgema32"
 corpus = sys.argv[1]
 nproc = int(sys.argv[2]) if len(sys.argv) > 2 else 12
 TR2 = os.environ.get("T32_TRACE2", f"{T.OUT}/trace2")
-out = f"{T.OUT}/rows_v3/{corpus}"
+band = os.environ.get("T32_BAND", "")
+sfx = "_band" + band if band else ""
+out = f"{T.OUT}/rows_v3{sfx}/{corpus}"
 
 
 def block_prob_mats(p_raw, p_selc, top16):
@@ -81,7 +83,7 @@ def job(L):
     ids1, _, _ = T.load_layer(L, corpus)
     same = float((np.sort(ids1, 1) == np.sort(ids2, 1)).all(1).mean())
     t16ok = float((np.sort(top16[:, :8], 1) == np.sort(ids2, 1)).all(1).mean())
-    d = np.load(f"{T.OUT}/rows/{corpus}/L{L}.npz")
+    d = np.load(f"{T.OUT}/rows{sfx}/{corpus}/L{L}.npz")
     X3 = v3_features(*block_prob_mats(p_raw, p_selc, top16), d["cand"])
     os.makedirs(out, exist_ok=True)
     np.savez(f"{out}/L{L}.part.npz", X3=X3)

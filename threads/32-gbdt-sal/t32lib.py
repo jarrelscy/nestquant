@@ -237,8 +237,7 @@ def feature_matrix(names, corpus, L, band="", valid=False, d=None):
     if "X2" in need:
         arr["X2"] = np.load(f"{OUT}/rows_v2{sfx}/{corpus}/L{L}.npz")["X2"]
     if "X3" in need:
-        assert not band, "rows_v3 only on the default band"
-        arr["X3"] = np.load(f"{OUT}/rows_v3/{corpus}/L{L}.npz")["X3"]
+        arr["X3"] = np.load(f"{OUT}/rows_v3{sfx}/{corpus}/L{L}.npz")["X3"]
     cols = [arr[src[n][0]][..., src[n][1]] for n in names]
     M = np.stack(cols, -1)
     if valid:
