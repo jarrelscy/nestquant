@@ -66,7 +66,7 @@ Checked equal to the reference converter: for L3 at TP4 the records and resident
 
 ## Drop-in record dir (T30)
 
-`serving/tp4/` is a drop-in `NQ_REPACK_DIR`: `rank{r}/L{L}.bin` == the bytes `streaming/repack.py` (HEAD 750e317) writes at
+`serving/tp4/` is a drop-in `NQ_REPACK_DIR`: `rank{r}/L{L}.bin` == the bytes `streaming/repack.py` (at d662dff, which also puts `in_had_down` into the L3-6 res files) writes at
 `((L-3)*256)*rec_bytes` of `rank{r}.bin`, and `res/rank{r}/L{L}.pt` == its resident file, checked by sha256 on all 4 ranks for L10
 (v1) and L3-6 (h512 refit), repack.py run on the HF-layout safetensors. `rank{r}.json` is a superset of repack.py's index; every
 reader (stream_engine.RankFile, nq_vllm.available, serve_nq.sh, eval/nqeff.py, eval/eval_fp8.py, smoke_stream.py, repack.py's
