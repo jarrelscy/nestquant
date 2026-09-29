@@ -35,6 +35,12 @@ services:
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_GBDT_MODE: ${NQ_GBDT_MODE:-next_refresh}
       NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
+      NQ_PF: ${NQ_PF:-1}                      # prefill path (moe.MoELayer.prefill) for >= NQ_PF_MIN tokens
+      NQ_PF_MIN: ${NQ_PF_MIN:-384}
+      NQ_PF_ROWS: ${NQ_PF_ROWS:-8192}
+      NQ_PF_G: ${NQ_PF_G:-16}
+      NQ_PF_GEMM: ${NQ_PF_GEMM:-triton}
+      MAX_NUM_BATCHED_TOKENS: ${NQ_MNBT:-4096}
       NQ_LGB_PATH: /nqlgb
       LIBURING: /data/Jarrel/liburing
       CUDA_HOME: /opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13

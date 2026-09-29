@@ -10,7 +10,8 @@ Per worker process (one TP rank):
     51 floating/layer, 6 GB/s cap, start = floating_default) + executor (io_uring engine) + a host thread that turns
     the kernel's routing hits into level ops. Table rows change only through the Mailbox, whose apply() runs at the
     start of every layer call (inside CUDA graphs too).
-  - forward = torch custom op nq::moe (opaque to torch.compile): <= 8 tokens one kernel call, more tokens in chunks of 8.
+  - forward = torch custom op nq::moe (opaque to torch.compile): <= 8 tokens one kernel call; >= NQ_PF_MIN (384) tokens the
+    prefill path (moe.MoELayer.prefill: routed experts decoded once + grouped GEMMs); in between chunks of 8.
 Env: NQ_HOME (repo, default /nq), NQ_REPACK (record + resident dir), NQ_SLOTS_PER_LAYER (56), NQ_CAP_GBPS (0 = uncapped: drive and slot pool limit; else aggregate GB/s over the TP ranks),
 NQ_TOK_PER_S (111), NQ_STREAM (1; 0 = fixed set only, no streaming), NQ_POLL_MS (4), NQ_LAYERS (e.g. 3-18, default all
 present), NQ_PREDICTOR (floating-set predictor: ema | gbdt, default scheduler.DEFAULT_PREDICTOR; only the scheduling rank
@@ -30,6 +31,11 @@ except Exception:log=logging.getLogger('nestquant')
 CFG_GU=[None,[1,8,4],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,12],[1,8,12]]
 CFG_DN=[None,[1,8,4],[1,8,2],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4]]
 NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
+# prefill (T >= NQ_PF_MIN tokens, not capturing): moe.MoELayer.prefill; below it (and inside graph capture) the decode
+# kernel in 8-token slices. NQ_PF=0 disables; while the file NQ_PF_OFF (default /dev/shm/nq_pf_off) exists the slice
+# loop runs (in-boot A/B). Scratch (moe.pf_scratch, NQ_PF_ROWS x NQ_PF_G) is allocated on the first prefill call, i.e.
+# in vLLM's profile run, so the KV budget accounts for it.
+PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384'));PF_OFF=os.environ.get('NQ_PF_OFF','/dev/shm/nq_pf_off')
 ARVQ_NAMES=('hyb_kind',)+tuple(f'arvq_{p}_{k}' for p in ('w13','w2') for k in ('packed','scales','codebooks','global'))+\
     tuple(f'nvfp4_{p}_{k}' for p in ('w13','w2') for k in ('packed','bscale','scale2'))
 
@@ -229,6 +235,8 @@ def forward(L,x,topk_weights,topk_ids):
         try:torch.cuda.synchronize()
         except Exception as e:raise RuntimeError(f'NestQuant mailbox.apply faulted (L{L})') from e
     if T<=BMAX:return M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T]).to(x.dtype)
+    if PF and T>=PF_MIN and not torch.cuda.is_current_stream_capturing() and not os.path.exists(PF_OFF):
+        return M.prefill(xh,ids,w).to(x.dtype)   # each routed expert decoded once at its live table level + grouped GEMMs
     out=torch.empty(T,x.shape[1],dtype=torch.float32,device=x.device)
     for i in range(0,T,BMAX):
         j=min(T,i+BMAX);M(xh[i:j],ids[i:j],w[i:j],out=out[i:j],cfg_gu=CFG_GU[j-i],cfg_dn=CFG_DN[j-i])
