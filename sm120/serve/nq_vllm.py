@@ -11,7 +11,7 @@ Per worker process (one TP rank):
     the kernel's routing hits into level ops. Table rows change only through the Mailbox, whose apply() runs at the
     start of every layer call (inside CUDA graphs too).
   - forward = torch custom op nq::moe (opaque to torch.compile): <= 8 tokens one kernel call, more tokens in chunks of 8.
-Env: NQ_HOME (repo, default /nq), NQ_REPACK (record + resident dir), NQ_SLOTS_PER_LAYER (56), NQ_CAP_GBPS (12, aggregate GB/s over the TP ranks),
+Env: NQ_HOME (repo, default /nq), NQ_REPACK (record + resident dir), NQ_SLOTS_PER_LAYER (56), NQ_CAP_GBPS (0 = uncapped: drive and slot pool limit; else aggregate GB/s over the TP ranks),
 NQ_TOK_PER_S (111), NQ_STREAM (1; 0 = fixed set only, no streaming), NQ_POLL_MS (4), NQ_LAYERS (e.g. 3-18, default all
 present), NQ_PREDICTOR (floating-set predictor: ema | gbdt, default scheduler.DEFAULT_PREDICTOR; only the scheduling rank
 runs it), NQ_LGB_PATH (dir with lightgbm + narwhals + scipy, appended to sys.path; serve_nq.sh mounts it at /nqlgb). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
@@ -117,7 +117,7 @@ class Runtime:
         dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in L_}
         lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
         pred=(os.environ.get('NQ_PREDICTOR') or SC.DEFAULT_PREDICTOR) if (s.rank==0 or not lead) else 'ema'   # followers never step S
-        s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=NF,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','12')),
+        s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=NF,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
                          tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')),predictor=pred)
         log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
         s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=64,qd=8,device=dev.index,

@@ -3,7 +3,7 @@
 #   sm120/serve/serve_nq.sh [up|down|logs|smoke]
 # Env: NQ_REPACK_DIR (records + resident planes from streaming/repack.py, default /home/jarrelscy/nq-p4rec/prod),
 #      NQ_LAYERS (e.g. 3-18; default every layer in the repack), NQ_STREAM (0 = fixed set only), NQ_MAXLEN, NQ_UTIL,
-#      NQ_SLOTS_PER_LAYER, NQ_CAP_GBPS (upgrade budget, aggregate GB/s over the 4 ranks, default 12), NQ_PREDICTOR (ema | gbdt, default streaming/scheduler.py DEFAULT_PREDICTOR), NQ_SERVED_NAME (default glm-5.3-nq; alias "local" always works).
+#      NQ_SLOTS_PER_LAYER, NQ_CAP_GBPS (upgrade budget, aggregate GB/s over the 4 ranks, default 0 = uncapped), NQ_PREDICTOR (ema | gbdt, default streaming/scheduler.py DEFAULT_PREDICTOR), NQ_SERVED_NAME (default glm-5.3-nq; alias "local" always works).
 # Layers missing from the repack serve with the production ARVQ experts.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd);HA=${HA:-/home/jarrelscy/homeassistant}

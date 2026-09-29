@@ -21,7 +21,7 @@ services:
       NQ_LAYERS: ${NQ_LAYERS:-}
       NQ_STREAM: ${NQ_STREAM:-1}
       NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-56}
-      NQ_CAP_GBPS: ${NQ_CAP_GBPS:-12}         # aggregate over the TP ranks (rec_bytes x tp charged); drive ceiling ~11 GB/s
+      NQ_CAP_GBPS: ${NQ_CAP_GBPS:-0}          # 0 = uncapped (drive ~11 GB/s + slot pool limit); else aggregate GB/s over the TP ranks
       NQ_CHECK: ${NQ_CHECK:-0}
       CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
       NQ_DUMP: ${NQ_DUMP:-}
