@@ -71,6 +71,9 @@ The checks:
    - (c) an independent decode of the **published** planes matches the threads/12 reference decoder bitwise, at levels 2 and 4. The published planes are the resident base/var plus the record P4, unpacked from the sub-array layout, plus the d4 block words, decoded with `moe.dense_W`. The U4 segment and resident lr also equal the reference lrU4 and lrV|lrU2.
 
 Runs on CPU or `--dev cuda` (capped at 12 GB). One layer on 4 ranks with 3 experts takes 28 s on an A100 and 68 s on CPU.
+The full TP4 release (75 layers, 600 files, 392.8 GB) passes: hashing takes 50 s from page cache (32 threads), and 225 decode checks take 259 s on one A100, for 311 s in total.
+
+`nq_assemble.py` was tested on rank 0 of the full build. The L3 region is `cmp`-identical to `repack.py` output, the L40 and L77 regions match their shas, and a rerun is a no-op (0 s).
 
 Negative tests (`neg_test.py`, L3): all 12 cases behave as expected.
 - A clean copy passes.
