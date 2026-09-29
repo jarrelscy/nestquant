@@ -123,7 +123,10 @@ class Runtime:
         s.F=s.log=None
         if os.environ.get('NQ_LEADER','1')!='0' and s.tp>1:     # rank 0 schedules, the other ranks replay its ops
             import oplog as OL
-            s.log=OL.OpLog(f'/dev/shm/nq_oplog_{os.getppid()}.bin',writer=s.rank==0)
+            # /dev/shm is the host's and container pids repeat across boots: key the log by the parent's start time too,
+            # so a follower can never open (and replay) a previous boot's log before the leader has created this one
+            pp=os.getppid();st=open(f'/proc/{pp}/stat').read().rsplit(')',1)[1].split()[19]
+            s.log=OL.OpLog(f'/dev/shm/nq_oplog_{pp}_{st}.bin',writer=s.rank==0)
             if s.rank:s.F=OL.Follower(s.X,s.log);s.F.busy.update(init)
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
         _gate_captures(s)
