@@ -4,7 +4,8 @@ Source = the serving repack (repack.py OUT): res/rank{r}/L{L}.pt (level-2 planes
 the served weights; a new artifact version only needs a repack.
 Per (layer, TP rank, expert, level) the kernel computes (moe.Expert.ref)
     g = wht(wht(x*su_g) Wg^T) * sv_g + (x Vg^T)(U2g [+U4g]),  u likewise (su_u, sv_u),  y = wht(wht(h*su_d) Wd^T)*sv_o + ...
-with wht = 128-blocked orthonormal Hadamard, so the effective weights are
+with wht = 128-blocked orthonormal Hadamard (the down input wht at the layer's in_had_down, threads/29: 128 or 512),
+so the effective weights are
     Wgate = D(sv_g) B_I Wg B_H D(su_g) + U2g^T Vg (+U4g^T Vg),  Wdown = D(sv_o) B_H Wd B_I D(su_d) + U2d^T Vd (+U4d^T Vd)
 (the kernel's fp16 rounding of the rotated activations is not modelled: this eval measures the weights, bf16 math).
 The rank's slice is its own intermediate block (I/tp rows of gate/up, columns of down); summing the 4 ranks' partial
@@ -36,11 +37,11 @@ def unpack_words(p4,bits,nrec):
         w[:,A//32]|=(bb<<torch.arange(T,device=dev)).sum(-1)<<(A%32)
     return w
 
-def _hblk(A,dim):
-    """multiply A by the 128-blocked orthonormal Hadamard along dim (0 = left, 1 = right)."""
-    Hm=MO.H128(A.device)
-    if dim==1:return (A.reshape(A.shape[0],-1,128)@Hm).reshape(A.shape)
-    return (Hm@A.reshape(-1,128,A.shape[1])).reshape(A.shape)
+def _hblk(A,dim,n=128):
+    """multiply A by the n-blocked orthonormal (Sylvester) Hadamard along dim (0 = left, 1 = right)."""
+    Hm=MO.H128(A.device,n)
+    if dim==1:return (A.reshape(A.shape[0],-1,n)@Hm).reshape(A.shape)
+    return (Hm@A.reshape(-1,n,A.shape[1])).reshape(A.shape)
 
 def sha_file(path,chunk=16<<20):
     h=hashlib.sha256()
@@ -88,7 +89,7 @@ class RankLayerEff:
         H,I=s.H,s.I;x=s.ex[E];sg=x.sc[level].float();su,svg,svu,sud,svo,suu=sg[:H],sg[H:H+I],sg[H+I:H+2*I],sg[H+2*I:H+3*I],sg[H+3*I:2*H+3*I],sg[2*H+3*I:]
         G=_hblk(_hblk(Wg[:I],1),0)*svg[:,None]*su[None,:]
         U=_hblk(_hblk(Wg[I:],1),0)*svu[:,None]*suu[None,:]
-        D=_hblk(_hblk(Wd,1),0)*svo[:,None]*sud[None,:]
+        D=_hblk(_hblk(Wd,1,MO.had_dn(x)),0)*svo[:,None]*sud[None,:]   # down input side at in_had_down (threads/29)
         rg,rd=x.rg,x.rd
         if rg+rd:
             lr=x.lr.float();o=0

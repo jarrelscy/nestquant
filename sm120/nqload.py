@@ -83,6 +83,10 @@ def kernel_expert(art,dev='cuda',want_Q=False):
     ex.sc={lv:scales(lv) for lv in (2,4)}
     return ex,scales,(Qg,Qu,Qd)
 
+def had_width(man):
+    """threads/29 in_had_down (down-projection input Hadamard width) of a layer manifest; absent = 128"""
+    return int(man.get('config',{}).get('in_had_down',128))
+
 def p4_bytes(ex):
     """bytes of the streamed level-4 part of one expert on one rank: P4 + block words (+ U4 of the lr plane)."""
     b=sum(p.p4.numel()*4+p.d4.numel()*4 for p in (ex.gu,ex.dn))
@@ -114,6 +118,9 @@ class RankLayer:
         s.experts=[E for E in s.man['experts'] if experts is None or E in experts];s.dev=dev
         s.ex={E:kernel_expert(group_art(s.parts,s.man,E,s.ss),dev)[0] for E in s.experts}
         s.H,s.I=s.man['proj_meta']['down']['n'],s.man['proj_meta']['down']['k']*g//NSH
+        s.had_dn=had_width(s.man)                        # threads/29: down-input Hadamard width, one per layer
+        assert s.I%s.had_dn==0,(L,s.I,s.had_dn)
+        for x in s.ex.values():x.had_dn=s.had_dn
     def art(s,E):return group_art(s.parts,s.man,E,s.ss)
     def slot_bytes(s,align=256):
         """P4 slot size: max over this layer's experts, rounded up to `align` (the pool parameter)."""

@@ -41,7 +41,7 @@ services:
       VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
     volumes:
     - ${NQ_REPO:-/data/Jarrel/nestquant}:/nq:ro
-    - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/prod}:/nqrepack:ro
+    - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}:/nqrepack:ro
     - /data/Jarrel/nq-build-container:/nqbuild
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
     - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm

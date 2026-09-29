@@ -33,7 +33,11 @@
 //        (T12 base_var 'sign': a = -1 negates the ring's level-2 and level-4 values exactly). G = 4 only.
 //   [14] low-rank plane, resident with the base (0 = none): half[V_gu r_gu x H | U2_g r_gu x I | U2_u r_gu x I |
 //        V_dn r_dn x I | U2_d r_dn x H]   [15] level-4 part, lives with P4 (0 = none): half[U4_g | U4_u | U4_d]
-//   [16] r_gu, [17] r_dn (<= 4)   [18..19] reserved
+//   [16] r_gu, [17] r_dn (<= 4)   [18] in_had_down: width of the down projection's input Hadamard (0 or 128 = Had128
+//        blocks; 512 = one sign + Sylvester Hadamard-512 block per 512 SwiGLU columns, threads/29; must divide I)  [19] reserved
+//   in_had_down w > 128: K1's finisher stores WHT128(sw * su_d) in fp32 into the (already consumed) gate columns of
+//   acc_gu[slot]; the last-arriving of the w/128 column groups of a (run, w-block) applies the cross-block Sylvester
+//   H_{w/128} / sqrt(w/128) (WHT_w = H_{w/128} (x) WHT128), rounds to fp16 once into h[slot] and re-zeroes those columns.
 //   T12 lr plane (nq_decode.lr_term): W = Wq + U2^T V (+ U4^T V at level 4), V in the unrotated input basis, U in the
 //   unrotated output basis. Gate|up: z = x V_gu^T in K1's finisher, g/u += z (U2 [+ U4]) before SwiGLU (gate and up share
 //   V). Down: K1's finisher writes z partials of its 128 SwiGLU columns to zd [S][I/128][4]; K2's combine sums them and
@@ -365,6 +369,7 @@ struct MoeArgs
     half* wdump[2]; int dump_e;   // NQ_WDUMP debug builds only: decoded fp16 weights of expert dump_e (gu [2I][H], dn [H][I])
     int* hits;         // optional [E] int32 pick counters (may be host-mapped pinned memory); nullptr = off
     float* zd;         // [S][I/128][4] down lr partials (written by K1, read by K2; no zeroing needed)
+    int* cnt_h;        // [S*I/128] i32 down-input Hadamard block counters (in_had_down > 128; zero on entry/exit)
 };
 
 struct RunInfo { int e, level, ntok, nruns; int slot[8]; float w[8]; const int64_t* ent; };
@@ -606,6 +611,7 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
         const half* lrp = (const half*)R.ent[14];
         const int rg = lrp ? (int)R.ent[16] : 0, rd = lrp ? (int)R.ent[17] : 0;
         const half* U4 = lv == 4 ? (const half*)R.ent[15] : nullptr;
+        const int hw = (int)R.ent[18];
         for (int task = warp; task < ntok * rg; task += SB)   // z_gu = x V_gu^T (unrotated x)
         {
             int j = task / rg, r = task % rg, tok = R.slot[j] / a.topk; float d = 0.f;
@@ -661,7 +667,48 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
             #pragma unroll
             for (int i = 0; i < 4; ++i) v[i] *= s[i];
             wht128_warp(v, lane);
-            st4h(a.h + (size_t)R.slot[j] * a.I + col, v);
+            if (hw <= 128) st4h(a.h + (size_t)R.slot[j] * a.I + col, v);
+            else __stcg((float4*)(a.acc_gu + (size_t)R.slot[j] * N + col), make_float4(v[0], v[1], v[2], v[3]));
+        }
+        if (hw > 128)   // cross-block stage of WHT_hw (block-uniform branch)
+        {
+            const int nb = hw / 128, b0 = grp / nb * nb;
+            __shared__ int last_h;
+            __threadfence();
+            __syncthreads();
+            if (threadIdx.x == 0)
+            {
+                int prev; int* ch = a.cnt_h + z * (a.I / 128) + b0;
+                asm volatile ("atom.add.acq_rel.gpu.global.s32 %0, [%1], 1;" : "=r"(prev) : "l"(ch) : "memory");
+                last_h = (prev == nb - 1);
+                if (last_h) *ch = 0;
+            }
+            __syncthreads();
+            if (last_h)
+            {
+                const float rs = rsqrtf((float)nb);
+                for (int task = warp; task < ntok * nb; task += SB)
+                {
+                    const int j = task / nb, ob = task % nb;
+                    const float* p = a.acc_gu + (size_t)R.slot[j] * N + b0 * 128 + lane * 4;
+                    float o[4] = {0, 0, 0, 0};
+                    for (int b = 0; b < nb; ++b)
+                    {
+                        const float4 f = __ldcg((const float4*)(p + b * 128));
+                        const float sgn = (__popc(ob & b) & 1) ? -1.f : 1.f;
+                        o[0] += sgn * f.x; o[1] += sgn * f.y; o[2] += sgn * f.z; o[3] += sgn * f.w;
+                    }
+                    #pragma unroll
+                    for (int i = 0; i < 4; ++i) o[i] *= rs;
+                    st4h(a.h + (size_t)R.slot[j] * a.I + (b0 + ob) * 128 + lane * 4, o);
+                }
+                __syncthreads();   // every read of the fp32 stage is done before it is re-zeroed
+                for (int task = warp; task < ntok * nb; task += SB)
+                {
+                    const int j = task / nb, ob = task % nb;
+                    __stcg((float4*)(a.acc_gu + (size_t)R.slot[j] * N + (b0 + ob) * 128 + lane * 4), make_float4(0, 0, 0, 0));
+                }
+            }
         }
     }
     else
@@ -807,11 +854,12 @@ void set_wdump(int64_t gu, int64_t dn, int64_t e) { g_wdump[0] = gu; g_wdump[1] 
 // One MoE layer forward (graph-capturable; all routing/level/pointer decisions are read on device).
 // cfg_gu/cfg_dn: (cpw, sb, nst[, persistent]).  ws: acc_gu [S,2I] f32, h [S,I] f16, acc_d [S,H] f32,
 // cnt_gu [S*I/128] i32, cnt_d [H/128] i32, wq [4] i32 (persistent work counters) -- all zero on entry, zero on exit;
-// zd [S*I/128*4] f32 (lr down partials, fully rewritten by K1 before K2 reads it).
+// zd [S*I/128*4] f32 (lr down partials, fully rewritten by K1 before K2 reads it); cnt_h [S*I/128] i32 (zero on entry/exit).
 void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Tensor table, torch::Tensor out,
                  torch::Tensor acc_gu, torch::Tensor h, torch::Tensor acc_d, torch::Tensor cnt_gu, torch::Tensor cnt_d,
                  torch::Tensor wq, int64_t I, int64_t nm_gu, int64_t nm_dn, std::vector<int64_t> cfg_gu,
-                 std::vector<int64_t> cfg_dn, int64_t G, int64_t force_level, int64_t which, int64_t hits_ptr, torch::Tensor zd)
+                 std::vector<int64_t> cfg_dn, int64_t G, int64_t force_level, int64_t which, int64_t hits_ptr, torch::Tensor zd,
+                 torch::Tensor cnt_h)
 {
     MoeArgs a{};
     a.x = (const half*)x.data_ptr(); a.sel = (const int64_t*)sel.data_ptr(); a.rw = (const half*)rw.data_ptr();
@@ -819,6 +867,8 @@ void moe_forward(torch::Tensor x, torch::Tensor sel, torch::Tensor rw, torch::Te
     a.nm_gu = nm_gu; a.nm_dn = nm_dn; a.acc_gu = (float*)acc_gu.data_ptr(); a.h = (half*)h.data_ptr();
     a.acc_d = (float*)acc_d.data_ptr(); a.out = (float*)out.data_ptr(); a.cnt_gu = (int*)cnt_gu.data_ptr(); a.cnt_d = (int*)cnt_d.data_ptr();
     a.force_level = force_level; a.hits = (int*)hits_ptr; a.zd = (float*)zd.data_ptr();
+    a.cnt_h = (int*)cnt_h.data_ptr();
+    TORCH_CHECK(cnt_h.scalar_type() == at::kInt && cnt_h.numel() >= (int64_t)x.size(0) * sel.size(1) * (I / 128), "cnt_h [S*I/128] i32");
     a.wdump[0] = (half*)g_wdump[0]; a.wdump[1] = (half*)g_wdump[1]; a.dump_e = g_dump_e;
     const int S = a.B * a.topk;
     TORCH_CHECK(S <= 64 && a.B <= 8, "B*topk <= 64, B <= 8");
