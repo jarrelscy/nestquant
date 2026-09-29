@@ -193,6 +193,14 @@ def fingerprint(man_sha, cid):
     return hashlib.sha256(f"{man_sha}|{cid}|{REC_FORMAT}|{RES_FORMAT}|{EXPORT_VERSION}".encode()).hexdigest()[:24]
 
 
+ROT_KEYS = ("in_had_down", "had_sign_seed", "ics_down")    # threads/29: down-input Hadamard width (absent = 128)
+
+
+def rotation_fields(man):
+    """the layer manifest's rotation fields (only when present, so layers without them keep their block bytes/hash)"""
+    return {k: man["config"][k] for k in ROT_KEYS if k in man.get("config", {})}
+
+
 def finish_layer(root, out, tp, L):
     """all ranks of L exported -> layers/L{L}.json (the per-layer block + layer_hash)"""
     T = tpdir(out, tp)
@@ -205,7 +213,8 @@ def finish_layer(root, out, tp, L):
                layout=lay, ranks=ranks, default_allocation=fs,
                source=dict(format=man["format"], manifest_sha256=msha,
                            files={k: v["sha256"] for k, v in man["files"].items()},
-                           config_id=man.get("campaign", {}).get("config_id")),
+                           config_id=man.get("campaign", {}).get("config_id"),
+                           **rotation_fields(man)),
                time=time.strftime("%Y-%m-%d %H:%M:%S"))
     blk["layer_hash"] = layer_hash(blk)
     p = f"{T}/layers/L{L}.json"; os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -245,6 +254,8 @@ def build_index(out, tp, only=None, dest=None):
                                          offset=e["rec"]["offset"], bytes=e["rec"]["bytes"], sha256=e["rec"]["sha256"],
                                          res=e["res"]["file"], res_bytes=e["res"]["bytes"], res_sha256=e["res"]["sha256"],
                                          layer_hash=blks[L]["layer_hash"])
+            if "in_had_down" in blks[L]["source"]:
+                idx["layers"][str(L)]["in_had_down"] = blks[L]["source"]["in_had_down"]
         _wjson(f"{W}/rank{r}.json", idx)
     fss = sorted({blks[L]["default_allocation"]["fixed_set_sha256"] for L in Ls})
     man = dict(format=SERVE_FORMAT, rec_format=REC_FORMAT, res_format=RES_FORMAT, source_format="nestquant-v1",
@@ -256,6 +267,14 @@ def build_index(out, tp, only=None, dest=None):
                default_allocation={str(L): blks[L]["default_allocation"]["level4_experts"] for L in Ls},
                floating_default={str(L): blks[L]["default_allocation"]["floating_default"] for L in Ls},
                n_routed={str(L): blks[L]["default_allocation"]["n_routed"] for L in Ls},
+               **({} if not any("in_had_down" in blks[L]["source"] for L in Ls) else dict(
+                   in_had_down={str(L): int(blks[L]["source"].get("in_had_down", 128)) for L in Ls},
+                   had_sign_seed={str(L): blks[L]["source"]["had_sign_seed"] for L in Ls if "had_sign_seed" in blks[L]["source"]},
+                   rotation_note="in_had_down[L] = width of the down-projection INPUT Hadamard (k side, SwiGLU output): "
+                                 "128 = blockwise Had128 (default); 512 = one sign + Sylvester Had512 block per TP4 rank "
+                                 "(k = 2048 = 4 x 512; = Had4 across the rank's four 128-chunks after WHT128). Signs are "
+                                 "folded into the down suh scales as before; gate/up and all output sides stay Had128. "
+                                 "Record bytes (nq-p4rec-v1) are unchanged; only the kernel's h rotation differs.")),
                notes=["record of (L, E) in the assembled rank{r}.bin at ((L-L0)*NE + E) * rec_bytes; rank{r}/L{L}.bin "
                       "holds exactly the NE records of layer L (its offset in rank{r}.bin = rank{r}.json layers[L].offset)",
                       "default_allocation = fixed level-4 set per layer (always resident at level 4); floating_default = "
