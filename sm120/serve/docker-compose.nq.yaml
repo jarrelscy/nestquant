@@ -1,14 +1,24 @@
 # NestQuant experts on the GLM-5.3 ARVQ serving stack. Layered on the homeassistant compose files:
 #   COMPOSE_FILE=docker-compose.yaml:docker-compose.glm53-arvq.yaml:<this file>   (serve_nq.sh sets it)
 # Same image and non-expert weights as production; MoE layers present in NQ_REPACK run the NestQuant kernel with SSD
-# P4 streaming, the others keep ARVQ. LMCache is off (its cache holds KV computed with the ARVQ experts).
+# P4 streaming, the others keep ARVQ.
+# LMCache (NQ_LMCACHE, default 1): in-process LMCacheConnectorV1 (DCP-aware fork baked in the image), CPU RAM tier ONLY
+# (NQ_LMCACHE_CPU_GB per TP rank, x4 ranks total pinned host RAM; no disk tier: it would compete with the SSD expert
+# stream and has the known local_disk eviction crash). Own namespace /data/lmcache/glm5.3-nq, never the ARVQ caches
+# (those hold KV computed with ARVQ experts). The ~1 GiB/GPU LMCache kv_buffer is not counted by vLLM's profiler;
+# at NQ_UTIL 0.92 the 1M-prefill peak is 93.1 GB of 97.9 (~4.7 GiB free per GPU).
 services:
   vllm-glm5.3-hybrid-1m:
     container_name: glm53-nestquant
     security_opt:
     - seccomp=unconfined          # io_uring (the default docker profile blocks io_uring_setup)
     environment:
-      ENABLE_LMCACHE: '0'
+      ENABLE_LMCACHE: ${NQ_LMCACHE:-1}
+      LMCACHE_LOCAL_CPU: 'True'
+      LMCACHE_MAX_LOCAL_CPU_SIZE: ${NQ_LMCACHE_CPU_GB:-18}   # GB per TP rank (4 ranks -> 72 GB pinned host RAM, ~1.3M tokens)
+      LMCACHE_LOCAL_DISK: file:///lmcache/disk/unused
+      LMCACHE_MAX_LOCAL_DISK_SIZE: '0'                      # 0 = no disk backend (storage_backend: needs size > 0)
+      VLLM_SERVER_DEV_MODE: ${NQ_DEV_MODE:-0}               # 1 = /reset_prefix_cache etc. (gates only)
       SERVED_NAME: ${NQ_SERVED_NAME:-glm-5.3-nq}
       MAXLEN: ${NQ_MAXLEN:-131072}
       UTIL: ${NQ_UTIL:-0.88}
@@ -33,10 +43,11 @@ services:
       NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
       NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
-      NQ_GBDT_MODE: ${NQ_GBDT_MODE:-next_refresh}
+      NQ_GBDT_MODE: ${NQ_GBDT_MODE:-sync}
       NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
-      NQ_GBDT_SCALE: ${NQ_GBDT_SCALE:-none}
+      NQ_GBDT_SCALE: ${NQ_GBDT_SCALE:-mps}
       NQ_GBDT_BAND: ${NQ_GBDT_BAND:-ema256}
+      NQ_SESSION_RESTORE: ${NQ_SESSION_RESTORE:-1}   # per-session floating-set restore (nq_session.py); in-boot toggle /dev/shm/nq_sr_ctl
       NQ_PF: ${NQ_PF:-1}                      # prefill path (moe.MoELayer.prefill) for >= NQ_PF_MIN tokens
       NQ_PF_MIN: ${NQ_PF_MIN:-384}
       NQ_PF_ROWS: ${NQ_PF_ROWS:-8192}
@@ -63,5 +74,6 @@ services:
     - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
     - /data/Jarrel/nq-serve/dbg:/dbg
     - /data/Jarrel/nq-serve/predictor:/nqpred:ro
+    - /data/lmcache/glm5.3-nq:/lmcache/disk                 # replaces the ARVQ /lmcache/disk mount (unused while disk size is 0)
     - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro     # lightgbm + narwhals + scipy for NQ_PREDICTOR=gbdt (serve_nq.sh installs it)
     - ${NQ_REPO:-/data/Jarrel/nestquant}/sm120/serve/overlay/nvfp4_arvq_hybrid.py:/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro

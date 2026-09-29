@@ -3,7 +3,7 @@
 #   sm120/serve/serve_nq.sh [up|down|logs|smoke]
 # Env: NQ_REPACK_DIR (records + resident planes from streaming/repack.py, default /home/jarrelscy/nq-p4rec/hf = full 75-layer repack),
 #      NQ_LAYERS (e.g. 3-18; default every layer in the repack), NQ_STREAM (0 = fixed set only), NQ_MAXLEN, NQ_UTIL,
-#      NQ_SLOTS_PER_LAYER, NQ_CAP_GBPS (upgrade budget, aggregate GB/s over the 4 ranks, default 0 = uncapped), NQ_PREDICTOR (ema | gbdt, default streaming/scheduler.py DEFAULT_PREDICTOR), NQ_GBDT_MODE (next_refresh | sync), NQ_GBDT_SCALE (none | mps), NQ_GBDT_BAND (ema256 | all), NQ_SERVED_NAME (default glm-5.3-nq; alias "local" always works).
+#      NQ_SLOTS_PER_LAYER, NQ_CAP_GBPS (upgrade budget, aggregate GB/s over the 4 ranks, default 0 = uncapped), NQ_PREDICTOR (ema | gbdt, default streaming/scheduler.py DEFAULT_PREDICTOR), NQ_GBDT_MODE (next_refresh | sync, default sync), NQ_GBDT_SCALE (none | mps, default mps), NQ_GBDT_BAND (ema256 | all), NQ_SERVED_NAME (default glm-5.3-nq; alias "local" always works).
 # Layers missing from the repack serve with the production ARVQ experts.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd);HA=${HA:-/home/jarrelscy/homeassistant}
@@ -14,6 +14,8 @@ key(){ grep -oP 'VLLM_API_KEY=\K\S+' "$HA/.env"; }
 case "${1:-up}" in
 up)
   RP=${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}
+  # serve defaults (the compose file substitutes these): GBDT x mps128 salience scale, sync refresh (2026-09-29)
+  export NQ_GBDT_SCALE=${NQ_GBDT_SCALE:-mps} NQ_GBDT_MODE=${NQ_GBDT_MODE:-sync}
   for r in 0 1 2 3; do [ -f "$RP/rank$r.json" ] || { echo "no repack at $RP (rank$r.json)"; exit 1; }; done
   echo "NQ layers in repack: $(python3 -c "import json;print(sorted(int(k) for k in json.load(open('$RP/rank0.json'))['layers']))")"
   if docker ps --format '{{.Ports}}' | grep -q ':8001->'; then echo "port 8001 is in use; stop the running model first (switch.sh)"; exit 1; fi
