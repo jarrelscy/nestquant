@@ -214,7 +214,8 @@ def load_delta(path, col="delta"):
     return {int(L): torch.tensor(v, dtype=torch.float64) for L, v in it if v is not None}
 
 
-KINDS = ("count", "w", "sal", "salrel", "cntdelta")   # per-slot value: 1 | gate w | w^2|x|^2 delta_e | w^2|x|^2 drel_e | delta_e
+KINDS = ("count", "w", "sal", "salrel", "cntdelta", "wx2")   # per-slot value: 1 | gate w | w^2|x|^2 delta_e |
+#                                                                 w^2|x|^2 drel_e | delta_e | w^2|x|^2 (no delta)
 
 
 class Adapt(Base):
@@ -342,6 +343,8 @@ class Adapt(Base):
             assert torch.equal(ids_.long(), ids.long()), "act_full routing != scheduled routing"
         if kind == "w":
             return w.double()
+        if kind == "wx2":
+            return w.double().pow(2) * xn.double()[:, None]
         if kind == "cntdelta":
             return self.dtab["delta"][layer].to(ids.device)[ids.long()]
         D = self.dtab["delta" if kind == "sal" else "drel"][layer].to(ids.device)
@@ -414,7 +417,9 @@ class Adapt(Base):
                 Ch[:, b] += Ch[:, b - 1] * aG
             prior = Cs.sum(-1, keepdim=True) / Ch.sum(-1, keepdim=True).clamp_min(1e-30)
             mean_sal = torch.where(Ch > 0, Cs / Ch.clamp_min(1e-30), prior)          # [N, nblk, NE] through block b
-            mean_sal = (mean_sal * self.dtab["delta" if self.gscale == "sal" else "drel"][layer].to(ids.device)).cpu().numpy()
+            if self.gscale != "wx2":
+                mean_sal = mean_sal * self.dtab["delta" if self.gscale == "sal" else "drel"][layer].to(ids.device)
+            mean_sal = mean_sal.cpu().numpy()
             del sv, hv, Cs, Ch
         v2 = getattr(self, "gbdt_v2", False) or getattr(self, "gbdt_scale", None) is not None
         if v2:
@@ -527,13 +532,7 @@ class Adapt(Base):
         if self.ahead is not None:                                     # per-chunk upgrades from lookahead / oracle
             li_, lw, lx = self._la
             li_ = li_.long()
-            if self.rank == "count":
-                v = torch.ones(li_.shape, dtype=torch.float64, device=dev)
-            elif self.rank == "w":
-                v = lw.double()
-            else:
-                v = self._slot_value(layer, self.rank, li_, lw, lx) if self.rank == "cntdelta" else \
-                lw.double().pow(2) * lx.double()[:, None] * self.delta[layer].to(dev)[li_]
+            v = self._slot_value(layer, self.rank, li_, lw, lx)
             sc = torch.zeros(N * nc, NE, dtype=torch.float64, device=dev)
             sc.index_put_(((n * nc + k)[:, None].expand_as(li_), li_), v, accumulate=True)
             sc = sc.view(N, nc, NE).masked_fill(fixed, 0.0)

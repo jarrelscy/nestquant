@@ -46,7 +46,7 @@ def load_delta(path):
 
 def vecs(arr, L, delta):
     """[3, ..., 256] (count, sum w, sum w^2|x|^2) -> {ranking: score}"""
-    out = {"count": arr[0], "w": arr[1]}
+    out = {"count": arr[0], "w": arr[1], "wx2": arr[2]}
     for r, D in (delta or {}).items():
         out[r] = (arr[0] if r == "cntdelta" else arr[2]) * D[L]
     return out
@@ -64,7 +64,7 @@ def cmd_accuracy(a):
     m = json.load(open(MAN))
     fixed = {int(L): np.isin(np.arange(256), v) for L, v in m["default_allocation"].items()}
     delta = load_delta(a.delta)
-    ranks = ["count", "w"] + sorted(delta or {})
+    ranks = ["count", "w", "wx2"] + sorted(delta or {})
     measures = ["slots"] + ranks[1:]
     streams = sorted({os.path.basename(f).rsplit("_r", 1)[0][3:]
                       for f in glob.glob(f"{OUT}/results/{a.tag}/la_*_r*.npz")})
@@ -178,6 +178,7 @@ def cmd_accuracy(a):
                              "sal": "sum w^2 |x|^2 delta_e (delta = drel * G: T31 nq-delta-v1)",
                              "salrel": "sum w^2 |x|^2 drel_e (T31 drel, no gain G)",
                              "cntdelta": "routed slots x delta_e",
+                             "wx2": "sum w^2 |x|^2 (no delta)",
                              "x": "normalised MoE input (post_attention_layernorm output, what the experts see)"},
                 "streams": {"ref": "FP8 reference", "nqdef": "NestQuant nqdef (26 fixed level-4 / layer, rest "
                                                                "level-2; h512 L3-6)"},
