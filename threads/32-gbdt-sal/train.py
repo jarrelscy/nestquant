@@ -15,13 +15,16 @@ import t32lib as T
 FEATS = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16"]
 
 
-def rows(corpus, target, layers=T.LAYERS, m=None):
+def rows(corpus, target, layers=T.LAYERS, m=None, v2=False):
     Xs, ys = [], []
     mL = {}
     for L in layers:
         d = np.load(f"{T.OUT}/rows/{corpus}/L{L}.npz")
         v = d["valid"]
         X = d["X"][v].reshape(-1, 5)
+        if v2:
+            X2 = np.load(f"{T.OUT}/rows_v2/{corpus}/L{L}.npz")["X2"][v]
+            X = np.concatenate([X, X2.reshape(-1, X2.shape[-1])], 1)
         if target == "cnt":
             y = d["ycnt"][v].ravel()
         else:
@@ -42,11 +45,13 @@ def main():
     ap.add_argument("--valid", default="glm52-heldout")
     ap.add_argument("--threads", type=int, default=64)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--v2", action="store_true", help="+ salience features t32lib.FEATS_V2 (serve change)")
     a = ap.parse_args()
     import lightgbm as lgb
     t0 = time.time()
-    Xt, yt, m = rows(a.train, a.target)
-    Xv, yv, _ = rows(a.valid, a.target, m=m if a.target == "sal" else None)
+    Xt, yt, m = rows(a.train, a.target, v2=a.v2)
+    Xv, yv, _ = rows(a.valid, a.target, m=m if a.target == "sal" else None, v2=a.v2)
+    feats = FEATS + (list(T.FEATS_V2) if a.v2 else [])
     print(f"rows train {len(yt)} valid {len(yv)}  load {time.time() - t0:.0f}s  y mean {yt.mean():.4f} "
           f"zero frac {(yt == 0).mean():.3f}", flush=True)
     obj, _, pw = a.obj.partition(":")
@@ -55,7 +60,7 @@ def main():
              num_threads=a.threads, verbosity=-1, max_bin=255)
     if obj == "tweedie":
         p["tweedie_variance_power"] = float(pw or 1.5)
-    dt = lgb.Dataset(Xt, yt, feature_name=FEATS, free_raw_data=True)
+    dt = lgb.Dataset(Xt, yt, feature_name=feats, free_raw_data=True)
     dv = lgb.Dataset(Xv, yv, reference=dt)
     ev = {}
     bst = lgb.train(p, dt, num_boost_round=a.iters, valid_sets=[dv], valid_names=["heldout"],
@@ -63,7 +68,7 @@ def main():
                                lgb.log_evaluation(10)])
     bi = bst.best_iteration or a.iters
     bst.save_model(a.out, num_iteration=bi)
-    meta = dict(target=a.target, obj=a.obj, params=p, best_iteration=bi, iters_cap=a.iters,
+    meta = dict(features=feats, target=a.target, obj=a.obj, params=p, best_iteration=bi, iters_cap=a.iters,
                 valid_curve=ev["heldout"][list(ev["heldout"])[0]], train=a.train, valid=a.valid,
                 n_train=int(len(yt)), n_valid=int(len(yv)), sal_norm_mL=m if a.target == "sal" else None,
                 wall_s=time.time() - t0)

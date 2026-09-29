@@ -57,6 +57,7 @@ NQ_TRAIN = "/home/coder/git/orbit-duet/runs/glm53_training_15m_v2/tokens.npy"
 
 
 TRACE_DIR = os.environ.get("NQ_TRACE_DIR")   # T32: dump ref (ids, w, |x|^2) per sparse layer + windows manifest
+TRACE_PROBS = bool(os.environ.get("NQ_TRACE_PROBS"))   # T32: + full 256-way router scores (fp16 raw sigmoid, +bias)
 
 
 def log(m):
@@ -223,6 +224,7 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
     ref_iw = None                                # (ids, weights) of the reference stream, for oracle routing
     for f in flats:
         ids_l, w_l, own_l, xn_l = [], [], [], []
+        praw_l, psel_l, t16_l = [], [], []       # T32 NQ_TRACE_PROBS (reference stream only)
         out = torch.empty_like(f)
         if keep is not None:
             kx = torch.empty(f.shape, dtype=f.dtype, pin_memory=True)
@@ -234,6 +236,13 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
             x = norm(f[c0:c0 + chunk])
             logits, w, i = gate(x)
             own_l.append(i)
+            if TRACE_DIR and TRACE_PROBS and not route:
+                sg = logits.float().sigmoid()
+                praw_l.append(sg.half().cpu())
+                bc_ = gate.e_score_correction_bias.float()   # ~34: fp16 of sg + bias would lose the ranking
+                psel_l.append((sg + (bc_ - bc_.mean())).half().cpu())
+                t16_l.append(torch.topk(sg + bc_, 16, dim=-1).indices.to(torch.uint8).cpu())   # fp32-exact ranks 1..16
+                del sg
             if not route and margin is not None:  # FP8 router margin: 8th - 9th noaux_tc selection score
                 sc = torch.topk(logits.sigmoid() + gate.e_score_correction_bias, 9, dim=-1).values
                 g = (sc[:, 7] - sc[:, 8]).float()
@@ -269,8 +278,14 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
         if TRACE_DIR and not route:              # T32: reference routing trace (PRIVATE: stays on this box)
             os.makedirs(TRACE_DIR, exist_ok=True)
             tf = f"{TRACE_DIR}/L{li}.r{RANK}of{WORLD}.npz"
+            extra = {}
+            if TRACE_PROBS:
+                bc_ = gate.e_score_correction_bias.float().cpu()
+                extra = dict(p_raw=torch.cat(praw_l).numpy(), p_selc=torch.cat(psel_l).numpy(),
+                             top16=torch.cat(t16_l).numpy(),
+                             bias=bc_.numpy(), bias_mean=np.float32(bc_.mean()))   # sel = p_selc + bias_mean
             np.savez(tf + ".part.npz", ids=i.to(torch.uint8).cpu().numpy(), w=w.float().cpu().numpy(),
-                     xn=torch.cat(xn_l).cpu().numpy())
+                     xn=torch.cat(xn_l).cpu().numpy(), **extra)
             os.rename(tf + ".part.npz", tf)
         if not route:
             ref_iw = (i, w)

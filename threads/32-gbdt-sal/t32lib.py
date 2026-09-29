@@ -95,9 +95,9 @@ def block_mats(ids, w, xn, seg):
     return cnt, cnta, nans, sal, seg_last
 
 
-def chain_features(L, fixed, cnt, cnta, nans, seg_last):
+def chain_features(L, fixed, cnt, cnta, nans, seg_last, rlo=20, rhi=121):
     """drive GBDTPredictor's own block code over one chain -> X [nb, 101, 5], cand [nb,101], top [nb,20], e256top."""
-    P = GBDTPredictor([L], {L: fixed[L]}, mode="sync", num_threads=1)
+    P = GBDTPredictor([L], {L: fixed[L]}, mode="sync", num_threads=1, rlo=rlo, rhi=rhi)
     nb = cnt.shape[0]
     Xs, Cs, Ts, Es = [], [], [], []
     for k in range(nb):
@@ -105,7 +105,7 @@ def chain_features(L, fixed, cnt, cnta, nans, seg_last):
         P.seg = int(seg_last[k])
         P._close_block()
         X, cand, top, e256 = P._features()
-        Xs.append(X); Cs.append(cand[0]); Ts.append(top[0]); Es.append(e256[0, top[0]])
+        Xs.append(X); Cs.append(cand[0]); Ts.append(top[0]); Es.append(e256[0, top[0]] if top.shape[1] else e256[0, :0])
     P.close()
     return (np.stack(Xs).reshape(nb, -1, 5), np.stack(Cs).astype(np.uint8), np.stack(Ts).astype(np.uint8),
             np.stack(Es).astype(np.float32))
@@ -123,7 +123,7 @@ def future_sum(M, nb_chain):
     return F
 
 
-def build_layer(L, corpus, fixed, out_dir):
+def build_layer(L, corpus, fixed, out_dir, rlo=20, rhi=121):
     ids, w, xn = load_layer(L, corpus)
     T = ids.shape[0]
     tok = tokens(corpus, T // SEQ)
@@ -133,7 +133,7 @@ def build_layer(L, corpus, fixed, out_dir):
     res = {k: [] for k in ("X", "cand", "top", "e256", "ycnt", "ysal", "valid", "bcnt", "bsal")}
     for c0 in range(0, cnt.shape[0], nbc):
         s = slice(c0, min(c0 + nbc, cnt.shape[0]))
-        X, cand, top, e = chain_features(L, fixed, cnt[s], cnta[s], nans[s], seg_last[s])
+        X, cand, top, e = chain_features(L, fixed, cnt[s], cnta[s], nans[s], seg_last[s], rlo, rhi)
         Fc, Fs = future_sum(cnt[s], cnt[s].shape[0]), future_sum(sal[s], sal[s].shape[0])
         res["X"].append(X); res["cand"].append(cand); res["top"].append(top); res["e256"].append(e)
         res["ycnt"].append(np.take_along_axis(Fc, cand.astype(np.int64), 1).astype(np.float32))
@@ -149,7 +149,7 @@ def build_layer(L, corpus, fixed, out_dir):
 
 
 # --------------------------------------------------------------------------------------------- offline sim
-def sim_layer(S_blocks, fixed_L, fdef_L, nf=51, hm=0.5, nbc=CHAIN * SEQ // G):
+def sim_layer(S_blocks, fixed_L, fdef_L, nf=51, hm=0.5, nbc=CHAIN * SEQ // G, lag=1):
     """exact replay of Adapt._core_gbdt (next_refresh, hysteresis) from precomputed per-block score matrices.
     S_blocks [nb, NE] float32 = GBDTPredictor._score output at the end of block b.  -> serve [nb, NE] bool (floating
     set serving block k; fixed excluded)."""
@@ -161,8 +161,8 @@ def sim_layer(S_blocks, fixed_L, fdef_L, nf=51, hm=0.5, nbc=CHAIN * SEQ // G):
         want = fd.copy()
         for k in range(c0, min(c0 + nbc, nb)):
             serve[k] = want
-            if k - c0 >= 1:                             # block k closes: apply S of block k-1
-                S = S_blocks[k - 1]
+            if k - c0 >= lag:                           # block k closes: apply S of block k-1 (lag 0: sync, S of k)
+                S = S_blocks[k - lag]
                 v = np.where(fixed, -np.inf, S).astype(np.float32)
                 r = want & ~fixed
                 v = np.where(r, v * np.float32(1 + hm), v)
@@ -182,3 +182,36 @@ def score_blocks(pred, cand, top, e256):
     np.put_along_axis(S, cand.astype(np.int64), pred.reshape(nb, -1).astype(np.float32), 1)
     np.put_along_axis(S, top.astype(np.int64), (1e3 + e256).astype(np.float32), 1)
     return S
+
+
+# --------------------------------------------------------------------------------------------- v2 salience features
+FEATS_V2 = ("sema32", "sema128", "sal16", "mps128")
+
+
+def v2_features(bcnt, bsal, cand, nbc=CHAIN * SEQ // G):
+    """causal salience features at each block end (same block cadence / decays as the serve's ema32/ema128), reset
+    per chain.  Scale-free per layer: salience is divided by the layer's causal salience per routed slot
+    (sum_e EMA256 sal / sum_e EMA256 hits), so values are in hit-equivalents like the count features.
+      sema32, sema128  per-token EMA rates of normalised w^2|x|^2 (half-life 32 / 128 tokens)
+      sal16            normalised salience in the last 16-token block (hits16 analogue)
+      mps128           EMA128 salience per hit / layer salience per hit (1.0 when the expert has no recent hits)
+    -> [nb, ncand, 4] float32"""
+    nb = bcnt.shape[0]
+    ag = [0.5 ** (G / h) for h in (32, 128, 256)]
+    out = np.zeros((nb, cand.shape[1], 4), np.float32)
+    c = bcnt.astype(np.float64); s = bsal.astype(np.float64)
+    for c0 in range(0, nb, nbc):
+        Es = [np.zeros(NE) for _ in ag]; Ec = [np.zeros(NE) for _ in ag]
+        for k in range(c0, min(c0 + nbc, nb)):
+            for j, a in enumerate(ag):
+                Es[j] = Es[j] * a + s[k]; Ec[j] = Ec[j] * a + c[k]
+            norm = Es[2].sum() / max(Ec[2].sum(), 1e-30)
+            if norm <= 0:
+                norm = 1.0
+            ci = cand[k].astype(np.int64)
+            out[k, :, 0] = Es[0][ci] * ((1 - ag[0]) / G) / norm
+            out[k, :, 1] = Es[1][ci] * ((1 - ag[1]) / G) / norm
+            out[k, :, 2] = s[k][ci] / norm
+            h = Ec[1][ci]
+            out[k, :, 3] = np.where(h > 1e-3, Es[1][ci] / np.maximum(h, 1e-30) / norm, 1.0)
+    return out
