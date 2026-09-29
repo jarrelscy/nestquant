@@ -32,6 +32,10 @@ services:
       NQ_SHADOW: ${NQ_SHADOW:-0}
       NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
       NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
+      NQ_PREDICTOR: ${NQ_PREDICTOR:-}
+      NQ_GBDT_MODE: ${NQ_GBDT_MODE:-next_refresh}
+      NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
+      NQ_LGB_PATH: /nqlgb
       LIBURING: /data/Jarrel/liburing
       CUDA_HOME: /opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13
       VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
@@ -42,4 +46,5 @@ services:
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
     - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
     - /data/Jarrel/nq-serve/dbg:/dbg
+    - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro     # lightgbm + narwhals + scipy for NQ_PREDICTOR=gbdt (serve_nq.sh installs it)
     - ${NQ_REPO:-/data/Jarrel/nestquant}/sm120/serve/overlay/nvfp4_arvq_hybrid.py:/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro

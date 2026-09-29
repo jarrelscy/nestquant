@@ -13,7 +13,8 @@ Per worker process (one TP rank):
   - forward = torch custom op nq::moe (opaque to torch.compile): <= 8 tokens one kernel call, more tokens in chunks of 8.
 Env: NQ_HOME (repo, default /nq), NQ_REPACK (record + resident dir), NQ_SLOTS_PER_LAYER (56), NQ_CAP_GBPS (6),
 NQ_TOK_PER_S (111), NQ_STREAM (1; 0 = fixed set only, no streaming), NQ_POLL_MS (4), NQ_LAYERS (e.g. 3-18, default all
-present). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
+present), NQ_PREDICTOR (floating-set predictor: ema | gbdt, default scheduler.DEFAULT_PREDICTOR; only the scheduling rank
+runs it), NQ_LGB_PATH (dir with lightgbm + narwhals + scipy, appended to sys.path; serve_nq.sh mounts it at /nqlgb). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
 differ by a step between ranks, so for a short while an expert can be at level 4 on some ranks and level 2 on others;
 each rank's shard is a valid level-2 or level-4 weight either way)."""
 import os,sys,json,time,threading,logging
@@ -21,6 +22,7 @@ import numpy as np,torch
 NQ_HOME=os.environ.get('NQ_HOME','/nq')
 for _p in (NQ_HOME+'/streaming',NQ_HOME+'/sm120'):
     if _p not in sys.path:sys.path.insert(0,_p)
+if os.environ.get('NQ_LGB_PATH') and os.environ['NQ_LGB_PATH'] not in sys.path:sys.path.append(os.environ['NQ_LGB_PATH'])
 try:
     from vllm.logger import init_logger;log=init_logger('vllm.nestquant')
 except Exception:log=logging.getLogger('nestquant')
@@ -113,8 +115,11 @@ class Runtime:
         nslot=int(os.environ.get('NQ_SLOTS_PER_LAYER','56'))*len(L_)
         T22=NQ_HOME+'/threads/22-boundary-experts/fixed_set.json';fj=json.load(open(T22))
         dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in L_}
+        lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
+        pred=(os.environ.get('NQ_PREDICTOR') or SC.DEFAULT_PREDICTOR) if (s.rank==0 or not lead) else 'ema'   # followers never step S
         s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=NF,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','6')),
-                         tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')))
+                         tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')),predictor=pred)
+        log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
         s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=64,qd=8,device=dev.index,
                                shadow=os.environ.get('NQ_SHADOW','0')=='1')
         init=[(L,E) for L in L_ for E in dflt[L] if E not in fx[L]][:nslot]
@@ -172,6 +177,7 @@ class Runtime:
                     log.info('NestQuant rank %d: level-4 experts %d/%d, ups %d downs %d, read errors %d, op p50 %.1f ms',s.rank,
                              int((lv==4).sum()),lv.size,s.S.stats['ups'],s.S.stats['downs'],s.S.stats.get('read_errors',0),
                              float(np.median(s.X.lat[-256:]))*1e3 if s.X.lat else -1)
+                    if s.F is None and s.S.P is not None:log.info('NestQuant rank %d: predictor %s stats %s',s.rank,s.S.predictor_name,s.S.P.stats)
         except Exception as e:           # streaming stops; every expert keeps its current (valid) row
             s.err=e;log.exception('NestQuant streaming thread stopped')
 

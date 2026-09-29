@@ -13,6 +13,7 @@ Streams (separate residual streams, each with its own routing):
          serving defaults: 51 floating, EMA 512, refresh 64, 56 slots/layer, 6 GB/s at 111 tok/s split evenly over the
          75 layers, floating_default preloaded; windows chained in corpus order like one long session)
   arvq   the ARVQ hybrid checkpoint (hot NVFP4 + cold ARVQ) the box serves today (weights only, see arvqeff.py)
+  aqlm   the AQLM hybrid checkpoint (prod glm-5.3: hot donor NVFP4 + cold 2-bit AQLM 1x16/g8; weights only, aqlmeff.py)
 NQ weights come from the serving repack (nqeff.py: the bytes the kernel reads), so a new artifact needs only a repack.
 
 Layout: torchrun, WORLD GPUs (4). Windows are owned w[r::WORLD] (attention, router, shared experts, head on the owner);
@@ -36,7 +37,8 @@ import numpy as np,torch,torch.distributed as dist
 HERE=os.path.dirname(os.path.abspath(__file__));REPO=os.path.dirname(os.path.dirname(HERE))
 for p in (HERE,REPO+'/sm120',REPO+'/streaming',REPO+'/threads/18-e2e-eval'):
     if p not in sys.path:sys.path.insert(0,p)
-import nq_io,nqeff,arvqeff,scheduler as SC,fixed_set as FS
+import nq_io,nqeff,arvqeff,aqlmeff,scheduler as SC,fixed_set as FS
+HYB=('arvq','aqlm')   # hybrid-checkpoint streams: level 4 = hot NVFP4
 FP8=os.environ.get('NQ_FP8','/data/models/zai-org/GLM-5.3');SEQ=int(os.environ.get('NQ_SEQ','2048'))
 ARVQ='/data/models/jarrelscy/GLM-5.3-Vision-NVFP4-ARVQ-hybrid-pv-d4a105dc50dd'
 TRAJ='/home/jarrelscy/homeassistant/benchmarks/glm5.3-flash-nvfp4-vllm-tb21'
@@ -114,9 +116,13 @@ def ffn(x,g,u,d):
     return torch.nn.functional.linear(torch.nn.functional.silu(torch.nn.functional.linear(x,g))*torch.nn.functional.linear(x,u),d)
 
 # ------------------------------------------------------------------------------------------------ dyn scheduler
-def sim_dyn(ids,L,fixed,dflt,rb_tp,step_tok,land_steps=1,n_float=51,slots=56,cap=6.0,tps=111.0,nl=75):
-    """ids [T,8] (global token order) -> lv4 [T,8] bool + stats. One Scheduler per layer with 1/nl of the byte budget."""
-    S=SC.Scheduler([L],{L:fixed},{L:dflt},rb_tp,NE=NE,n_float=n_float,slots=slots,cap_GBps=cap/nl,tok_per_s=tps)
+def sim_dyn(ids,L,fixed,dflt,rb_tp,step_tok,land_steps=1,n_float=51,slots=56,cap=6.0,tps=111.0,nl=75,predictor='ema'):
+    """ids [T,8] (global token order) -> lv4 [T,8] bool + stats. One Scheduler per layer with 1/nl of the byte budget.
+    predictor 'ema' (EMA512 / refresh 64) or 'gbdt' (GBDT p64, 16-token refresh, next_refresh mode, 1 thread, no token
+    ids = segment state stays 'think', as in the serve). The GBDT features carry no layer id, so a per-layer predictor
+    is the same model the serve runs over all layers."""
+    S=SC.Scheduler([L],{L:fixed},{L:dflt},rb_tp,NE=NE,n_float=n_float,slots=slots,cap_GBps=cap/nl,tok_per_s=tps,
+                   predictor=predictor,predictor_kw=dict(num_threads=1,mode='next_refresh') if predictor=='gbdt' else None)
     for e in dflt:
         if e not in fixed:S.state[0,e]=2                     # floating_default is preloaded at startup
     T=ids.shape[0];lv4=np.zeros(ids.shape,bool);pend=[];fx=S.fixed[0]
@@ -133,40 +139,46 @@ def sim_dyn(ids,L,fixed,dflt,rb_tp,step_tok,land_steps=1,n_float=51,slots=56,cap
     for b0 in range(0,T,blk):
         r=ids[b0:b0+blk];c=np.bincount(r.reshape(-1),minlength=NE).astype(float);cf=c.copy();cf[fx]=-1
         top=np.argsort(-cf,kind='stable')[:n_float];orc[0]+=c[fx].sum()+c[top].sum();orc[1]+=c.sum()
-    return lv4,dict(share4=float(lv4.mean()),oracle_block64_share4=orc[0]/max(orc[1],1),**{k:int(v) for k,v in S.stats.items()})
+    S.close()
+    return lv4,dict(tokens=T,share4=float(lv4.mean()),oracle_block64_share4=orc[0]/max(orc[1],1),**{k:int(v) for k,v in S.stats.items()})
 
-def K(s):return 'dyn' if s.startswith('dyn') else s   # dyn_shuf / dyn_reset are dyn streams with another chaining
+def K(s):return 'dyn' if s.startswith('dyn') else s   # dyn_shuf / dyn_reset / dyn_gbdt* are dyn streams (other chaining / predictor)
+DYN=('dyn','dyn_shuf','dyn_reset','dyn_gbdt','dyn_gbdt_shuf','dyn_gbdt_reset')
 def dyn_levels(g,variant,nw,seed,**kw):
     """g [nw*SEQ,8] routing ids in global window order -> lv4 in the same order + stats.
       dyn        windows chained in corpus order (one long session; serving never resets the score)
       dyn_shuf   windows chained in a seeded random order (no warming on one document)
-      dyn_reset  every window starts from a fresh Scheduler (floating_default, zero score) = one window per fresh boot"""
-    g=g.reshape(nw,SEQ,TOPK)
-    if variant=='dyn_reset':
+      dyn_reset  every window starts from a fresh Scheduler (floating_default, zero score) = one window per fresh boot
+      dyn_gbdt, dyn_gbdt_shuf, dyn_gbdt_reset: the same with the GBDT p64 predictor instead of EMA512"""
+    g=g.reshape(nw,SEQ,TOPK);kw['predictor']='gbdt' if variant.startswith('dyn_gbdt') else 'ema'
+    if variant.endswith('_reset'):
         out=[sim_dyn(g[w],**kw) for w in range(nw)];lv=np.stack([o[0] for o in out]).reshape(-1,TOPK)
         st={k:(float(np.mean([o[1][k] for o in out])) if isinstance(out[0][1][k],float) else int(sum(o[1][k] for o in out))) for k in out[0][1]}
         return lv,dict(st,order='per-window reset')
-    order=np.arange(nw) if variant=='dyn' else np.random.default_rng(seed+2).permutation(nw)
+    shuf=variant.endswith('_shuf');order=np.random.default_rng(seed+2).permutation(nw) if shuf else np.arange(nw)
     l4,st=sim_dyn(g[order].reshape(-1,TOPK),**kw);lv=np.empty((nw,SEQ,TOPK),bool);lv[order]=l4.reshape(nw,SEQ,TOPK)
-    return lv.reshape(-1,TOPK),dict(st,order='corpus' if variant=='dyn' else f'shuffled (seed {seed+2})')
+    return lv.reshape(-1,TOPK),dict(st,order=f'shuffled (seed {seed+2})' if shuf else 'corpus')
 
 # ------------------------------------------------------------------------------------------------ run
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--repack',default='/home/jarrelscy/nq-p4rec/hf');ap.add_argument('--artifact',default='/rawdata/Jarrel/nq-glm53-hf')
-    ap.add_argument('--arvq',default=ARVQ);ap.add_argument('--out',default='/data/Jarrel/nq-eval')
+    ap.add_argument('--arvq',default=ARVQ);ap.add_argument('--aqlm',default=aqlmeff.AQLM);ap.add_argument('--out',default='/data/Jarrel/nq-eval')
     ap.add_argument('--tag',default=None);ap.add_argument('--streams',default='all2,all4,fixed,dyn,arvq',
         help='also dyn_shuf (windows chained in a seeded shuffled order) and dyn_reset (fresh scheduler per window)')
     ap.add_argument('--n-layers',type=int,default=0);ap.add_argument('--windows',default='id=32,wikitext=16,code=16')
+    ap.add_argument('--corpus-dir',default=None,help='prebuilt corpus dir (manifest.json + <name>.npy per --windows name)')
     ap.add_argument('--seed',type=int,default=0);ap.add_argument('--step-tok',type=int,default=3)
     ap.add_argument('--attn-chunk',type=int,default=2);ap.add_argument('--pos-chunk',type=int,default=512)
     ap.add_argument('--ebatch',type=int,default=64,help='own experts decoded per batch (memory knob)')
     ap.add_argument('--dbatch',type=int,default=8,help='experts per dense decode call (memory knob)')
+    ap.add_argument('--dyn-cap',type=float,default=6.0,help='dyn streams: scheduler byte budget, aggregate GB/s over the TP ranks (serve NQ_CAP_GBPS)')
+    ap.add_argument('--dump-routing',action='store_true',help='rank 0 saves the first dyn stream\'s routing ids per layer (uint8 [T,8], global token order) to results/<tag>_routing/')
     a=ap.parse_args()
     dist.init_process_group('nccl');torch.cuda.set_device(int(os.environ.get('LOCAL_RANK',RANK)));dev=torch.device('cuda')
     if os.environ.get('NQ_VRAM_GB'):torch.cuda.set_per_process_memory_fraction(min(1.,float(os.environ['NQ_VRAM_GB'])*2**30/torch.cuda.get_device_properties(dev).total_memory))
     torch.backends.cuda.matmul.allow_tf32=False;torch.backends.cudnn.allow_tf32=False
-    want={k:int(v) for k,v in (x.split('=') for x in a.windows.split(','))};cdir=f'{a.out}/corpora/'+'_'.join(f'{k}{v}' for k,v in want.items())+f'_s{a.seed}'
+    want={k:int(v) for k,v in (x.split('=') for x in a.windows.split(','))};cdir=a.corpus_dir or f'{a.out}/corpora/'+'_'.join(f'{k}{v}' for k,v in want.items())+f'_s{a.seed}'
     if RANK==0 and not os.path.exists(cdir+'/manifest.json'):prep(cdir,want,a.seed)
     dist.barrier();cman=json.load(open(cdir+'/manifest.json'));names=list(want)
     allw=np.concatenate([np.load(f'{cdir}/{k}.npy') for k in names]);grp=np.concatenate([[g]*want[k] for g,k in enumerate(names)])
@@ -174,7 +186,7 @@ def main():
     # gathered (rank-major) position of global window w: (w%WORLD)*Nr + w//WORLD
     gpos=np.array([(w%WORLD)*Nr+w//WORLD for w in range(NW)]);tok_perm=(gpos[:,None]*SEQ+np.arange(SEQ)).reshape(-1)  # global order -> gathered index
     streams=['ref']+[s for s in a.streams.split(',') if s];S_=len(streams)
-    assert all(K(s)!='dyn' or s in ('dyn','dyn_shuf','dyn_reset') for s in streams[1:]),streams
+    assert all(K(s)!='dyn' or s in DYN for s in streams[1:]),streams
     cfg=load_config();nl=a.n_layers or cfg.num_hidden_layers
     fp8=nq_io.FP8Model(FP8);bb=Backbone(cfg,fp8,dev)
     rj=[json.load(open(f'{a.repack}/rank{k}.json')) for k in range(4)];nq_layers=sorted(int(x) for x in rj[0]['layers'])
@@ -229,16 +241,20 @@ def main():
                             m=torch.zeros(NE,dtype=torch.bool,device=dev);m[fx[li]]=True;lv4[s]=m[gi[si]]
                         elif K(s)=='dyn':
                             g_np=gi[si].cpu().numpy()[tok_perm]          # global token order, the dyn stream's own routing
-                            l4,st=dyn_levels(g_np,s,NW,a.seed,L=li,fixed=fx[li],dflt=dflt[li],rb_tp=rb_tp,step_tok=a.step_tok);dynst[s][li]=st
+                            if a.dump_routing and RANK==0 and s==[x for x in streams if K(x)=='dyn'][0]:
+                                os.makedirs(f'{a.out}/results/{tag}_routing',exist_ok=True);np.save(f'{a.out}/results/{tag}_routing/L{li}.npy',g_np.astype(np.uint8))
+                            l4,st=dyn_levels(g_np,s,NW,a.seed,L=li,fixed=fx[li],dflt=dflt[li],rb_tp=rb_tp,step_tok=a.step_tok,cap=a.dyn_cap);dynst[s][li]=st
                             back=np.empty_like(l4);back[tok_perm]=l4;lv4[s]=torch.from_numpy(back).to(dev)
-                    if 'arvq' in streams:     # ARVQ: hot (NVFP4) share of the ARVQ stream's routed slots
-                        hk=torch.from_numpy(np.asarray(arvqeff.ArvqLayer.kinds(a.arvq,li))==0).to(dev)
-                        lv4a=hk[gi[streams.index('arvq')]]
-                    for s in list(lv4)+(['arvq'] if 'arvq' in streams else []):
-                        m=(lv4[s] if s in lv4 else lv4a).float();w_=gw[streams.index(s)];PL[s]['share4'][li]=float(m.mean())
+                    lv4a={}
+                    for s in HYB:     # ARVQ / AQLM: hot (NVFP4) share of the stream's own routed slots
+                        if s not in streams:continue
+                        kd=arvqeff.ArvqLayer.kinds(a.arvq,li) if s=='arvq' else aqlmeff.AqlmLayer.kinds(a.aqlm,li)
+                        lv4a[s]=(torch.from_numpy(np.asarray(kd))==0).to(dev)[gi[streams.index(s)]]
+                    for s in list(lv4)+list(lv4a):
+                        m=(lv4[s] if s in lv4 else lv4a[s]).float();w_=gw[streams.index(s)];PL[s]['share4'][li]=float(m.mean())
                         PL[s]['share4_c'][li]={cn:float(m[tgrp==g].mean()) for g,cn in enumerate(names)}    # per corpus, routed slots
                         PL[s]['share4gw_c'][li]={cn:float((m*w_)[tgrp==g].sum()/w_[tgrp==g].sum()) for g,cn in enumerate(names)}  # gate-weighted
-                    if 'arvq' in streams:del lv4a
+                    del lv4a
                 ys=[torch.zeros(T,xs[0].shape[1],dtype=torch.float32,device=dev) for _ in range(S_)]
                 lerr=[[0.,0.] for _ in range(S_)]
                 # per-stream token lists per expert
@@ -246,7 +262,7 @@ def main():
                 for si in range(S_):
                     fl=gi[si].reshape(-1);o=torch.argsort(fl,stable=True);order.append(o)
                     offs.append([0]+torch.bincount(fl,minlength=NE).cumsum(0).tolist())
-                t_dec=0.;werr={};Aq=arvqeff.ArvqLayer(a.arvq,li,dev) if ('arvq' in streams and nq) else None
+                t_dec=0.;werr={};HL={s:(arvqeff.ArvqLayer(a.arvq,li,dev) if s=='arvq' else aqlmeff.AqlmLayer(a.aqlm,li,dev)) for s in HYB if s in streams and nq}
                 for b0 in range(0,len(myE),a.ebatch):
                     Eb=myE[b0:b0+a.ebatch];td=time.time();NQW={}
                     if nq and any(K(s) in ('all2','all4','fixed','dyn') for s in streams):
@@ -263,13 +279,14 @@ def main():
                         del parts
                     t_dec+=time.time()-td
                     for E in Eb:
-                        td=time.time();Wr=fp8.expert(li,E,dev);Wr=(Wr['gate_proj'],Wr['up_proj'],Wr['down_proj']);AW=None;kind=None
-                        if Aq is not None:
-                            g_,u_,d_,kind=Aq.expert(E);AW=(g_.bfloat16(),u_.bfloat16(),d_.bfloat16());del g_,u_,d_
+                        td=time.time();Wr=fp8.expert(li,E,dev);Wr=(Wr['gate_proj'],Wr['up_proj'],Wr['down_proj']);AW={};kinds={}
+                        for s_,H_ in HL.items():
+                            g_,u_,d_,kinds[s_]=H_.expert(E);AW[s_]=(g_.bfloat16(),u_.bfloat16(),d_.bfloat16());del g_,u_,d_
                         t_dec+=time.time()-td
-                        if nq:   # weight error per level / kind
-                            nr=sum(float(w.float().pow(2).sum()) for w in Wr);rec=dict(kind=kind)
-                            for key,W in [(f'nq{lv}',NQW.get((E,lv))) for lv in (2,4)]+[('arvq',AW)]:
+                        if nq:   # weight error per level / kind ('kind' = ARVQ kind, 'kind_aqlm' = AQLM kind)
+                            nr=sum(float(w.float().pow(2).sum()) for w in Wr);rec=dict(kind=kinds.get('arvq'))
+                            if 'aqlm' in kinds:rec['kind_aqlm']=kinds['aqlm']
+                            for key,W in [(f'nq{lv}',NQW.get((E,lv))) for lv in (2,4)]+list(AW.items()):
                                 if W is not None:rec[key]=math.sqrt(sum(float((x.float()-y.float()).pow(2).sum()) for x,y in zip(W,Wr))/nr)
                             werr[E]=rec
                         for si,s in enumerate(streams):
@@ -277,7 +294,7 @@ def main():
                             if a_==b_:continue
                             sl=order[si][a_:b_];tk=sl//TOPK;wt=gw[si].reshape(-1)[sl]
                             if s=='ref' or not nq:groups=[(tk,wt,Wr)]
-                            elif s=='arvq':groups=[(tk,wt,AW)]
+                            elif s in HYB:groups=[(tk,wt,AW[s])]
                             else:
                                 m4=lv4[s].reshape(-1)[sl];groups=[(tk[m4],wt[m4],NQW[(E,4)]),(tk[~m4],wt[~m4],NQW[(E,2)])]
                             for tk_,wt_,W in groups:
@@ -310,22 +327,22 @@ def main():
     norm=GlmMoeDsaRMSNorm(cfg.hidden_size,cfg.rms_norm_eps).to(dev);norm.load_state_dict({'weight':fp8.tensor('model.norm.weight',dev)})
     head=fp8.tensor('lm_head.weight',dev)            # bf16 storage (exact: FP8-dequantised to bf16); fp32 math below
     def logits(x):return torch.cat([x.float()@head[v0:v0+16384].float().T for v0 in range(0,head.shape[0],16384)],-1)
-    tokkl={s:[] for s in streams[1:]};agree={s:[] for s in streams[1:]};nll={s:[] for s in streams};wgrp=[]
+    tokkl={s:[] for s in streams[1:]};agree={s:[] for s in streams[1:]};nll={s:[] for s in streams};amx={s:[] for s in streams};wgrp=[]
     with torch.no_grad():
         for j,w in enumerate(own):
             tgt=ids_own[j,1:];hr=norm(hid[0][j])[:-1];hc=[norm(hid[s][j])[:-1] for s in range(1,S_)]
-            kls=[[] for _ in hc];ags=[[] for _ in hc];nl_=[[] for _ in range(S_)]
+            kls=[[] for _ in hc];ags=[[] for _ in hc];nl_=[[] for _ in range(S_)];am_=[[] for _ in range(S_)]
             for p0 in range(0,SEQ-1,a.pos_chunk):
                 p1=min(p0+a.pos_chunk,SEQ-1);lr=torch.log_softmax(logits(hr[p0:p1]),-1);am=lr.argmax(-1)
-                nl_[0].append(-lr.gather(1,tgt[p0:p1,None])[:,0])
+                nl_[0].append(-lr.gather(1,tgt[p0:p1,None])[:,0]);am_[0].append(am)
                 for c,h in enumerate(hc):
-                    lc=torch.log_softmax(logits(h[p0:p1]),-1);kls[c].append((lr.exp()*(lr-lc)).sum(-1));ags[c].append(lc.argmax(-1)==am)
+                    lc=torch.log_softmax(logits(h[p0:p1]),-1);kls[c].append((lr.exp()*(lr-lc)).sum(-1));ags[c].append(lc.argmax(-1)==am);am_[c+1].append(lc.argmax(-1))
                     nl_[c+1].append(-lc.gather(1,tgt[p0:p1,None])[:,0]);del lc
                 del lr
             for c,s in enumerate(streams[1:]):tokkl[s].append(torch.cat(kls[c]).cpu().numpy());agree[s].append(torch.cat(ags[c]).cpu().numpy())
-            for c,s in enumerate(streams):nll[s].append(torch.cat(nl_[c]).cpu().numpy())
+            for c,s in enumerate(streams):nll[s].append(torch.cat(nl_[c]).cpu().numpy());amx[s].append(torch.cat(am_[c]).int().cpu().numpy())
             wgrp.append(int(grp[w]))
-    mine=dict(own=own,grp=wgrp,tokkl=tokkl,agree=agree,nll=nll,werr=WE,hashes=hashes)
+    mine=dict(own=own,grp=wgrp,tokkl=tokkl,agree=agree,nll=nll,amx=amx,werr=WE,hashes=hashes)
     allr=[None]*WORLD;dist.all_gather_object(allr,mine)
     if RANK==0:merge(a,tag,allr,streams,names,cman,PL,dynst,tl,nq_layers,fx,fsrc,rj,time.time()-t_start,nl)
     dist.barrier();dist.destroy_process_group()
@@ -337,6 +354,8 @@ def bits_table(a,nq_layers):
     P=3*2048*6144;L=nq_layers[len(nq_layers)//2];r2=sum(os.path.getsize(f'{a.repack}/res/rank{k}/L{L}.pt') for k in range(4))/NE
     seg=json.load(open(f'{a.repack}/rank0.json'))['seg'];r4=r2+4*sum(v[1] for v in seg.values())
     out=dict(nq2=8*r2/P,nq4=8*r4/P,nq_note=f'repack bytes of L{L} (res file incl. scales + low-rank, / 256) + 4 x used record bytes')
+    if getattr(a,'aqlm',None) and os.path.exists(a.aqlm):
+        ab=aqlmeff.AqlmLayer(a.aqlm,L,'cpu').bits();out.update(aqlm_cold=ab['cold_books'],aqlm_hot=ab['hot'])
     if a.arvq and os.path.exists(a.arvq):
         from safetensors import safe_open
         f=safe_open(f'{a.arvq}/arvq-layer-{L:03d}-gateup.safetensors','pt');g=safe_open(f'{a.arvq}/arvq-layer-{L:03d}-down.safetensors','pt');h=safe_open(f'{a.arvq}/hot-layer-{L:03d}.safetensors','pt')
@@ -369,20 +388,21 @@ def merge(a,tag,allr,streams,names,cman,PL,dynst,tl,nq_layers,fx,fsrc,rj,wall,nl
     # served bits per expert: resident (steady-state level-4 set) and routed-slot weighted (level-4 share of routed slots)
     b2,b4=bits['nq2'],bits['nq4'];bpe={}
     for s in C:
-        if s=='arvq':
+        if s in HYB:
             continue
         sh=np.mean(list(PL[s]['share4'].values())) if PL[s]['share4'] else float('nan')
         res_frac={'all2':0,'all4':1,'fixed':26/256,'dyn':77/256}.get(K(s),float('nan'))
         bpe[s]=dict(resident=b2+res_frac*(b4-b2),served=b2+sh*(b4-b2),share4_routed=sh,level4_resident_frac=res_frac)
-    if 'arvq' in C and 'arvq_cold' in bits:
-        fr=float(np.mean([np.mean([x.get('kind')=='hot' for x in d.values()]) for d in WE.values()]))
-        sh=float(np.mean(list(PL['arvq']['share4'].values())))
-        bpe['arvq']=dict(resident=bits['arvq_hot']*fr+bits['arvq_cold']*(1-fr),served=bits['arvq_hot']*sh+bits['arvq_cold']*(1-sh),
-                         share4_routed=sh,level4_resident_frac=fr,note='level 4 = hot NVFP4 for ARVQ')
+    for hs,kk in (('arvq','kind'),('aqlm','kind_aqlm')):
+        if hs not in C or f'{hs}_cold' not in bits:continue
+        fr=float(np.mean([np.mean([x.get(kk)=='hot' for x in d.values()]) for d in WE.values()]))
+        sh=float(np.mean(list(PL[hs]['share4'].values())))
+        bpe[hs]=dict(resident=bits[f'{hs}_hot']*fr+bits[f'{hs}_cold']*(1-fr),served=bits[f'{hs}_hot']*sh+bits[f'{hs}_cold']*(1-sh),
+                     share4_routed=sh,level4_resident_frac=fr,note=f'level 4 = hot NVFP4 for {hs.upper()}')
     per_layer={}
     for L in sorted(WE):
         d=WE[L];row={}
-        for key in ('nq2','nq4','arvq'):
+        for key in ('nq2','nq4','arvq','aqlm'):
             v=[x[key] for x in d.values() if key in x]
             if v:row[key+'_werr']=float(np.mean(v))
         for kd in ('hot','cold'):
@@ -411,21 +431,34 @@ def merge(a,tag,allr,streams,names,cman,PL,dynst,tl,nq_layers,fx,fsrc,rj,wall,nl
              inputs=dict(fp8=FP8,fp8_index_sha256=sha_path(FP8+'/model.safetensors.index.json'),repack=a.repack,
                          repack_json_sha256={f'rank{k}':sha_path(f'{a.repack}/rank{k}.json') for k in range(4)},artifact=a.artifact,
                          artifact_layers=art,arvq=a.arvq,arvq_provenance_sha256=sha_path(a.arvq+'/build_provenance.json'),
-                         arvq_cold_assignment_sha256=sha_path(a.arvq+'/cold_assignment.json'),fixed_set_source=fsrc,
-                         fixed_set_sha256=sha_path(FS.T22),corpora=cman,seed=a.seed,step_tok=a.step_tok),
+                         arvq_cold_assignment_sha256=sha_path(a.arvq+'/cold_assignment.json'),aqlm=a.aqlm,aqlm_index_sha256=sha_path(a.aqlm+'/model.safetensors.index.json'),fixed_set_source=fsrc,
+                         fixed_set_sha256=sha_path(FS.T22),corpora=cman,seed=a.seed,step_tok=a.step_tok,dyn_cap_GBps=a.dyn_cap),
              results=res,bits=bits,bits_per_expert=bpe,per_layer=per_layer,layer_seconds=tl,repack_hashes=H)
     os.makedirs(f'{a.out}/results',exist_ok=True);json.dump(out,open(f'{a.out}/results/{tag}.json','w'),indent=1)
     win={f'win_{g}':np.array([r['own'][j] for r in allr for j,gg in enumerate(r['grp']) if gg==g]) for g in range(len(names))}  # global window of each SEQ-1 block
-    np.savez_compressed(f'{a.out}/results/{tag}_tokkl.npz',**win,**{f'{s}_{g}':np.concatenate([r['tokkl'][s][j] for r in allr for j,gg in enumerate(r['grp']) if gg==g]) for s in C for g in range(len(names))})
+    cat=lambda k,s,g:np.concatenate([r[k][s][j] for r in allr for j,gg in enumerate(r['grp']) if gg==g])
+    np.savez_compressed(f'{a.out}/results/{tag}_tokkl.npz',**win,**{f'{s}_{g}':cat('tokkl',s,g) for s in C for g in range(len(names))})
+    # per token (position p predicts token p+1): target nll and argmax id, every stream incl. ref
+    np.savez_compressed(f'{a.out}/results/{tag}_tok.npz',**win,**{f'nll_{s}_{g}':cat('nll',s,g) for s in streams for g in range(len(names))},
+                        **{f'am_{s}_{g}':cat('amx',s,g) for s in streams for g in range(len(names))})
     md=[f'# C2 FP8-reference eval {tag}','','| stream | corpus | KLD mean | +-se | p50 | p90 | p99 | top-1 | ppl ref | ppl |','|---|---|---|---|---|---|---|---|---|---|']
     for s in C:
         for cn in names:
             r=res[s][cn];md.append(f"| {s} | {cn} | {r['kld']:.5f} | {r['kld_se']:.5f} | {r['kld_p50']:.5f} | {r['kld_p90']:.4f} | {r['kld_p99']:.4f} | {100*r['top1']:.2f}% | {r['ppl_ref']:.4f} | {r['ppl']:.4f} |")
-    md+=['','Level-4 share per corpus (mean over NQ layers; ARVQ = hot NVFP4): routed slots / gate-weighted','',
+    md+=['','Level-4 share per corpus (mean over NQ layers; ARVQ / AQLM = hot NVFP4): routed slots / gate-weighted','',
          '| stream | '+' | '.join(names)+' |','|---|'+'---|'*len(names)]
     for s in C:md.append(f'| {s} | '+' | '.join(f"{res[s][cn]['share4']:.3f} / {res[s][cn]['share4_gw']:.3f}" for cn in names)+' |')
     md+=['','| stream | bits/expert resident | bits/expert served (routed-slot weighted) | level-4 share of routed slots |','|---|---|---|---|']
     for s,b in bpe.items():md.append(f"| {s} | {b['resident']:.3f} | {b['served']:.3f} | {b.get('share4_routed',float('nan')):.3f} |")
+    if dynst:     # streamed bytes (rec_bytes x tp per upgrade, the serve's budget unit) summed over layers, per token
+        md+=['','Scheduler traffic (sum over NQ layers; bytes = rec_bytes x tp per upgrade, GB/s at 111 tok/s)','',
+             '| stream | order | upgrades | MB/token | GB/s @111 | deferred steps | big steps |','|---|---|---|---|---|---|---|']
+        for s,d in dynst.items():
+            if not d:continue
+            tk=max(x['tokens'] for x in d.values());by=sum(x['bytes'] for x in d.values());ups=sum(x['ups'] for x in d.values())
+            out['traffic']=out.get('traffic',{});out['traffic'][s]=dict(upgrades=ups,bytes=by,tokens=tk,MB_per_token=by/tk/1e6,GBps_at_111=by/tk*111/1e9)
+            md.append(f"| {s} | {next(iter(d.values()))['order']} | {ups} | {by/tk/1e6:.3f} | {by/tk*111/1e9:.3f} | {sum(x['deferred_steps'] for x in d.values())} | {sum(x['big_steps'] for x in d.values())} |")
+        json.dump(out,open(f'{a.out}/results/{tag}.json','w'),indent=1)
     open(f'{a.out}/results/{tag}.md','w').write('\n'.join(md)+'\n');print('\n'.join(md),flush=True)
 
 if __name__=='__main__':main()

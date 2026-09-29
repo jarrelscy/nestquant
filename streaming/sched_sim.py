@@ -26,7 +26,7 @@ for v in reqs.values():
 seqs=seqs[:MAXS];t0=time.time()
 hot0=[];hot4=[];nb=0;ntok=0;st=collections.Counter()
 for e in seqs:
-    S=scheduler.Scheduler(layers,fx,dflt,MB,NE=NE,n_float=NF,half_life=HL,refresh=64,cap_GBps=CAP)
+    S=scheduler.Scheduler(layers,fx,dflt,MB,NE=NE,n_float=NF,half_life=HL,refresh=64,cap_GBps=CAP,predictor='ema')
     # initial floating_default loads before the first token (not counted against the cap)
     for i,x in zip(*np.nonzero(S.want)):S.state[i,x]=2
     inflight=collections.deque();ar=np.arange(NL)[:,None]

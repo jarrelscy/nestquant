@@ -13,12 +13,31 @@ Defaults follow the lead (floating-set defaults 2026-09-28) and select_sweep.jso
   landed(L, E) / released(L, E) / failed(L, E)   executor feedback: upgrade applied / downgrade applied (slot free) /
                                    upgrade refused or read failed (expert stays at level 2, retried later;
                                    after a read error not before retry_tokens)
-  slots=N caps experts in flight + landed + draining at the executor's slot pool size."""
+  slots=N caps experts in flight + landed + draining at the executor's slot pool size.
+
+Predictor (floating-set target): predictor='ema' (the rule above) or 'gbdt' (gbdt_predictor.GBDTPredictor, LightGBM
+p64 model, 16-token refresh, next_refresh mode; see sm120/eval/PREDICTOR.md). Default from env NQ_PREDICTOR (else
+DEFAULT_PREDICTOR). With gbdt the EMA score is still kept (kv_pressure, and candidate order until the first GBDT score
+matrix exists); the target set and the upgrade order come from the predictor, and the budget / big-step guard / slots /
+executor feedback are unchanged. step(..., token_ids=None, new_request=False) feeds the think/answer segment state
+(None = segment stays 'think'). A predictor object with the GBDTPredictor interface can be passed instead of a name."""
+import os
 import numpy as np
+
+DEFAULT_PREDICTOR='gbdt'
+def make_predictor(name,layers,fixed,n_float=51,**kw):
+    if name in (None,'ema'):return None
+    if name=='gbdt':
+        from gbdt_predictor import GBDTPredictor
+        kw.setdefault('num_threads',int(os.environ.get('NQ_GBDT_THREADS','4')))
+        kw.setdefault('mode',os.environ.get('NQ_GBDT_MODE','next_refresh'))
+        return GBDTPredictor(layers,fixed,model_path=os.environ.get('NQ_GBDT_MODEL') or None,n_float=n_float,**kw)
+    raise ValueError(f'unknown predictor {name!r}')
 
 class Scheduler:
     def __init__(s,layers,fixed,floating_default,rec_bytes,NE=256,n_float=51,half_life=512,refresh=64,
-                 cap_GBps=6.0,tok_per_s=111.0,big_frac=0.5,burst_tokens=64,slots=None,retry_tokens=None):
+                 cap_GBps=6.0,tok_per_s=111.0,big_frac=0.5,burst_tokens=64,slots=None,retry_tokens=None,
+                 predictor=None,predictor_kw=None):
         s.layers=list(layers);s.li={L:i for i,L in enumerate(s.layers)};s.NE=NE;s.nf=n_float;s.R=refresh
         s.a=0.5**(1/half_life);s.big=big_frac;s.rb=rec_bytes
         s.fixed=np.zeros((len(s.layers),NE),bool)
@@ -32,11 +51,19 @@ class Scheduler:
         s.slots=slots                                      # slot pool size (streamed experts per rank); None = unbounded
         s.retry=refresh if retry_tokens is None else retry_tokens;s.hold=np.zeros((len(s.layers),NE))   # failed read -> no retry before hold
         s.tok=0;s.next_refresh=refresh;s.stats=dict(ups=0,downs=0,deferred_steps=0,big_steps=0,bytes=0)
-    def step(s,counts,ntok=1):
+        if predictor is None:predictor=os.environ.get('NQ_PREDICTOR') or DEFAULT_PREDICTOR
+        s.predictor_name=predictor if isinstance(predictor,str) else type(predictor).__name__
+        s.P=make_predictor(predictor,s.layers,fixed,n_float,**(predictor_kw or {})) if isinstance(predictor,str) else predictor
+    def step(s,counts,ntok=1,token_ids=None,new_request=False):
         c=np.asarray(counts,np.float64)
         s.score=s.score*s.a**ntok+c;s.tok+=ntok
         s.budget=min(s.cap,s.budget+s.per_tok*ntok)
-        if s.tok>=s.next_refresh:
+        osc=None
+        if s.P is not None:
+            if s.P.step(c,ntok,token_ids,new_request):
+                res=np.isin(s.state,(1,2));w=s.P.target(res)
+                if w is not None:s.want=w&~s.fixed
+        elif s.tok>=s.next_refresh:
             s.next_refresh+=s.R
             has=s.score.sum(1)>0                           # layers with no counts keep floating_default
             sc=np.where(s.fixed,-np.inf,s.score);top=np.argsort(-sc,1,kind='stable')[:,:s.nf]
@@ -48,7 +75,8 @@ class Scheduler:
         cand=(s.state==0)&s.want&(s.hold<=s.tok)
         if big:s.stats['big_steps']+=1
         elif cand.any():
-            i,e=np.nonzero(cand);o=np.argsort(-s.score[i,e],kind='stable')
+            if s.P is not None:osc=s.P.order_score(np.isin(s.state,(1,2)))
+            i,e=np.nonzero(cand);o=np.argsort(-(s.score if osc is None else osc)[i,e],kind='stable')
             n=int(s.budget//s.rb)
             if s.slots is not None:n=max(0,min(n,s.slots-int((s.state>0).sum())))   # slots held by in-flight, landed and draining
             take=o[:n]
@@ -57,6 +85,8 @@ class Scheduler:
             s.budget-=len(take)*s.rb;s.stats['bytes']+=len(take)*s.rb
         s.stats['ups']+=len(ups);s.stats['downs']+=len(downs)
         return ups,downs
+    def close(s):
+        if s.P is not None:s.P.close()
     def landed(s,L,e):
         i=s.li[L]
         if s.state[i,e]==1:s.state[i,e]=2
