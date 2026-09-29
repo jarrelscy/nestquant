@@ -173,6 +173,7 @@ def main():
     ap.add_argument('--ebatch',type=int,default=64,help='own experts decoded per batch (memory knob)')
     ap.add_argument('--dbatch',type=int,default=8,help='experts per dense decode call (memory knob)')
     ap.add_argument('--dyn-cap',type=float,default=6.0,help='dyn streams: scheduler byte budget, aggregate GB/s over the TP ranks (serve NQ_CAP_GBPS)')
+    ap.add_argument('--gbdt-cap',type=float,default=None,help='dyn_gbdt* streams: budget, aggregate GB/s (default --dyn-cap)')
     ap.add_argument('--dump-routing',action='store_true',help='rank 0 saves the first dyn stream\'s routing ids per layer (uint8 [T,8], global token order) to results/<tag>_routing/')
     a=ap.parse_args()
     dist.init_process_group('nccl');torch.cuda.set_device(int(os.environ.get('LOCAL_RANK',RANK)));dev=torch.device('cuda')
@@ -243,7 +244,7 @@ def main():
                             g_np=gi[si].cpu().numpy()[tok_perm]          # global token order, the dyn stream's own routing
                             if a.dump_routing and RANK==0 and s==[x for x in streams if K(x)=='dyn'][0]:
                                 os.makedirs(f'{a.out}/results/{tag}_routing',exist_ok=True);np.save(f'{a.out}/results/{tag}_routing/L{li}.npy',g_np.astype(np.uint8))
-                            l4,st=dyn_levels(g_np,s,NW,a.seed,L=li,fixed=fx[li],dflt=dflt[li],rb_tp=rb_tp,step_tok=a.step_tok,cap=a.dyn_cap);dynst[s][li]=st
+                            l4,st=dyn_levels(g_np,s,NW,a.seed,L=li,fixed=fx[li],dflt=dflt[li],rb_tp=rb_tp,step_tok=a.step_tok,cap=a.gbdt_cap if ('gbdt' in s and a.gbdt_cap is not None) else a.dyn_cap);dynst[s][li]=st
                             back=np.empty_like(l4);back[tok_perm]=l4;lv4[s]=torch.from_numpy(back).to(dev)
                     lv4a={}
                     for s in HYB:     # ARVQ / AQLM: hot (NVFP4) share of the stream's own routed slots
@@ -432,7 +433,7 @@ def merge(a,tag,allr,streams,names,cman,PL,dynst,tl,nq_layers,fx,fsrc,rj,wall,nl
                          repack_json_sha256={f'rank{k}':sha_path(f'{a.repack}/rank{k}.json') for k in range(4)},artifact=a.artifact,
                          artifact_layers=art,arvq=a.arvq,arvq_provenance_sha256=sha_path(a.arvq+'/build_provenance.json'),
                          arvq_cold_assignment_sha256=sha_path(a.arvq+'/cold_assignment.json'),aqlm=a.aqlm,aqlm_index_sha256=sha_path(a.aqlm+'/model.safetensors.index.json'),fixed_set_source=fsrc,
-                         fixed_set_sha256=sha_path(FS.T22),corpora=cman,seed=a.seed,step_tok=a.step_tok,dyn_cap_GBps=a.dyn_cap),
+                         fixed_set_sha256=sha_path(FS.T22),corpora=cman,seed=a.seed,step_tok=a.step_tok,dyn_cap_GBps=a.dyn_cap,gbdt_cap_GBps=a.gbdt_cap if a.gbdt_cap is not None else a.dyn_cap),
              results=res,bits=bits,bits_per_expert=bpe,per_layer=per_layer,layer_seconds=tl,repack_hashes=H)
     os.makedirs(f'{a.out}/results',exist_ok=True);json.dump(out,open(f'{a.out}/results/{tag}.json','w'),indent=1)
     win={f'win_{g}':np.array([r['own'][j] for r in allr for j,gg in enumerate(r['grp']) if gg==g]) for g in range(len(names))}  # global window of each SEQ-1 block
@@ -452,12 +453,13 @@ def merge(a,tag,allr,streams,names,cman,PL,dynst,tl,nq_layers,fx,fsrc,rj,wall,nl
     for s,b in bpe.items():md.append(f"| {s} | {b['resident']:.3f} | {b['served']:.3f} | {b.get('share4_routed',float('nan')):.3f} |")
     if dynst:     # streamed bytes (rec_bytes x tp per upgrade, the serve's budget unit) summed over layers, per token
         md+=['','Scheduler traffic (sum over NQ layers; bytes = rec_bytes x tp per upgrade, GB/s at 111 tok/s)','',
-             '| stream | order | upgrades | MB/token | GB/s @111 | deferred steps | big steps |','|---|---|---|---|---|---|---|']
+             '| stream | order | cap GB/s | upgrades | MB/token | GB/s @111 | deferred steps | big steps |','|---|---|---|---|---|---|---|---|']
         for s,d in dynst.items():
             if not d:continue
             tk=max(x['tokens'] for x in d.values());by=sum(x['bytes'] for x in d.values());ups=sum(x['ups'] for x in d.values())
             out['traffic']=out.get('traffic',{});out['traffic'][s]=dict(upgrades=ups,bytes=by,tokens=tk,MB_per_token=by/tk/1e6,GBps_at_111=by/tk*111/1e9)
-            md.append(f"| {s} | {next(iter(d.values()))['order']} | {ups} | {by/tk/1e6:.3f} | {by/tk*111/1e9:.3f} | {sum(x['deferred_steps'] for x in d.values())} | {sum(x['big_steps'] for x in d.values())} |")
+            cp=a.gbdt_cap if ('gbdt' in s and a.gbdt_cap is not None) else a.dyn_cap;out['traffic'][s]['cap_GBps']=cp
+            md.append(f"| {s} | {next(iter(d.values()))['order']} | {cp:g} | {ups} | {by/tk/1e6:.3f} | {by/tk*111/1e9:.3f} | {sum(x['deferred_steps'] for x in d.values())} | {sum(x['big_steps'] for x in d.values())} |")
         json.dump(out,open(f'{a.out}/results/{tag}.json','w'),indent=1)
     open(f'{a.out}/results/{tag}.md','w').write('\n'.join(md)+'\n');print('\n'.join(md),flush=True)
 
