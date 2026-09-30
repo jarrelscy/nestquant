@@ -232,7 +232,8 @@ class Adapt(Base):
     def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
                  predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
                  oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None,
-                 gbdt_scale=None, fb=0, gmode="next_refresh", grlo=20, grhi=121, salstat=0, nf_map=None):
+                 gbdt_scale=None, fb=0, gmode="next_refresh", grlo=20, grhi=121, salstat=0, nf_map=None,
+                 joint=None, joint_map=None):
         # T32 nf_map=JSON {layer: n_float}: per-layer floating slot count (T33k allocation B; layers absent: n_float);
         # diag then also records nf and the min/max floating-set size actually served per layer.
         self.nf_map = {int(k): int(v) for k, v in json.load(open(nf_map)).items()} if nf_map else None
@@ -255,6 +256,25 @@ class Adapt(Base):
                     if ln.startswith("feature_names="):
                         self.gbdt_v2 = len(ln.split("=", 1)[1].split()) > 5
                         break
+        # T33i joint=PATH (.pt): threads/33-search/joint JointPredictor = v2 over all 256 experts (its own tree file
+        # 32-gbdt-sal/models/v2_sal_tweedie1.5.txt, the net's training input) + a 2-layer transformer residual; same
+        # step/target interface as GBDTPredictorV2 (salience fed per step), net on the layer's device.  Needs
+        # predictor=gbdt; gbdt_model / grlo / grhi are ignored by the joint arm.  Default off.
+        # joint_map=JSON {"corpus": NAME, "map": corpus .map.npz (task, names per window), "by_task": {task: .pt},
+        # "default": .pt}: per-chain net by the chain's task (out-of-sample fold models on decode corpora); windows
+        # of other corpora use "default"; a chain must not span tasks.  Window ids from nq_e2e.WIN_IDS (__main__).
+        self.joint, self.jmap = joint, None
+        if joint_map is not None:
+            jm = json.load(open(joint_map)); z = np.load(jm["map"])
+            self.jmap = dict(corpus=jm["corpus"], task=[str(z["names"][t]) for t in z["task"]], by=jm["by_task"],
+                             default=jm.get("default"))
+            for p_ in list(self.jmap["by"].values()) + [self.jmap["default"]]:
+                assert p_ is None or os.path.exists(p_), p_
+            joint = joint or self.jmap["default"] or "map"
+            self.joint = joint
+        if joint is not None:
+            assert predictor == "gbdt" and (joint == "map" or os.path.exists(joint)), joint
+            self.gbdt_v2 = True
         self.gbdt_scale = gbdt_scale
         assert gbdt_scale in (None, "mps") and (gbdt_scale is None or predictor == "gbdt"), gbdt_scale
         if chunk is not None:            # chunked prefill: tokens [kC,(k+1)C) served by the EMA set through chunk k-1
@@ -336,6 +356,7 @@ class Adapt(Base):
         for w0, w1 in runs:
             self._la = None if self.la_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.la_full)
             self._act = None if self.act_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.act_full)
+            self._run = (w0, w1)
             h, sv, st = self._core(layer, ids[w0 * seq:w1 * seq], seq if not self.chain else (w1 - w0) * seq)
             if getattr(self, "salstat", 0) and self._act is not None:
                 ai, aw, ax = self._act
@@ -451,8 +472,17 @@ class Adapt(Base):
             assert torch.equal(ids_.long(), ids.long()), "act_full routing != scheduled routing"
             sv_ = (w_.double().pow(2) * xn_.double()[:, None]).cpu().numpy()
         churn = []
+        if getattr(self, "joint", None):
+            if "/home/coder/git/nestquant/threads/33-search/joint" not in sys.path:
+                sys.path.insert(0, "/home/coder/git/nestquant/threads/33-search/joint")
+            from joint_predictor import JointPredictor
+            net = self._joint_net()
         for n in range(N):
-            if v2:
+            if getattr(self, "joint", None):
+                P = JointPredictor([layer], {layer: self.fixed[layer]}, net, n_float=self.nf, hm=self.hm,
+                                   device=str(dev), mode=getattr(self, "gmode", "next_refresh"),
+                                   num_threads=int(os.environ.get("NQ_GBDT_THREADS", "4")))
+            elif v2:
                 P = GBDTPredictorV2([layer], {layer: self.fixed[layer]}, model_path=self.gbdt_model,
                                     scale=self.gbdt_scale, n_float=self.nf, hm=self.hm,
                                     mode=getattr(self, "gmode", "next_refresh"), rlo=getattr(self, "grlo", 20),
@@ -494,6 +524,20 @@ class Adapt(Base):
                  float0_slots=int(stat[ids.long()].sum()), churn_sum=float(sum(churn)), churn_n=len(churn),
                  churn_first_sum=0.0, churn_first_n=0)
         return hi, serve_t, d
+
+    def _joint_net(self):
+        """joint arm: net path for the current run of windows (joint_map: by the run's task)."""
+        if self.jmap is None:
+            return self.joint
+        wins = [(n, g) for n, mine in sys.modules["__main__"].WIN_IDS for g in mine]   # local window -> (corpus, id)
+        w0, w1 = self._run
+        tasks = {self.jmap["task"][g] if n == self.jmap["corpus"] else None for n, g in wins[w0:w1]}
+        assert len(tasks) == 1, f"chain spans tasks {tasks}"
+        t = tasks.pop()
+        p_ = self.jmap["by"].get(t, self.jmap["default"]) if t is not None else self.jmap["default"]
+        assert p_ is not None, f"no joint net for task {t}"
+        self.jlog = getattr(self, "jlog", {}); self.jlog[(w0, w1)] = (t, p_)
+        return p_
 
     def _gbdt_scaled_target(self, P, resident, ms, fixed):
         """P.target with the applied score matrix rescaled: predicted hits x delta_e x mean sal per hit."""

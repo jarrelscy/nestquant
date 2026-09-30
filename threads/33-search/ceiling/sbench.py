@@ -159,6 +159,31 @@ def mode_F():
     return out, dt, fake.reg.t_reg
 
 
+def mode_Q(nthr, src):
+    """dec.py --stream pin: PinRing (pinned slots + nthr host-copy threads per device) + DModel._load_pin."""
+    import types
+    import dec as Dm
+    fake = types.SimpleNamespace(idx=idx, ring=Dm.PinRing(devs, nthr, 64, src),
+                                 ls=[torch.cuda.Stream(device=d) for d in devs], devs=devs, E=E, D=D)
+    fake._exp_names = types.MethodType(Dm.DModel._exp_names, fake)
+    ts = []
+    for rep in range(2):
+        t = time.time()
+        with cf.ThreadPoolExecutor(D) as p:
+            res = list(p.map(lambda g: Dm.DModel._load_pin(fake, li, g), range(D)))
+        ts.append(time.time() - t)
+        if rep == 0:
+            del res
+    out = {g: {} for g in range(D)}
+    for g in range(D):
+        for e, dd in res[g].items():
+            for k in ("gate_proj", "up_proj", "down_proj"):
+                out[g][f"model.layers.{li}.mlp.experts.{e}.{k}.weight"] = dd[k][0]
+                out[g][f"model.layers.{li}.mlp.experts.{e}.{k}.weight_scale_inv"] = dd[k][1]
+    print(f"  Q({nthr},{src}): rep times {[round(x, 2) for x in ts]}", flush=True)
+    return out, ts[-1]
+
+
 def mode_P():
     out = {g: {} for g in range(D)}
 
@@ -180,7 +205,10 @@ def mode_P():
 if __name__ == "__main__":
     ref = None
     for m in modes:
-        r = {"A": mode_A, "R": mode_R, "P": mode_P, "F": mode_F}[m]()
+        if m.startswith("Q"):              # Q<nthr><m|p>, e.g. Q4p = 4 threads/device preadv, Q4m = mmap memcpy
+            r = mode_Q(int(m[1:-1]), {"p": "pread", "m": "mmap"}[m[-1]])
+        else:
+            r = {"A": mode_A, "R": mode_R, "P": mode_P, "F": mode_F}[m]()
         o, dt = r[0], r[1]
         extra = f" (max per-device register {r[2]:.2f}s)" if len(r) > 2 else ""
         ok = ""

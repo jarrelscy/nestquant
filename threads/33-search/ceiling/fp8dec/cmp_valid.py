@@ -53,5 +53,7 @@ rep("vA force vs tf", Af, At)
 rep("vA tf vs T32 trace (cont)", At, ref["trA"][:, :, 64:])
 rep("vA force: prompt tail (prefill) vs trace", rows("A_force", "tail"), ref["trA"][:, :, :64])
 Bf, Bt = rows("B_force", "cont"), rows("B_tf", "cont")
+if Bf is None and rows("B_force8", "cont") is not None:
+    Bf = rows("B_force8", "cont")[:4]                 # vB_force8 = the 4 vB tasks + duplicates (>= 1 task per device)
 rep("vB (3000-token ctx) force vs tf [indexer on]", Bf, Bt)
 rep("vB tf (KV carry) vs trace (no carry)", Bt, ref["trB"])

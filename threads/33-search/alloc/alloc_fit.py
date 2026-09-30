@@ -6,10 +6,11 @@ import sys, json
 import numpy as np
 
 cur = json.load(open(sys.argv[1]))["per_layer"]; HM = sys.argv[2]; TOT = int(sys.argv[3]); out = sys.argv[4]
-kw = json.load(open("/tmp/nestquant/33-search/alloc/kldw.json")) if len(sys.argv) > 5 else None
+kw = json.load(open(sys.argv[5] if sys.argv[5] != "kld" else "/tmp/nestquant/33-search/alloc/kldw.json")) if len(sys.argv) > 5 else None
 alloc, curves = {}, {}
 for L, d in cur.items():
     nfs = sorted({int(k.split("|")[0]) for k in d})
+    nfs = [n for n in nfs if n >= int(__import__("os").environ.get("FLOOR", "0"))]
     y = np.array([d[f"{n}|{HM}"]["sal"] for n in nfs])
     xs = np.arange(nfs[0], nfs[-1] + 1)
     yi = np.interp(xs, nfs, y)
@@ -24,7 +25,7 @@ for L, d in cur.items():
             else:
                 break
     ye = np.interp(xs, xs[hull], yi[hull])
-    wt = (kw[L] + 1e-4) if kw else 1.0
+    wt = (kw[L] + (1e-4 if sys.argv[5] == "kld" else 0)) if kw else 1.0
     curves[L] = (xs, ye * wt)
     alloc[L] = int(xs[0])
 left = TOT - sum(alloc.values())

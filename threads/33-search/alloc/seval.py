@@ -20,6 +20,10 @@ HMS = [float(x) for x in os.environ.get("HMS", "0.2,0.3,0.4,0.5,0.6,0.7,0.85,1.0
 HEDGE = [(69, 21, ha, hf) for ha in (0.5, 0.7, 1.0) for hf in (0.6, 1.0)] if not os.environ.get("NOHEDGE") else []
 
 
+def bsum(L):
+    return float(np.load(f"{SL.BLK}/{stream}/L{L}.npz")["bsal"].astype(np.float64).sum())
+
+
 def job(L):
     import lightgbm as lgb
     D = SL.load(stream, L)
@@ -52,13 +56,15 @@ def job(L):
                 out[f"{pn}|{k}|{hm}"] = dict(sal=float((bs * sv).sum() / tot), cnt=float((bc * sv).sum() / bc.sum()),
                                               churn=ch)
         if k == 0 and os.environ.get("ALLOC"):
-            nfL = json.load(open(os.environ["ALLOC"]))[str(L)]
             st = f26 + list(A.fdef[L]); cal = A.load("calib-fit", L)[1].sum(0)
             st = st + [int(e) for e in np.argsort(-cal, kind="stable") if e not in set(st)]
-            for hm in HMS:
-                sv = A.sim_seg(Sv2, [], st, nfL, hm, sg=sg)
-                out[f"v2B|0|{hm}"] = dict(sal=float((bs * sv).sum() / tot), cnt=float((bc * sv).sum() / bc.sum()),
-                                          churn=A.churn_seg(sv, sg))
+            for af in os.environ["ALLOC"].split(","):
+                nm = os.path.basename(af)[6:-5]
+                nfL = json.load(open(af))[str(L)]
+                for hm in HMS:
+                    sv = A.sim_seg(Sv2, [], st, nfL, hm, sg=sg)
+                    out[f"v2{nm}|0|{hm}"] = dict(sal=float((bs * sv).sum() / tot), cnt=float((bc * sv).sum() / bc.sum()),
+                                                 churn=A.churn_seg(sv, sg), tot=float(tot))
         if k == 0:
             for (nF, nD, ha, hf) in HEDGE:
                 FU = np.zeros((nb, 256), bool); DO = np.zeros((nb, 256), bool)
@@ -81,7 +87,10 @@ if __name__ == "__main__":
     with Pool(int(os.environ.get("NPROC", "18"))) as p:
         R = dict(p.map(job, A.T.LAYERS))
     summ = {key: {m: float(np.mean([R[L][key][m] for L in A.T.LAYERS])) for m in R[3][key]} for key in R[3]}
+    tl = {L: bsum(L) for L in A.T.LAYERS}
+    for key in summ:
+        summ[key]["pooled"] = float(sum(R[L][key]["sal"] * tl[L] for L in tl) / sum(tl.values()))
     for key, s in summ.items():
         print(f"{key:22s} sal {s['sal']*100:6.2f} churn {s['churn']:5.2f}" +
-              ("".join(f" k{kap} {s[f'sal_k{kap}']*100:6.2f}" for kap in (0.7, 0.9, 1.0, 1.4)) if "sal_k1.0" in s else ""), flush=True)
+              f" pooled {s['pooled']*100:6.2f}" + ("".join(f" k{kap} {s[f'sal_k{kap}']*100:6.2f}" for kap in (0.7, 0.9, 1.0, 1.4)) if "sal_k1.0" in s else ""), flush=True)
     json.dump(dict(stream=stream, summary=summ, per_layer=R), open(f"{A.A}/seval_{stream}{os.environ.get('TAG', '')}.json", "w"))

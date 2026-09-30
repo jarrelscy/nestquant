@@ -42,7 +42,108 @@ from gen import lin, rms, rope_inter, log, sample_top_p  # noqa: E402
 TOPK = 2048
 
 
+class Prof:
+    """--prof: wall time per phase with a device sync at every mark (perturbs overlap; profiling holds only)."""
+
+    def __init__(self, devs):
+        self.devs, self.acc, self.t, self.on = devs, {}, time.time(), False
+        self.load = 0.0; self.ll = threading.Lock()
+
+    def mark(self, cat):
+        if not self.on:
+            return
+        for d in self.devs:
+            torch.cuda.synchronize(d)
+        now = time.time()
+        if cat is not None:
+            self.acc[cat] = self.acc.get(cat, 0.0) + now - self.t
+        self.t = now
+
+    def add_load(self, dt):
+        with self.ll:
+            self.load += dt
+
+    def report(self):
+        r = " ".join(f"{k} {v:.1f}" for k, v in sorted(self.acc.items(), key=lambda x: -x[1]))
+        out = f"prof [s]: {r} | loader-busy (sum over devices) {self.load:.1f}"
+        self.acc = {}; self.load = 0.0
+        return out
+
+
+PROF = None
+
+
+def pm(cat):
+    if PROF is not None:
+        PROF.mark(cat)
+
+
 # ------------------------------------------------------------------------------------------------ host registration
+class PinRing:
+    """--stream pin: per device a ring of pinned host slots (slot_mb each, 2 x nthr slots) + nthr copy threads:
+    host copy (preadv from the page cache, or mmap memcpy) into a free slot -> async H2D on the device's loader stream
+    -> event on the slot (slot reused once its H2D is done).  Pinned host total = D * 2 * nthr * slot_mb (4 GB at 8x4x64MB);
+    no registration of the checkpoint files, no mmap RSS growth with src=pread."""
+
+    def __init__(self, devs, nthr=4, slot_mb=64, src="pread"):
+        import queue
+        self.devs, self.nthr, self.S, self.src = devs, nthr, slot_mb << 20, src
+        self.slot, self.ev, self.q, self.pool = [], [], [], []
+        for d in devs:
+            with torch.cuda.device(d):
+                sl = [torch.empty(self.S, dtype=torch.uint8, pin_memory=True) for _ in range(2 * nthr)]
+                self.ev.append([torch.cuda.Event() for _ in sl])
+            self.slot.append(sl)
+            q = queue.Queue()
+            for i in range(len(sl)):
+                q.put(i)
+            self.q.append(q)
+            self.pool.append(cf.ThreadPoolExecutor(nthr))
+        self.fd = {}
+        self.mm = {}
+        self.lk = threading.Lock()
+
+    def _fd(self, f):
+        with self.lk:
+            if f not in self.fd:
+                self.fd[f] = os.open(f, os.O_RDONLY)
+                if self.src == "mmap":
+                    self.mm[f] = mmap.mmap(self.fd[f], 0, prot=mmap.PROT_READ)
+            return self.fd[f]
+
+    def _one(self, g, stream, buf, f, off, nb, bo):
+        fd = self._fd(f)
+        i = self.q[g].get()
+        try:
+            self.ev[g][i].synchronize()
+            st = self.slot[g][i]
+            if self.src == "mmap":
+                np.copyto(st.numpy()[:nb], np.frombuffer(self.mm[f], dtype=np.uint8, count=nb, offset=off))
+            else:
+                mv = memoryview(st.numpy())
+                got = 0
+                while got < nb:
+                    r = os.preadv(fd, [mv[got:nb]], off + got)
+                    assert r > 0, "short read"
+                    got += r
+            with torch.cuda.device(self.devs[g]), torch.cuda.stream(stream):
+                buf[bo:bo + nb].copy_(st[:nb], non_blocking=True)
+                self.ev[g][i].record(stream)
+        finally:
+            self.q[g].put(i)
+
+    def load(self, g, stream, buf, pieces):
+        """pieces: [(file, off, nb, buf_off)]; returns after all H2D copies into buf are complete."""
+        fs = []
+        for f, off, nb, bo in pieces:
+            for o in range(0, nb, self.S):
+                n = min(self.S, nb - o)
+                fs.append(self.pool[g].submit(self._one, g, stream, buf, f, off + o, n, bo + o))
+        for x in fs:
+            x.result()
+        stream.synchronize()
+
+
 class Reg:
     """refcounted cudaHostRegister of whole mmap'd safetensors files (read-only, portable)."""
 
@@ -118,14 +219,18 @@ class DModel(G.Model):
     def __init__(self, a, devs):
         self.stream_mode = a.stream
         self.reg = Reg() if a.stream == "reg" else None
+        self.ring = PinRing(devs, a.pin_threads, a.pin_slot_mb, a.pin_src) if a.stream == "pin" else None
         super().__init__(a, devs)
         cfg = self.cfg
         self.full = [t == "full" for t in cfg.indexer_types[: self.nl]]
         self.mtp = None
         if getattr(a, "mtp", False):                 # MTP layer 78 (draft for speculative decoding)
-            self.mtp = cfg.num_hidden_layers
+            assert a.stream != "pread", "--mtp needs --stream page|reg (expert names via _exp_names)"
+            self.mtp = self.nl                        # list/cache index of the MTP layer (== 78 unless --n-layers)
+            self.mtp_src = cfg.num_hidden_layers      # checkpoint layer id (model.layers.78.*)
+            assert len(self.bb[0]) == self.nl
             for g, d in enumerate(devs):
-                self.bb[g].append(self._load_bb(self.mtp, d))
+                self.bb[g].append(self._load_bb(self.mtp_src, d))
             self.sparse = self.sparse + [True]
             self.full = self.full + [True]            # own indexer (keys over the MTP cache)
             self.cycle.append(self.mtp)
@@ -176,6 +281,7 @@ class DModel(G.Model):
 
     # -------------------------------------------------------------------------------------------- experts
     def _exp_names(self, li, g):
+        li = self.mtp_src if (getattr(self, "mtp", None) is not None and li == self.mtp) else li
         return [(e, k, s, f"model.layers.{li}.mlp.experts.{e}.{k}{s}") for e in range(g, self.E, self.D)
                 for k in ("gate_proj", "up_proj", "down_proj") for s in (".weight", ".weight_scale_inv")]
 
@@ -220,6 +326,7 @@ class DModel(G.Model):
     def _load_page(self, li, g):
         """pageable mmap (page cache) -> H2D via driver staging, one loader thread per device (sbench mode P:
         21 GB/s aggregate, bitwise == pread; no pinned host memory, no registration)."""
+        t0 = time.time()
         d = self.devs[g]
         ns = self._exp_names(li, g)
         metas = [self.idx.map[n] for *_, n in ns]
@@ -233,6 +340,31 @@ class DModel(G.Model):
                 host = torch.from_numpy(np.frombuffer(self._mmap(f), dtype=np.uint8, count=nb, offset=off))
                 buf[bo:bo + nb].copy_(host)
         s.synchronize()
+        if PROF is not None:
+            PROF.add_load(time.time() - t0)
+        out = {}
+        for (e, k, sfx, n), (f, dt, shape, off, nb), bo in zip(ns, metas, offs):
+            t = buf[bo:bo + nb].view(nq_io.DT[dt]).view(shape)
+            out.setdefault(e, {"__buf__": buf}).setdefault(k, [None, None])[0 if sfx == ".weight" else 1] = t
+        for e in out:
+            for k in ("gate_proj", "up_proj", "down_proj"):
+                out[e][k] = tuple(out[e][k])
+        return out
+
+    def _load_pin(self, li, g):
+        t0 = time.time()
+        d = self.devs[g]
+        ns = self._exp_names(li, g)
+        metas = [self.idx.map[n] for *_, n in ns]
+        offs, o = [], 0
+        for m in metas:
+            offs.append(o); o += (m[4] + 255) // 256 * 256
+        s = self.ls[g]
+        with torch.cuda.stream(s):
+            buf = torch.empty(o, dtype=torch.uint8, device=d)
+        self.ring.load(g, s, buf, [(m[0], m[3], m[4], bo) for m, bo in zip(metas, offs)])
+        if PROF is not None:
+            PROF.add_load(time.time() - t0)
         out = {}
         for (e, k, sfx, n), (f, dt, shape, off, nb), bo in zip(ns, metas, offs):
             t = buf[bo:bo + nb].view(nq_io.DT[dt]).view(shape)
@@ -243,6 +375,8 @@ class DModel(G.Model):
         return out
 
     def _load_layer_split(self, li, g, parts=4):
+        if self.stream_mode == "pin":
+            return [self.lp.submit(self._load_pin, li, g)]
         if self.stream_mode == "reg":
             return [self.lp.submit(self._load_reg, li, g)]
         if self.stream_mode == "page":
@@ -303,11 +437,17 @@ class DModel(G.Model):
                 xc = x[c0:c0 + chunk]
                 _, w, i = gate(xc)
                 i_l.append(i); w_l.append(w); xn_l.append(xc.float().pow(2).sum(-1))
+            if not i_l:                                  # device without tasks (n_tasks < n_devices, tf/force)
+                i_l = [torch.zeros(0, self.cfg.num_experts_per_tok, dtype=torch.long, device=x.device)]
+                w_l = [torch.zeros(0, self.cfg.num_experts_per_tok, dtype=torch.float32, device=x.device)]
+                xn_l = [torch.zeros(0, dtype=torch.float32, device=x.device)]
             i, w = torch.cat(i_l), torch.cat(w_l)
             rec(g, i, w, torch.cat(xn_l))
             ids.append(i); ws.append(w)
+        pm("moe_gate")
         EXP = self.experts(li)
         self.prefetch_after(li)
+        pm("expert_wait")
         outs = [torch.empty_like(x) for x in xs]
         nmax = max(x.shape[0] for x in xs)
         for c0 in range(0, nmax, chunk):
@@ -328,6 +468,7 @@ class DModel(G.Model):
                 sel = sel[order]; ex = ex[order]
                 prep.append((X, sel // I.shape[1], Wt.reshape(-1)[sel], torch.bincount(ex, minlength=self.E)))
             cnts = [p[3].cpu().tolist() for p in prep]        # one host sync per device, all queued already
+            pm("moe_dispatch+sync")
             partials = []
             for h, d in enumerate(self.devs):                 # phase 2: expert FFNs
                 X, tok, wt, _ = prep[h]
@@ -344,6 +485,7 @@ class DModel(G.Model):
                     P.index_add_(0, t, y.float() * wt[o:o + n, None].float())
                     o += n
                 partials.append(P)
+            pm("expert_ffn")
             for g, d in enumerate(self.devs):
                 if sizes[g] == 0:
                     continue
@@ -355,6 +497,7 @@ class DModel(G.Model):
                 outs[g][c0:c0 + chunk] = acc.to(torch.bfloat16)
             del prep, partials
         del EXP
+        pm("moe_shared+combine")
         return outs
 
 
@@ -399,7 +542,10 @@ def main():
     ap.add_argument("--n-dec", type=int, default=2048)
     ap.add_argument("--n-layers", type=int, default=78)
     ap.add_argument("--devices", default=",".join(f"cuda:{i}" for i in range(8)))
-    ap.add_argument("--stream", choices=["page", "reg", "pread"], default="page")
+    ap.add_argument("--stream", choices=["page", "pin", "reg", "pread"], default="page")
+    ap.add_argument("--pin-threads", type=int, default=4, help="--stream pin: host copy threads per device")
+    ap.add_argument("--pin-slot-mb", type=int, default=64)
+    ap.add_argument("--pin-src", choices=["pread", "mmap"], default="pread")
     ap.add_argument("--threads", type=int, default=16)
     ap.add_argument("--depth", type=int, default=2)
     ap.add_argument("--resident-layers", type=int, default=-1)
@@ -416,6 +562,7 @@ def main():
                     help="ban stop ids for the first N decode tokens (default 0 = natural stop)")
     ap.add_argument("--mtp", action="store_true", help="speculative decoding with the MTP layer (exact: "
                     "speculative sampling against the top-p target distribution)")
+    ap.add_argument("--prof", action="store_true", help="per-phase timing with device syncs (decode steps)")
     ap.add_argument("--temp", type=float, default=1.0)
     ap.add_argument("--top-p", type=float, default=0.95)
     a = ap.parse_args()
@@ -424,6 +571,9 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     devs = [torch.device(d) for d in a.devices.split(",")]
     D = len(devs)
+    global PROF
+    if a.prof:
+        PROF = Prof(devs)
     TK = json.load(open(a.tasks))
     if a.max_tasks:
         TK = TK[: a.max_tasks]
@@ -434,6 +584,9 @@ def main():
     P = [len(s) for s in seqs]
     cap = [p + ndec + (2 if a.mtp else 0) for p in P]
     assert not (a.mtp and a.mode != "gen")
+    assert a.mode == "tf" or len(TK) >= len(a.devices.split(",")), "decode needs >= 1 task per device"
+    import warnings
+    warnings.filterwarnings("ignore", message=".*not writable")
     # LPT balance of cache tokens over devices
     order = sorted(range(len(TK)), key=lambda i: -cap[i])
     load = [0] * D
@@ -488,7 +641,8 @@ def main():
     if a.resume and os.path.exists(f"{ck}/meta.json"):
         meta = json.load(open(f"{ck}/meta.json"))
         assert meta["per"] == per, "task assignment changed"
-        for g, s in enumerate(st):
+        def load_g(g):
+            s = st[g]
             for k in CKK:
                 for li in range(s[k].shape[0]) if s[k].dim() == 3 else [None]:
                     fn = f"{ck}/g{g}_{k}{'' if li is None else f'_{li}'}.npy"
@@ -496,6 +650,10 @@ def main():
                     (s[k] if li is None else s[k][li]).copy_(x.view(s[k].dtype) if x.dtype != s[k].dtype else x)
             s["gen"].set_state(torch.load(f"{ck}/g{g}_gen.pt"))
             s["step"] = meta["step"]
+        t_ck = time.time()
+        with cf.ThreadPoolExecutor(len(st)) as ex:
+            list(ex.map(load_g, range(len(st))))
+        log(f"checkpoint read {time.time() - t_ck:.0f}s")
         log(f"resumed at decode step {st[0]['step']}")
     M.make_resident(min(nres, len(M.cycle)))
     for li in [x for x in M.cycle if x not in M.resident][: a.depth]:
@@ -686,6 +844,7 @@ def main():
             pos.append(p); fpos.append(fp)
             hs.append(F.embedding(s["tok"][fp], M.glob[g]["emb"]).to(torch.bfloat16))
         sel = [None] * D
+        pm(None)
         for li in range(M.nl):
             M.clear_dq()
             xs = []
@@ -704,8 +863,10 @@ def main():
                         sel[g] = (ar[None, :].expand(n, L), valid)
                     else:
                         gidx = (s["off_t"][:, None] + ar[None, :]).clamp_max(s["N"] - 1)
+                        pm("attn")
                         qi, wi = M.idx_q(g, li, hn, qres, cos, sin)
                         sel[g] = sel_topk(qi, wi, s["KI"][M.fidx[li]], gidx, valid)
+                        pm("indexer")
                 pk, ok = sel[g]
                 fi = (s["off_t"][:, None] + pk).clamp_max(s["N"] - 1)
                 ol = attend(q, s["C"][li], fi, ok, M.scale)
@@ -715,6 +876,7 @@ def main():
                     xs.append(x)
                 else:
                     hs[g] = hs[g] + M.dense(g, li, x)
+            pm("attn")
             if M.sparse[li]:
                 outs = M.moe_chunked(li, xs, rec_into(spi[li], fpos))
                 for g in range(D):
@@ -734,6 +896,9 @@ def main():
                 s["tok"][fpos[g][live] + 1] = nt[live]
                 mark_stop(g, nt, t + 1)
             s["step"] = t + 1
+        pm("head+sample")
+        if PROF is not None:
+            log(PROF.report())
         nd = sum(int(s["done"].sum()) for s in st)
         log(f"step {t} {time.time() - t0:.1f}s done {nd}/{len(TK)} (expert wait {M.t_wait - w0:.1f}s, "
             f"reg live {M.reg.live_gb() if M.reg else 0:.0f} GB, reg time {M.reg.t_reg if M.reg else 0:.0f}s)")
@@ -756,8 +921,10 @@ def main():
                     sel[g] = (ar[None, :].expand(len(pos[g]), L), valid)
                 else:
                     gidx = (offr[g][:, None] + ar[None, :]).clamp_max(s["N"] - 1)
+                    pm("attn")
                     qi, wi = M.idx_q(g, li, hn, qres, cos, sin)
                     sel[g] = sel_topk(qi, wi, s["KI"][M.fidx[li]], gidx, valid)
+                    pm("indexer")
             pk, ok = sel[g]
             fi = (offr[g][:, None] + pk).clamp_max(s["N"] - 1)
             ol = attend(q, s["C"][li], fi, ok, M.scale)
@@ -783,9 +950,11 @@ def main():
             hs.append(F.embedding(toks, M.glob[g]["emb"]).to(torch.bfloat16))
             Lh.append(int(ps.max()) + 1)
         sel = [None] * D
+        pm(None)
         for li in range(M.nl):
             M.clear_dq()
             xs = dec_layer(li, hs, pos, fpos, offr, Lh, sel)
+            pm("attn")
             if M.sparse[li]:
                 outs = M.moe_chunked(li, xs, rec_into(spi[li], fpos))
                 for g in range(D):
@@ -833,10 +1002,12 @@ def main():
             xnext.append(torch.stack([x1, x2], 1).reshape(-1))
             last.append(torch.arange(n, device=devs[g]) * 2 + two.long())
             s["step"] = t + 1
+        pm("head+accept")
         # MTP: position j <- (h_j, x_{j+1}) for the two rows; next draft from the last accepted row
         hm = [mtp_in(g, hs[g], xnext[g]) for g in range(D)]
         del hs
         xs = dec_layer(M.mtp, hm, pos, fpos, offr, Lh, [None] * D)
+        pm("mtp_attn")
         outs = M.moe_chunked(M.mtp, xs, norec)
         for g, s in enumerate(st):
             h = (hm[g] + outs[g])[last[g]]
@@ -845,6 +1016,9 @@ def main():
             s["draft"] = torch.multinomial(q, 1, generator=s["gen"])[:, 0]
         del outs, xs, hm
         M.clear_dq()
+        pm("mtp_head")
+        if PROF is not None:
+            log(PROF.report())
         nd = sum(int(s["done"].sum()) for s in st)
         na = sum(int(s["nacc"]) for s in st); npp = sum(int(s["nprop"]) for s in st)
         adv = sum(int(s["cur"].sum()) for s in st)
@@ -882,7 +1056,10 @@ def main():
                       open(f"{a.out}/index.json", "w"))
             log(f"final -> {a.out}")
             return
-        for g, s in enumerate(st):
+        t_ck = time.time()
+
+        def save_g(g):                      # one writer thread per device (sequential np.save: 0.7 GiB/s; 8x: 2.5)
+            s = st[g]
             for k in CKK:
                 if s[k].dim() == 3:
                     for li in range(s[k].shape[0]):
@@ -891,13 +1068,19 @@ def main():
                 else:
                     np.save(f"{ck}/g{g}_{k}.npy", s[k].cpu().numpy())
             torch.save(s["gen"].get_state(), f"{ck}/g{g}_gen.pt")
+        with cf.ThreadPoolExecutor(len(st)) as ex:
+            list(ex.map(save_g, range(len(st))))
+        log(f"checkpoint write {time.time() - t_ck:.0f}s")
         json.dump(dict(step=st[0]["step"], per=per), open(f"{ck}/meta.json.part", "w"))
         os.replace(f"{ck}/meta.json.part", f"{ck}/meta.json")
         log(f"checkpoint at step {st[0]['step']} -> {ck}")
 
     if not (a.resume and os.path.exists(f"{ck}/meta.json")):
         prefill()
+    ck_min = max(6.0, 2.0 + kv_gb * len(st) / 1.5 / 60)      # checkpoint write budget (8 writers ~2.5 GiB/s measured)
     t = st[0]["step"]
+    if PROF is not None:
+        PROF.on = True; PROF.acc = {}; PROF.load = 0.0
     t_step = time.time()
     nsteps = ndec                           # step t processes decode token t (token 0 from the prefill logits)
     while t < nsteps:
@@ -914,7 +1097,7 @@ def main():
         if a.mode == "gen" and all(bool(s["done"].all()) for s in st):
             log(f"all chains stopped at step {t}")
             break
-        if t < nsteps and el + 1.5 * last + 6.0 > a.time_limit_min:
+        if t < nsteps and el + 1.5 * last + ck_min > a.time_limit_min:
             save(False)
             log("time limit: exit 3 (resume with --resume)")
             if M.reg:
