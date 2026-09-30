@@ -19,6 +19,12 @@ V2 = "/home/coder/git/nestquant/streaming/gbdt_v2sal_p64.txt"
 fixed, fdef = T.serve_sets()
 NOFIX = {L: [] for L in fixed}
 FDEF77 = {L: list(fixed[L]) + [e for e in fdef[L] if e not in set(fixed[L])] for L in fixed}
+K = int(os.environ.get("K", "0"))  # K>0: fixed = top-K of fixed-26 by calib-fit salience, rest floating (nf = 77-K)
+if K:
+    import json as _j
+    _m = _j.load(open(f"{T.OUT}/k{K}_manifest.json"))
+    KFIX = {L: _m["default_allocation"][str(L)] for L in fixed}
+    KFDEF = {L: _m["floating_default"][str(L)] for L in fixed}
 RK, RV = f"{T.OUT}/rows_bandk0/{corpus}", f"{T.OUT}/rows_v2_bandk0/{corpus}"
 
 
@@ -40,7 +46,11 @@ def sweep(L):
     bc, bs = d["bcnt"].astype(np.float64), d["bsal"].astype(np.float64)
     out = {}
     for hm in HMS:
-        sv = T.sim_layer(S, [], FDEF77[L], nf=77, hm=hm, lag=0)
+        if K:
+            sv = T.sim_layer(S, KFIX[L], KFDEF[L], nf=77 - K, hm=hm, lag=0)
+            sv = sv.copy(); sv[:, KFIX[L]] = True
+        else:
+            sv = T.sim_layer(S, [], FDEF77[L], nf=77, hm=hm, lag=0)
         out[hm] = dict(sal=float((bs * sv).sum() / bs.sum()), cnt=float((bc * sv).sum() / bc.sum()),
                        churn=float((sv[1:] & ~sv[:-1]).sum(1).mean()))
     return L, out
@@ -58,7 +68,7 @@ if __name__ == "__main__":
         for hm in HMS:
             s = {k: float(np.mean([res[L][hm][k] for L in T.LAYERS])) for k in ("sal", "cnt", "churn")}
             summ[str(hm)] = s
-            print(f"[{corpus}] k=0 nf=77 hm {hm:4.1f}  sal-hot {s['sal'] * 100:6.2f}  routes-hot {s['cnt'] * 100:6.2f}"
+            print(f"[{corpus}] k={K} nf={77 - K} hm {hm:4.1f}  sal-hot {s['sal'] * 100:6.2f}  routes-hot {s['cnt'] * 100:6.2f}"
                   f"  churn {s['churn']:5.2f}", flush=True)
         json.dump(dict(summary=summ, per_layer={str(L): {str(h): v for h, v in res[L].items()} for L in T.LAYERS}),
-                  open(f"{T.OUT}/k0_sweep_{corpus}.json", "w"), indent=1)
+                  open(f"{T.OUT}/k{K}_sweep_{corpus}.json", "w"), indent=1)
