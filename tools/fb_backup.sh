@@ -11,11 +11,15 @@ LOG=$SRC/fb_backup.log
 # 32-gbdt-sal holds PRIVATE traces: flashblade (internal) only, user OK 2026-09-30; rows_* regenerable, excluded
 # 18-e2e bulk (farm_*, predecoded_{A,B,S,S2}, hdump*) is regenerable and excluded (5 TB bucket cap)
 EXCL=(--exclude "farm_*" --exclude "predecoded_A/*" --exclude "predecoded_B/*" --exclude "predecoded_S/*" --exclude "predecoded_S2/*" --exclude "hdump*" --exclude "rows_*" --exclude "*.tmp")
-DIRS="corpus 21-traces trace-survey 02-feedback-conflict 04-decode-kernel 12-reference-encoder 13-moe-layer-kernel 14-level4-floor 15-level4-decode 16-bit-allocation 17-level2-margin 18-e2e glm53-fp8-experts 32-gbdt-sal"
+# 33-search / 34-tr3 / 35-nq15 added 2026-10-01 (user: bucket cap raised to 7 TB). Dead search lines, tmp, TR3 weights
+# and BF16 teacher (both on HF) are excluded; the run-1 resume ckpt is uploaded by T33l once it is closed.
+EXCL+=(--exclude "seq/*" --exclude "hprobe/*" --exclude "analog/*" --exclude "draft/*" --exclude "xlatent/*" --exclude "joint/tmp_tfX/*"
+  --exclude "ceiling/tp/tb345/*" --exclude "ceiling/fp8dec_run1b/run/ckpt/*" --exclude "gpu.lock" --exclude "src/*" --exclude "teacher/*")
+DIRS="corpus 21-traces trace-survey 02-feedback-conflict 04-decode-kernel 12-reference-encoder 13-moe-layer-kernel 14-level4-floor 15-level4-decode 16-bit-allocation 17-level2-margin 18-e2e glm53-fp8-experts 32-gbdt-sal 33-search 34-tr3 35-nq15"
 once() {
-  # 5 TB bucket cap (user 2026-09-29): skip the round if the bucket is already over 4.8 TB
+  # 7 TB bucket cap (user 2026-10-01, was 5 TB): skip the round if the bucket is already over 6.8 TB
   tot=$(aws s3 ls --recursive --summarize --endpoint-url $EP $DST/ 2>/dev/null | awk '/Total Size/{print $3}')
-  if [ -n "$tot" ] && [ "$tot" -gt 4800000000000 ]; then echo "$(date -u +%FT%TZ) SKIP bucket at $tot bytes" >>$LOG; return; fi
+  if [ -n "$tot" ] && [ "$tot" -gt 6800000000000 ]; then echo "$(date -u +%FT%TZ) SKIP bucket at $tot bytes" >>$LOG; return; fi
   for d in $DIRS; do
     [ -d $SRC/$d ] || continue
     aws s3 sync --only-show-errors "${EXCL[@]}" --endpoint-url $EP $SRC/$d $DST/$d >>$LOG 2>&1 \
