@@ -8,10 +8,15 @@ set -euo pipefail
 O=/tmp/nestquant/32-gbdt-sal; P=$O/private; PD=/tmp/nestquant/src/predec; T=/home/coder/git/nestquant/threads/32-gbdt-sal
 R=/home/coder/git/nestquant/threads/18-e2e-eval/run.sh; PY=/home/coder/git/glm52/.venv/bin/python
 F=$P/fp8dec_t32; TAG=${TAG:-passT32KF}; CORP=fp8dec-heldout,fp8dec-tb21,sm120tfk8
-until [ -s $P/fp8dec_go ]; do sleep 30; done
-DEC=$(head -1 $P/fp8dec_go)
+# go = $P/fp8dec_go (first line DEC_DIR) or T33l's final run-1 output: index.json without partial=true, stable for
+# 5 min, and no dec.py process on that out dir
+RUN1=/tmp/nestquant/33-search/ceiling/fp8dec_run1b/run
+final() { [ -f $RUN1/index.json ] && $PY -c "import json,sys; sys.exit(bool(json.load(open('$RUN1/index.json')).get('partial')))" \
+  && [ $(( $(date +%s) - $(stat -c %Y $RUN1/index.json) )) -gt 300 ] && ! pgrep -f "dec.py .*--out $RUN1" >/dev/null; }
+until [ -s $P/fp8dec_go ] || final; do sleep 60; done
+if [ -s $P/fp8dec_go ]; then DEC=$(head -1 $P/fp8dec_go); else DEC=$RUN1; fi
 echo "prep $DEC $(date -u)"
-rm -rf $F.tmp; nice -n 10 $PY $T/fp8dec_prep.py $DEC $(dirname $DEC)/tasks_run1.json $F.tmp --k 2 --world 8
+rm -rf $F.tmp; nice -n 10 $PY $T/fp8dec_prep.py $DEC $(dirname $DEC)/tasks_run1.json $F.tmp --k 2 --world 8 --spec fp8dec-tb21=1:1
 rm -rf $F; mv $F.tmp $F
 ln -sf $P/corpora/sm120tfk8.npy $F/corpora/sm120tfk8.npy; ln -sf $P/corpora/sm120tfk8.map.npz $F/corpora/sm120tfk8.map.npz
 A=adapt:lo=$PD/farm/nq2,hi=$PD/farm/nq4,chain=map,salstat=1,predictor=gbdt,gbdt_model=/home/coder/git/nestquant/streaming/gbdt_v2sal_p64.txt,gmode=sync,grlo=0,grhi=256
