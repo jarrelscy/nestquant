@@ -232,7 +232,10 @@ class Adapt(Base):
     def __init__(self, lo, hi, manifest, hi2=None, half_life=512, refresh=64, n_float=51, lag=1, chain=0, NE=256,
                  predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
                  oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None,
-                 gbdt_scale=None, fb=0, gmode="next_refresh", grlo=20, grhi=121, salstat=0):
+                 gbdt_scale=None, fb=0, gmode="next_refresh", grlo=20, grhi=121, salstat=0, nf_map=None):
+        # T32 nf_map=JSON {layer: n_float}: per-layer floating slot count (T33k allocation B; layers absent: n_float);
+        # diag then also records nf and the min/max floating-set size actually served per layer.
+        self.nf_map = {int(k): int(v) for k, v in json.load(open(nf_map)).items()} if nf_map else None
         # T32: gmode=sync (score of block k applied at its end) | next_refresh (serve default, one-block lag);
         # grlo/grhi: GBDT candidate band over EMA256 ranks (default 20..120 + forced top-20; grlo=0,grhi=256: all)
         self.gmode, self.grlo, self.grhi = gmode, int(grlo), int(grhi)
@@ -299,6 +302,7 @@ class Adapt(Base):
         self.fdef = {int(L): [int(e) for e in v] for L, v in m["floating_default"].items()}
         self.a = 0.5 ** (1 / float(half_life))
         self.R, self.nf, self.lag, self.NE = int(refresh), int(n_float), int(lag), NE
+        self.nf0 = self.nf
         assert self.lag in (0, 1), "lag 0 (chunked prefill) or 1 (decode refresh) only"
         assert self.ahead is None or self.lag == 0, "lookahead upgrades are per prefill chunk (chunk=C)"
         self.n_hi = self.n_lo = 0
@@ -317,6 +321,8 @@ class Adapt(Base):
         """chain=0: every window is its own sequence (state reset); chain=1: each run of consecutive windows of the
         same corpus (groups[w]) is one sequence (needs contiguous sharding, NQ_SHARD=contig, for document order)."""
         N = ids.shape[0] // seq
+        if self.nf_map is not None:
+            self.nf = self.nf_map.get(int(layer), self.nf0)
         if not self.chain:
             runs = [(0, N)]
             L = seq
@@ -345,6 +351,9 @@ class Adapt(Base):
                 else:
                     tot[k] = tot.get(k, 0) + v
         tot["chains"] = [w1 - w0 for w0, w1 in runs] if self.chain else None
+        if self.nf_map is not None:
+            szs = [np.asarray(torch.as_tensor(sv).sum(-1).cpu()) for sv in serves]
+            tot.update(nf=self.nf, float_max=int(max(z.max() for z in szs)), float_min=int(min(z.min() for z in szs)))
         self.diag[layer] = tot
         return torch.cat(hi), serves
 
