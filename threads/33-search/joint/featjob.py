@@ -10,11 +10,17 @@ LAY = [int(x) for x in sys.argv[3].split(",")] if len(sys.argv) > 3 else J.LAYER
 
 def job(L):
     f = f"{od}/L{L}.npz"
-    if os.path.exists(f) or os.path.exists(f + ".done"):
+    if os.path.exists(f) or os.path.exists(f + ".done") or (os.environ.get("V2ONLY") and
+                                                            os.path.exists(f"{J.OUT}/scores/v2_{stream}/L{L}.npy")):
         return L
     d = J.load(stream, L); F = J.features(d); fx, _ = J.masks(L)
-    P = J.v2_pred(F, L, fx)
-    np.save(f"{J.OUT}/scores/v2_{stream}/L{L}.npy", P)
+    pf = f"{J.OUT}/scores/v2_{stream}/L{L}.npy"
+    if os.path.exists(pf):
+        P = np.load(pf)
+    else:
+        P = J.v2_pred(F, L, fx); np.save(pf + ".part.npy", P); os.replace(pf + ".part.npy", pf)
+    if os.environ.get("V2ONLY"):
+        return L
     X = J.net_inputs(F, P)
     np.savez(f + ".part.npz", X=X, P=P); os.replace(f + ".part.npz", f)
     return L

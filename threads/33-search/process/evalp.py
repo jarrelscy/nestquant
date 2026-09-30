@@ -10,6 +10,8 @@ corpus = sys.argv[1]
 specs = dict(a.split("=", 1) for a in sys.argv[2:])
 HMS = [float(x) for x in os.environ.get("HMS", "0.5").split(",")]
 SAVE = os.environ.get("SAVE", "")
+LAYERS = P.T.LAYERS[::int(os.environ.get("LSTEP", "1"))]
+PT = int(os.environ.get("PT", "1"))
 
 
 def job(L):
@@ -23,8 +25,11 @@ def job(L):
     if os.path.exists(ff):
         z = np.load(ff); PFd = {k: z[k].astype(np.float32) for k in z.files}
     else:
-        PFd = FE.feats(D, L)
+        PFd = FE.feats(D, L, os.environ.get("FAMS", "hks,hmm,bou,kf").split(","))
     src = dict(D["F"]); src.update(PFd)
+    f2 = f"{P.OUT}/private/feat2/{src_c}/L{L}.npz"
+    if os.path.exists(f2):
+        z = np.load(f2); src.update({k: z[k].astype(np.float32) for k in z.files})
     rows = np.concatenate([np.arange(s, e) for s, e in segs])
     lsegs, o = [], 0
     for s, e in segs:
@@ -45,7 +50,7 @@ def job(L):
             b = lgb.Booster(model_file=P.V2 if sp == "v2" else sp)
             names = b.feature_name()
             X = np.stack([src[c][rows] for c in names], -1).reshape(-1, len(names))
-            S = b.predict(X, num_threads=1).reshape(len(rows), P.NE).astype(np.float32)
+            S = b.predict(X, num_threads=PT).reshape(len(rows), P.NE).astype(np.float32)
         if n == SAVE:
             os.makedirs(f"{P.OUT}/scores_{corpus}", exist_ok=True)
             np.save(f"{P.OUT}/scores_{corpus}/L{L}.npy", S.astype(np.float16))
@@ -56,13 +61,13 @@ def job(L):
 if __name__ == "__main__":
     t0 = time.time()
     with Pool(int(os.environ.get("NPROC", "16"))) as p:
-        r = dict(p.map(job, P.T.LAYERS))
-    f = f"{P.OUT}/eval_{corpus}.json"
+        r = dict(p.map(job, LAYERS))
+    f = f"{P.OUT}/eval_{corpus}{os.environ.get('TAG', '')}.json"
     allr = json.load(open(f)) if os.path.exists(f) else {}
     for n in specs:
         for hm in HMS:
             s = {k: float(np.mean([r[L][n][str(hm)][k] for L in r])) for k in ("sal", "cnt", "churn_g", "churn")}
-            allr.setdefault(n, {})[str(hm)] = dict(s, spec=specs[n], per_layer=[r[L][n][str(hm)]["sal"] for L in P.T.LAYERS])
+            allr.setdefault(n, {})[str(hm)] = dict(s, spec=specs[n], per_layer=[r[L][n][str(hm)]["sal"] for L in LAYERS], layers=LAYERS)
             print(f"{corpus} {n:16s} hm {hm:4.2f}  sal-hot {s['sal']*100:6.2f}  churn {s['churn_g']:5.2f} (in-chain {s['churn']:5.2f})  routes {s['cnt']*100:6.2f}", flush=True)
     json.dump(allr, open(f, "w"), indent=1)
     print(f"{time.time()-t0:.0f}s")

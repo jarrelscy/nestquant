@@ -17,6 +17,14 @@ V2 = "/tmp/nestquant/32-gbdt-sal/models/v2_sal_tweedie1.5.txt"
 V2F = list(T.FEATS5) + list(T.FEATS_V2)
 BLK = "/tmp/nestquant/32-gbdt-sal/private/sm120/blk"
 fixed, fdef = T.serve_sets()
+FIXED26 = fixed
+NF = 51
+LAYOUT = os.environ.get("LAYOUT", "k26")
+if LAYOUT == "k0":                  # empty fixed set, 77 floating slots over all 256 experts
+    _m = json.load(open("/tmp/nestquant/32-gbdt-sal/k0_manifest.json"))
+    fixed = {int(L): [] for L in _m["floating_default"]}
+    fdef = {int(L): [int(e) for e in v] for L, v in _m["floating_default"].items()}
+    NF = 77
 
 
 def load(corpus, L):
@@ -55,7 +63,8 @@ def target(M, segs, k=4):
     return Y
 
 
-def replay(S, L, segs, hm=0.5, nf=51):
+def replay(S, L, segs, hm=0.5, nf=None):
+    nf = nf or NF
     """= t32lib.sim_layer lag 0 (sync), chains = segs. -> serve [nb, NE] bool (floating set serving block k)."""
     fx = np.zeros(NE, bool); fx[fixed[L]] = True
     fd = np.zeros(NE, bool); fd[[e for e in fdef[L] if e not in set(fixed[L])][:nf]] = True

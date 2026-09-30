@@ -18,6 +18,13 @@ BLK = "/tmp/nestquant/33-search/analog/blk"   # sm120tf blocks (built by prep_tf
 V2 = "/tmp/nestquant/32-gbdt-sal/models/v2_sal_tweedie1.5.txt"
 FEATS9 = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16", "sema32", "sema128", "sal16", "mps128"]
 fixed, fdef = T.serve_sets()
+LAYOUT = os.environ.get("NQ_LAYOUT", "k26")           # k26 = serve (26 fixed + 51 floating) | k0 = 77 floating
+NF = 51
+if LAYOUT == "k0":
+    _m = json.load(open("/tmp/nestquant/32-gbdt-sal/k0_manifest.json"))
+    fixed = {int(L): [] for L in _m["floating_default"]}
+    fdef = {int(L): [int(e) for e in v] for L, v in _m["floating_default"].items()}
+    NF = 77
 LAYERS = T.LAYERS
 mL = {int(k): v for k, v in json.load(open(V2 + ".meta.json"))["sal_norm_mL"].items()}
 
@@ -72,8 +79,8 @@ def fut(M, sg, h):
 
 def sim(S, L, sg, hm=0.5):
     fx = np.zeros(NE, bool); fx[fixed[L]] = True
-    fd = np.zeros(NE, bool); fd[[e for e in fdef[L] if e not in set(fixed[L])][:51]] = True
-    return S1.replay(S.astype(np.float32), fx, fd, sg, hm=hm), fx
+    fd = np.zeros(NE, bool); fd[[e for e in fdef[L] if e not in set(fixed[L])][:NF]] = True
+    return S1.replay(S.astype(np.float32), fx, fd, sg, hm=hm, nf=NF), fx
 
 
 def metrics(sv, fx, bs, sg):

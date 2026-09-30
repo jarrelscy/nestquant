@@ -32,7 +32,7 @@ def ema_blocks(M, hl, segs):
 
 
 # ------------------------------------------------------------------------------------------ Hawkes
-def fit_hawkes(C, segs, fx):
+def fit_hawkes(C, segs, fx, shared_mu=False):
     """C [nb, NE] counts. Poisson MLE of lambda(k+1) = mu_e + sum a_m (1-d_m) E_m(k). -> dict(mu, a)."""
     nf = ~fx
     Es = [ema_blocks(C, h, segs) * (1 - 0.5 ** (1.0 / h)) for h in HAWKES_HL]
@@ -42,6 +42,8 @@ def fit_hawkes(C, segs, fx):
     n, ne_, M = Z.shape
     Zf = Z.reshape(-1, M); yf = y.ravel()
     eidx = np.tile(np.arange(ne_), n)
+    if shared_mu:                                           # one immigrant rate for all experts (no corpus memory)
+        eidx = np.zeros_like(eidx); ne_ = 1
 
     def f(p):
         mu = np.exp(p[:ne_]); a = np.exp(p[ne_:])
@@ -51,7 +53,8 @@ def fit_hawkes(C, segs, fx):
         gmu = np.bincount(eidx, r, ne_) * mu
         ga = (Zf * r[:, None]).sum(0) * a
         return -ll / len(yf), -np.r_[gmu, ga] / len(yf)
-    p0 = np.r_[np.log(y.mean(0) * 0.2 + 1e-4), np.log(np.full(M, 0.2))]
+    p0 = np.r_[np.log(np.full(ne_, y.mean() * 0.2) + 1e-4) if shared_mu else np.log(y.mean(0) * 0.2 + 1e-4),
+               np.log(np.full(M, 0.2))]
     r = minimize(f, p0, jac=True, method="L-BFGS-B", options=dict(maxiter=200))
     mu = np.zeros(NE); mu[nf] = np.exp(r.x[:ne_])
     return dict(mu=mu, a=np.exp(r.x[ne_:]), nll=float(r.fun))
@@ -132,18 +135,18 @@ def hmm_feats(C, segs, P):
 
 
 # ------------------------------------------------------------------------------------------ BOCPD
-def bocpd_feats(C, segs, prior, kappa=64.0, hazard=1 / 128, R=128, tau=1.0):
+def bocpd_feats(C, segs, prior, kappa=64.0, hazard=1 / 128, R=128, tau=1.0, Sal=None):
     """C [nb, NE] counts (fixed experts included: histogram of the whole layer). prior [NE] usage share."""
     nb = C.shape[0]
-    out = {k: np.zeros((nb, NE) if k in ("bo_rate", "bo_rmap") else nb, np.float32)
-           for k in ("bo_cp", "bo_er", "bo_rate", "bo_rmap")}
+    out = {k: np.zeros((nb, NE) if k not in ("bo_cp", "bo_er") else nb, np.float32)
+           for k in ("bo_cp", "bo_er", "bo_rate", "bo_rmap", "bo_srate", "bo_srmap")}
     a0 = kappa * prior + 1e-3
     lh, l1h = np.log(hazard), np.log1p(-hazard)
     evid = 0.0
     for s, e in segs:
         # hypotheses: row r = current run holds the last r+1 blocks (row 0: a change right before this block)
         logp = None
-        cnts = np.zeros((0, NE))
+        cnts = np.zeros((0, NE)); scs = np.zeros((0, NE))
         for k in range(s, e):
             x = C[k]
             nz = np.flatnonzero(x)
@@ -160,9 +163,11 @@ def bocpd_feats(C, segs, prior, kappa=64.0, hazard=1 / 128, R=128, tau=1.0):
             evid += z
             logp = lg - z
             cnts = np.vstack([np.zeros((1, NE)), cnts]) + x[None]
+            if Sal is not None:
+                scs = np.vstack([np.zeros((1, NE)), scs]) + Sal[k][None]
             if len(logp) > R:                                # truncate: merge tail into the last kept hypothesis
                 logp = np.r_[logp[:R - 1], np.logaddexp.reduce(logp[R - 1:])]
-                cnts = cnts[:R]
+                cnts = cnts[:R]; scs = scs[:R]
             p = np.exp(logp)
             rl = np.arange(1, len(p) + 1)
             out["bo_cp"][k] = p[:4].sum()
@@ -171,6 +176,11 @@ def bocpd_feats(C, segs, prior, kappa=64.0, hazard=1 / 128, R=128, tau=1.0):
             out["bo_rate"][k] = (p @ (alp / alp.sum(1, keepdims=True))) * 128.0
             m = int(np.argmax(p))
             out["bo_rmap"][k] = cnts[m] / (m + 1)
+            if Sal is not None:                              # run-length-averaged salience rate (per block)
+                out["bo_srate"][k] = p @ (scs / rl[:, None])
+                out["bo_srmap"][k] = scs[m] / (m + 1)
+    if Sal is None:
+        out.pop("bo_srate"); out.pop("bo_srmap")
     out["evid"] = evid
     return out
 

@@ -12,11 +12,14 @@ sys.path.insert(0, "/home/coder/git/nestquant/threads/32-gbdt-sal")
 T32 = "/tmp/nestquant/32-gbdt-sal"
 BLK = f"{T32}/private/sm120/blk"
 OUT = "/tmp/nestquant/33-search/joint"
-G, NE, NF = 16, 256, 51
+G, NE = 16, 256
+LAYOUT = os.environ.get("LAYOUT", "k26")          # k26: 26 fixed + 51 floating (serve today) | k0: 77 floating
+NF = 77 if LAYOUT == "k0" else 51
 LAYERS = list(range(3, 78))
 V2 = f"{T32}/models/v2_sal_tweedie1.5.txt"
 mL = {int(k): v for k, v in json.load(open(V2 + ".meta.json"))["sal_norm_mL"].items()}
-MANIFEST = "/tmp/nestquant/28-serve-release/out/serving/tp4/manifest.json"
+MANIFEST = ("/tmp/nestquant/32-gbdt-sal/k0_manifest.json" if LAYOUT == "k0" else
+            "/tmp/nestquant/28-serve-release/out/serving/tp4/manifest.json")
 
 
 def serve_sets():
@@ -135,7 +138,7 @@ def features(d):
 def v2_pred(F, L, fx):
     import lightgbm as lgb
     b = lgb.Booster(model_file=V2)
-    nfx = np.flatnonzero(~fx)
+    nfx = np.arange(NE)                                 # all experts (k0 layout needs the fixed ones too)
     X = np.stack([F[n][:, nfx] for n in b.feature_name()], -1).reshape(-1, 9)
     p = b.predict(X, num_threads=int(os.environ.get("PT", "1"))).reshape(-1, len(nfx))
     P = np.zeros(F["ema32"].shape, np.float32); P[:, nfx] = p

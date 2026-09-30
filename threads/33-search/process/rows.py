@@ -4,9 +4,9 @@ import os, sys
 os.environ["OMP_NUM_THREADS"] = "1"
 import numpy as np
 import plib as P, pfeat as Q, feats as FE
-COLS = P.V2F + list(FE.PF)
+COLS = P.V2F + list(FE.PF) + list(FE.PF2)
 SUB = 4
-RD = f"{P.OUT}/private/rows"
+RD = f"{P.OUT}/private/rows" + ("0" if P.LAYOUT == "k0" else "")
 
 
 def job(L):
@@ -16,6 +16,7 @@ def job(L):
     D = P.load("calib-fit", L)
     pf = np.load(f"{P.OUT}/private/feat/calib-fit/L{L}.npz")
     src = dict(D["F"]); src.update({k: pf[k] for k in pf.files})
+    pf2 = np.load(f"{P.OUT}/private/feat2/calib-fit/L{L}.npz"); src.update({k: pf2[k] for k in pf2.files})
     Y = P.target(D["bsal"], D["segs"]) / D["mL"]
     nf = np.ones(256, bool); nf[P.fixed[L]] = False
     out = {}

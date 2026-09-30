@@ -18,7 +18,7 @@ import cap_io as C  # noqa: E402
 
 LAYERS = list(range(3, 78))
 PRIV = "/tmp/nestquant/33-search/draft/private"
-K = 4
+K = int(os.environ.get("FIT_K", "4"))
 SEQ = 2048
 NBC = 512
 t00 = time.time()
@@ -140,7 +140,7 @@ def main():
             pc = np.arange(Tc) % SEQ
             nb = Tc // 16
             anc = (np.arange(nb) + 1) * 16 - 1
-            P = np.full((nb, K, 256), np.nan, np.float16)
+            P = np.full((nb, 4, 256), np.nan, np.float16)
             for j in range(1, K + 1):
                 okj = pc[anc] < SEQ - j
                 a = anc[okj]

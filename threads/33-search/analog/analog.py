@@ -37,8 +37,21 @@ def share(M):
     return (M / np.where(t > 0, t, 1.0)).astype(np.float32)
 
 
+ML = [int(x) for x in os.environ.get("ML", "0").split(",")]   # multi-layer state: layer offsets (clipped to 3..77)
+
+
 def states(bs, sg, hl=(64, 512)):
     return np.concatenate([np.sqrt(share(ema_rate(bs, h, sg))) for h in hl], 1)
+
+
+def states_ml(corpus, L, sg, hl, bs_self=None):
+    """concat of per-layer states over layers L+o, o in ML (each block scaled 1/sqrt(len(ML)))."""
+    Zs = []
+    for o in ML:
+        Lo = min(77, max(3, L + o))
+        bs = bs_self if (o == 0 and bs_self is not None) else A.load(corpus, Lo)["bsal"]
+        Zs.append(states(bs.astype(np.float64), sg, hl))
+    return np.concatenate(Zs, 1) / np.sqrt(len(ML))
 
 
 def futures(bs, sg):
@@ -142,7 +155,7 @@ def build_library(L, D=64, nch=NTRAIN_CH, proj="pca", hl=(64, 512)):
     d = A.load("calib-fit", L)
     sg = d["sg"]
     bs = d["bsal"].astype(np.float64)
-    Z = states(bs, sg, hl)
+    Z = states(bs, sg, hl) if ML == [0] else states_ml("calib-fit", L, sg, hl, d["bsal"])
     P64 = share(ema_rate(bs, 64, sg))
     F64, F256, ok = futures(bs, sg)
     cid = chain_id(sg, len(Z))

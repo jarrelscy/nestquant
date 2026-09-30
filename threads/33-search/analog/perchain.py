@@ -8,7 +8,7 @@ import multiprocessing as mp
 import numpy as np
 import alib as A
 
-corpus, HM = sys.argv[1], float(sys.argv[2])
+corpus, HMS = sys.argv[1], [float(x) for x in sys.argv[2].split(",")]
 arms = {a.split("=")[0]: a.split("=")[1].split("@") for a in sys.argv[3:]}
 
 
@@ -28,20 +28,22 @@ def job(L):
     for n, (m, fv) in arms.items():
         b = lgb.Booster(model_file=m)
         S = A.predict(b, fm(fv, L), b.feature_name())
-        sv, fx = A.sim(S, L, d["sg"], hm=HM)
-        hot = sv | fx
-        ch = (sv[1:] & ~sv[:-1]).sum(1)
-        out[n] = [[float((bs[s:e] * hot[s:e]).sum()), float(bs[s:e].sum()), float(ch[s:e - 1].sum()), e - s - 1]
-                  for s, e in d["sg"]]
+        for HM in HMS:
+            sv, fx = A.sim(S, L, d["sg"], hm=HM)
+            hot = sv | fx
+            ch = (sv[1:] & ~sv[:-1]).sum(1)
+            out[(n, HM)] = [[float((bs[s:e] * hot[s:e]).sum()), float(bs[s:e].sum()), float(ch[s:e - 1].sum()), e - s - 1]
+                            for s, e in d["sg"]]
     return L, out
 
 
 if __name__ == "__main__":
     with mp.get_context("spawn").Pool(16) as p:
         R = dict(p.map(job, A.LAYERS))
-    for n in arms:
-        a = np.array([R[L][n] for L in A.LAYERS])          # [L, chain, 4]
+    for n, HM in [(n, h) for h in HMS for n in arms]:
+        a = np.array([R[L][(n, HM)] for L in A.LAYERS])          # [L, chain, 4]
         per = (a[..., 0] / a[..., 1]).mean(0) * 100
-        print(f"{n:14s} all {per.mean() if False else (a[..., 0] / a[..., 1]).mean(0).mean() * 100:6.2f} "
+        print(f"{A.LAYOUT} hm{HM} {n:14s} all {per.mean() if False else (a[..., 0] / a[..., 1]).mean(0).mean() * 100:6.2f} "
               f"pooled-per-layer {((a[..., 0].sum(1) / a[..., 1].sum(1)).mean() * 100):6.2f} churn "
-              f"{(a[..., 2].sum(1) / a[..., 3].sum(1)).mean():.2f} | per chain " + " ".join(f"{x:5.1f}" for x in per))
+              f"{(a[..., 2].sum(1) / a[..., 3].sum(1)).mean():.2f} | ex-last {((a[:, :-1, 0].sum(1) / a[:, :-1, 1].sum(1)).mean() * 100):6.2f} "
+              f"churn {(a[:, :-1, 2].sum(1) / a[:, :-1, 3].sum(1)).mean():.2f} | per chain " + " ".join(f"{x:5.1f}" for x in per))

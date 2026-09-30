@@ -32,7 +32,8 @@ def load(corpus, name, keys, mmap=False):
     out = {k: [] for k in keys}
     for sfx, s in order:
         if sfx not in cache:
-            cache[sfx] = np.load(f"{CAP}/{name}.{sfx}.npz", mmap_mode="r" if mmap else None)
+            z = np.load(f"{CAP}/{name}.{sfx}.npz")
+            cache[sfx] = {k: z[k] for k in keys}      # NpzFile re-reads a member on every [] access
         for k in keys:
-            out[k].append(np.asarray(cache[sfx][k][s]))
+            out[k].append(cache[sfx][k][s])
     return {k: np.concatenate(v) for k, v in out.items()}

@@ -52,7 +52,8 @@ def job(args):
     Y = np.log1p(HL.target(d["calib-fit"], L)) - off["calib-fit"]
     need = set("".join(arms).replace("lg", "L").replace("h", "H"))
     ins = inputs(L, {"lg" if "L" in need else "", "h" if "H" in need else ""})
-    parts = {"lg": ["lg"], "h": ["h"], "lgh": ["lg", "h"]}
+    ins["c"] = {c: np.zeros((len(d[c]["valid"]), 1), np.float32) for c in CORP}     # intercept-only control
+    parts = {"lg": ["lg"], "h": ["h"], "lgh": ["lg", "h"], "c": ["c"]}
     out = {}
     dh, dc = d["glm52-heldout"], d["calib-fit"]
     val = HL.chain_id(len(Y)) % 4 == 3

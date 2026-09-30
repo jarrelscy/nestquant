@@ -53,7 +53,9 @@ def job(L):
         m["segl"] = np.repeat(D["segl"][s + P - 1:s + P], 16)
         syn.append(m)
     f26 = A.f26_ranked(L)
-    arms = {"cold": (sub([[d] for d in dec]), 0), "warmmean": (sub([[m, d] for m, d in zip(syn, dec)]), 16)}
+    arms = {"cold": (sub([[d] for d in dec]), 0)}
+    if os.environ.get("WARM"):      # prefill warm-start dropped (T33j: hurts on real SM120 request structure)
+        arms["warmmean"] = (sub([[m, d] for m, d in zip(syn, dec)]), 16)
     res = {}
     for an, (D2, skip) in arms.items():
         S = scores(b, D2)

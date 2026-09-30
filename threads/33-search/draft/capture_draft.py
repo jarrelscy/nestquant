@@ -191,9 +191,13 @@ def main():
         res["variant"] = best
         m, d, p = m1[best]
         del m1
-        save("mtp1", m=m.half().cpu().numpy(), d=d.int().cpu().numpy(), p=p.float().cpu().numpy())
+        if os.environ.get("DRAFT_SKIP1") != "1":
+            save("mtp1", m=m.half().cpu().numpy(), d=d.int().cpu().numpy(), p=p.float().cpu().numpy())
+        CH = os.environ.get("DRAFT_CHAIN", "normed")   # step j>1 hidden input: MTP output (raw) or snorm(output)
+        res["chain"] = CH
         for j in range(2, NSTEP + 1):
-            m = mtp(m, d.view(N, SEQ))
+            hin = m if CH == "raw" else torch.cat([snorm(m[c0:c0 + MC]) for c0 in range(0, T, MC)])
+            m = mtp(hin, d.view(N, SEQ))
             d, p = argmax_head(torch.cat([snorm(m[c0:c0 + MC]) for c0 in range(0, T, MC)]))
             res[f"step{j}_acc"] = shift_acc(d, j)
             E.log(f"MTP step{j}: draft acc vs x_(t+{j + 1}) {res[f'step{j}_acc']:.4f}")

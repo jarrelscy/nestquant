@@ -8,5 +8,7 @@ S1 = A.S1
 S1.BLK = A.BLK
 S1.PD = f"{A.OUT}/sm120pd"
 S1.T.OUT = f"{A.OUT}/sm120pd"
+S1.TFC = "/tmp/nestquant/32-gbdt-sal/private/corpora/sm120tf.map.npz"
+S1.TFT = "/tmp/nestquant/32-gbdt-sal/private/trace_sm120"
 os.makedirs(S1.PD, exist_ok=True)
 S1.prep_tf()

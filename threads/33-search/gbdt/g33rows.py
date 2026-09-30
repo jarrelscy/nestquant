@@ -20,7 +20,9 @@ def job(L):
     li = g.T.LAYERS.index(L)
     v2 = lgb.Booster(model_file=V2)
     res = {"tr": [], "va": []}
-    nfx = np.ones(g.NE, bool); nfx[g.FIXED[L]] = False
+    nfx = np.ones(g.NE, bool)
+    if band != "k0":
+        nfx[g.FIXED[L]] = False
     for f in ["f0", "f1", "f2", "f3", "all"]:
         b = g.full_feats("calib-fit", L, PZ[f"P_{f}"][li])
         XA = b["XA"]; nb = XA.shape[0]
@@ -36,6 +38,8 @@ def job(L):
             m[:] = nfx[None]
             if band == "band":
                 m &= (re[ks] >= 20) & (re[ks] <= 120)
+            if band == "k0":                       # k=0: all 256 candidates, full EMA256 rank 20..146 (boundary 77)
+                m &= (re[ks] >= 20) & (re[ks] <= 146)
             bi, ei = np.nonzero(m); kk = ks[bi]
             X = np.concatenate([XA[kk, ei], p2[kk, ei, None]], 1)
             aux = np.stack([np.full(len(kk), L), np.full(len(kk), ci), kk, rv[kk, ei], re[kk, ei]], 1).astype(np.int32)

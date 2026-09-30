@@ -13,7 +13,7 @@ import t32lib as T  # noqa: E402
 WD = "/tmp/nestquant/33-search/seq"
 NE, G = 256, 16
 LAYERS = T.LAYERS
-FIXED, FDEF = T.serve_sets()
+from lite import FIXED, FDEF, NF, LAYOUT  # noqa  (layout via NQ_LAYOUT, default k0)
 BLK = f"{T.OUT}/private/sm120/blk"
 ML = {int(k): v for k, v in json.load(open(f"{T.OUT}/models/v2_sal_tweedie1.5.txt.meta.json"))["sal_norm_mL"].items()}
 V2 = "/tmp/nestquant/32-gbdt-sal/models/v2_sal_tweedie1.5.txt"

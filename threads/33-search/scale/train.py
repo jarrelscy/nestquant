@@ -5,12 +5,13 @@ import argparse, json, os, sys, time
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scalelib as S
-R = f"{S.OUT}/private/rows"
-F9 = S.V2F
+DYN = os.environ.get("DYN0") == "1"
+R = f"{S.OUT}/private/rows{'_dyn0' if DYN else ''}"
+F9 = S.V2F + (S.DYN0 if DYN else [])
 
 def load(stream, chains, stuck, row_frac=1.0, seed=0):
     Xs, ys = [], []
-    cols = list(range(9))
+    cols = list(range(9)) + (list(range(10, 19)) if DYN else [])
     if stuck:
         cols[2] = 9
     rng = np.random.default_rng(seed)
@@ -30,7 +31,7 @@ def main():
     ap.add_argument("--val", default="3,7,11,15,19,23,27,31"); ap.add_argument("--cap", type=int, default=1)
     ap.add_argument("--stuck", action="store_true"); ap.add_argument("--rowfrac", type=float, default=1.0)
     ap.add_argument("--tfw", type=float, default=1.0, help="sample weight of sm120tf rows"); ap.add_argument("--threads", type=int, default=16)
-    ap.add_argument("--obj", default="tweedie:1.5")
+    ap.add_argument("--obj", default="tweedie:1.5"); ap.add_argument("--noes", action="store_true", help="no early stopping (fixed iters)")
     a = ap.parse_args()
     import lightgbm as lgb
     t0 = time.time()
@@ -59,8 +60,8 @@ def main():
     dv = lgb.Dataset(Xv, yv, reference=dt)
     ev = {}
     bst = lgb.train(p, dt, num_boost_round=iters, valid_sets=[dv], valid_names=["val"],
-                    callbacks=[lgb.early_stopping(10, verbose=False), lgb.record_evaluation(ev)])
-    bi = bst.best_iteration or iters
+                    callbacks=([] if a.noes else [lgb.early_stopping(10, verbose=False)]) + [lgb.record_evaluation(ev)])
+    bi = iters if a.noes else (bst.best_iteration or iters)
     out = f"{S.OUT}/models/{a.name}.txt"
     bst.save_model(out, num_iteration=bi)
     json.dump(dict(vars(a), n_train=int(len(y)), best_iter=bi, val_curve=ev["val"][obj], params=p, wall=time.time() - t0),

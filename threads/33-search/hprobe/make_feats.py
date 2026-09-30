@@ -60,7 +60,8 @@ def fit_oof(Xc, Yc, Xh, Ys=None):
     """-> calib OOF preds (4 chain folds), heldout preds (fit on all).  Gram shared across folds (standardisation
     from all valid calib rows, unsupervised); Ys: optional list of extra targets -> list of (Pc, Ph)."""
     ok = np.isfinite(Yc).all(1)
-    fold = HL.chain_id(len(Yc)) % 4
+    cid = HL.chain_id(len(Yc))
+    fold = cid * 4 // (cid.max() + 1) if os.environ.get("FOLD") == "contig" else cid % 4   # contig: 4 blocks of chains
     mx, sx = Xc[ok].mean(0), Xc[ok].std(0) + 1e-6
     Z = ((Xc - mx) / sx).astype(np.float64); Zh = (Xh - mx) / sx
     Zf = np.hstack([Z, np.ones((len(Z), 1))])           # intercept column (unpenalised)

@@ -10,13 +10,20 @@ import t32lib as T  # noqa: E402
 
 D = "/tmp/nestquant/33-search/xlatent/data"
 LAYERS = T.LAYERS
-NL, NE, NF = len(LAYERS), 256, 51
+K0 = os.environ.get("K0", "1") == "1"          # k=0 layout (default since 2026-09-30 11:00): no fixed, 77 floating
+K0_MANIFEST = f"{T.OUT}/k0_manifest.json"
+NL, NE, NF = len(LAYERS), 256, (77 if K0 else 51)
 V2 = "/home/coder/git/nestquant/streaming/gbdt_v2sal_p64.txt"
 BLK = f"{T.OUT}/private/sm120/blk"
 
 
 def masks():
-    fixed, fdef = T.serve_sets()
+    if K0:
+        m = json.load(open(K0_MANIFEST))
+        fixed = {int(L): sorted(map(int, v)) for L, v in m["default_allocation"].items()}
+        fdef = {int(L): [int(e) for e in v] for L, v in m["floating_default"].items()}
+    else:
+        fixed, fdef = T.serve_sets()
     fx = np.zeros((NL, NE), bool); fd = np.zeros((NL, NE), bool)
     for i, L in enumerate(LAYERS):
         fx[i, fixed[L]] = True

@@ -18,7 +18,7 @@ import numpy as np
 from multiprocessing import Pool
 import alib as A
 
-corpus = sys.argv[1]
+corpus = sys.argv[1] if len(sys.argv) > 1 else ""
 TAG = sys.argv[2] if len(sys.argv) > 2 else ""
 B_GU, B_D = 1585152 / 2558208, (915460 + 57344) / 2558208      # tp4 p4rec segments: gu.p4+gu.d4 | dn.p4+dn.d4+lr4
 KAPS = tuple(float(x) for x in os.environ.get("KAPS", "0.7,0.9,1.0,1.4").split(","))

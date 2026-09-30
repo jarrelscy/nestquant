@@ -26,7 +26,7 @@ def job(i):
         bs, bc = d["bsal"].astype(np.float32), d["bcnt"]
         nb = bc.shape[0]
         fx = np.zeros(256, bool); fx[sm120.fixed[L]] = True
-        nfx = np.flatnonzero(~fx)
+        nfx = np.arange(256) if X.K0 else np.flatnonzero(~fx)
         S = np.zeros((nb, 256), np.float32)
         for c0 in range(0, nb, 20000):
             Xm = np.stack([F[f][c0:c0 + 20000][:, nfx] for f in names], -1).reshape(-1, len(names))

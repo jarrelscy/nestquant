@@ -87,28 +87,34 @@ class XLatent(nn.Module):
         d = torch.sigmoid(self.logit_decay)
         return st * d + (1 - d) * self.proj(u)
 
-    def decode(self, f, z):
-        """f [B,T,NL,NE,NC], z [B,T,dz] -> log mu [B,T,NL,NE]"""
+    def decode(self, f, z, eidx=None):
+        """f [B,T,NL,NE,NC], z [B,T,dz] -> log mu [B,T,NL,NE]  (eidx: expert subset [NL,K] -> [B,T,NL,K])"""
+        bb, UU = self.b, self.U
+        if eidx is not None:
+            f = torch.gather(f, 3, eidx[None, None, :, :, None].expand(f.shape[0], f.shape[1], NL, eidx.shape[1], f.shape[-1]))
+            bb = torch.gather(bb, 1, eidx)
+            UU = torch.gather(UU, 1, eidx[..., None].expand(NL, eidx.shape[1], UU.shape[-1]))
+        ne = f.shape[3]
         if self.dz_zero:
             z = torch.zeros_like(z)
         B, T_ = f.shape[:2]
         parts = [f.float()]
         if self.use_ctx:
             c = torch.einsum("btd,ldc->btlc", z, self.ctx)
-            parts.append(c[:, :, :, None, :].expand(B, T_, NL, NE, c.shape[-1]))
-        parts.append(self.lemb[None, None, :, None, :].expand(B, T_, NL, NE, 4))
+            parts.append(c[:, :, :, None, :].expand(B, T_, NL, ne, c.shape[-1]))
+        parts.append(self.lemb[None, None, :, None, :].expand(B, T_, NL, ne, 4))
         x = torch.cat(parts, -1)
         base = self.mlp(x)[..., 0]
         out = base
         if self.use_b:
-            out = out + self.b
+            out = out + bb
         if self.use_U:
-            out = out + torch.einsum("btd,led->btle", z, self.U)
+            out = out + torch.einsum("btd,led->btle", z, UU)
         if self.use_v2:
             out = out + self.a[:, None] * f[..., 0].float()
         return out
 
-    def forward(self, f, st):
+    def forward(self, f, st, eidx=None):
         """f [B,T,...] chunk; st [B,dz] -> logmu [B,T,NL,NE], new st"""
         u = self.z_in(f.float())
         zs = []
@@ -116,7 +122,7 @@ class XLatent(nn.Module):
             st = self.step_latent(u[:, t], st)
             zs.append(st)
         z = torch.stack(zs, 1)
-        return self.decode(f, z), st, z
+        return self.decode(f, z, eidx), st, z
 
 
 def tweedie_loss(logmu, y, m, p=1.5):

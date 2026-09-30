@@ -5,7 +5,11 @@ import numpy as np
 WD = "/tmp/nestquant/33-search/seq"
 NE, G = 256, 16
 LAYERS = list(range(3, 78))
-_m = json.load(open("/tmp/nestquant/28-serve-release/out/serving/tp4/manifest.json"))
+import os
+LAYOUT = os.environ.get("NQ_LAYOUT", "k0")
+_m = json.load(open("/tmp/nestquant/32-gbdt-sal/k0_manifest.json" if LAYOUT == "k0" else
+                    "/tmp/nestquant/28-serve-release/out/serving/tp4/manifest.json"))
+NF = 77 if LAYOUT == "k0" else 51
 FIXED = {int(L): sorted(map(int, v)) for L, v in _m["default_allocation"].items()}
 FDEF = {int(L): [int(e) for e in v] for L, v in _m["floating_default"].items()}
 ML = {int(k): v for k, v in json.load(open("/tmp/nestquant/32-gbdt-sal/models/v2_sal_tweedie1.5.txt.meta.json"))["sal_norm_mL"].items()}
@@ -24,7 +28,8 @@ def fxmask(L):
     return fx
 
 
-def replay(S, L, sg, hm=0.5, nf=51):
+def replay(S, L, sg, hm=0.5, nf=None):
+    nf = nf or NF
     fx = fxmask(L)
     fd = np.zeros(NE, bool); fd[[e for e in FDEF[L] if e not in set(FIXED[L])][:nf]] = True
     nb = S.shape[0]

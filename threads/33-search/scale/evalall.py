@@ -23,6 +23,8 @@ def job(L):
     if "--chains" in opt:
         D = S.subset(D, [int(c) for c in opt["--chains"].split(",")])
     F, e256 = S.feats(D)
+    if os.environ.get("DYN0") == "1":
+        F = np.concatenate([F, S.dyn0_feats(D)], -1)
     need_stuck = any(p.endswith("@stuck") for p in models.values())
     Fst = S.mem_state(D["bc"], D["bca"], D["nans"], D["segl"], D["sg"], stuck=True) if need_stuck else None
     res = {}
@@ -32,7 +34,7 @@ def job(L):
         FF = F
         if how == "stuck":
             FF = F.copy(); FF[..., 2] = Fst
-        Sm = S.predict_S(b, FF, L)
+        Sm = S.predict_S(b, FF, L, cols=None if b.num_feature() == FF.shape[-1] else list(range(b.num_feature())))
         del FF
         for hm in HMS:
             res[f"{n}|{hm}"] = S.block_metrics(S.replay(Sm, L, D["sg"], hm=hm), D, L).astype(np.float32)
@@ -43,11 +45,13 @@ def job(L):
     np.savez(f"{out}/L{L}.npz", **res)
     return L
 
+LAYS = S.LAYERS[int(os.environ.get("LOFF", "0"))::int(os.environ.get("LSTEP", "1"))]
+
 if __name__ == "__main__":
     with Pool(int(os.environ.get("NPROC", "16"))) as p:
-        for L in p.imap_unordered(job, S.LAYERS):
+        for L in p.imap_unordered(job, LAYS):
             pass
-    R = {L: dict(np.load(f"{out}/L{L}.npz")) for L in S.LAYERS}
-    for k in R[S.LAYERS[0]]:
-        s = S.summarize({L: R[L][k] for L in S.LAYERS})
+    R = {L: dict(np.load(f"{out}/L{L}.npz")) for L in LAYS}
+    for k in R[LAYS[0]]:
+        s = S.summarize({L: R[L][k] for L in LAYS})
         print(f"{stream} {tag} {k:28s} sal-hot {s['sal']:6.2f} hits {s['cnt']:6.2f} churn {s['churn']:5.2f}", flush=True)

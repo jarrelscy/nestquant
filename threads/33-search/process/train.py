@@ -15,7 +15,7 @@ for L in P.T.LAYERS:
     d = np.load(f"{R.RD}/L{L}.npz")
     Xt.append(d["Xtr"][:, ci]); yt.append(d["ytr"]); Xv.append(d["Xva"][:, ci]); yv.append(d["yva"])
 Xt, yt, Xv, yv = map(np.concatenate, (Xt, yt, Xv, yv))
-print(name, fl, "rows", len(yt), len(yv), f"{time.time()-t0:.0f}s", flush=True)
+print(name, P.LAYOUT, R.RD, fl, "rows", len(yt), len(yv), f"{time.time()-t0:.0f}s", flush=True)
 p = dict(objective="tweedie", metric="tweedie", tweedie_variance_power=1.5, learning_rate=0.3, num_leaves=15,
          min_data_in_leaf=500, bagging_fraction=0.5, bagging_freq=1, bagging_seed=3, feature_fraction=0.9, seed=0,
          num_threads=int(os.environ.get("THR", "20")), verbosity=-1, max_bin=255)

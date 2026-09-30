@@ -17,6 +17,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("name")
 ap.add_argument("--dz", type=int, default=32)
 ap.add_argument("--r", type=int, default=8)
+ap.add_argument("--hid", type=int, default=128)
 ap.add_argument("--latent", default="gru")
 ap.add_argument("--noctx", action="store_true")
 ap.add_argument("--nov2", action="store_true")
@@ -27,6 +28,7 @@ ap.add_argument("--lr", type=float, default=3e-3)
 ap.add_argument("--wd", type=float, default=1e-4)
 ap.add_argument("--noU", action="store_true")
 ap.add_argument("--nob", action="store_true")
+ap.add_argument("--ksub", type=int, default=0, help="train decoder on K random non-fixed experts/layer/chunk")
 ap.add_argument("--tf", action="store_true")
 ap.add_argument("--dev", default="cuda")
 ap.add_argument("--hm", type=float, default=0.5)
@@ -76,7 +78,7 @@ Ytr = torch.from_numpy(np.stack(Ytr)).to(dev, torch.float16)
 Mtr = torch.from_numpy(np.stack(Mtr)).to(dev)
 print("train tensors", tuple(Ftr.shape), flush=True)
 
-model = N.XLatent(dz=a.dz, r=a.r, latent=a.latent, use_ctx=not a.noctx, use_v2=not a.nov2, dz_zero=a.zero, use_U=not a.noU, use_b=not a.nob).to(dev)
+model = N.XLatent(dz=a.dz, r=a.r, hid=a.hid, latent=a.latent, use_ctx=not a.noctx, use_v2=not a.nov2, dz_zero=a.zero, use_U=not a.noU, use_b=not a.nob).to(dev)
 opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.epochs)
 
@@ -115,13 +117,22 @@ for ep in range(a.epochs):
     tot = 0.0
     for c0 in range(0, nbc, a.tb):
         f = Ftr[:, c0:c0 + a.tb]
-        lm, st, _ = model(f, st)
+        y = Ytr[:, c0:c0 + a.tb].float()
+        if a.ksub:
+            eidx = torch.argsort(torch.rand(75, 256, device=dev) - fxt.float() * 10, 1, descending=True)[:, :a.ksub]
+            lm, st, _ = model(f, st, eidx)
+            y = torch.gather(y, 3, eidx[None, None].expand(y.shape[0], y.shape[1], 75, a.ksub))
+            m = Mtr[:, c0:c0 + a.tb, None, None].float().expand_as(y)
+        else:
+            lm, st, _ = model(f, st)
+            m = Mtr[:, c0:c0 + a.tb, None, None].float() * mask_e
         st = st.detach()
-        m = Mtr[:, c0:c0 + a.tb, None, None].float() * mask_e
-        loss = N.tweedie_loss(lm, Ytr[:, c0:c0 + a.tb].float(), m)
+        loss = N.tweedie_loss(lm, y, m)
         opt.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step(); tot += loss.item()
+        if ep == 0 and c0 < 3 * a.tb:
+            print(f'  chunk {c0} {time.time() - t0:.1f}s loss {loss.item():.4f}', flush=True)
     sched.step()
     v = val_score()
     hist.append(dict(ep=ep, loss=tot, val=v["sal"], churn=v["churn"]))
@@ -133,11 +144,26 @@ model.load_state_dict(torch.load(f"{OUTD}/{a.name}.pt"))
 res = dict(args=vars(a), v2_val=ref["sal"], v2_val_churn=ref["churn"], best_val=best, hist=hist)
 Sv = predict(Fc, [sg[i] for i in VAL])
 np.save(f"{X.D}/calib-fit/S_{a.name}_val.npy", Sv)
+def predict_stream(corpus):
+    """long corpora: features per chain (no 60 GB feature cache)"""
+    bsal, bcnt, sv2 = X.load(corpus, "bsal"), X.load(corpus, "bcnt"), X.load(corpus, "S_v2")
+    S = np.lib.format.open_memmap(f"{X.D}/{corpus}/S_{a.name}.npy", "w+", np.float32, bsal.shape)
+    for s, e in X.chains(corpus):
+        f = N.own_features(bsal[s:e], bcnt[s:e], sv2[s:e], [(0, e - s)], dev).numpy()
+        S[s:e] = predict(f, [(0, e - s)])
+        del f
+    S.flush()
+    return S
+
+
 for corpus in ["glm52-heldout"] + (["sm120tf"] if a.tf else []):
-    Fh = feats(corpus)
-    S = predict(Fh, X.chains(corpus))
-    np.save(f"{X.D}/{corpus}/S_{a.name}.npy", S)
-    for hm in (0.3, 0.5, 0.7):
+    if corpus.startswith("sm120"):
+        S = predict_stream(corpus)
+    else:
+        S = predict(feats(corpus), X.chains(corpus))
+    if not corpus.startswith("sm120"):
+        np.save(f"{X.D}/{corpus}/S_{a.name}.npy", S)
+    for hm in (0.4, 0.6, 0.8):
         r = X.evaluate(S, corpus, hm)
         res[f"{corpus}_hm{hm}"] = {k: v for k, v in r.items() if k != "per_layer"}
         print(f"{corpus} {a.name} hm{hm}: sal-hot {r['sal'] * 100:.2f} churn {r['churn']:.2f} L3-6 {r['L3_6'] * 100:.1f} "

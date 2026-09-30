@@ -19,6 +19,9 @@ import t32lib as T  # noqa: E402
 V2F = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16", "sema32", "sema128", "sal16", "mps128"]
 FD = f"{H.HP}/private/feat"
 MD = f"{H.HP}/private/models"
+K0 = bool(os.environ.get("K0"))
+SAVE = bool(os.environ.get("SAVE"))
+FDEF77 = {L: list(H.FIXED[L]) + [e for e in H.FDEF[L] if e not in set(H.FIXED[L])] for L in H.FIXED}
 PARAMS = dict(objective="tweedie", metric="tweedie", learning_rate=0.3, num_leaves=15, min_data_in_leaf=500,
               bagging_fraction=0.5, bagging_freq=1, bagging_seed=3, feature_fraction=0.9, seed=0, num_threads=18,
               verbosity=-1, max_bin=255, tweedie_variance_power=1.5)
@@ -67,13 +70,27 @@ def _eval(args):
     b = lgb.Booster(model_file=f"{MD}/{name}.txt")
     fn = b.feature_name()
     feats = fn[len(V2F):]
-    d = H.rows(corpus, L)
-    X = T.feature_matrix(V2F, corpus, L, band="all", d=d).reshape(d["cand"].shape[0], -1, len(V2F))
+    if K0:                                               # T32 k=0 arm: no fixed set, 77 floating (k0.py)
+        d = np.load(f"{T.OUT}/rows_bandk0/{corpus}/L{L}.npz")
+        X = np.concatenate([d["X"], np.load(f"{T.OUT}/rows_v2_bandk0/{corpus}/L{L}.npz")["X2"]], -1)
+    else:
+        d = H.rows(corpus, L)
+        X = T.feature_matrix(V2F, corpus, L, band="all", d=d).reshape(d["cand"].shape[0], -1, len(V2F))
     cols = [X[..., i] for i in range(len(V2F))] + extra(feats, corpus, L, d["cand"])
     Xa = np.stack(cols, -1).reshape(-1, len(cols))
     S = T.score_blocks(b.predict(Xa, num_threads=1), d["cand"], d["top"], d["e256"])
+    if SAVE:
+        os.makedirs(f"{H.HP}/scores/{name}_{corpus}{'_k0' if K0 else ''}", exist_ok=True)
+        np.save(f"{H.HP}/scores/{name}_{corpus}{'_k0' if K0 else ''}/L{L}.npy", S.astype(np.float16))
     mask = (HL.chain_id(len(S)) % 4 == 3) if val else None
     bs, bc = d["bsal"].astype(np.float64), d["bcnt"].astype(np.float64)
+    if K0:
+        out = {}
+        for hm in hms:
+            sv = T.sim_layer(S, [], FDEF77[L], nf=77, hm=hm, lag=0)
+            out[hm] = dict(sn=float((bs * sv).sum()), sd=float(bs.sum()), cn=float((bc * sv).sum()), cd=float(bc.sum()),
+                           ch=float((sv[1:] & ~sv[:-1]).sum()), chn=float(len(sv) - 1), ch_in=0.0, chn_in=1.0)
+        return L, out
     return L, {hm: H.eval_S(S, L, bs, bc, hm=hm, mask=mask) for hm in hms}
 
 
@@ -84,11 +101,11 @@ def evaluate(name, corpus, hms, val):
     for hm in hms:
         s = H.summarise({L: res[L][hm] for L in T.LAYERS})
         out[str(hm)] = s
-        print(f"{name:24s} {corpus}{'-val' if val else ''} hm {hm}: sal {s['sal']:6.2f} churn {s['churn']:5.2f}",
+        print(f"{name:24s} {corpus}{'-val' if val else ''}{'-k0' if K0 else ''} hm {hm}: sal {s['sal']:6.2f} churn {s['churn']:5.2f}",
               flush=True)
     f = f"{H.HP}/exp2_results.json"
     allr = json.load(open(f)) if os.path.exists(f) else {}
-    allr[f"{name}|{corpus}{'-val' if val else ''}"] = out
+    allr[f"{name}|{corpus}{'-val' if val else ''}{'-k0' if K0 else ''}"] = out
     json.dump(allr, open(f, "w"), indent=1)
 
 

@@ -8,14 +8,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scalelib as S
 stream, SUB = sys.argv[1], int(sys.argv[2])
 mL = {int(k): v for k, v in json.load(open("/tmp/nestquant/32-gbdt-sal/models/v2_sal_tweedie1.5.txt.meta.json"))["sal_norm_mL"].items()}
-out = f"{S.OUT}/private/rows/{stream}"
+DYN = os.environ.get("DYN0") == "1"
+out = f"{S.OUT}/private/rows{'_dyn0' if DYN else ''}/{stream}"
 os.makedirs(out, exist_ok=True)
 
 def job(L):
     D = S.load(stream, L)
     F, e256 = S.feats(D)
     Fs = S.mem_state(D["bc"], D["bca"], D["nans"], D["segl"], D["sg"], stuck=True)
-    F = np.concatenate([F, Fs[..., None]], -1)
+    F = np.concatenate([F, Fs[..., None]] + ([S.dyn0_feats(D)] if DYN else []), -1)
     ch = np.zeros(D["bc"].shape[0], np.int16)
     for i, (s, e) in enumerate(D["sg"]):
         ch[s:e] = i

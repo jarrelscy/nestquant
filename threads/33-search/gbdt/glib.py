@@ -15,6 +15,9 @@ NE, G = 256, 16
 NBC = T.CHAIN * T.SEQ // G      # 512 blocks per chain (calib / heldout)
 BASE9 = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16", "sema32", "sema128", "sal16", "mps128"]
 FIXED, FDEF = T.serve_sets()
+_k0 = json.load(open("/tmp/nestquant/32-gbdt-sal/k0_manifest.json"))
+LAYOUTS = {"k26": (FIXED, FDEF, 51),
+           "k0": ({int(L): [] for L in FIXED}, {int(L): [int(e) for e in v] for L, v in _k0["floating_default"].items()}, 77)}
 BANDS = {"L3-6": range(3, 7), "L7-40": range(7, 41), "L41-77": range(41, 78)}
 
 
@@ -26,7 +29,7 @@ def segs_of(corpus, nb):
     return [(s, e) for s, e in zip(b[:-1], b[1:]) if e > s]
 
 
-def load_base(corpus, L):
+def load_base(corpus, L, chain=None):
     """-> dict: X9 [nb,256,9] f32, bcnt [nb,256] f64, bsal f64, segs, ysal (next-64 sal, nan where invalid)"""
     if corpus in ("calib-fit", "glm52-heldout"):
         d = np.load(f"{T.OUT}/rows_bandall/{corpus}/L{L}.npz")
@@ -39,11 +42,21 @@ def load_base(corpus, L):
         return dict(X9=X9, bcnt=bc, bsal=bs, segs=sg, ysal=fut(bs, sg), mL=float(d["slot_sal_sum"] / d["slots"]))
     import sm120 as S
     d, meta = S.load_blk(corpus, L)
+    if chain is not None:                          # one chain only (memory): slice blocks, single segment
+        s0, s1 = meta["bstart"][chain], meta["bstart"][chain + 1]
+        d = _Sl({k: (d[k][s0:s1] if d[k].ndim else d[k]) for k in d.files})
+        meta = dict(meta, bstart=[0, s1 - s0], chains=[meta["chains"][chain]])
     F = S.feats(d, meta, L, set(BASE9) | {"e256"})
     X9 = np.stack([F[n] for n in BASE9], -1).astype(np.float32)
     bc, bs = d["bcnt"].astype(np.float64), d["bsal"].astype(np.float64)
-    sg = segs_of(corpus, bc.shape[0])
+    sg = segs_of(corpus, bc.shape[0]) if chain is None else [(0, bc.shape[0])]
     return dict(X9=X9, bcnt=bc, bsal=bs, segs=sg, ysal=fut(bs, sg), mL=float(bs.sum() / (bc.sum())))
+
+
+class _Sl(dict):
+    @property
+    def files(self):
+        return list(self.keys())
 
 
 def fut(M, sg, k=4):
@@ -56,10 +69,11 @@ def fut(M, sg, k=4):
     return F
 
 
-def replay(S, L, segs, hm=0.5, nf=51):
+def replay(S, L, segs, hm=0.5, layout="k26"):
     """= t32lib.sim_layer lag 0 with arbitrary chain segments -> serve [nb,NE] bool (floating only)."""
-    fixed = np.zeros(NE, bool); fixed[FIXED[L]] = True
-    fd = np.zeros(NE, bool); fd[[e for e in FDEF[L] if e not in set(FIXED[L])][:nf]] = True
+    FX, FD, nf = LAYOUTS[layout]
+    fixed = np.zeros(NE, bool); fixed[FX[L]] = True
+    fd = np.zeros(NE, bool); fd[[e for e in FD[L] if e not in set(FX[L])][:nf]] = True
     nb = S.shape[0]
     serve = np.zeros((nb, NE), bool)
     V = np.where(fixed[None], -np.inf, S).astype(np.float32)
@@ -76,14 +90,14 @@ def replay(S, L, segs, hm=0.5, nf=51):
     return serve
 
 
-def metrics(S, L, base, hms=(0.5,)):
+def metrics(S, L, base, hms=(0.5,), layout="k26"):
     bs, bc = base["bsal"], base["bcnt"]
     out = {}
     for hm in hms:
-        sv = replay(S, L, base["segs"], hm)
+        sv = replay(S, L, base["segs"], hm, layout)
         # churn: new floating per refresh, within chain (chain boundary transitions excluded like T32? T32 includes all)
         ch = (sv[1:] & ~sv[:-1]).sum(1).astype(np.float64)
-        sv[:, FIXED[L]] = True
+        sv[:, LAYOUTS[layout][0][L]] = True
         out[hm] = dict(sal=float((bs * sv).sum() / bs.sum()), cnt=float((bc * sv).sum() / bc.sum()), churn=float(ch.mean()),
                        num=float((bs * sv).sum()), den=float(bs.sum()), chs=float(ch.sum()), chn=len(ch))
     return out
@@ -192,9 +206,9 @@ def dyn_feats(bc, bs, segs, pri):
     return np.stack([F[n] for n in DYN], -1).astype(np.float32)
 
 
-def full_feats(corpus, L, pri):
+def full_feats(corpus, L, pri, chain=None):
     """-> base dict + XA [nb, NE, len(ALLX)]"""
-    b = load_base(corpus, L)
+    b = load_base(corpus, L, chain)
     D = dyn_feats(b["bcnt"], b["bsal"], b["segs"], pri)
     P = np.broadcast_to(pri[None], (D.shape[0], NE, pri.shape[1]))
     b["XA"] = np.concatenate([b.pop("X9"), D, P], -1)

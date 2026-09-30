@@ -23,6 +23,7 @@ NLIB = int(sys.argv[5])
 PROJ = sys.argv[6] if len(sys.argv) > 6 else "pca"
 HL = tuple(int(x) for x in sys.argv[7].split(",")) if len(sys.argv) > 7 else (64, 512)
 BANK = os.environ.get("BANK", "calib")      # calib | self | both : bank used for NON-calib queries (heldout, sm120tf)
+BSTRIDE = int(os.environ.get("BSTRIDE", "1"))   # self-bank: keep every BSTRIDE-th block (bank size cap)
 CAUSAL = os.environ.get("CAUSAL", "0") == "1"
 CORPORA = os.environ.get("CORPORA", "calib-fit,glm52-heldout").split(",")
 OD = f"{A.OUT}/feat/{var}"
@@ -40,6 +41,7 @@ def self_bank(clib, d, Z, both):
     sg = d["sg"]; bs = d["bsal"].astype(np.float64)
     P64 = N.share(N.ema_rate(bs, 64, sg)); F64, F256, ok = N.futures(bs, sg)
     cid = N.chain_id(sg, len(Z))
+    ok = ok & (np.arange(len(Z)) % BSTRIDE == 0)
     K_ = clib.proj(Z[ok]); V_ = torch.from_numpy(np.concatenate([F64, P64, F256], 1)[ok].astype(np.float32))
     kc = torch.from_numpy(cid[ok].astype(np.int64))
     if both:
@@ -73,7 +75,8 @@ def job(L):
             qc = c["wid"]                                # every calib query excludes own chain + doc-sharing windows
         else:
             d = A.load(corpus, L)
-            Z = N.states(d["bsal"].astype(np.float64), d["sg"], HL); qc = None
+            Z = (N.states(d["bsal"].astype(np.float64), d["sg"], HL) if N.ML == [0] else
+                 N.states_ml(corpus, L, d["sg"], HL, d["bsal"])); qc = None
         if corpus != "calib-fit" and BANK in ("self", "both"):
             f64, p64, f256, dist = self_bank(lib, d, Z, BANK == "both")
             os.makedirs(f"{OD}/{corpus}", exist_ok=True)

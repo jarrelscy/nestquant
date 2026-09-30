@@ -20,6 +20,10 @@ BLK = f"{SRC}/private/sm120/blk"
 OUT = "/tmp/nestquant/33-search/scale"
 V2F = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16", "sema32", "sema128", "sal16", "mps128"]
 FIXED, FDEF = T.serve_sets()
+NF = 51
+if os.environ.get("K0") == "1":           # k=0 layout: no fixed experts, 77 floating slots (T32 k0.py FDEF77)
+    FDEF = {L: list(FIXED[L]) + [e for e in FDEF[L] if e not in set(FIXED[L])] for L in FIXED}
+    FIXED = {L: [] for L in FIXED}; NF = 77
 LAYERS = T.LAYERS
 
 
@@ -69,15 +73,8 @@ def ema_raw(M, h, sg):
 def mem_state(bc, bca, nans, segl, sg, stuck=False):
     out = np.empty(bc.shape, np.float32)
     sa = 0.5 ** (1 / 2048)
-    if stuck:
-        a = sa ** G
-        E = lfilter([1.0], [1.0, -a], bc, axis=0) if len(sg) == 1 else None
-        for s, e in sg:
-            Et = lfilter([1.0], [1.0, -a], bc[s:e], axis=0)
-            wt = lfilter([1.0], [1.0, -a], np.full(e - s, float(G)))
-            out[s:e] = Et / np.maximum(wt, 1e-6)[:, None]
-        del E
-        return out
+    if stuck:                                  # serve without token ids: always think (same fp32 recurrence as the streaming class)
+        bca = np.zeros_like(bc); nans = np.zeros(len(bc)); segl = np.zeros(len(bc), np.int8)
     c32, ca = bc.astype(np.float32), bca.astype(np.float32)
     for s, e in sg:
         Et = np.zeros(NE, np.float32); Ea = np.zeros(NE, np.float32); wt = wa = 0.0
@@ -171,9 +168,10 @@ def predict_S(bst, F, L, cols=None, nthr=1, chunk=4096):
     return S
 
 
-def replay(S, L, sg, hm=0.5, cap=None, init=None, nf=51, lag=0):
+def replay(S, L, sg, hm=0.5, cap=None, init=None, nf=None, lag=0):
     """t32lib.sim_layer (lag 0) semantics per chain; cap = decomp swap cap; init: optional [nchain, NE] bool initial
     floating set per chain (else floating_default)."""
+    nf = NF if nf is None else nf
     fx = np.zeros(NE, bool); fx[FIXED[L]] = True
     fd = np.zeros(NE, bool); fd[[e for e in FDEF[L] if e not in set(FIXED[L])][:nf]] = True
     nb = S.shape[0]
@@ -243,3 +241,30 @@ def subset(D, chains):
     out = {k: np.concatenate(v) for k, v in parts.items()}
     out["sg"] = sg; out["names"] = [D["names"][i] for i in chains]
     return out
+
+
+DYN0 = ["e256", "sema256", "ema64", "sema64", "ema512", "sema512", "r_sema128", "r_e256", "sal_share"]
+
+
+def _ema_seg(M, h, sg):
+    a = 0.5 ** (G / h)
+    E = np.empty(M.shape, np.float32)
+    for s, e in sg:
+        E[s:e] = lfilter([1.0], [1.0, -a], M[s:e], axis=0) * ((1 - a) / G)
+    return E
+
+
+def dyn0_feats(D):
+    """T33g glib.dyn_feats restricted to the dyn0 set (no priors) -> [nb, NE, 9] float32 in DYN0 order."""
+    bc, bs, sg = D["bc"], D["bs"], D["sg"]
+    nrm = _ema_seg(bs, 256, sg).sum(1) / np.maximum(_ema_seg(bc, 256, sg).sum(1), 1e-30)
+    nrm = np.where(nrm > 0, nrm, 1.0)[:, None]
+    F = {}
+    F["e256"] = _ema_seg(bc, 256, sg); F["sema256"] = _ema_seg(bs, 256, sg) / nrm
+    F["ema64"] = _ema_seg(bc, 64, sg); F["sema64"] = _ema_seg(bs, 64, sg) / nrm
+    F["ema512"] = _ema_seg(bc, 512, sg); F["sema512"] = _ema_seg(bs, 512, sg) / nrm
+    s128 = _ema_seg(bs, 128, sg)
+    F["r_sema128"] = np.argsort(np.argsort(-s128, 1, kind="stable"), 1).astype(np.float32)
+    F["r_e256"] = np.argsort(np.argsort(-F["e256"], 1, kind="stable"), 1).astype(np.float32)
+    F["sal_share"] = s128 / np.maximum(s128.sum(1, keepdims=True), 1e-30)
+    return np.stack([F[n] for n in DYN0], -1).astype(np.float32)

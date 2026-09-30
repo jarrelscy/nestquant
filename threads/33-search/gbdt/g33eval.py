@@ -17,6 +17,7 @@ models = dict(x.split("=", 1) for x in args if "=" in x)
 V2 = "/tmp/nestquant/32-gbdt-sal/models/v2_sal_tweedie1.5.txt"
 HMS = tuple(float(x) for x in os.environ.get("HMS", "0,0.2,0.3,0.4,0.5,0.7,1.0").split(","))
 PZ = dict(np.load(f"{g.W}/priors.npz"))
+HMS0 = tuple(float(x) for x in os.environ.get("HMS0", "0.4,0.5,0.6,0.7,0.9").split(","))
 CH = 400000   # rows per predict chunk
 
 
@@ -37,8 +38,27 @@ def predict(bst, X, raw=False):
 
 
 def job(L):
-    import lightgbm as lgb
     li = g.T.LAYERS.index(L)
+    if corpus.startswith("sm120"):
+        nch = len(json.load(open(f"{g.T.OUT}/private/sm120/blk/{corpus}/meta.json"))["chains"])
+        acc = None
+        for ci in range(nch):
+            b = g.full_feats(corpus, L, PZ["P_all"][li], chain=ci)
+            if b["bcnt"].shape[0] == 0:
+                continue
+            o, _ = piece(b, L)
+            del b
+            if acc is None:
+                acc = o
+            else:
+                for n in o:
+                    for hm in o[n]:
+                        for k in ("num", "den", "chs", "chn"):
+                            acc[n][hm][k] += o[n][hm][k]
+        for n in acc:
+            for hm, v in acc[n].items():
+                v["sal"] = v["num"] / v["den"]; v["churn"] = v["chs"] / v["chn"]
+        return L, acc
     src = "calib-fit" if corpus == "calib-val" else corpus
     b = g.full_feats(src, L, PZ["P_all"][li])
     if corpus == "calib-val":
@@ -46,6 +66,16 @@ def job(L):
         for k in ("XA", "bcnt", "bsal", "ysal"):
             b[k] = b[k][s0:]
         b["segs"] = [(s - s0, e - s0) for s, e in b["segs"][g.NTRAIN_CH:]]
+    out, S_save = piece(b, L)
+    if S_save is not None:
+        d = f"{g.W}/scores_{corpus}"
+        os.makedirs(d, exist_ok=True)
+        np.save(f"{d}/L{L}.npy", S_save.astype(np.float16))
+    return L, out
+
+
+def piece(b, L):
+    import lightgbm as lgb
     XA = b.pop("XA"); nb = XA.shape[0]
     XA = XA.reshape(nb * g.NE, -1)
     v2b = lgb.Booster(model_file=V2)
@@ -65,13 +95,10 @@ def job(L):
             r = r + v2raw
         S = np.exp(r).reshape(nb, g.NE).astype(np.float32)
         out[n] = g.metrics(S, L, b, hms=HMS)
+        out[n + "@k0"] = g.metrics(S, L, b, hms=HMS0, layout="k0")
         if save == n:
             S_save = S
-    if S_save is not None:
-        d = f"{g.W}/scores_{corpus}"
-        os.makedirs(d, exist_ok=True)
-        np.save(f"{d}/L{L}.npy", S_save.astype(np.float16))
-    return L, out
+    return out, S_save
 
 
 if __name__ == "__main__":
@@ -80,10 +107,12 @@ if __name__ == "__main__":
         res = dict(p.map(job, g.T.LAYERS))
     f = f"{g.W}/eval_{corpus}.json"
     allr = json.load(open(f)) if os.path.exists(f) else {}
-    for n in models:
+    for n in [m + sfx for m in models for sfx in ("", "@k0")]:
         s = g.summarize({L: res[L][n] for L in g.T.LAYERS})
         m278, m32 = g.at_churn(s, 2.78), g.at_churn(s, 3.2)
-        allr[n] = dict(spec=models[n], sweep={str(k): v for k, v in s.items()}, at278=m278, at32=m32,
+        if n.endswith("@k0"):
+            m278 = g.at_churn(s, 3.16)
+        allr[n] = dict(spec=models[n.split("@")[0]], sweep={str(k): v for k, v in s.items()}, at278=m278, at32=m32,
                        per_layer={str(L): res[L][n][0.5]["sal"] for L in g.T.LAYERS})
         print(f"{n:22s} @2.78 {m278:6.2f}  @3.2 {m32:6.2f}  | " +
               "  ".join(f"hm{k:g}:{v['sal']:.2f}/{v['churn']:.2f}" for k, v in s.items()) +

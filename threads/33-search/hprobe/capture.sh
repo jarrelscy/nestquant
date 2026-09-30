@@ -19,6 +19,7 @@ export PYTHONPATH=/tmp/nestquant/18-e2e/pylib
 export NQ_OUT=$P/e2e NQ_CORPUS_DIR=${NQ_CORPUS_DIR:-/tmp/nestquant/18-e2e/corpora} NQ_SHARD=contig NQ_VRAM_GB=${NQ_VRAM_GB:-40}
 if [ "$MODE" = pool ]; then export NQ_HP_POOL=1 NQ_HP_DIR=${HPDIR:-$P/pool}
 else export NQ_HP_PROJ=$PROJ NQ_HP_DIR=${HPDIR:-$P/proj_${CORPORA}}; fi
+[ -n "${TRACE:-}" ] && export NQ_TRACE_DIR=$TRACE
 echo "take GPUs $TAG $(date -u)"
 for r in $(seq 0 $((WORLD - 1))); do
   CUDA_VISIBLE_DEVICES=${GMAP[$r]} RANK=$r WORLD=$WORLD nice -n 5 \

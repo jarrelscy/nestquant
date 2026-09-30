@@ -18,9 +18,12 @@ import torch.nn.functional as Fn
 
 OUT = "/tmp/nestquant/33-search/joint"
 LAYERS = list(range(3, 78))
-NE, NF, NBC = 256, 51, 512
+LAYOUT = os.environ.get("LAYOUT", "k26")
+NE, NBC = 256, 512
+NF = 77 if LAYOUT == "k0" else 51
 TRAIN_CH, VAL_CH = range(0, 28), range(28, 32)
-MANIFEST = "/tmp/nestquant/28-serve-release/out/serving/tp4/manifest.json"
+MANIFEST = ("/tmp/nestquant/32-gbdt-sal/k0_manifest.json" if LAYOUT == "k0" else
+            "/tmp/nestquant/28-serve-release/out/serving/tp4/manifest.json")
 
 
 def sets():
@@ -54,10 +57,11 @@ class Net(nn.Module):
 
     def forward(self, x, lp, li, fxm):
         x = x.float()
-        lpn = lp.masked_fill(fxm, -1e4)
-        kth = lpn.topk(NF + 1, -1).values[..., NF - 1:NF + 1].mean(-1, keepdim=True)     # v2's 51/52 boundary
-        rank = lpn.argsort(-1, descending=True).argsort(-1).float() / NE
-        z = torch.cat([x, (lp - kth).clamp(-8, 8)[..., None], rank[..., None], fxm.float()[..., None]], -1)
+        # layout-agnostic context features (no fixed mask: one model serves k26 and k0): v2 rank + gap to v2's
+        # 77/78 boundary over all 256 experts; 3rd extra column kept (zeros) for checkpoint compatibility
+        kth = lp.topk(78, -1).values[..., 76:78].mean(-1, keepdim=True)
+        rank = lp.argsort(-1, descending=True).argsort(-1).float() / NE
+        z = torch.cat([x, (lp - kth).clamp(-8, 8)[..., None], rank[..., None], torch.zeros_like(lp)[..., None]], -1)
         h = self.inp(z) + self.emb[li] + self.lemb[li]
         if self.arch == "tf":
             h = self.body(h)
@@ -136,9 +140,10 @@ def main():
     ap.add_argument("--tw", type=float, default=1.0); ap.add_argument("--soft", type=float, default=0.0)
     ap.add_argument("--lnet", type=float, default=0.0); ap.add_argument("--T", type=float, default=0.3)
     ap.add_argument("--target", default="y64"); ap.add_argument("--drop", default="", help="comma input idx to zero")
-    ap.add_argument("--noresid", action="store_true")
+    ap.add_argument("--noresid", action="store_true"); ap.add_argument("--noemb", action="store_true")
     ap.add_argument("--score", default="glm52-heldout,calib-fit", help="streams to dump scores for at the end")
-    ap.add_argument("--dev", default="cuda"); ap.add_argument("--maxn", type=int, default=0)
+    ap.add_argument("--budget", type=float, default=0, help="train wall minutes (cosine lr by time)")
+    ap.add_argument("--valmin", type=float, default=5.0); ap.add_argument("--dev", default="cuda"); ap.add_argument("--maxn", type=int, default=0)
     a = ap.parse_args()
     dev = a.dev
     torch.manual_seed(0)
@@ -168,13 +173,14 @@ def main():
     n = Xt.shape[0]
     print(f"{a.name}: train samples {n} K {K} load {time.time() - t0:.0f}s", flush=True)
     net = Net(K, a.arch, a.d, a.nl).to(dev)
+    if a.noemb:                                   # no (layer, expert) identity embedding (transfer rule)
+        net.emb.requires_grad_(False)
     if a.noresid:
         pass
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=a.wd)
     steps = a.epochs * (n // a.bs)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, a.lr, total_steps=steps, pct_start=0.05)
     print(f"params {sum(p.numel() for p in net.parameters())} steps {steps}", flush=True)
-    hms = [0.2, 0.35, 0.5, 0.7, 1.0]
+    hms = [0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 2.5, 4.0, 7.0, 12.0, 25.0]
 
     def prep_x(x):
         if drop:
@@ -209,11 +215,16 @@ def main():
           f"  @2.78 {v278 * 100:.2f} @3.2 {v32 * 100:.2f}", flush=True)
     hist = [dict(epoch=-1, pts=pts, v278=v278, v32=v32)]
     best = (-1, None)
-    step = 0
-    for ep in range(a.epochs):
+    step = 0; ts = time.time(); tv = ts; budget = a.budget * 60 if a.budget else None
+    run = torch.zeros(3, device=dev); cnt = 0; done = False; ep = 0
+    while not done:
         perm = torch.randperm(n, device=dev)
-        run = torch.zeros(3, device=dev); cnt = 0
         for j in range(0, n - a.bs + 1, a.bs):
+            frac = (time.time() - ts) / budget if budget else step / steps
+            if frac >= 1:
+                done = True; break
+            for g in opt.param_groups:
+                g["lr"] = a.lr * min(1.0, (step + 1) / 300) * 0.5 * (1 + np.cos(np.pi * frac))
             idx = perm[j:j + a.bs]
             x, y, li = Xt[idx], Yt[idx].float(), Lt[idx]
             m = (~fx[li]).float()
@@ -223,16 +234,25 @@ def main():
                      listnet(lm, y, m) if a.lnet else lm.new_zeros(())]
             loss = a.tw * parts[0] + a.soft * parts[1] + a.lnet * parts[2]
             opt.zero_grad(set_to_none=True); loss.backward()
-            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0); opt.step(); sched.step(); step += 1
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0); opt.step(); step += 1
             run += torch.stack([p.detach().float() for p in parts]); cnt += 1
-        run = run.cpu().numpy()
+            if time.time() - tv > a.valmin * 60:
+                break
+        else:
+            ep += 1
+        tv = time.time()
+        rr = run.cpu().numpy() / max(cnt, 1); run.zero_(); cnt = 0
         pts, v278, v32 = val()
-        hist.append(dict(epoch=ep, pts=pts, v278=v278, v32=v32, loss=(run / cnt).tolist()))
-        print(f"EP {ep} loss tw {run[0] / cnt:.4f} soft {run[1] / cnt:.4f} lnet {run[2] / cnt:.4f} | val " +
+        hist.append(dict(step=step, epoch=ep, pts=pts, v278=v278, v32=v32, loss=rr.tolist()))
+        print(f"step {step} ep {ep + j / n:.2f} loss tw {rr[0]:.4f} soft {rr[1]:.4f} lnet {rr[2]:.4f} | val " +
               " ".join(f"{c:.2f}/{s * 100:.2f}" for c, s in pts) + f"  @2.78 {v278 * 100:.2f} @3.2 {v32 * 100:.2f}"
               f"  {time.time() - t0:.0f}s", flush=True)
-        if v32 > best[0]:
+        key = v32 if v32 == v32 else -0.5
+        if key > best[0]:
+            v32 = key
             best = (v32, {k: v.detach().clone() for k, v in net.state_dict().items()})
+        if not budget and step >= steps:
+            done = True
     net.load_state_dict(best[1])
     os.makedirs(f"{OUT}/models", exist_ok=True)
     torch.save(dict(state=best[1], args=vars(a), K=K), f"{OUT}/models/{a.name}.pt")
@@ -245,6 +265,15 @@ def main():
             X = torch.from_numpy(np.load(f"{OUT}/feat/{s}/L{L}.npz")["X"]).to(dev)
             P = torch.from_numpy(np.log(np.maximum(np.load(f"{OUT}/scores/v2_{s}/L{L}.npy"), 1e-30)).astype(np.float32)).to(dev)
             np.save(f"{od}/L{L}.npy", score_one(X, P, i, fwd, net))
+    # serve cost: one refresh = 75 layers x 256 experts, batch 75, GPU fwd (bf16 autocast)
+    xs = Xv[:, 0].contiguous(); ps_ = Pv[:, 0].contiguous(); li = torch.arange(len(LAYERS), device=dev)
+    net.eval(); tt = []
+    sync = torch.cuda.synchronize if dev == "cuda" else (lambda: None)
+    with torch.no_grad():
+        for r_ in range(60):
+            sync(); t1 = time.time(); fwd(xs, ps_, li); sync()
+            tt.append(time.time() - t1)
+    print(f"serve fwd 75 layers: {np.median(tt[10:]) * 1e3:.2f} ms ({dev}, {torch.get_num_threads()} thr, batch 75)", flush=True)
     print(f"done best val@3.2 {best[0] * 100:.2f} {time.time() - t0:.0f}s", flush=True)
 
 

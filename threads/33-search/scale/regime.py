@@ -9,7 +9,8 @@ lab = dict(np.load(f"{S.OUT}/private/labels_{stream}.npz"))
 if os.environ.get("SUBCH"):                      # res computed on a chain subset (evalall --chains)
     keep = np.isin(lab["chain"], [int(c) for c in os.environ["SUBCH"].split(",")])
     lab = {k: v[keep] for k, v in lab.items()}
-R = {L: np.load(f"{S.OUT}/private/res/{stream}/{tag}/L{L}.npz") for L in S.LAYERS}
+LAYS = [L for L in S.LAYERS if os.path.exists(f"{S.OUT}/private/res/{stream}/{tag}/L{L}.npz")]
+R = {L: np.load(f"{S.OUT}/private/res/{stream}/{tag}/L{L}.npz") for L in LAYS}
 base = np.ones(len(lab["pos"]), bool) if chs is None else np.isin(lab["chain"], chs)
 rp = lab["rpos"]
 regs = {
@@ -21,7 +22,8 @@ regs = {
   "prose": base & (lab["tcls"] == 0), "code": base & (lab["tcls"] == 1), "math": base & (lab["tcls"] == 2),
 }
 bands = {"L3-6": range(3, 7), "L7-20": range(7, 21), "L21-40": range(21, 41), "L41-60": range(41, 61), "L61-77": range(61, 78)}
-def stat(m, layers=S.LAYERS):
+def stat(m, layers=None):
+    layers = LAYS if layers is None else [L for L in layers if L in R]
     ha, hb, sh, gc = [], [], [], []
     for L in layers:
         a, b = R[L][A][m], R[L][B][m]

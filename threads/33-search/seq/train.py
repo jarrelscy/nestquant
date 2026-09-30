@@ -15,7 +15,7 @@ ap.add_argument("--lw", type=float, default=0.0); ap.add_argument("--ep", type=i
 ap.add_argument("--lr", type=float, default=2e-3); ap.add_argument("--bs", type=int, default=4)
 ap.add_argument("--aux", type=float, default=0.3); ap.add_argument("--ctx", type=int, default=1)
 ap.add_argument("--tau", type=float, default=1.0); ap.add_argument("--full", type=int, default=0)
-ap.add_argument("--noval", type=int, default=0); ap.add_argument("--maxb", type=int, default=0); ap.add_argument("--es", type=int, default=0)
+ap.add_argument("--noval", type=int, default=0); ap.add_argument("--maxb", type=int, default=0); ap.add_argument("--es", type=int, default=0); ap.add_argument("--eemb", type=int, default=1)
 a = ap.parse_args()
 torch.set_num_threads(int(os.environ.get("NT", "20"))); torch.manual_seed(0); np.random.seed(0)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -82,7 +82,8 @@ class TCN(nn.Module):
         if eix is None:
             eix = torch.arange(256, device=x.device)[None].expand(B, -1)
         eid = Lidx[:, None] * 256 + eix
-        emb = torch.cat([s.lemb(Lidx)[:, None].expand(-1, E, -1), s.eemb(eid)], -1)   # [B,E,20]
+        ee = s.eemb(eid) if a.eemb else torch.zeros(B, E, 12, device=x.device)
+        emb = torch.cat([s.lemb(Lidx)[:, None].expand(-1, E, -1), ee], -1)   # [B,E,20]
         h = h + s.emb2h(emb)[:, None]
         if s.ctx is not None:
             w = (~fx).float()[:, None, :, None]
@@ -133,7 +134,7 @@ def infer(model, corpus, cnt, sal, v2):
     """-> scores [75, nb, 256] float32 numpy (exp of next-64 head), chains from lite.segs_of (full causal)."""
     nb = cnt.shape[1]
     sg = lite.segs_of(corpus, nb)
-    out = np.zeros((NL, nb, 256), np.float32)
+    out = np.zeros((NL, nb, 256), np.float16)
     model.eval()
     CH = 4096                                           # time chunk with RF lookback
     for li in range(NL):
@@ -145,12 +146,12 @@ def infer(model, corpus, cnt, sal, v2):
                 x = feats(cnt[li:li + 1, b0:c1], sal[li:li + 1, b0:c1], None if v2 is None else v2[li:li + 1, b0:c1], pos)
                 lv2 = torch.log(v2[li:li + 1, b0:c1].float().clamp_min(0) + 1e-2) if a.resid else None
                 o = model(x, Lidx, FX[Lidx], lv2)[0, c0 - b0:, :, 0]
-                out[li, c0:c1] = torch.exp(o).float().cpu().numpy()
+                out[li, c0:c1] = torch.exp(o).float().clamp(max=6e4).cpu().numpy()
     model.train()
     return out
 
 
-def evaluate(S, corpus, cnt, sal, hms=(0.3, 0.5, 0.7, 1.0), sel=None):
+def evaluate(S, corpus, cnt, sal, hms=(0.3, 0.45, 0.6, 0.8, 1.0), sel=None):
     from multiprocessing import Pool
     bc = cnt.cpu().numpy(); bs = sal.float().cpu().numpy()
     jobs = []
