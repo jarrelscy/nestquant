@@ -23,10 +23,13 @@ sys.path.insert(0, "/home/coder/git/nestquant/streaming")
 from gbdt_predictor import GBDTPredictor, THINK_ID, ETHINK_ID, G  # noqa: E402
 
 OUT = "/tmp/nestquant/32-gbdt-sal"
-TRACE = f"{OUT}/trace"
-CORP = "/tmp/nestquant/18-e2e/corpora"
+# env overrides for new corpora (e.g. T33l fp8dec): T32_TRACE = capture trace dir, NQ_CORPUS_DIR = token-id corpus dir
+# (same variable the T18 harness reads), T32_CHAIN = windows per chain (predictor-state reset; set it to the windows
+# per task so a chain is one task).
+TRACE = os.environ.get("T32_TRACE", f"{OUT}/trace")
+CORP = os.environ.get("NQ_CORPUS_DIR", "/tmp/nestquant/18-e2e/corpora")
 MANIFEST = "/tmp/nestquant/28-serve-release/out/serving/tp4/manifest.json"
-SEQ, CHAIN, H, NE = 2048, 4, 64, 256
+SEQ, CHAIN, H, NE = 2048, int(os.environ.get("T32_CHAIN", "4")), 64, 256
 LAYERS = list(range(3, 78))
 
 

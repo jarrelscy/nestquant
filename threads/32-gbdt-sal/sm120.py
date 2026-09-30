@@ -538,7 +538,7 @@ def report(stream):
 
 
 # ------------------------------------------------------------------------------------------------ (b) recapture
-TFC = f"{PD}/../corpora/sm120tf.map.npz"
+TFC = f"{T.OUT}/private/corpora/sm120tf.map.npz"
 TFT = f"{PD}/../trace_sm120"
 
 
