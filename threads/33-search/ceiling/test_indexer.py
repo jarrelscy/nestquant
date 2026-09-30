@@ -125,3 +125,15 @@ for t in range(2048, T, 7):
 print(f"T={T} L{LF} full : rel|mine-HF| pos<2048 {rel(my0, hf0, lo):.2e}  pos>=2048 {rel(my0, hf0, hi):.2e}  "
       f"| dense-vs-HF pos>=2048 {rel(dn0, hf0, hi):.2e}  | top-2048 set agreement {np.mean(agree):.5f} (min {np.min(agree):.4f})")
 print(f"T={T} L{LF + 1} shared: rel|mine-HF| pos<2048 {rel(my1, hf1, lo):.2e}  pos>=2048 {rel(my1, hf1, hi):.2e}")
+# attribution: my attention over HF's own top-2048 sets (pos >= 2048), and error split by exact-set rows
+q, c, kr, *_ = M.qkv(0, LF, hn, pos)
+C = torch.cat([c, kr], -1)
+hs = slice(2048, T)
+pk = tk_hf[0, 2048:].long()
+ol = Dm.attend(q[hs], C, pk, torch.ones_like(pk, dtype=torch.bool), M.scale)
+myh = M.attn_out(0, LF, ol)
+print(f"L{LF} mine-with-HF-sets vs HF pos>=2048: {float((myh.float() - hf0[hs].float()).norm() / hf0[hs].float().norm()):.2e}")
+ex = torch.tensor([set(tk_hf[0, t].tolist()) == set(tks[0][t][tks[1][t]].tolist()) for t in range(2048, T)])
+e = ((my0[hs].float() - hf0[hs].float()).norm(dim=-1) / hf0[hs].float().norm(dim=-1))
+print(f"rows exact-set {int(ex.sum())}/{len(ex)}: median row rel err exact {float(e[ex].median()) if ex.any() else float('nan'):.2e} "
+      f"non-exact {float(e[~ex].median()) if (~ex).any() else float('nan'):.2e}; max row err {float(e.max()):.2e}")

@@ -144,7 +144,15 @@ def main():
     ap.add_argument("--score", default="glm52-heldout,calib-fit", help="streams to dump scores for at the end")
     ap.add_argument("--budget", type=float, default=0, help="train wall minutes (cosine lr by time)")
     ap.add_argument("--valmin", type=float, default=5.0); ap.add_argument("--dev", default="cuda"); ap.add_argument("--maxn", type=int, default=0)
+    ap.add_argument("--tfadd", default="", help="sm120tf task names added to training (feat/sm120tf_s{tfsub})")
+    ap.add_argument("--tfsub", type=int, default=10)
+    ap.add_argument("--scoretf", default="", help="sm120tf task names to score at the end (from tmp_tfX)")
     a = ap.parse_args()
+    tmeta = json.load(open("/tmp/nestquant/32-gbdt-sal/private/sm120/blk/sm120tf/meta.json"))
+    TSK = [(n, s0, e0) for n, s0, e0 in zip(tmeta["chains"], tmeta["bstart"][:-1], tmeta["bstart"][1:]) if e0 > s0]
+    TNAMES = [t[0] for t in TSK]
+    tfadd = [TNAMES.index(t) for t in a.tfadd.split(",") if t]
+    assert not tfadd or a.target == "y64"
     dev = a.dev
     torch.manual_seed(0)
     fx_np, fd_np = sets()
@@ -162,6 +170,12 @@ def main():
         va = np.isin(ch, VAL_CH)
         Xv.append(torch.from_numpy(X[va])); Pt.append(torch.from_numpy(P[tr]).to(dev)); Pv.append(torch.from_numpy(P[va]))
         Bv.append(torch.from_numpy(np.load(f"{OUT}/blk/calib-fit/L{L}.npz")["bsal"][va]))
+        if tfadd:
+            zt = np.load(f"{OUT}/feat/sm120tf_s{a.tfsub}/L{L}.npz")
+            m = np.isin(zt["task"], tfadd)
+            Xt.append(torch.from_numpy(zt["X"][m]).to(dev)); Yt.append(torch.from_numpy(zt["y64"][m]).to(dev))
+            Pt.append(torch.from_numpy(np.log(np.maximum(zt["P"][m], 1e-30)).astype(np.float32)).to(dev))
+            Lt.append(torch.full((int(m.sum()),), i, dtype=torch.int16))
     Xt = torch.cat(Xt).to(dev); Yt = torch.cat(Yt).to(dev); Lt = torch.cat(Lt).to(dev).long()
     Pt = torch.cat(Pt).to(dev); Pv = torch.stack(Pv).to(dev)
     Xv = torch.stack(Xv).to(dev); Bv = torch.stack(Bv).to(dev).float()          # [NL, nbv, NE]
@@ -265,6 +279,17 @@ def main():
             X = torch.from_numpy(np.load(f"{OUT}/feat/{s}/L{L}.npz")["X"]).to(dev)
             P = torch.from_numpy(np.log(np.maximum(np.load(f"{OUT}/scores/v2_{s}/L{L}.npy"), 1e-30)).astype(np.float32)).to(dev)
             np.save(f"{od}/L{L}.npy", score_one(X, P, i, fwd, net))
+    if a.scoretf:
+        od = f"{OUT}/scores/{a.name}_sm120tf"; os.makedirs(od, exist_ok=True)
+        rng = [TSK[TNAMES.index(t)][1:] for t in a.scoretf.split(",")]
+        for i, L in enumerate(LAYERS):
+            z = np.load(f"{OUT}/tmp_tfX/L{L}.npz")
+            idx = np.concatenate([np.arange(s0, e0) for s0, e0 in rng])
+            X = torch.from_numpy(z["X"][idx]).to(dev)
+            P = torch.from_numpy(np.log(np.maximum(z["P"][idx], 1e-30)).astype(np.float32)).to(dev)
+            S = np.zeros((z["P"].shape[0], NE), np.float32); S[idx] = score_one(X, P, i, fwd, net)
+            np.save(f"{od}/L{L}.npy", S)
+        print(f"scored sm120tf {a.scoretf} {time.time() - t0:.0f}s", flush=True)
     # serve cost: one refresh = 75 layers x 256 experts, batch 75, GPU fwd (bf16 autocast)
     xs = Xv[:, 0].contiguous(); ps_ = Pv[:, 0].contiguous(); li = torch.arange(len(LAYERS), device=dev)
     net.eval(); tt = []

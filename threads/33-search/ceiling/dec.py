@@ -9,7 +9,8 @@ vs gen.py (T33l ceiling, <=2048 exact indexer skip):
     attention = MLA absorbed form over the gathered top-k latent rows (== dense causal when len <= 2048);
   * flat (unpadded) per-device latent + indexer-key caches, variable prompt lengths, LPT device balancing;
   * prefill layer-major over all prompts (query chunks, token-chunked MoE, experts fetched once per layer);
-  * expert streaming: --stream reg = cudaHostRegister(Portable|ReadOnly) of the mmap'd safetensors files
+  * expert streaming: --stream page (default) = pageable mmap -> H2D per device (sbench: 21 GB/s, bitwise OK);
+    --stream reg = cudaHostRegister(Portable|ReadOnly) of the mmap'd safetensors files
     (refcounted, unregistered after the layer's copies complete; GPU DMAs straight from the page cache) or
     --stream pread (gen.py path, --threads readers); one host sync per layer for the expert counts;
   * decode: temperature 1.0 / top_p 0.95 (generation_config), seeded per device; natural stop on any stop id
@@ -120,8 +121,17 @@ class DModel(G.Model):
         super().__init__(a, devs)
         cfg = self.cfg
         self.full = [t == "full" for t in cfg.indexer_types[: self.nl]]
+        self.mtp = None
+        if getattr(a, "mtp", False):                 # MTP layer 78 (draft for speculative decoding)
+            self.mtp = cfg.num_hidden_layers
+            for g, d in enumerate(devs):
+                self.bb[g].append(self._load_bb(self.mtp, d))
+            self.sparse = self.sparse + [True]
+            self.full = self.full + [True]            # own indexer (keys over the MTP cache)
+            self.cycle.append(self.mtp)
+        self.nlc = self.nl + (1 if self.mtp is not None else 0)     # cache layers
         self.fidx = {}
-        for li in range(self.nl):
+        for li in range(self.nlc):
             if self.full[li]:
                 self.fidx[li] = len(self.fidx)
         self.nfull = len(self.fidx)
@@ -196,9 +206,47 @@ class DModel(G.Model):
                 out[e][k] = tuple(out[e][k])
         return out
 
+    _mm = {}
+    _mml = threading.Lock()
+
+    def _mmap(self, f):
+        with self._mml:
+            if f not in self._mm:
+                fd = os.open(f, os.O_RDONLY)
+                self._mm[f] = mmap.mmap(fd, 0, prot=mmap.PROT_READ)
+                os.close(fd)
+            return self._mm[f]
+
+    def _load_page(self, li, g):
+        """pageable mmap (page cache) -> H2D via driver staging, one loader thread per device (sbench mode P:
+        21 GB/s aggregate, bitwise == pread; no pinned host memory, no registration)."""
+        d = self.devs[g]
+        ns = self._exp_names(li, g)
+        metas = [self.idx.map[n] for *_, n in ns]
+        offs, o = [], 0
+        for m in metas:
+            offs.append(o); o += (m[4] + 255) // 256 * 256
+        s = self.ls[g]
+        with torch.cuda.stream(s):
+            buf = torch.empty(o, dtype=torch.uint8, device=d)
+            for (f, dt, shape, off, nb), bo in zip(metas, offs):
+                host = torch.from_numpy(np.frombuffer(self._mmap(f), dtype=np.uint8, count=nb, offset=off))
+                buf[bo:bo + nb].copy_(host)
+        s.synchronize()
+        out = {}
+        for (e, k, sfx, n), (f, dt, shape, off, nb), bo in zip(ns, metas, offs):
+            t = buf[bo:bo + nb].view(nq_io.DT[dt]).view(shape)
+            out.setdefault(e, {"__buf__": buf}).setdefault(k, [None, None])[0 if sfx == ".weight" else 1] = t
+        for e in out:
+            for k in ("gate_proj", "up_proj", "down_proj"):
+                out[e][k] = tuple(out[e][k])
+        return out
+
     def _load_layer_split(self, li, g, parts=4):
         if self.stream_mode == "reg":
             return [self.lp.submit(self._load_reg, li, g)]
+        if self.stream_mode == "page":
+            return [self.lp.submit(self._load_page, li, g)]
         return super()._load_layer_split(li, g, parts=max(1, self.pool._max_workers // self.D))
 
     def experts(self, li):
@@ -351,7 +399,7 @@ def main():
     ap.add_argument("--n-dec", type=int, default=2048)
     ap.add_argument("--n-layers", type=int, default=78)
     ap.add_argument("--devices", default=",".join(f"cuda:{i}" for i in range(8)))
-    ap.add_argument("--stream", choices=["reg", "pread"], default="reg")
+    ap.add_argument("--stream", choices=["page", "reg", "pread"], default="page")
     ap.add_argument("--threads", type=int, default=16)
     ap.add_argument("--depth", type=int, default=2)
     ap.add_argument("--resident-layers", type=int, default=-1)
@@ -366,6 +414,8 @@ def main():
     ap.add_argument("--seed", type=int, default=53)
     ap.add_argument("--min-tokens", type=int, default=0,
                     help="ban stop ids for the first N decode tokens (default 0 = natural stop)")
+    ap.add_argument("--mtp", action="store_true", help="speculative decoding with the MTP layer (exact: "
+                    "speculative sampling against the top-p target distribution)")
     ap.add_argument("--temp", type=float, default=1.0)
     ap.add_argument("--top-p", type=float, default=0.95)
     a = ap.parse_args()
@@ -382,7 +432,8 @@ def main():
     ndec = 0 if a.mode == "tf" else a.n_dec
     seqs = [list(t["prompt"]) + (list(t["tf"]) if a.mode == "tf" else []) for t in TK]
     P = [len(s) for s in seqs]
-    cap = [p + ndec for p in P]
+    cap = [p + ndec + (2 if a.mtp else 0) for p in P]
+    assert not (a.mtp and a.mode != "gen")
     # LPT balance of cache tokens over devices
     order = sorted(range(len(TK)), key=lambda i: -cap[i])
     load = [0] * D
@@ -405,7 +456,7 @@ def main():
         N = int(off[-1])
         s = dict(pl=pl, Ps=Ps, off=off, N=N,
                  off_t=torch.tensor(off[:-1], device=d), P_t=torch.tensor(Ps, device=d),
-                 C=torch.zeros(M.nl, N, 576, dtype=torch.bfloat16, device=d),
+                 C=torch.zeros(M.nlc, N, 576, dtype=torch.bfloat16, device=d),
                  KI=torch.zeros(M.nfull, N, M.ID, dtype=torch.bfloat16, device=d),
                  tok=torch.zeros(N, dtype=torch.long, device=d),
                  rid=torch.zeros(nsp, N, 8, dtype=torch.uint8, device=d),
@@ -415,23 +466,30 @@ def main():
                  gen=torch.Generator(device=d).manual_seed(a.seed * 1000 + g), step=0,
                  done=torch.zeros(len(pl), dtype=torch.bool, device=d),
                  dlen=torch.full((len(pl),), ndec, dtype=torch.long, device=d))
+        if a.mtp:
+            s.update(cur=torch.zeros(len(pl), dtype=torch.long, device=d),        # decode index of the next unfed token
+                     draft=torch.zeros(len(pl), dtype=torch.long, device=d),
+                     q=torch.zeros(len(pl), cfg.vocab_size, dtype=torch.float32, device=d),
+                     nacc=torch.zeros((), dtype=torch.long, device=d), nprop=torch.zeros((), dtype=torch.long, device=d))
         for j, i in enumerate(pl):
             s["tok"][off[j]:off[j] + P[i]] = torch.tensor(seqs[i], dtype=torch.long)
             if a.mode == "force":
                 s["tok"][off[j] + P[i]:off[j] + P[i] + ndec] = torch.tensor(TK[i]["tf"], dtype=torch.long)
         st.append(s)
-    kv_gb = max(s["N"] for s in st) * (M.nl * 576 * 2 + M.nfull * M.ID * 2 + nsp * 44 + 12) / 2**30
+    kv_gb = max(s["N"] for s in st) * (M.nlc * 576 * 2 + M.nfull * M.ID * 2 + nsp * 44 + 12) / 2**30
     mem = [torch.cuda.mem_get_info(d) for d in devs]
     per_layer = 32 * 3 * (2048 * 6144) * (8 / D) / 2**30 * 1.02
     free = min(m[0] for m in mem) / 2**30
     nres = a.resident_layers if a.resident_layers >= 0 else max(0, int((free - a.reserve_gb - (a.depth + 1) * per_layer) / per_layer))
     log(f"state {kv_gb:.1f} GB/device (allocated); free GB {[round(m[0] / 2**30, 1) for m in mem]}; resident {nres}")
     ck = f"{a.out}/ckpt"
+    CKK = ("C", "KI", "tok", "rid", "rw", "rxn", "ent", "done", "dlen") + (("cur", "draft", "q", "nacc", "nprop") if a.mtp else ())
+    assert not (a.mtp and a.min_tokens), "--min-tokens is not supported with --mtp"
     if a.resume and os.path.exists(f"{ck}/meta.json"):
         meta = json.load(open(f"{ck}/meta.json"))
         assert meta["per"] == per, "task assignment changed"
         for g, s in enumerate(st):
-            for k in ("C", "KI", "tok", "rid", "rw", "rxn", "ent", "done", "dlen"):
+            for k in CKK:
                 for li in range(s[k].shape[0]) if s[k].dim() == 3 else [None]:
                     fn = f"{ck}/g{g}_{k}{'' if li is None else f'_{li}'}.npy"
                     x = torch.from_numpy(np.load(fn)).to(devs[g])
@@ -467,6 +525,81 @@ def main():
         s["done"][js] |= hit
 
     # ---------------------------------------------------------------------------------------- prefill
+    def prefill_layer(li, hs, pos, fpos, seg, wv, tks):
+        """attention of layer li over the wave (keys of every prompt token first, then query chunks, in place on hs);
+        dense MLP in place; returns the MoE inputs (sparse layers) or None.  tks[g] = the full layer's selection."""
+        xs = []
+        for g, s in enumerate(st):
+            b = M.bb[g][li]
+            T_ = hs[g].shape[0]
+            if T_ == 0:
+                xs.append(hs[g]); continue
+            for c0 in range(0, T_, 8192):                 # keys of every prompt token first
+                hn = rms(hs[g][c0:c0 + 8192], b["input_layernorm.weight"], M.eps)
+                _, c, kr, _, cos, sin = M.qkv(g, li, hn, pos[g][c0:c0 + 8192])
+                fr = fpos[g][c0:c0 + 8192]
+                s["C"][li, fr, :512] = c; s["C"][li, fr, 512:] = kr
+                if M.full[li]:
+                    s["KI"][M.fidx[li], fr] = M.idx_k(g, li, hn, cos, sin)
+                del hn, c, kr
+            if M.full[li]:
+                tks[g] = (torch.zeros(T_, TOPK, dtype=torch.int32, device=devs[g]),
+                          torch.zeros(T_, TOPK, dtype=torch.bool, device=devs[g]))
+            for jj, j in enumerate(wv[g]):
+                p = s["Ps"][j]; o0 = int(s["off"][j]); r0 = int(seg[g][jj])
+                for q0 in range(0, p, a.qchunk):
+                    q1 = min(p, q0 + a.qchunk)
+                    rr = slice(r0 + q0, r0 + q1)
+                    hn = rms(hs[g][rr], b["input_layernorm.weight"], M.eps)
+                    q, _, _, qres, cos, sin = M.qkv(g, li, hn, pos[g][rr])
+                    L = q1                                # keys 0..q1-1 cover every causal key of the chunk
+                    ar = torch.arange(L, device=q.device)
+                    valid = ar[None, :] <= torch.arange(q0, q1, device=q.device)[:, None]
+                    if L <= TOPK:                          # every causal key selected (full and shared layers)
+                        pk, ok = ar[None, :].expand(q1 - q0, L), valid
+                        if M.full[li]:
+                            tks[g][0][rr, :L] = ar.to(torch.int32)[None]; tks[g][1][rr, :L] = valid
+                    elif M.full[li]:
+                        qi, wi = M.idx_q(g, li, hn, qres, cos, sin)
+                        pk, ok = sel_topk_seq(qi, wi, s["KI"][M.fidx[li], o0:o0 + L], valid)
+                        tks[g][0][rr] = pk.to(torch.int32); tks[g][1][rr] = ok
+                        del qi, wi
+                    else:
+                        pk, ok = tks[g][0][rr].long(), tks[g][1][rr]
+                    ol = attend(q, s["C"][li], o0 + pk, ok, M.scale)
+                    hs[g][rr] += M.attn_out(g, li, ol)         # rows already consumed (keys cached above)
+                    del q, qres, hn, ol
+            x = rms(hs[g], b["post_attention_layernorm.weight"], M.eps)
+            if M.sparse[li]:
+                xs.append(x)
+            else:
+                for c0 in range(0, T_, 16384):
+                    hs[g][c0:c0 + 16384] += M.dense(g, li, x[c0:c0 + 16384])
+                del x
+        return xs if M.sparse[li] else None
+
+    def norec(g, i, w, xn):
+        pass
+
+    def mtp_in(g, h, nxt):
+        """MTP input: eh_proj([enorm(emb(next token)), hnorm(main final hidden)])."""
+        b = M.bb[g][M.mtp]
+        e = rms(F.embedding(nxt, M.glob[g]["emb"]).to(torch.bfloat16), b["enorm.weight"], M.eps)
+        return M.L(torch.cat([e, rms(h, b["hnorm.weight"], M.eps)], -1), g, M.mtp, "eh_proj")
+
+    def mtp_logits(g, h):
+        x = rms(h, M.bb[g][M.mtp]["shared_head.norm.weight"], M.eps)
+        return x.float() @ M.glob[g]["head"].T
+
+    def topp(lg):
+        """[n,V] logits -> top-p filtered probs [n,V] fp32 (== sample_top_p's distribution)."""
+        pr = torch.softmax(lg.float() / a.temp, -1)
+        sp, si = torch.sort(pr, -1, descending=True)
+        drop = (sp.cumsum(-1) - sp) > a.top_p
+        sp = sp.masked_fill(drop, 0)
+        sp = sp / sp.sum(-1, keepdim=True)
+        return torch.zeros_like(pr).scatter_(1, si, sp)
+
     def prefill_wave(wv):
         """wv[g] = list of local seq indices on device g for this wave (layer-major over the wave)."""
         t0 = time.time()
@@ -483,54 +616,7 @@ def main():
         tks = [None] * D
         for li in range(M.nl):
             M.clear_dq()
-            xs = []
-            for g, s in enumerate(st):
-                b = M.bb[g][li]
-                T_ = hs[g].shape[0]
-                if T_ == 0:
-                    xs.append(hs[g]); continue
-                for c0 in range(0, T_, 8192):                 # keys of every prompt token first
-                    hn = rms(hs[g][c0:c0 + 8192], b["input_layernorm.weight"], M.eps)
-                    _, c, kr, _, cos, sin = M.qkv(g, li, hn, pos[g][c0:c0 + 8192])
-                    fr = fpos[g][c0:c0 + 8192]
-                    s["C"][li, fr, :512] = c; s["C"][li, fr, 512:] = kr
-                    if M.full[li]:
-                        s["KI"][M.fidx[li], fr] = M.idx_k(g, li, hn, cos, sin)
-                    del hn, c, kr
-                if M.full[li]:
-                    tks[g] = (torch.zeros(T_, TOPK, dtype=torch.int32, device=devs[g]),
-                              torch.zeros(T_, TOPK, dtype=torch.bool, device=devs[g]))
-                for jj, j in enumerate(wv[g]):
-                    p = s["Ps"][j]; o0 = int(s["off"][j]); r0 = int(seg[g][jj])
-                    for q0 in range(0, p, a.qchunk):
-                        q1 = min(p, q0 + a.qchunk)
-                        rr = slice(r0 + q0, r0 + q1)
-                        hn = rms(hs[g][rr], b["input_layernorm.weight"], M.eps)
-                        q, _, _, qres, cos, sin = M.qkv(g, li, hn, pos[g][rr])
-                        L = q1                                # keys 0..q1-1 cover every causal key of the chunk
-                        ar = torch.arange(L, device=q.device)
-                        valid = ar[None, :] <= torch.arange(q0, q1, device=q.device)[:, None]
-                        if L <= TOPK:                          # every causal key selected (full and shared layers)
-                            pk, ok = ar[None, :].expand(q1 - q0, L), valid
-                            if M.full[li]:
-                                tks[g][0][rr, :L] = ar.to(torch.int32)[None]; tks[g][1][rr, :L] = valid
-                        elif M.full[li]:
-                            qi, wi = M.idx_q(g, li, hn, qres, cos, sin)
-                            pk, ok = sel_topk_seq(qi, wi, s["KI"][M.fidx[li], o0:o0 + L], valid)
-                            tks[g][0][rr] = pk.to(torch.int32); tks[g][1][rr] = ok
-                            del qi, wi
-                        else:
-                            pk, ok = tks[g][0][rr].long(), tks[g][1][rr]
-                        ol = attend(q, s["C"][li], o0 + pk, ok, M.scale)
-                        hs[g][rr] += M.attn_out(g, li, ol)         # rows already consumed (keys cached above)
-                        del q, qres, hn, ol
-                x = rms(hs[g], b["post_attention_layernorm.weight"], M.eps)
-                if M.sparse[li]:
-                    xs.append(x)
-                else:
-                    for c0 in range(0, T_, 16384):
-                        hs[g][c0:c0 + 16384] += M.dense(g, li, x[c0:c0 + 16384])
-                    del x
+            xs = prefill_layer(li, hs, pos, fpos, seg, wv, tks)
             if M.sparse[li]:
                 outs = M.moe_chunked(li, xs, rec_into(spi[li], fpos))
                 for g in range(D):
@@ -554,6 +640,24 @@ def main():
                 js = torch.tensor(wv[g], device=devs[g])
                 s["tok"][s["off_t"][js] + s["P_t"][js]] = nt
                 mark_stop(g, nt, 0, js)
+        if a.mtp and ndec:                          # MTP prefill: position j <- (h_j, x_{j+1}), j = 0..P-1
+            hm = [mtp_in(g, hs[g], s["tok"][fpos[g] + 1]) if hs[g].shape[0] else hs[g] for g, s in enumerate(st)]
+            del hs
+            tkm = [None] * D
+            xs = prefill_layer(M.mtp, hm, pos, fpos, seg, wv, tkm)
+            outs = M.moe_chunked(M.mtp, xs, norec)
+            for g, s in enumerate(st):
+                if not wv[g]:
+                    continue
+                hm[g] += outs[g]
+                last = torch.tensor(seg[g][1:] - 1, device=devs[g])
+                js = torch.tensor(wv[g], device=devs[g])
+                q = topp(mtp_logits(g, hm[g][last]))
+                s["q"][js] = q
+                s["draft"][js] = torch.multinomial(q, 1, generator=s["gen"])[:, 0]
+            del outs, xs, hm
+            M.clear_dq()
+            log(f"prefill MTP layer {time.time() - t0:.0f}s")
         log(f"prefill wave done {time.time() - t0:.0f}s")
 
     def prefill():
@@ -634,6 +738,120 @@ def main():
         log(f"step {t} {time.time() - t0:.1f}s done {nd}/{len(TK)} (expert wait {M.t_wait - w0:.1f}s, "
             f"reg live {M.reg.live_gb() if M.reg else 0:.0f} GB, reg time {M.reg.t_reg if M.reg else 0:.0f}s)")
 
+    def dec_layer(li, hs, pos, fpos, offr, Lh, sel):
+        """one decode layer over rows (hs[g] [R,6144]; pos/fpos/offr [R]; Lh[g] = host max(pos)+1): attention (+ dense
+        MLP) in place; returns the MoE inputs for sparse layers. sel[g] = the current full layer's selection."""
+        xs = []
+        for g, s in enumerate(st):
+            b = M.bb[g][li]
+            hn = rms(hs[g], b["input_layernorm.weight"], M.eps)
+            q, c, kr, qres, cos, sin = M.qkv(g, li, hn, pos[g])
+            s["C"][li, fpos[g], :512] = c; s["C"][li, fpos[g], 512:] = kr
+            L = Lh[g]
+            ar = torch.arange(L, device=q.device)
+            valid = ar[None, :] <= pos[g][:, None]
+            if M.full[li]:
+                s["KI"][M.fidx[li], fpos[g]] = M.idx_k(g, li, hn, cos, sin)
+                if L <= TOPK:
+                    sel[g] = (ar[None, :].expand(len(pos[g]), L), valid)
+                else:
+                    gidx = (offr[g][:, None] + ar[None, :]).clamp_max(s["N"] - 1)
+                    qi, wi = M.idx_q(g, li, hn, qres, cos, sin)
+                    sel[g] = sel_topk(qi, wi, s["KI"][M.fidx[li]], gidx, valid)
+            pk, ok = sel[g]
+            fi = (offr[g][:, None] + pk).clamp_max(s["N"] - 1)
+            ol = attend(q, s["C"][li], fi, ok, M.scale)
+            hs[g] = hs[g] + M.attn_out(g, li, ol)
+            x = rms(hs[g], b["post_attention_layernorm.weight"], M.eps)
+            if M.sparse[li]:
+                xs.append(x)
+            else:
+                hs[g] = hs[g] + M.dense(g, li, x)
+        return xs
+
+    def step_spec(t):
+        """one speculative step per live chain: main model on [x_n, draft] at positions n, n+1 (exact speculative
+        sampling vs the top-p target), then the MTP layer on the accepted positions -> next draft."""
+        t0 = time.time(); w0 = M.t_wait
+        hs, pos, fpos, offr, Lh = [], [], [], [], []
+        for g, s in enumerate(st):
+            p0 = s["P_t"] + s["cur"]
+            ps = torch.stack([p0, p0 + 1], 1).reshape(-1)
+            orr = s["off_t"].repeat_interleave(2)
+            toks = torch.stack([s["tok"][s["off_t"] + p0], s["draft"]], 1).reshape(-1)
+            pos.append(ps); offr.append(orr); fpos.append(orr + ps)
+            hs.append(F.embedding(toks, M.glob[g]["emb"]).to(torch.bfloat16))
+            Lh.append(int(ps.max()) + 1)
+        sel = [None] * D
+        for li in range(M.nl):
+            M.clear_dq()
+            xs = dec_layer(li, hs, pos, fpos, offr, Lh, sel)
+            if M.sparse[li]:
+                outs = M.moe_chunked(li, xs, rec_into(spi[li], fpos))
+                for g in range(D):
+                    hs[g] = hs[g] + outs[g]
+                del outs, xs
+        M.clear_dq()
+        xnext, last = [], []
+        for g, s in enumerate(st):
+            n = len(s["Ps"])
+            lg = M.logits(g, hs[g])
+            lp = torch.log_softmax(lg.float(), -1)
+            s["ent"][fpos[g]] = -(lp.exp() * lp).sum(-1)
+            del lp
+            pt = topp(lg); del lg
+            p0d, p1d = pt[0::2], pt[1::2]
+            d, qd = s["draft"], s["q"]
+            ratio = p0d.gather(1, d[:, None])[:, 0] / qd.gather(1, d[:, None])[:, 0].clamp_min(1e-30)
+            u = torch.rand(n, generator=s["gen"], device=devs[g])
+            acc = u < ratio
+            res = (p0d - qd).clamp_min(0)
+            rs = res.sum(-1, keepdim=True)
+            res = torch.where(rs > 0, res / rs.clamp_min(1e-30), p0d)
+            x1 = torch.where(acc, d, torch.multinomial(res, 1, generator=s["gen"])[:, 0])
+            x2 = torch.multinomial(p1d, 1, generator=s["gen"])[:, 0]
+            del pt, p0d, p1d, res
+            live = ~s["done"]
+            cur = s["cur"]
+            p0 = s["P_t"] + cur
+            e_ = eos.to(x1.device)
+            st1 = torch.isin(x1, e_)
+            two = acc & ~st1
+            st2 = two & torch.isin(x2, e_)
+            w1 = live
+            w2 = live & two
+            s["tok"][(s["off_t"] + p0 + 1)[w1]] = x1[w1]
+            s["tok"][(s["off_t"] + p0 + 2)[w2]] = x2[w2]
+            ncur = cur + 1 + two.long()
+            dl = torch.where(st1, cur + 1, torch.where(st2, cur + 2, torch.full_like(cur, ndec))).clamp_max(ndec)
+            fin = live & (st1 | st2 | (ncur >= ndec))
+            s["dlen"] = torch.where(fin, dl, s["dlen"])
+            s["done"] = s["done"] | fin
+            # finished chains park at cur = dlen: their later (ignored) rows write only non-real positions >= P+dlen
+            s["cur"] = torch.where(fin, dl, torch.where(live, ncur, cur))
+            s["nprop"] += live.sum(); s["nacc"] += (live & acc).sum()
+            xnext.append(torch.stack([x1, x2], 1).reshape(-1))
+            last.append(torch.arange(n, device=devs[g]) * 2 + two.long())
+            s["step"] = t + 1
+        # MTP: position j <- (h_j, x_{j+1}) for the two rows; next draft from the last accepted row
+        hm = [mtp_in(g, hs[g], xnext[g]) for g in range(D)]
+        del hs
+        xs = dec_layer(M.mtp, hm, pos, fpos, offr, Lh, [None] * D)
+        outs = M.moe_chunked(M.mtp, xs, norec)
+        for g, s in enumerate(st):
+            h = (hm[g] + outs[g])[last[g]]
+            q = topp(mtp_logits(g, h))
+            s["q"] = q
+            s["draft"] = torch.multinomial(q, 1, generator=s["gen"])[:, 0]
+        del outs, xs, hm
+        M.clear_dq()
+        nd = sum(int(s["done"].sum()) for s in st)
+        na = sum(int(s["nacc"]) for s in st); npp = sum(int(s["nprop"]) for s in st)
+        adv = sum(int(s["cur"].sum()) for s in st)
+        log(f"spec step {t} {time.time() - t0:.1f}s done {nd}/{len(TK)} accept {na / max(npp, 1):.3f} "
+            f"decode tokens {adv} (expert wait {M.t_wait - w0:.1f}s, "
+            f"reg live {M.reg.live_gb() if M.reg else 0:.0f} GB, reg time {M.reg.t_reg if M.reg else 0:.0f}s)")
+
     def save(final):
         os.makedirs(ck, exist_ok=True)
         if final:
@@ -665,7 +883,7 @@ def main():
             log(f"final -> {a.out}")
             return
         for g, s in enumerate(st):
-            for k in ("C", "KI", "tok", "rid", "rw", "rxn", "ent", "done", "dlen"):
+            for k in CKK:
                 if s[k].dim() == 3:
                     for li in range(s[k].shape[0]):
                         x = s[k][li].cpu()
@@ -683,7 +901,10 @@ def main():
     t_step = time.time()
     nsteps = ndec                           # step t processes decode token t (token 0 from the prefill logits)
     while t < nsteps:
-        step(t)
+        if a.mtp:
+            step_spec(t)
+        else:
+            step(t)
         t += 1
         el = (time.time() - G.T0) / 60
         last = (time.time() - t_step) / 60
@@ -699,6 +920,9 @@ def main():
             if M.reg:
                 M.reg.close_all()
             os._exit(3)
+    if a.max_steps and a.mode == "gen":      # bench stop: real decode length = tokens actually fed
+        for s in st:
+            s["dlen"] = torch.minimum(s["dlen"], s["cur"] if a.mtp else torch.full_like(s["dlen"], t))
     save(True)
     if M.reg:
         M.reg.close_all()
