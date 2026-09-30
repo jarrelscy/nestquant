@@ -12,6 +12,10 @@ def kalman_grid(Y, tr, nf):
     best = None
     tgt = P.target(Y, tr) / 4.0
     ok = np.isfinite(tgt[:, 0])
+    trr = np.zeros(len(ok), bool)
+    for s, e in tr:
+        trr[s:e] = True
+    ok &= trr
     for ql in (0.003, 0.01, 0.03, 0.1, 0.3):
         for qs in (0.0, 1e-5, 1e-4, 1e-3, 1e-2):
             o = Q.kalman_feats(Y[:, nf], tr, ql, qs)

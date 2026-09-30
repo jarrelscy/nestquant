@@ -79,7 +79,13 @@ def main():
             hh[s0:s1] += att
             del att
 
-    for li in range(int(os.environ.get("DRAFT_NL", cfg.num_hidden_layers))):
+    NL = int(os.environ.get("DRAFT_NL", cfg.num_hidden_layers))
+    hfile = f"{OUTD}/hfinal_nl{NL}.r{R}of{W}.pt"
+    done_layers = os.path.exists(hfile)
+    if done_layers:
+        h = torch.load(hfile, map_location=dev)
+        E.log(f"resumed final hidden from {hfile}")
+    for li in range(NL if done_layers else 0, NL):
         layer, sparse = bb.build(li)
         ref.begin_layer(li, dev)
         with torch.no_grad():
@@ -110,6 +116,8 @@ def main():
         torch.cuda.empty_cache()
         E.log(f"layer {li} done {time.time() - t0:.0f}s peak {torch.cuda.max_memory_allocated() / 2**30:.1f}G")
 
+    if not done_layers:
+        torch.save(h, hfile + ".part"); os.rename(hfile + ".part", hfile)
     # ---------------------------------------------------------------- head + MTP
     def rmsnorm(name):
         n = GlmMoeDsaRMSNorm(cfg.hidden_size, cfg.rms_norm_eps).to(dev)
@@ -119,12 +127,12 @@ def main():
         fnorm = rmsnorm("model.norm.weight")
         head = fp8.tensor("lm_head.weight", dev).to(torch.bfloat16)
         hraw = h.view(T, -1)
-        hn = torch.cat([fnorm(hraw[c0:c0 + MC]) for c0 in range(0, T, MC)])
+        hn = torch.cat([fnorm(hraw[c0:c0 + MC]) for c0 in range(0, T, MC)]).to(torch.bfloat16)
 
         def argmax_head(x):
             d, p = [], []
             for c0 in range(0, T, 4096):
-                lp = torch.log_softmax((x[c0:c0 + 4096] @ head.T).float(), -1)
+                lp = torch.log_softmax((x[c0:c0 + 4096].to(torch.bfloat16) @ head.T).float(), -1)
                 mx = lp.max(-1)
                 d.append(mx.indices); p.append(mx.values.exp())
                 del lp
@@ -138,6 +146,7 @@ def main():
         with torch.device("meta"):
             ml = GlmMoeDsaDecoderLayer(cfg, 77)
         ml.self_attn.indexer = None
+        ml.mlp.experts = torch.nn.Module()
         sd = {}
         for n in bb.names:
             if n.startswith(pre):
@@ -156,7 +165,8 @@ def main():
         def mtp(hprev, tok):
             """hprev [T,H] (per anchor), tok [N,SEQ] ids -> MTP output residual [T,H]"""
             e = F.embedding(tok, emb_w).to(torch.bfloat16).view(T, -1)
-            z = torch.cat([F.linear(torch.cat([enorm(e[c0:c0 + MC]), hnorm(hprev[c0:c0 + MC])], -1), eh)
+            z = torch.cat([F.linear(torch.cat([enorm(e[c0:c0 + MC]).to(torch.bfloat16),
+                                               hnorm(hprev[c0:c0 + MC]).to(torch.bfloat16)], -1), eh)
                            for c0 in range(0, T, MC)]).view(N, SEQ, -1)
             del e
             attn(ml, z)

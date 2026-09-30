@@ -28,13 +28,11 @@ def load(stream, L):
     if stream in ("calib-fit", "glm52-heldout"):
         d = np.load(f"{SRC}/rows_bandall/{stream}/L{L}.npz")
         bc, bs = d["bcnt"].astype(np.float64), d["bsal"].astype(np.float64)
-        z = np.load(f"{BLK}/{stream}/L{L}.npz")
+        z = seg_blk(stream, L)
         nb = bc.shape[0]
         bca = z["bcnta"][:nb].astype(np.float64)
         nans = z["nans"][:nb].astype(np.float64); segl = z["segl"][:nb].astype(np.int8)
-        if len(nans) < nb:                                  # heldout: last partial window missing from blk (no think)
-            pad = nb - len(nans)
-            bca = np.vstack([bca, np.zeros((pad, NE))]); nans = np.r_[nans, np.zeros(pad)]; segl = np.r_[segl, np.zeros(pad, np.int8)]
+        assert len(nans) == nb
         bst = list(range(0, nb, NBC)) + [nb]
         names = [f"{stream}#{i}" for i in range(len(bst) - 1)]
     else:
@@ -46,6 +44,18 @@ def load(stream, L):
     sg = [(a, b) for a, b in zip(bst[:-1], bst[1:])]
     keep = [i for i, (a, b) in enumerate(sg) if b > a]
     return dict(bc=bc, bs=bs, bca=bca, nans=nans, segl=segl, sg=[sg[i] for i in keep], names=[names[i] for i in keep])
+
+
+def seg_blk(stream, L):
+    """own cache of answer-segment block arrays (t32lib.seg_of / block_mats on the trace) -> bcnta, nans, segl."""
+    f = f"{OUT}/private/blk/{stream}/L{L}.npz"
+    if not os.path.exists(f):
+        ids, w, xn = T.load_layer(L, stream)
+        seg = T.seg_of(T.tokens(stream, ids.shape[0] // T.SEQ))
+        cnt, cnta, nans, sal, segl = T.block_mats(ids, w, xn, seg)
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        np.savez(f, bcnta=cnta.astype(np.uint8), nans=nans.astype(np.uint8), segl=segl.astype(np.uint8))
+    return np.load(f)
 
 
 def ema_raw(M, h, sg):
@@ -219,3 +229,17 @@ def summarize(M, mask=None, cross_chain_churn=True):
         sal.append(a[:, 0].sum() / max(a[:, 1].sum(), 1e-30)); cnt.append(a[:, 2].sum() / max(a[:, 3].sum(), 1e-30))
         c = a[:, 4]; ch.append(np.nanmean(c) if np.isfinite(c).any() else np.nan)
     return dict(sal=float(np.mean(sal)) * 100, cnt=float(np.mean(cnt)) * 100, churn=float(np.nanmean(ch)))
+
+
+def subset(D, chains):
+    """keep only the listed chain indices (re-based sg)."""
+    keys = ("bc", "bs", "bca", "nans", "segl")
+    parts = {k: [] for k in keys}; sg = []; n = 0
+    for i in chains:
+        s, e = D["sg"][i]
+        for k in keys:
+            parts[k].append(D[k][s:e])
+        sg.append((n, n + e - s)); n += e - s
+    out = {k: np.concatenate(v) for k, v in parts.items()}
+    out["sg"] = sg; out["names"] = [D["names"][i] for i in chains]
+    return out

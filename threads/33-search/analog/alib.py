@@ -14,7 +14,7 @@ import sm120 as S1  # noqa: E402
 
 NE, G = 256, 16
 OUT = "/tmp/nestquant/33-search/analog"
-BLK = "/tmp/nestquant/32-gbdt-sal/private/sm120/blk"
+BLK = "/tmp/nestquant/33-search/analog/blk"   # sm120tf blocks (built by prep_tf.py)
 V2 = "/tmp/nestquant/32-gbdt-sal/models/v2_sal_tweedie1.5.txt"
 FEATS9 = ["ema32", "ema128", "mem_cur_state", "tok_since_hit", "hits16", "sema32", "sema128", "sal16", "mps128"]
 fixed, fdef = T.serve_sets()
@@ -23,18 +23,18 @@ mL = {int(k): v for k, v in json.load(open(V2 + ".meta.json"))["sal_norm_mL"].it
 
 
 def load(corpus, L):
-    """-> dict bcnt bcnta nans segl bsal (np arrays) + sg list of (s,e) chain block ranges."""
+    """-> dict bcnt bsal (+ bcnta nans segl for sm120 streams) + sg list of (s,e) chain block ranges.
+    calib/heldout: from T32 rows_bandall (chains of CHAIN*SEQ/G = 512 blocks, trailing partial chain kept)."""
+    if corpus in ("calib-fit", "glm52-heldout"):
+        z = np.load(f"/tmp/nestquant/32-gbdt-sal/rows_bandall/{corpus}/L{L}.npz")
+        d = {"bcnt": z["bcnt"], "bsal": z["bsal"]}
+        nb = d["bcnt"].shape[0]
+        d["sg"] = [(s, min(s + 512, nb)) for s in range(0, nb, 512)]
+        return d
     z = np.load(f"{BLK}/{corpus}/L{L}.npz")
-    d = {k: z[k] for k in ("bcnt", "bcnta", "nans", "segl")}
-    if "bsal" in z.files:
-        d["bsal"] = z["bsal"]
-    else:
-        d["bsal"] = np.load(f"/tmp/nestquant/32-gbdt-sal/rows_bandall/{corpus}/L{L}.npz")["bsal"]
+    d = {k: z[k] for k in ("bcnt", "bcnta", "nans", "segl", "bsal")}
     meta = json.load(open(f"{BLK}/{corpus}/meta.json"))
     bs = list(meta["bstart"])
-    nb = d["bcnt"].shape[0]
-    if bs[-1] < nb:                      # calib/heldout meta drops the trailing partial chain
-        bs.append(nb)
     d["sg"] = [(a, b) for a, b in zip(bs[:-1], bs[1:]) if b > a]
     return d
 

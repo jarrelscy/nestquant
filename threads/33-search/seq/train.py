@@ -15,10 +15,11 @@ ap.add_argument("--lw", type=float, default=0.0); ap.add_argument("--ep", type=i
 ap.add_argument("--lr", type=float, default=2e-3); ap.add_argument("--bs", type=int, default=4)
 ap.add_argument("--aux", type=float, default=0.3); ap.add_argument("--ctx", type=int, default=1)
 ap.add_argument("--tau", type=float, default=1.0); ap.add_argument("--full", type=int, default=0)
-ap.add_argument("--noval", type=int, default=0)
+ap.add_argument("--noval", type=int, default=0); ap.add_argument("--maxb", type=int, default=0); ap.add_argument("--es", type=int, default=0)
 a = ap.parse_args()
 torch.set_num_threads(int(os.environ.get("NT", "20"))); torch.manual_seed(0); np.random.seed(0)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
+print("dev", dev, flush=True)
 D = f"{lite.WD}/data"; OUTD = f"{lite.WD}/runs/{a.name}"; os.makedirs(OUTD, exist_ok=True)
 NL = 75
 FX = torch.tensor(np.stack([lite.fxmask(L) for L in lite.LAYERS]), device=dev)       # [75,256]
@@ -58,29 +59,30 @@ class TCN(nn.Module):
         super().__init__()
         s.lemb = nn.Embedding(NL, 8); s.eemb = nn.Embedding(NL * 256, 12)
         nn.init.normal_(s.eemb.weight, std=0.1)
-        s.inp = nn.Conv1d(cin + 1, H, 1)
+        s.inp = nn.Linear(cin + 1, H)
         s.dil = [2 ** i for i in range(ndil)]
-        s.conv = nn.ModuleList([nn.Conv1d(H, 2 * H, 2, dilation=d) for d in s.dil])
-        s.proj = nn.ModuleList([nn.Conv1d(H, H, 1) for _ in s.dil])
+        s.conv = nn.ModuleList([nn.Linear(2 * H, 2 * H) for d in s.dil])
+        s.proj = nn.ModuleList([nn.Linear(H, H) for _ in s.dil])
         s.ctx = nn.Linear(H, H) if a.ctx else None
         s.emb2h = nn.Linear(20, H)
         s.head = nn.Sequential(nn.Linear(H, H), nn.GELU(), nn.Linear(H, 3))
         s.rs = nn.Parameter(torch.tensor(1.0))
         s.RF = sum(s.dil) + 1
 
-    def forward(s, x, Lidx, fx, lv2=None):
-        """x [B,T,256,C]; Lidx [B]; fx [B,256] -> log-rate [B,T,256,3]"""
+    def forward(s, x, Lidx, fx, lv2=None, eix=None):
+        """x [B,T,256,C]; Lidx [B]; fx [B,256] -> log-rate [B,T,256,3]   (channels-last GEMMs, causal shifts on T)"""
         B, T, E, C = x.shape
-        z = x.permute(0, 2, 3, 1).reshape(B * E, C, T)
-        z = torch.cat([z, fx.float().reshape(B * E, 1, 1).expand(-1, 1, T)], 1)
-        h = s.inp(z)
+        z = torch.cat([x, fx.float()[:, None, :, None].expand(B, T, E, 1)], -1)
+        h = s.inp(z)                                                     # [B,T,E,H]
         for cv, pj, d in zip(s.conv, s.proj, s.dil):
-            u = cv(F.pad(h, (d, 0)))
-            u = torch.tanh(u[:, :u.shape[1] // 2]) * torch.sigmoid(u[:, u.shape[1] // 2:])
+            hp = F.pad(h, (0, 0, 0, 0, d, 0))[:, :T]                     # h[t-d] (zeros before chain start)
+            u = cv(torch.cat([hp, h], -1))
+            u = torch.tanh(u[..., :u.shape[-1] // 2]) * torch.sigmoid(u[..., u.shape[-1] // 2:])
             h = h + pj(u)
-        h = h.reshape(B, E, -1, T).permute(0, 3, 1, 2)                 # [B,T,E,H]
-        eid = Lidx[:, None] * 256 + torch.arange(256, device=x.device)[None]
-        emb = torch.cat([s.lemb(Lidx)[:, None].expand(-1, 256, -1), s.eemb(eid)], -1)   # [B,E,20]
+        if eix is None:
+            eix = torch.arange(256, device=x.device)[None].expand(B, -1)
+        eid = Lidx[:, None] * 256 + eix
+        emb = torch.cat([s.lemb(Lidx)[:, None].expand(-1, E, -1), s.eemb(eid)], -1)   # [B,E,20]
         h = h + s.emb2h(emb)[:, None]
         if s.ctx is not None:
             w = (~fx).float()[:, None, :, None]
@@ -96,11 +98,15 @@ def tweedie(o, y, p=1.5):
     return -y * torch.exp(o * (1 - p)) / (1 - p) + torch.exp(o * (2 - p)) / (2 - p)
 
 
-def batch_loss(model, cnt, sal, v2, Lidx, t0, T, pos):
-    x = feats(cnt, sal, v2, pos)
+def batch_loss(model, cnt, sal, v2, Lidx, t0, T, pos, eix=None):
     fx = FX[Lidx]
+    if eix is not None:
+        g = lambda M: None if M is None else torch.gather(M, 2, eix[:, None].expand(-1, M.shape[1], -1))
+        cnt, sal, v2 = g(cnt), g(sal), g(v2)
+        fx = torch.gather(fx, 1, eix)
+    x = feats(cnt, sal, v2, pos)
     lv2 = torch.log(v2.float().clamp_min(0) + 1e-2) if a.resid else None
-    o = model(x, Lidx, fx, lv2)
+    o = model(x, Lidx, fx, lv2, eix)
     y, m = targets(sal, T)
     wmask = (~fx).float()[:, None, :, None] * m[:, :, None, :]        # [B,T,E,3]
     ym = (y * wmask).sum((0, 1, 2)) / wmask.sum((0, 1, 2))
@@ -179,14 +185,24 @@ if __name__ == "__main__":
         perm = np.random.permutation(len(items))
         tl = []
         for i in range(0, len(perm) - a.bs + 1, a.bs):
+            if a.maxb and i // a.bs >= a.maxb:
+                break
             it = [items[j] for j in perm[i:i + a.bs]]
             Li = torch.tensor([x[0] for x in it], device=dev)
             sl = [slice(c * 512, c * 512 + 512) for _, c in it]
             cb = torch.stack([cnt[l, s] for (l, _), s in zip(it, sl)])
             sb = torch.stack([sal[l, s] for (l, _), s in zip(it, sl)])
             vb = torch.stack([v2[l, s] for (l, _), s in zip(it, sl)]) if v2 is not None else None
+            eix = None
+            if a.es:                                       # expert subsample: half from top-128 recent activity, half uniform (non-fixed)
+                act = sb.float().sum(1).masked_fill(FX[Li], -1)
+                r = torch.rand_like(act) + (act > 0).float() + (act >= act.topk(128, 1).values[:, -1:]).float() * 2
+                r = r.masked_fill(FX[Li], -9)
+                eix = r.topk(a.es, 1).indices
+                if torch.rand(()) < 0.5:
+                    eix = torch.rand_like(act).masked_fill(FX[Li], -9).topk(a.es, 1).indices
             with torch.autocast(dev, dtype=torch.bfloat16, enabled=dev == "cuda"):
-                loss, lt, ll = batch_loss(model, cb, sb, vb, Li, 0, 512, pos)
+                loss, lt, ll = batch_loss(model, cb, sb, vb, Li, 0, 512, pos, eix)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step(); sched.step(); step += 1
@@ -195,7 +211,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             vl = []
             for li in range(NL):
-                for c in VALCH:
+                for c in (VALCH if not a.maxb else VALCH[:1]):
                     s = slice(c * 512, c * 512 + 512)
                     _, lt, ll = batch_loss(model, cnt[li, s][None], sal[li, s][None], None if v2 is None else v2[li, s][None],
                                            torch.tensor([li], device=dev), 0, 512, pos)
@@ -204,10 +220,10 @@ if __name__ == "__main__":
     torch.save(dict(sd=model.state_dict(), args=vars(a)), f"{OUTD}/model.pt")
     res = {}
     # calib-val
-    S = infer(model, "calib-fit", cnt, sal, v2)
     idx = np.concatenate([np.arange(c * 512, c * 512 + 512) for c in VALCH])
     sgv = [(i * 512, i * 512 + 512) for i in range(len(VALCH))]
-    res["calib-val"] = evaluate(S[:, idx], "calib-val", cnt[:, idx], sal[:, idx], sel=sgv)
+    S = infer(model, "calib-val", cnt[:, idx], sal[:, idx], None if v2 is None else v2[:, idx])
+    res["calib-val"] = evaluate(S, "calib-val", cnt[:, idx], sal[:, idx], sel=sgv)
     Sv2 = np.load(f"{D}/calib-fit.v2.npy")[:, idx]
     res["calib-val-v2"] = evaluate(Sv2, "calib-val", cnt[:, idx], sal[:, idx], sel=sgv)
     del cnt, sal, v2, S

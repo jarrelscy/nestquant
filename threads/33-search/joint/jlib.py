@@ -35,21 +35,35 @@ def masks(L):
     return fx, fd
 
 
+def _blk_from_trace(stream, L):
+    """calib-fit / glm52-heldout: block matrices from the T32 trace (t32lib semantics), cached (PRIVATE)."""
+    f = f"{OUT}/blk/{stream}/L{L}.npz"
+    if not os.path.exists(f):
+        import t32lib as T
+        ids, w, xn = T.load_layer(L, stream)
+        tok = T.tokens(stream, ids.shape[0] // T.SEQ)
+        seg = T.seg_of(tok)
+        cnt, cnta, nans, sal, seg_last = T.block_mats(ids, w, xn, seg)
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        np.savez(f + ".part.npz", bcnt=cnt.astype(np.uint8), bcnta=cnta.astype(np.uint8), nans=nans.astype(np.uint8),
+                 segl=seg_last.astype(np.uint8), bsal=sal.astype(np.float32))
+        os.replace(f + ".part.npz", f)
+    d = np.load(f)
+    r = {k: d[k] for k in d.files}
+    nb = r["bcnt"].shape[0]; nbc = 4 * 2048 // G
+    r["sg"] = [(a, min(a + nbc, nb)) for a in range(0, nb, nbc)]
+    return r
+
+
 def load(stream, L):
-    """-> dict bcnt, bcnta, nans, segl, bsal (float64 arrays), sg list of (s, e) chain block ranges."""
+    """-> dict bcnt, bcnta, nans, segl, bsal, sg list of (s, e) chain block ranges."""
+    if stream in ("calib-fit", "glm52-heldout"):
+        return _blk_from_trace(stream, L)
     d = np.load(f"{BLK}/{stream}/L{L}.npz")
     meta = json.load(open(f"{BLK}/{stream}/meta.json"))
     bs = meta["bstart"]
     sg = [(a, b) for a, b in zip(bs[:-1], bs[1:]) if b > a]
-    if bs[-1] < d["bcnt"].shape[0]:                     # trailing partial chain (heldout: 1 window) - t32lib keeps it
-        sg.append((bs[-1], d["bcnt"].shape[0]))
-    r = {k: d[k] for k in ("bcnt", "bcnta", "nans", "segl")}
-    if "bsal" in d.files:
-        r["bsal"] = d["bsal"]
-    else:
-        r2 = np.load(f"{T32}/rows_bandall/{stream}/L{L}.npz")
-        assert (r2["bcnt"] == r["bcnt"]).all()
-        r["bsal"] = r2["bsal"]
+    r = {k: d[k] for k in ("bcnt", "bcnta", "nans", "segl", "bsal")}
     r["sg"] = sg
     return r
 

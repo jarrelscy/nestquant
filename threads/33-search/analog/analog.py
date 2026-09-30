@@ -79,8 +79,9 @@ class Lib:
         for c0 in range(0, len(Q), chunk):
             q = Q[c0:c0 + chunk]
             d2 = (q ** 2).sum(1, keepdim=True) - 2 * q @ self.K.T + self.kn[None]
-            if qcid is not None:
-                m = torch.from_numpy(qcid[c0:c0 + chunk].astype(np.int64))[:, None] == self.cid[None]
+            if qcid is not None:                       # qcid = query calib window id (-1: none); CONFLICT[qw, lw]
+                qw = torch.from_numpy(qcid[c0:c0 + chunk].astype(np.int64))
+                m = CONFLICT_T[qw.clamp_min(0)][:, self.cid] & (qw[:, None] >= 0)
                 d2 = d2.masked_fill(m, float("inf"))
             dv, ix = torch.topk(d2, k, dim=1, largest=False)
             if tau is None:
@@ -119,6 +120,24 @@ def within_request(Zp, F64, sg, k=8, min_lag=4, min_hist=8):
     return out
 
 
+def _conflict():
+    """[128,128] bool: calib window pairs that must not see each other in retrieval: same chain (4 windows) or
+    sharing any source document (segments.npy doc_index)."""
+    import json
+    seg = np.load("/tmp/nestquant/corpus/glm53_calib_glmfmt_v1/c2048/segments.npy")
+    rows = json.load(open("/tmp/nestquant/18-e2e/corpora/manifest.json"))["calib-fit"]["rows"]
+    docs = [set(np.unique(seg[r] & (2 ** 20 - 1)).tolist()) for r in rows]
+    C = np.zeros((128, 128), bool)
+    for i in range(128):
+        for j in range(128):
+            C[i, j] = (i // 4 == j // 4) or bool(docs[i] & docs[j])
+    return C
+
+
+CONFLICT = _conflict()
+CONFLICT_T = torch.from_numpy(CONFLICT)
+
+
 def build_library(L, D=64, nch=NTRAIN_CH, proj="pca", hl=(64, 512)):
     d = A.load("calib-fit", L)
     sg = d["sg"]
@@ -127,6 +146,7 @@ def build_library(L, D=64, nch=NTRAIN_CH, proj="pca", hl=(64, 512)):
     P64 = share(ema_rate(bs, 64, sg))
     F64, F256, ok = futures(bs, sg)
     cid = chain_id(sg, len(Z))
+    wid = np.arange(len(Z)) // 128                     # calib window id (2048 tokens = 128 blocks)
     lm = ok & (cid < nch)
-    lib = Lib(Z[lm], P64[lm], F64[lm], F256[lm], cid[lm], D=D, proj=proj)
-    return lib, dict(d=d, Z=Z, cid=cid, F64=F64)
+    lib = Lib(Z[lm], P64[lm], F64[lm], F256[lm], wid[lm], D=D, proj=proj)
+    return lib, dict(d=d, Z=Z, cid=cid, wid=wid, F64=F64)

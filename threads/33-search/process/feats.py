@@ -7,6 +7,7 @@ PF = ("hk_mu", "hk_lam", "hk_pred", "hmm_pred", "hmm_hot", "hmm_rise", "hmm_p0",
       "bo_rmap", "kf_lvl", "kf_slp", "kf_fc")
 FAM = dict(hk=[f for f in PF if f.startswith("hk")], hmm=[f for f in PF if f.startswith("hmm")],
            bo=[f for f in PF if f.startswith("bo")], kf=[f for f in PF if f.startswith("kf")])
+KF_QS = 1e-4
 BO = dict(kappa=128.0, hazard=1 / 32, tau=16.0, R=128)
 
 
@@ -27,7 +28,7 @@ def feats(D, L, fams=("hk", "hmm", "bo", "kf")):
         out.update(o)
     if "kf" in fams:
         Y = np.log(D["F"]["sal16"].astype(np.float64) + 0.1)
-        out.update(Q.kalman_feats(Y, segs, float(p["kf"][0]), float(p["kf"][1])))
+        out.update(Q.kalman_feats(Y, segs, float(p["kf"][0]), KF_QS))   # MSE-best q_s is 0 (no slope); keep a slow slope as feature
     return {k: np.asarray(v, np.float32) for k, v in out.items()}
 
 

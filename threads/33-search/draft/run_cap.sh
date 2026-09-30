@@ -4,7 +4,7 @@ set -uo pipefail
 H=/home/coder/git/nestquant/threads/33-search/draft
 LG=/tmp/nestquant/33-search/draft/logs; mkdir -p $LG
 source /home/coder/git/glm52/artifacts/shared-bit-graphs/runtime/env.sh
-export LD_LIBRARY_PATH=/home/coder/git/nestquant/threads/06-expert-objective/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/tmp/compat13/usr/local/cuda-13.2/compat:/home/coder/git/nestquant/threads/06-expert-objective/lib:$LD_LIBRARY_PATH
 export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 NQ_FP8=/tmp/nestquant/src/glm53-fp8 NQ_OUT=/tmp/nestquant/33-search/draft/private/e2e
 export NQ_CORPUS_DIR=/tmp/nestquant/18-e2e/corpora NQ_SHARD=contig NQ_VRAM_GB=${NQ_VRAM_GB:-60}
 export PYTHONPATH=/tmp/nestquant/18-e2e/pylib; unset NQ_TRACE_DIR

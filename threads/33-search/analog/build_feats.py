@@ -6,6 +6,7 @@ for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
     _o.environ[_v] = "1"
 import json
 import os
+import os
 import sys
 import time
 from multiprocessing import Pool
@@ -21,6 +22,9 @@ TAU = None if sys.argv[4] == "none" else float(sys.argv[4])
 NLIB = int(sys.argv[5])
 PROJ = sys.argv[6] if len(sys.argv) > 6 else "pca"
 HL = tuple(int(x) for x in sys.argv[7].split(",")) if len(sys.argv) > 7 else (64, 512)
+BANK = os.environ.get("BANK", "calib")      # calib | self | both : bank used for NON-calib queries (heldout, sm120tf)
+CAUSAL = os.environ.get("CAUSAL", "0") == "1"
+CORPORA = os.environ.get("CORPORA", "calib-fit,glm52-heldout").split(",")
 OD = f"{A.OUT}/feat/{var}"
 
 
@@ -30,6 +34,32 @@ def feats_for(lib, Z, qcid=None):
     return f64, p64, f256
 
 
+def self_bank(clib, d, Z, both):
+    """leave-own-chain-out bank from the SAME corpus (serve analogue: a bank of other requests' traffic), optionally
+    concatenated with the calib bank.  Same PCA as the calib bank."""
+    sg = d["sg"]; bs = d["bsal"].astype(np.float64)
+    P64 = N.share(N.ema_rate(bs, 64, sg)); F64, F256, ok = N.futures(bs, sg)
+    cid = N.chain_id(sg, len(Z))
+    K_ = clib.proj(Z[ok]); V_ = torch.from_numpy(np.concatenate([F64, P64, F256], 1)[ok].astype(np.float32))
+    kc = torch.from_numpy(cid[ok].astype(np.int64))
+    if both:
+        K_ = torch.cat([K_, clib.K]); V_ = torch.cat([V_, clib.V]); kc = torch.cat([kc, torch.full((len(clib.K),), -9)])
+    kn = (K_ ** 2).sum(1)
+    Q = clib.proj(Z)
+    out = np.empty((len(Z), 768), np.float32); dist = np.empty(len(Z), np.float32)
+    for c0 in range(0, len(Z), 2048):
+        q = Q[c0:c0 + 2048]
+        d2 = (q ** 2).sum(1, keepdim=True) - 2 * q @ K_.T + kn[None]
+        qc = torch.from_numpy(cid[c0:c0 + 2048].astype(np.int64))
+        bad = qc[:, None] == kc[None]
+        if CAUSAL:                                   # bank = strictly earlier chains only (+ calib when both)
+            bad |= (kc[None] > qc[:, None])
+        d2 = d2.masked_fill(bad, float("inf"))
+        dv, ix = torch.topk(d2, K, 1, largest=False)
+        out[c0:c0 + 2048] = V_[ix].mean(1).numpy(); dist[c0:c0 + 2048] = dv.clamp_min(0).mean(1).numpy()
+    return out[:, :256] * 8, out[:, 256:512] * 8, out[:, 512:] * 8, dist
+
+
 def job(L):
     torch.set_num_threads(1)
     t0 = time.time()
@@ -37,13 +67,19 @@ def job(L):
     Q = lib.proj(c["Z"])
     # neighbour distance (mean d2 of the k nearest / library median NN d2) as match quality
     out = {}
-    for corpus in ("calib-fit", "glm52-heldout"):
+    for corpus in CORPORA:
         if corpus == "calib-fit":
-            Z, cid = c["Z"], c["cid"]
-            qc = np.where(cid < NLIB, cid, -1)          # train-chain queries exclude their own chain
+            Z = c["Z"]
+            qc = c["wid"]                                # every calib query excludes own chain + doc-sharing windows
         else:
             d = A.load(corpus, L)
             Z = N.states(d["bsal"].astype(np.float64), d["sg"], HL); qc = None
+        if corpus != "calib-fit" and BANK in ("self", "both"):
+            f64, p64, f256, dist = self_bank(lib, d, Z, BANK == "both")
+            os.makedirs(f"{OD}/{corpus}", exist_ok=True)
+            np.savez(f"{OD}/{corpus}/L{L}.npz", an_f64=f64.astype(np.float16), an_p64=p64.astype(np.float16),
+                     an_f256=f256.astype(np.float16), an_dist=dist)
+            continue
         f64, p64, f256 = feats_for(lib, Z, qc)
         # match distance
         Qz = lib.proj(Z)
@@ -52,8 +88,8 @@ def job(L):
             q = Qz[c0:c0 + 4096]
             d2 = (q ** 2).sum(1, keepdim=True) - 2 * q @ lib.K.T + lib.kn[None]
             if qc is not None:
-                m = torch.from_numpy(qc[c0:c0 + 4096].astype(np.int64))[:, None] == lib.cid[None]
-                d2 = d2.masked_fill(m, float("inf"))
+                qw = torch.from_numpy(qc[c0:c0 + 4096].astype(np.int64))
+                d2 = d2.masked_fill(N.CONFLICT_T[qw][:, lib.cid], float("inf"))
             dist[c0:c0 + 4096] = torch.topk(d2, K, 1, largest=False)[0].clamp_min(0).mean(1).numpy()
         os.makedirs(f"{OD}/{corpus}", exist_ok=True)
         np.savez(f"{OD}/{corpus}/L{L}.npz", an_f64=f64.astype(np.float16), an_p64=p64.astype(np.float16),

@@ -10,11 +10,19 @@ T = D.T
 STRIDE = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 FE = list(T.FEATS5) + list(T.FEATS_V2)
 
+def futn(M, n):
+    """sum of blocks b+1..b+n within chain; NaN where the horizon leaves the chain (= rows_lh semantics)"""
+    out = np.full(M.shape, np.nan)
+    for c0 in range(0, M.shape[0], D.NBC):
+        s = M[c0:c0 + D.NBC]; cs = np.vstack([np.zeros((1, M.shape[1])), np.cumsum(s, 0)])
+        k = np.arange(s.shape[0] - n); out[c0 + k] = cs[k + 1 + n] - cs[k + 1]
+    return out
+
+
 def job(L):
     c = "calib-fit"
     d = np.load(f"{T.OUT}/rows_bandall/{c}/L{L}.npz")
     X = T.feature_matrix(FE, c, L, band="all", d=d).reshape(-1, 256, len(FE))
-    lh = np.load(f"{T.OUT}/rows_lh/{c}/L{L}.npz")
     m = float(d["slot_sal_sum"] / d["slots"])
     bs = d["bsal"].astype(np.float64); nb = bs.shape[0]
     cand = d["cand"].astype(np.int64)
@@ -22,7 +30,8 @@ def job(L):
     ok = (nxt % D.NBC) != 0
     y16[ok] = bs[nxt[ok]]
     y16 = np.take_along_axis(y16, cand, 1)
-    Y = np.stack([y16, d["ysal"], lh["ysal128"], lh["ysal256"]], -1) / m
+    f128 = np.take_along_axis(futn(bs, 8), cand, 1); f256 = np.take_along_axis(futn(bs, 16), cand, 1)
+    Y = np.stack([y16, d["ysal"], f128, f256], -1) / m
     Y = np.concatenate([Y, d["ycnt"][..., None]], -1).astype(np.float32)
     ch = np.arange(nb) // D.NBC; b = np.arange(nb)
     fin = np.isfinite(Y[:, 0, :4]).all(1)

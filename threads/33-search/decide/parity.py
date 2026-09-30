@@ -8,11 +8,8 @@ def job(L):
     out = []
     for hm in HMS:
         sv = D.replay(S, S * (1 + hm), fx, fd, D.NBC, 0)
-        n, d, c, r = D.evaluate(sv, bs, bc, fx)
-        # hot_eval churn: all transitions incl chain boundaries
-        c2 = (sv[1:] & ~sv[:-1]).sum(1).mean()
-        out.append((n / d, c / r, c2))
+        out.append(D.evaluate(sv, bs, fx))
     return out
 with Pool(16) as p: R = np.array(p.map(job, D.LAYERS))
 for i, hm in enumerate(HMS):
-    print(f"hm {hm:.2f}  sal {R[:, i, 0].mean()*100:.2f}  churn(inside) {R[:, i, 1].mean():.3f}  churn(hot_eval) {R[:, i, 2].mean():.3f}")
+    print(f"hm {hm:.2f}  sal {R[:, i, 0].mean()*100:.2f}  churn {R[:, i, 1].mean():.3f}")

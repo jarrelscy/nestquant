@@ -52,9 +52,10 @@ def own_features(bsal, bcnt, S_v2, sg, dev, out_dtype=torch.float16, chunk=4096)
 
 
 class XLatent(nn.Module):
-    def __init__(self, dz=32, r=8, hid=128, latent="gru", use_ctx=True, use_v2=True, mlp_hid=32, dz_zero=False):
+    def __init__(self, dz=32, r=8, hid=128, latent="gru", use_ctx=True, use_v2=True, mlp_hid=32, dz_zero=False, use_U=True, use_b=True):
         super().__init__()
         self.dz, self.latent, self.use_ctx, self.use_v2, self.dz_zero = dz, latent, use_ctx, use_v2, dz_zero
+        self.use_U, self.use_b = use_U, use_b
         self.enc_w = nn.Parameter(torch.randn(NL, 2 * NE, r) * (1.0 / np.sqrt(2 * NE)))
         self.enc_b = nn.Parameter(torch.zeros(NL, r))
         self.enc = nn.Sequential(nn.Linear(NL * r, hid), nn.GELU(), nn.Linear(hid, hid), nn.GELU())
@@ -98,7 +99,11 @@ class XLatent(nn.Module):
         parts.append(self.lemb[None, None, :, None, :].expand(B, T_, NL, NE, 4))
         x = torch.cat(parts, -1)
         base = self.mlp(x)[..., 0]
-        out = base + self.b + torch.einsum("btd,led->btle", z, self.U)
+        out = base
+        if self.use_b:
+            out = out + self.b
+        if self.use_U:
+            out = out + torch.einsum("btd,led->btle", z, self.U)
         if self.use_v2:
             out = out + self.a[:, None] * f[..., 0].float()
         return out

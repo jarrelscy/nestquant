@@ -38,10 +38,12 @@ def load(k):
     if a.sub > 1 and k == "tr":
         m &= aux[:, 2] % a.sub == 0
     idx = np.flatnonzero(m)
+    full = len(idx) == len(y)
+    col = lambda c: (np.load(f"{R}/cols/{k}_{COLS[c]}.npy") if full else np.load(f"{R}/cols/{k}_{COLS[c]}.npy", mmap_mode="r")[idx])  # noqa: E731
     Xs = np.empty((len(idx), len(ci)), np.float32)
     for j, c in enumerate(ci):
-        Xs[:, j] = X[idx, c]
-    v2 = np.asarray(X[idx, COLS.index("v2")]) if a.init == "v2" else None
+        Xs[:, j] = col(c)
+    v2 = col(COLS.index("v2")) if a.init == "v2" else None
     w = None
     if a.weight.startswith("bnd"):
         _, A, Wd = a.weight.split(":")

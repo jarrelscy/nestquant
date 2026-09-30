@@ -13,7 +13,7 @@ while IFS=, read -r i free; do
   [ "${free// /}" -ge 30000 ] || { echo "GPU $i only ${free}MiB free $(date -u)"; exit 1; }
 done < <(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits)
 source /home/coder/git/glm52/artifacts/shared-bit-graphs/runtime/env.sh
-export LD_LIBRARY_PATH=/home/coder/git/nestquant/threads/06-expert-objective/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/tmp/compat13/usr/local/cuda-13.2/compat:/home/coder/git/nestquant/threads/06-expert-objective/lib:$LD_LIBRARY_PATH
 export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 NQ_FP8=${NQ_FP8:-/tmp/nestquant/src/glm53-fp8}
 export PYTHONPATH=/tmp/nestquant/18-e2e/pylib
 export NQ_OUT=$P/e2e NQ_CORPUS_DIR=${NQ_CORPUS_DIR:-/tmp/nestquant/18-e2e/corpora} NQ_SHARD=contig NQ_VRAM_GB=${NQ_VRAM_GB:-40}

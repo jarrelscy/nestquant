@@ -179,7 +179,7 @@ def bocpd_feats(C, segs, prior, kappa=64.0, hazard=1 / 128, R=128, tau=1.0):
 def kalman_feats(Y, segs, q_l, q_s, r=1.0, p0=4.0):
     """local-linear-trend Kalman on Y [nb, NE] per expert; common covariance (same obs model for all experts)."""
     nb = Y.shape[0]
-    lvl = np.empty(Y.shape, np.float32); slp = np.empty(Y.shape, np.float32)
+    lvl = np.full(Y.shape, np.nan, np.float32); slp = np.full(Y.shape, np.nan, np.float32)
     F = np.array([[1.0, 1.0], [0.0, 1.0]]); Q = np.diag([q_l, q_s]); H = np.array([1.0, 0.0])
     for s, e in segs:
         x = np.stack([Y[s], np.zeros(Y.shape[1])])                   # [2, NE]

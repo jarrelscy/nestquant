@@ -20,6 +20,8 @@ def job(L):
     if os.path.exists(f"{out}/L{L}.npz"):
         return L
     D = S.load(stream, L)
+    if "--chains" in opt:
+        D = S.subset(D, [int(c) for c in opt["--chains"].split(",")])
     F, e256 = S.feats(D)
     need_stuck = any(p.endswith("@stuck") for p in models.values())
     Fst = S.mem_state(D["bc"], D["bca"], D["nans"], D["segl"], D["sg"], stuck=True) if need_stuck else None
