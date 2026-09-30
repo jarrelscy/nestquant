@@ -352,6 +352,8 @@ class Adapt(Base):
             for w in range(1, N + 1):
                 if w == N or g[w] != g[w0]:
                     runs.append((w0, w)); w0 = w
+            if self.chain > 1:       # T32 chain=K>1: one sequence per K windows (fp8dec: one task = K windows)
+                runs = [(a, min(a + self.chain, b)) for r0, b in runs for a in range(r0, b, self.chain)]
         hi, serves, tot = [], [], {}
         for w0, w1 in runs:
             self._la = None if self.la_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.la_full)
