@@ -20,5 +20,5 @@ def job(L):
 
 
 if __name__ == "__main__":
-    with Pool(40) as p:
+    with Pool(int(sys.argv[2]) if len(sys.argv) > 2 else 40) as p:
         print(sorted(p.map(job, T.LAYERS))[-1])
