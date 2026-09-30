@@ -241,7 +241,10 @@ class Adapt(Base):
         # grlo/grhi: GBDT candidate band over EMA256 ranks (default 20..120 + forced top-20; grlo=0,grhi=256: all)
         self.gmode, self.grlo, self.grhi = gmode, int(grlo), int(grhi)
         assert gmode in ("next_refresh", "sync"), gmode
-        self.chain = int(chain)          # 1: carry scores + floating set across consecutive windows of one corpus
+        # T32 chain=map: chain=1 but also break where the corpus's NQ_CORPUS_DIR/NAME.map.npz "chain" (else "task")
+        # changes between consecutive windows (one sequence per task; corpora without a map: whole run)
+        self.chainmap = str(chain) == "map"
+        self.chain = 1 if self.chainmap else int(chain)   # 1: carry scores + floating set across consecutive windows of one corpus
         self.predictor, self.hm = predictor, float(hm)   # gbdt: streaming/gbdt_predictor.GBDTPredictor (see _core_gbdt)
         assert predictor in ("ema", "gbdt"), predictor
         # T32: gbdt_model=PATH swaps the LightGBM tree file (same 5 features; e.g. the salience-target retrain)
@@ -260,14 +263,19 @@ class Adapt(Base):
         # 32-gbdt-sal/models/v2_sal_tweedie1.5.txt, the net's training input) + a 2-layer transformer residual; same
         # step/target interface as GBDTPredictorV2 (salience fed per step), net on the layer's device.  Needs
         # predictor=gbdt; gbdt_model / grlo / grhi are ignored by the joint arm.  Default off.
-        # joint_map=JSON {"corpus": NAME, "map": corpus .map.npz (task, names per window), "by_task": {task: .pt},
-        # "default": .pt}: per-chain net by the chain's task (out-of-sample fold models on decode corpora); windows
+        # joint_map=JSON {"corpus": NAME | [NAMES], "map": .map.npz | [one per corpus] (task, names per window), "by_task": {task: .pt},
+        # "default": .pt}: task = int index into names, or the task_id string itself (fp8dec maps); per-chain net by the chain's task (out-of-sample fold models on decode corpora); windows
         # of other corpora use "default"; a chain must not span tasks.  Window ids from nq_e2e.WIN_IDS (__main__).
         self.joint, self.jmap = joint, None
         if joint_map is not None:
-            jm = json.load(open(joint_map)); z = np.load(jm["map"])
-            self.jmap = dict(corpus=jm["corpus"], task=[str(z["names"][t]) for t in z["task"]], by=jm["by_task"],
-                             default=jm.get("default"))
+            jm = json.load(open(joint_map))
+            cs, ms = (jm["corpus"], jm["map"]) if isinstance(jm["corpus"], list) else ([jm["corpus"]], [jm["map"]])
+            task = {}
+            for c_, m_ in zip(cs, ms):
+                z = np.load(m_)
+                task[c_] = ([str(t) for t in z["task"]] if z["task"].dtype.kind in "USO"
+                            else [str(z["names"][t]) for t in z["task"]])
+            self.jmap = dict(task=task, by=jm["by_task"], default=jm.get("default"))
             for p_ in list(self.jmap["by"].values()) + [self.jmap["default"]]:
                 assert p_ is None or os.path.exists(p_), p_
             joint = joint or self.jmap["default"] or "map"
@@ -354,6 +362,8 @@ class Adapt(Base):
                     runs.append((w0, w)); w0 = w
             if self.chain > 1:       # T32 chain=K>1: one sequence per K windows (fp8dec: one task = K windows)
                 runs = [(a, min(a + self.chain, b)) for r0, b in runs for a in range(r0, b, self.chain)]
+            if self.chainmap:
+                runs = self._split_by_map(runs, g)
         hi, serves, tot = [], [], {}
         for w0, w1 in runs:
             self._la = None if self.la_full is None else tuple(t[w0 * seq:w1 * seq] for t in self.la_full)
@@ -527,13 +537,31 @@ class Adapt(Base):
                  churn_first_sum=0.0, churn_first_n=0)
         return hi, serve_t, d
 
+    def _split_by_map(self, runs, g):
+        """chain=map: split each corpus run (one per corpus in rank order, nq_e2e.WIN_IDS) at chain/task changes."""
+        M = sys.modules["__main__"]
+        out = []
+        for w0, w1 in runs:
+            name, mine = M.WIN_IDS[g[w0]]
+            assert len(mine) == w1 - w0, (name, len(mine), w0, w1)
+            f = f"{M.CORPUS_DIR}/{name}.map.npz"
+            if not os.path.exists(f):
+                out.append((w0, w1)); continue
+            z = np.load(f)
+            key = np.asarray(z["chain"] if "chain" in z else z["task"])[list(mine)]
+            a = w0
+            for j in range(1, len(mine) + 1):
+                if j == len(mine) or key[j] != key[j - 1]:
+                    out.append((a, w0 + j)); a = w0 + j
+        return out
+
     def _joint_net(self):
         """joint arm: net path for the current run of windows (joint_map: by the run's task)."""
         if self.jmap is None:
             return self.joint
         wins = [(n, g) for n, mine in sys.modules["__main__"].WIN_IDS for g in mine]   # local window -> (corpus, id)
         w0, w1 = self._run
-        tasks = {self.jmap["task"][g] if n == self.jmap["corpus"] else None for n, g in wins[w0:w1]}
+        tasks = {self.jmap["task"][n][g] if n in self.jmap["task"] else None for n, g in wins[w0:w1]}
         assert len(tasks) == 1, f"chain spans tasks {tasks}"
         t = tasks.pop()
         p_ = self.jmap["by"].get(t, self.jmap["default"]) if t is not None else self.jmap["default"]

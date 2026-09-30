@@ -3,7 +3,7 @@
 harness replay sal-hot / l4 (= routes-hot) / churn from Adapt.diag (salstat=1), pooled over ranks and corpora
 (sum over layers; also the per-layer mean), swaps/1k = churn per 16-token refresh x 62.5 (per layer).
 Optional decode-only KL (--mask-map map.npz with dec [nwin, 2048]: KL at position t counts if token t+1 is a decode row).
-  kld_report.py --results DIR/TAG --ref k26_v2 [--mask-map M] [--out J]"""
+  kld_report.py --results DIR/TAG --ref k26_v2 [--mask-map M | --mask-map NAME=M ...] [--out J]"""
 import argparse
 import glob
 import json
@@ -12,13 +12,15 @@ import numpy as np
 ap = argparse.ArgumentParser()
 ap.add_argument("--results", required=True)
 ap.add_argument("--ref", default="k26_v2")
-ap.add_argument("--mask-map")
+ap.add_argument("--mask-map", action="append", default=[],
+                help="map.npz (all corpora) or NAME=map.npz (per corpus; repeatable)")
 ap.add_argument("--out")
 a = ap.parse_args()
 parts = sorted((json.load(open(p)) for p in glob.glob(f"{a.results}/r*.json")), key=lambda p: p["rank"])
 names, seq = parts[0]["corpora"], parts[0]["seq"] - 1
 arms = list(parts[0]["results"])
-dec = np.load(a.mask_map)["dec"][:, 1:] if a.mask_map else None
+MM = dict((m.split("=", 1) if "=" in m else ("*", m)) for m in a.mask_map)
+DEC = {k: np.load(v)["dec"][:, 1:] for k, v in MM.items()}
 rep = {}
 for arm in arms:
     R = {}
@@ -37,6 +39,7 @@ for arm in arms:
     R["churn"] = tot["churn_sum"] / tot["churn_n"]
     R["swaps_per_1k"] = R["churn"] * 1000 / 16
     for g, n in enumerate(names):
+        dec = DEC.get(n, DEC.get("*"))
         wd, wdd, kl, kld = [], [], [], []
         for p in parts:
             ka = np.load(f"{a.results}/tokkl_{a.ref}_r{p['rank']}.npy").astype(np.float64).reshape(-1, seq)
@@ -47,7 +50,8 @@ for arm in arms:
                 wd.append(kb[w].mean() - ka[w].mean()); kl.append(kb[w].mean())
                 if dec is not None:
                     m = dec[wins[j]].astype(bool)
-                    wdd.append(kb[w][m].mean() - ka[w][m].mean()); kld.append(kb[w][m].mean())
+                    if m.any():      # windows with no decode positions (all prompt) do not enter the decode-only KL
+                        wdd.append(kb[w][m].mean() - ka[w][m].mean()); kld.append(kb[w][m].mean())
         wd = np.array(wd)
         c = dict(kld=float(np.mean(kl)), dkld=float(wd.mean()), se=float(wd.std(ddof=1) / np.sqrt(len(wd))),
                  win_better=float((wd < 0).mean()), nwin=len(wd))
