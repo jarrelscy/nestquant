@@ -1,6 +1,6 @@
 # T35 Stage 1 design note: pattern-rate base + ~4-bit residual (GLM-5.3, 2x DGX Spark)
 
-Status: design only. Stage 0 result and verdict are in section 0.
+Status: Stage 0 result and verdict are in section 0. The Stage 1 encoder pilot is in section 4a. The fine-tune harness smoke is in section 5a.
 
 ## 0. Stage 0 result (report_partb.json, kvq, 4 bf16conf windows, jF_all k0 hm0.7 sync)
 
@@ -64,6 +64,43 @@ Verdict:
   3. Measure L2 and L4 rel-MSE vs FP8 against today's (2.0, 2.0/2.3125).
   4. Compare with Stage 0's emulated s(b) (1.417 for 1.5, 1.191 for 1.75). Stage 0 assumed that the base error scales as sqrt(r(b)/r(2)) with the same direction as nq2. The real encoder error has a different direction, so check whether its KLD effect matches.
 - Then one layer end-to-end through the harness (threads/18-e2e-eval), then the full model.
+
+### 4a. Pilot result (2026-10-01, pilot15.py / run_pilot.sh / summarize_pilot.py -> results/pilot_summary.json)
+
+Setup:
+- 9 experts: L16/49/66 x E36/92/165, the same H and eval protocol as threads/12 results_v1. EXL3-2/4/4+4.125 rows are copied from there.
+- Encoder: nq15.py (pattern-rate base), production settings (single joint pass, inner 0, sign variants, lr plane).
+- Configs:
+  - b20 = 2 + (2, 2, 2.3125);
+  - b175 = 1.75 (1,0xEEEE) + (2.25, 2.25, 2.5625);
+  - b15 = 1.5 (1,0xAAAA) + (2.5, 2.5, 2.8125).
+- All three configs land at 4.137 bpw at L4.
+
+Mean router-weighted rel-L2 (%) over 9 experts:
+
+| row | bpw | all/routed | all/forced | ood/routed |
+|---|---|---|---|---|
+| EXL3-1.5 | 1.51 | 49.66 | 52.90 | 54.85 |
+| nq b15 / L2 | 1.52 | 49.61 | 52.53 | 54.30 |
+| EXL3-1.75 | 1.76 | 42.18 | 45.13 | 46.76 |
+| nq b175 / L2 | 1.77 | 42.19 | 44.79 | 46.31 |
+| EXL3-2 | 2.0 | 35.71 | 38.27 | 39.96 |
+| nq b20 / L2 | 2.02 | 35.54 | 37.98 | 39.19 |
+| EXL3-4 | 4.0 | 9.217 | 10.005 | 10.399 |
+| EXL3-4+4.125 | 4.125 | 8.780 | 9.539 | 9.924 |
+| nq b20 / L4 | 4.137 | 8.900 | 9.747 | 10.151 |
+| nq b175 / L4 | 4.137 | 8.969 | 9.785 | 10.215 |
+| nq b15 / L4 | 4.137 | 8.962 | 9.816 | 10.241 |
+
+- **L2 base vs EXL3 at the same rate: parity.** b15 vs EXL3-1.5 +0.00% mean (worst +2.4%); b175 vs EXL3-1.75 +0.14% (worst +2.1%). b20 vs EXL3-2 -0.29%.
+- **L4 hot level is nearly unchanged:** b175 and b15 are each +0.71% rel-L2 vs b20 (worst +2.6% / +1.6%). They still beat EXL3-4 by 2.8% and are +2.0% vs EXL3-4+4.125 (b20: +1.3%).
+- **Emulation check (L2, whole expert):**
+  - Real error-energy ratio vs b20: b15 2.000 plain / 2.052 H-metric (emulation r = 2.008); b175 1.416 / 1.432 (emulation 1.419).
+  - rel-L2 vs b20: +39.8% (emulation s = +41.7%) and +18.7% (emulation +19.1%).
+  - **Magnitude matches. Direction does not:** cos(E_b, E_b20) = 0.090 (b15) and 0.077 (b175), and cos_H is about the same. The real base error is essentially independent of the nq2 error. Stage 0 instead added a scaled copy of the nq2 error.
+  - In the H metric the real error is about 2.5% / 1% bigger than the plain ratio the emulation used. So Stage 0's KLD for real cold experts could be slightly optimistic, unless errors from independent directions average out better across the experts of a token. Only a real-encode e2e KLD can settle this.
+- Round trip: all 27 encodes bit-exact from disk at L2 and L4, and ref15 cross-check mismatches = 0 (32 units per projection).
+- Encode time per expert on 1 A100 shared by 9 processes: b20 32 s, b175 48 s, b15 50 s. The frac Viterbi costs about 1.5x.
 
 ## 5. Fine-tune (after the encoder): user rules
 
