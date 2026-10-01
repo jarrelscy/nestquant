@@ -1,7 +1,7 @@
 """T35 ft pilot: the tuned experts written by nq35_ftp.py must decode bit-exactly through the packed serving path (CPU).
 
 For each tuned arm dir OUT/{arm}/L{L}/E{e}.pt (same codes as enc_b175, only su/sv/U/V changed):
-  a. tuned proj meta == the layer manifest's proj_meta (the packer writes one meta per layer)
+  a. tuned proj meta == the encoder artifact's proj meta
   b. nq_layer.split_expert -> TP8 shard parts -> nq_layer.assemble-style rebuild == tuned planes (tensor-equal), and
      nq_decode.decode_matrix of the rebuild == decode of the tuned artifact (the after-eval path), levels 2 and 4, bitwise
   c. a synthetic layer root PACK/L{L} (manifest copy + tp{s}.pt holding only the tuned experts) is run through
@@ -94,9 +94,11 @@ for d in dirs:
     for E in Es:
         tu = torch.load(f"{d}/E{E}.pt", weights_only=False, map_location="cpu")
         en = torch.load(f"{a.root}/L{L}/experts/E{E}.pt", weights_only=False, map_location="cpu")
-        rr["meta_diff"][E] = {pn: sorted(k for k in man["proj_meta"][pn]
-                                         if json.dumps(man["proj_meta"][pn][k], sort_keys=True, default=str)
-                                         != json.dumps(tu[pn]["meta"].get(k), sort_keys=True, default=str)) for pn in PROJ}
+        # tuned proj meta must equal the encoder's (per-expert fields such as lr rank legitimately differ from the
+        # manifest's layer-level proj_meta, which is taken from the first expert)
+        J = lambda v: json.dumps(v, sort_keys=True, default=str)
+        rr["meta_diff"][E] = {pn: sorted(k for k in set(en[pn]["meta"]) | set(tu[pn]["meta"])
+                                         if J(en[pn]["meta"].get(k)) != J(tu[pn]["meta"].get(k))) for pn in PROJ}
         rr["changed_vs_enc"][E] = {pn: teq(en[pn], tu[pn], pn) for pn in PROJ}
         sp = NL.split_expert(tu)
         for s in range(NL.NSH):
