@@ -93,14 +93,14 @@ The floating-expert pool and the KV cache draw from the same VRAM budget (~93 GB
 Rough unit costs, per GPU:
 
 - **Floating refinement plane** ≈ 2.5 MiB/expert (14.3 GiB for the 77×75 resident set). So adding one hot expert on *every* layer ≈ **+190 MiB**.
-- **KV per token** ≈ 14 KiB (MLA-compressed, DCP4-sharded; from the ~55 KiB/token total over 4 ranks). So **100k tokens of context ≈ the VRAM of ~7 extra hot experts per layer**, and going 77 → 170 hot (+93/layer ≈ **+17 GiB/GPU**) costs about **1.3M tokens** of context budget.
+- **KV per token** ≈ 14 KiB (MLA-compressed, DCP4-sharded; from the ~55 KiB/token total over 4 ranks). So **100k tokens of context ≈ the VRAM of ~7 extra hot experts per layer** — about **14k tokens per hot expert per layer**. At the default ~1M context the KV pool is nearly full at 77 hot, so there's only room to add ~70 hot/layer (to ~145) and only as context falls toward zero. Useful operating points trade a few hundred k of context for a few dozen more hot experts.
 
-**Example — 170 hot experts.** From the default (~77 hot, long context), push more capability into the hot set:
+**Example — 120 hot experts.** From the default (~77 hot, ~1M context), push more capability into the hot set:
 
 ```bash
-NQ_SLOTS_PER_LAYER=176 NQ_MAXLEN=500000 NQ_UTIL=0.92 ./start.sh
+NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 NQ_UTIL=0.92 ./start.sh
 ```
 
-170 floating needs ~176 slots (the pool keeps a few slots of headroom per layer for in-flight swaps). Capping context near **500k** frees the ~17 GiB the extra experts occupy. This is approximate — confirm the fit at boot: the prefill-peak line in the logs should stay a few GiB under 97.9 GB/GPU; if it doesn't, trim `NQ_SLOTS_PER_LAYER` or `NQ_MAXLEN`, or nudge `NQ_UTIL`.
+120 floating needs ~124 slots (the pool keeps a few slots of headroom per layer for in-flight swaps). The +43 hot experts/layer ≈ **+8 GiB/GPU** ≈ **~570k tokens** of KV, so the ~1M default context drops to ~430k; cap at **400k** for headroom. This is approximate — confirm the fit at boot: the prefill-peak line in the logs should stay a few GiB under 97.9 GB/GPU; if it doesn't, trim `NQ_SLOTS_PER_LAYER` or `NQ_MAXLEN`, or nudge `NQ_UTIL`.
 
 Which way to lean: more hot experts lowers per-layer KLD (better quality at short-to-mid context); more KV extends usable context. The predictors (`gbdt`/`jF`) choose *which* experts are hot each step; `NQ_SLOTS_PER_LAYER` sets *how many*.
