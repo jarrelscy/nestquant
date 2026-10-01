@@ -7,8 +7,12 @@ TBL_W=20
 A_=float(np.array([0x1eee],np.uint16).view(np.float16)[0]);B_=float(np.array([0xc931],np.uint16).view(np.float16)[0])
 
 # residual window patterns (table code -> (KA, MASK)); LSB-first period-16 fractional steps (thread 15)
-RKP={0:(2,0),1:(1,0xEEEE),2:(2,0xAAAA),3:(2,0x8888),4:(3,0),5:(1,0xAAAA),6:(1,0xFFFE),7:(2,0x9248),8:(1,0xFEFE)}
-RK_OF={2:0,1.75:1,2.5:2,2.25:3,3:4,1.5:5,1.9375:6,2.3125:7,1.875:8}
+RKP={0:(2,0),1:(1,0xEEEE),2:(2,0xAAAA),3:(2,0x8888),4:(3,0),5:(1,0xAAAA),6:(1,0xFFFE),7:(2,0x9248),8:(1,0xFEFE),
+     9:(2,0xD5AA)}                                       # 9: K=2.5625 (2, bres(9)), threads/35 b1.75 down residual
+RK_OF={2:0,1.75:1,2.5:2,2.25:3,3:4,1.5:5,1.9375:6,2.3125:7,1.875:8,2.5625:9}
+# Base K code (nq-res-v2, table [19]): same numbering as RKP. 0 = today's K=2 ring base (uint4 per record, == the
+# sub-array layout at 128 bits); 1 = K=1.75 (1,0xEEEE) pattern-rate base (threads/35), 112 bits per record in the P4
+# sub-array layout (uint2 | uint | ushort). Spec: sm120/NQ_RES_V2.md.
 popc=lambda m:bin(m).count('1')
 def rbits(rk):KA,M=RKP[rk];return 4*(16*KA+popc(M))
 def step_off(p,KA,MASK):
@@ -16,10 +20,10 @@ def step_off(p,KA,MASK):
     p=torch.as_tensor(p);return (p>>4)*(16*KA+popc(MASK))+torch.tensor(per,device=p.device)[p&15]
 def split_bits(bits):n4=bits//128;r=bits%128;return n4,r//64,(r%64)//32,(r%32)//16,bits%16   # + tail bits T
 
-def proj_sizes(N,K,nm=None,rk=0):
+def proj_sizes(N,K,nm=None,rk=0,bk=0):
     """bytes per plane (flags: int64 per strip). nm=None: dense P4; else nm flagged chunks per strip."""
     S,C=N//16,K//128;R=C if nm is None else nm
-    return dict(S=S,C=C,nm=nm,rk=rk,base=S*C*32*16,p4=S*R*32*rbits(rk)//8+(4 if rbits(rk)%16 else 0),d4=S*R*4,flags=0 if nm is None else S*8,nrec_r=S*R*32)
+    return dict(S=S,C=C,nm=nm,rk=rk,bk=bk,base=S*C*32*rbits(bk)//8+(4 if rbits(bk)%16 else 0),p4=S*R*32*rbits(rk)//8+(4 if rbits(rk)%16 else 0),d4=S*R*4,flags=0 if nm is None else S*8,nrec_r=S*R*32)
 
 def make_flags(S,C,nm,gen,grp=8):
     """nm flagged chunks per strip; identical across each group of `grp` strips (128x128 block granularity)."""
@@ -44,6 +48,23 @@ def pack_words(w,bits):
         b=b[:b.numel()//8*8].view(-1,8);parts.append((b<<torch.arange(8)).sum(1).to(torch.uint8))
     return torch.cat(parts).view(torch.int32)
 
+def unpack_words(t,nrec,bits):
+    """inverse of pack_words: int32 sub-array layout of nrec records -> [nrec, NW] int64 (uint32 values)."""
+    n4,n2,n1,nh,T=split_bits(bits);nw=(bits+31)//32;b=t.contiguous().view(torch.uint8).long();o=0
+    w=torch.zeros(nrec,nw,dtype=torch.int64,device=t.device)
+    def take(nwords,nb):
+        nonlocal o;x=b[o:o+nrec*nwords*nb].view(nrec,nwords,nb);o+=nrec*nwords*nb
+        return (x<<(8*torch.arange(nb,device=t.device))).sum(-1)
+    k=0
+    if n4:w[:,:4*n4]=take(4*n4,4);k=4*n4
+    if n2:w[:,k:k+2]=take(2,4);k+=2
+    if n1:w[:,k]=take(1,4)[:,0];k+=1
+    if nh:w[:,k]=take(1,2)[:,0]
+    if T:
+        A=bits-T;bb=b[o:o+(nrec*T+7)//8];bits_=((bb[:,None]>>torch.arange(8,device=t.device))&1).reshape(-1)[:nrec*T].view(nrec,T)
+        w[:,A//32]|=(bits_<<torch.arange(T,device=t.device)).sum(-1)<<(A%32)
+    return w
+
 MB_LIST=None
 def all_MbN():
     """every valid block word (Mb, N): 1<=Mb<=255, 0<=N<=255, Mb+N<=257"""
@@ -56,11 +77,15 @@ class Proj:
     """Random packed planes of one projection of one expert (separate tensors so they can live in pools).
     base: int32 [S*C*32*4] (uint4 per record). p4: int32 view of the packed residual sub-arrays. d4: int32 Mb|N<<8 per block.
     mbn: 'rand' (realistic delta ~0.1-0.8 plus random extremes) or ('exh', offset): cycle through every valid (Mb, N)."""
-    def __init__(s,N,K,gen,nm=None,rk=0,mbn='rand',var=False):
-        z=proj_sizes(N,K,nm,rk);s.z=z;s.N,s.K,s.rk=N,K,rk
+    def __init__(s,N,K,gen,nm=None,rk=0,mbn='rand',var=False,bk=0):
+        z=proj_sizes(N,K,nm,rk,bk);s.z=z;s.N,s.K,s.rk,s.bk=N,K,rk,bk
         S,C=z['S'],z['C'];R=C if nm is None else nm;nr=S*R*32;bits=rbits(rk);nw=(bits+31)//32
         ri=lambda n:torch.randint(-2**31,2**31-1,(n,),generator=gen,dtype=torch.int32)
-        s.base=ri(S*C*32*4)
+        if bk==0:s.base=ri(S*C*32*4)                     # (bk = 0: unchanged RNG stream)
+        else:
+            bb=rbits(bk);wb=torch.randint(0,2**32,(S*C*32,(bb+31)//32),generator=gen,dtype=torch.int64)
+            if bb%32:wb[:,-1]&=(1<<(bb%32))-1
+            s.bw=wb;s.base=pack_words(wb,bb)
         w=torch.randint(0,2**32,(nr,nw),generator=gen,dtype=torch.int64)
         if bits%32:w[:,-1]&=(1<<(bits%32))-1
         s.p4w=w;s.p4=pack_words(w,bits)
@@ -77,7 +102,7 @@ class Proj:
         if nm is None:s.flags=None;s.fl=None
         else:s.flags,s.fl=make_flags(S,C,nm,gen)
     def to(s,dev):
-        for k in ['base','p4','d4','flags','p4w','Mb','Nn','var']:
+        for k in ['base','p4','d4','flags','p4w','Mb','Nn','var','bw']:
             if getattr(s,k) is not None:setattr(s,k,getattr(s,k).to(dev))
         return s
 
@@ -110,15 +135,18 @@ def fold_vals(Sb,Sr,Mb,N,sg=1.0):
 def lane_vals(p,level,G):
     """decoded fp16 weights [S, C, 32, 64] in lane-weight order"""
     z=p.z;S,C=z['S'],z['C'];dev=p.base.device
-    wb=(p.base.long()&0xFFFFFFFF).view(-1,4)
-    Sb=lane_sums(wb,128,2,0,G).view(S,C,32,64)
+    bk=getattr(p,'bk',0)
+    if bk==0:wb=(p.base.long()&0xFFFFFFFF).view(-1,4)
+    else:wb=p.bw if getattr(p,'bw',None) is not None else unpack_words(p.base,S*C*32,rbits(bk))
+    Sb=lane_sums(wb,rbits(bk),*RKP[bk],G).view(S,C,32,64)
     sg=1.0
     if getattr(p,'var',None) is not None:
         assert G==4;bit=(p.var.long().view(S,C,1)>>(torch.arange(32,device=dev)>>2))&1;sg=(1-2*bit).double()[...,None]
     q2=((sg*A_)*(1024+Sb.double())+sg*B_).half()
     if level==2:return q2
     KA,M=RKP[p.rk];R=C if p.fl is None else z['nm']
-    Sr=lane_sums(p.p4w,rbits(p.rk),KA,M,G).view(S,R,32,64)
+    p4w=p.p4w if getattr(p,'p4w',None) is not None else unpack_words(p.p4,S*R*32,rbits(p.rk))
+    Sr=lane_sums(p4w,rbits(p.rk),KA,M,G).view(S,R,32,64)
     Mb=p.Mb.view(S,R);Nn=p.Nn.view(S,R)
     if p.fl is None:on=torch.ones(S,C,dtype=torch.bool,device=dev);rank=torch.arange(C,device=dev)[None].expand(S,C)
     else:on=p.fl.to(dev);rank=(torch.cumsum(on.long(),1)-on.long()).clamp(max=R-1)
@@ -147,9 +175,9 @@ def had_dn(ex):
     return int(getattr(ex,'had_dn',128) or 128)
 
 class Expert:
-    def __init__(s,H,I,seed,nm_gu=None,nm_dn=None,dev='cuda',rk_gu=0,rk_dn=0,mbn='rand',var=False):
+    def __init__(s,H,I,seed,nm_gu=None,nm_dn=None,dev='cuda',rk_gu=0,rk_dn=0,mbn='rand',var=False,bk_gu=0,bk_dn=0):
         gen=torch.Generator().manual_seed(seed)
-        s.gu=Proj(2*I,H,gen,nm_gu,rk_gu,mbn,var).to(dev);s.dn=Proj(H,I,gen,nm_dn,rk_dn,mbn if mbn=='rand' else ('exh',mbn[1]+(2*I//16)*(H//128)),var).to(dev)
+        s.gu=Proj(2*I,H,gen,nm_gu,rk_gu,mbn,var,bk_gu).to(dev);s.dn=Proj(H,I,gen,nm_dn,rk_dn,mbn if mbn=='rand' else ('exh',mbn[1]+(2*I//16)*(H//128)),var,bk_dn).to(dev)
         sg=torch.randint(0,2,(2*H+3*I,),generator=gen)*2-1;su_u=torch.randint(0,2,(H,),generator=gen)*2-1
         s.signs=torch.cat([sg,su_u]).half().to(dev)      # [H su_g | I sv_g | I sv_u | I su_d | H sv_o | H su_u]
         s.H,s.I=H,I;s.lr=s.lr4=None;s.rg=s.rd=0
@@ -181,6 +209,10 @@ class Expert:
         if s.lr is not None:z=sw@Vd.T;y=y+z@U2d+(z@U4d if level==4 else 0)
         return y
 
+def base_code(p):
+    """base K code of a projection (RKP numbering; absent = 0 = K=2 ring base)"""
+    return int(getattr(p,'bk',0) or 0)
+
 def entry(ex,level):
     e=torch.zeros(TBL_W,dtype=torch.int64)
     e[0]=level
@@ -193,6 +225,7 @@ def entry(ex,level):
     lr=getattr(ex,'lr',None)
     if lr is not None:e[14]=lr.data_ptr();e[15]=ex.lr4.data_ptr();e[16]=ex.rg;e[17]=ex.rd
     w=had_dn(ex);e[18]=0 if w==128 else w
+    e[19]=base_code(ex.gu)|base_code(ex.dn)<<8           # nq-res-v2 base K codes (0 = K=2 ring base, as before)
     return e
 
 class MoELayer:
@@ -210,6 +243,10 @@ class MoELayer:
     def set(s,e,ex,level):
         w=had_dn(ex);assert w in (128,512) and s.I%w==0,f'in_had_down {w} must be 128 or 512 and divide I={s.I}'
         if getattr(ex,'lr',None) is not None:assert ex.rg<=4 and ex.rd<=4 and ex.lr.dtype==torch.float16
+        bks=(base_code(ex.gu),base_code(ex.dn))
+        if bks!=(0,0):                                    # kernels without bk_codes() decode only the K=2 base
+            if not hasattr(s,'bkm'):s.bkm=s.M.bk_codes() if hasattr(s.M,'bk_codes') else [1,1]
+            assert s.bkm[0]>>bks[0]&1 and s.bkm[1]>>bks[1]&1,f'base K code gu {bks[0]} / dn {bks[1]} not compiled (bk_codes {s.bkm})'
         if level==4:
             if not hasattr(s,'rkm'):s.rkm=s.M.rk_codes() if hasattr(s.M,'rk_codes') else [255,255]
             assert s.rkm[0]>>ex.gu.rk&1 and s.rkm[1]>>ex.dn.rk&1,f'residual K code gu {ex.gu.rk} / dn {ex.dn.rk} not compiled (rk_codes {s.rkm})'

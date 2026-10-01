@@ -4,13 +4,15 @@ manifest.json -> sm120 kernel experts. Rank r of a TP=tp run owns the contiguous
   group_art(parts, man, E, ss)   pseudo-artifact of shard group ss (nq_decode can decode it; lr like nq_layer.assemble)
   kernel_expert(art, want_Q)     -> (ex, scales(lv), Q) kernel planes (+ rotated nq_decode Q2/Q4 for WDUMP checks)
   RankLayer(root, L, rank, tp)   all experts of one layer for one rank; slot_bytes() = P4 slot size (P4 + d4 + U4)
-The kernel's residual code comes from proj_meta.res_rule (uniform K per projection)."""
+The kernel's residual code comes from proj_meta.res_rule (uniform K per projection); the base code from proj_meta.base_K
+(threads/35 pattern-rate base; absent = 2 -> code 0, planes byte-identical to before). Spec: NQ_RES_V2.md."""
 import os,sys,json,types,torch
 _R=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _p in (_R+'/threads/05-exl3-harness',_R+'/threads/12-reference-encoder'):
     if _p not in sys.path:sys.path.append(_p)
 import nq_decode as D
 from moe import RK_OF,RKP,rbits,proj_sizes,pack_words
+D.PATTERNS.setdefault(2.5625,(2,0xD5AA))               # threads/35 b1.75 down residual (== nq15.NEW; T12 lacks it)
 PROJ=('gate','up','down')
 NSH=8
 
@@ -38,6 +40,7 @@ def repack(P,dev='cuda',want_Q=False):
     m=P['meta'];tk,tn=m['tk'],m['tn'];U=tk*tn
     rule=m['res_rule'];assert rule['kind']=='uniform',rule
     K=float(rule['K']);rk=RK_OF[K];KA,MASK=RKP[rk];assert D.PATTERNS[K]==(KA,MASK)
+    bK=float(m.get('base_K',2));bk=RK_OF[bK];assert bk==0 or D.PATTERNS[bK]==RKP[bk],(bK,bk)   # bk 0 iff K=2
     order,_=D.unit_order(tk,tn,m['shard_axis'],dev)
     Q=None
     if want_Q:
@@ -49,9 +52,10 @@ def repack(P,dev='cuda',want_Q=False):
         b=((st.long()[...,None]>>torch.arange(8,device=dev))&1).view(U,8,4,bits).reshape(U*32,bits)
         nw=(bits+31)//32;b=torch.nn.functional.pad(b,(0,nw*32-bits)).view(U*32,nw,32)
         return (b<<torch.arange(32,device=dev)).sum(-1)
-    wb=lane_words(D._cat(P['base']['shards'],'cpu'),128);wr=lane_words(D._cat(P['p4']['shards'],'cpu'),rbits(rk))
-    p=types.SimpleNamespace(N=m['n'],K=m['k'],rk=rk,z=proj_sizes(m['n'],m['k'],None,rk),flags=None,fl=None)
-    p.base=torch.from_numpy(wb.reshape(-1).cpu().numpy().astype('uint32').view('int32')).to(dev)
+    wb=lane_words(D._cat(P['base']['shards'],'cpu'),rbits(bk));wr=lane_words(D._cat(P['p4']['shards'],'cpu'),rbits(rk))
+    p=types.SimpleNamespace(N=m['n'],K=m['k'],rk=rk,bk=bk,z=proj_sizes(m['n'],m['k'],None,rk,bk),flags=None,fl=None)
+    if bk==0:p.base=torch.from_numpy(wb.reshape(-1).cpu().numpy().astype('uint32').view('int32')).to(dev)
+    else:p.bw=wb;p.base=pack_words(wb.cpu(),rbits(bk)).to(dev)   # P4 sub-array layout at rbits(bk) bits per record
     p.p4w=wr;p.p4=pack_words(wr.cpu(),rbits(rk)).to(dev)
     bw=D._cat(P['p4']['word'],'cpu').long().to(dev)[inv];p.Mb=bw&255;p.Nn=(bw>>8)&255;p.d4=(p.Mb|(p.Nn<<8)).to(torch.int32)
     assert m['base_var']=='sign'
@@ -60,14 +64,19 @@ def repack(P,dev='cuda',want_Q=False):
 
 def cat_proj(a,b,dev='cuda'):
     assert a.rk==b.rk,'gate and up must share the residual code (one K1 code per expert)'
-    p=types.SimpleNamespace(N=a.N+b.N,K=a.K,rk=a.rk,z=proj_sizes(a.N+b.N,a.K,None,a.rk),flags=None,fl=None)
-    p.base=torch.cat([a.base,b.base]);p.p4w=torch.cat([a.p4w,b.p4w]);p.p4=pack_words(p.p4w.cpu(),rbits(p.rk)).to(dev)
+    bk=getattr(a,'bk',0);assert bk==getattr(b,'bk',0),'gate and up must share the base code'
+    p=types.SimpleNamespace(N=a.N+b.N,K=a.K,rk=a.rk,bk=bk,z=proj_sizes(a.N+b.N,a.K,None,a.rk,bk),flags=None,fl=None)
+    if bk==0:p.base=torch.cat([a.base,b.base])
+    else:p.bw=torch.cat([a.bw,b.bw]);p.base=pack_words(p.bw.cpu(),rbits(bk)).to(dev)   # sub-arrays span all records
+    p.p4w=torch.cat([a.p4w,b.p4w]);p.p4=pack_words(p.p4w.cpu(),rbits(p.rk)).to(dev)
     p.Mb=torch.cat([a.Mb,b.Mb]);p.Nn=torch.cat([a.Nn,b.Nn]);p.d4=torch.cat([a.d4,b.d4]);p.var=torch.cat([a.var,b.var]);return p
 
 def kernel_expert(art,dev='cuda',want_Q=False):
     g,Qg=repack(art['gate'],dev,want_Q);u,Qu=repack(art['up'],dev,want_Q);d,Qd=repack(art['down'],dev,want_Q)
     ex=types.SimpleNamespace(gu=cat_proj(g,u,dev),dn=d,H=d.N,I=d.K,lr=None,lr4=None,rg=0,rd=0)
-    for p in (ex.gu,ex.dn):del p.p4w                      # only needed for cat_proj / host decode
+    for p in (ex.gu,ex.dn):                               # only needed for cat_proj / host decode (moe.lane_vals unpacks)
+        del p.p4w
+        if hasattr(p,'bw'):del p.bw
     def lrp(pn):                                          # the encoder omits 'lr' for a projection with r = 0
         P=art[pn];n,k=P['meta']['n'],P['meta']['k'];z=lambda c:torch.zeros(0,c,dtype=torch.float16)
         if 'lr' not in P['base']:return z(k),z(n),z(n)
