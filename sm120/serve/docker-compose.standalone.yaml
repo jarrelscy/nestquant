@@ -6,14 +6,14 @@
 # and runs the one-off host prep. Every host path below is an env var with a default; override as needed.
 #
 # Required local artifacts (NOT shipped in this repo — see README "Serving"):
-#   - the Docker image glm53-arvq-sm120 (SM120 vLLM fork; pull_policy: never)
+#   - the SM120 vLLM fork image (public: jarrelscy/glm53-nestquant-sm120); auto-pulled if absent
 #   - the GLM-5.3 base checkpoint at NQ_MODEL_DIR (under NQ_MODELS_ROOT)
 #   - the NestQuant repack at NQ_REPACK_DIR, the predictor at NQ_PREDICTOR_DIR, liburing at NQ_LIBURING_DIR
 # MoE layers present in the repack run the NestQuant SSD-streaming kernel; the rest keep the base experts.
 services:
   glm53-nestquant:
-    image: ${NQ_IMAGE:-glm53-arvq-sm120:fixes12-mtp-buffer-rng-20260917}
-    pull_policy: never
+    image: ${NQ_IMAGE:-jarrelscy/glm53-nestquant-sm120:fixes12-mtp-buffer-rng-20260917}
+    pull_policy: missing
     container_name: glm53-nestquant
     restart: unless-stopped
     ipc: host

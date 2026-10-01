@@ -11,7 +11,7 @@
 # Hardware: 4x RTX PRO 6000 Blackwell (SM120, 96 GB each). TP4 + DCP4, MTP ns=3.
 #
 # Key env vars (see the compose file for the full set):
-#   NQ_IMAGE          serving image tag                    (default glm53-arvq-sm120:fixes12-...)
+#   NQ_IMAGE          serving image tag (public on Docker Hub) (default jarrelscy/glm53-nestquant-sm120:fixes12-...)
 #   NQ_MODELS_ROOT    host dir mounted at /data/models     (default /data/models); holds NQ_MODEL_DIR
 #   NQ_MODEL_DIR      base checkpoint path (container)     (default .../GLM-5.3-Vision-...-ARVQ-hybrid-...)
 #   NQ_REPACK_DIR     NestQuant repack (rankN.json + planes) (default /home/jarrelscy/nq-p4rec/hf)
@@ -27,7 +27,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 export COMPOSE_FILE="$HERE/sm120/serve/docker-compose.standalone.yaml"
 export COMPOSE_PROJECT_NAME=nestquant
 export NQ_REPO=${NQ_REPO:-$HERE}
-NQ_IMAGE=${NQ_IMAGE:-glm53-arvq-sm120:fixes12-mtp-buffer-rng-20260917}
+NQ_IMAGE=${NQ_IMAGE:-jarrelscy/glm53-nestquant-sm120:fixes12-mtp-buffer-rng-20260917}
 export NQ_IMAGE
 
 # VLLM_API_KEY: honour the environment first, else pull it from a gitignored local env file, else none.
@@ -55,6 +55,11 @@ up)
     [ -f "$RP/rank$r.json" ] || { echo "repack still missing rank$r.json at $RP after download. Set NQ_REPACK_DIR / NQ_REPACK_REPO."; exit 1; }
   done
   echo "NQ layers in repack: $(python3 -c "import json;print(sorted(int(k) for k in json.load(open('$RP/rank0.json'))['layers']))")"
+  # Pull the SM120 serving image if it isn't already present (the kernel build below runs it before compose).
+  if ! docker image inspect "$NQ_IMAGE" >/dev/null 2>&1; then
+    echo "serving image $NQ_IMAGE not local — pulling from Docker Hub (~20 GB, once) ..."
+    docker pull "$NQ_IMAGE"
+  fi
   if docker ps --format '{{.Ports}}' | grep -q ':8001->'; then
     echo "port 8001 is already in use; stop the running model first"; exit 1
   fi

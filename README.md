@@ -44,19 +44,21 @@ nothing in the image is shadowed.
 **Prerequisites (local artifacts, not shipped here):**
 
 - An SM120 host — 4x RTX PRO 6000 Blackwell (96 GB each).
-- The serving Docker image (`NQ_IMAGE`, default `glm53-arvq-sm120:fixes12-...`): the SM120 vLLM fork with
-  the GLM-5.3 ARVQ/MLA kernels and the NestQuant hooks baked in. `pull_policy: never` — build/load it
-  locally. Non-repack MoE layers run on this image's base (ARVQ) experts; that path lives inside the
-  image and its single overlay `sm120/serve/overlay/nvfp4_arvq_hybrid.py`, not as a separate package.
 - The GLM-5.3 base checkpoint at `NQ_MODEL_DIR` (under the host dir `NQ_MODELS_ROOT` → `/data/models`).
 - The predictor dir at `NQ_PREDICTOR_DIR` (`joint/jF.pt`, `joint/v2_sal_tweedie1.5.txt`, `delta_table.json`)
   and a `liburing` install at `NQ_LIBURING_DIR` (SSD streaming).
 
-The NestQuant repack is **not** a prerequisite you build — `start.sh` downloads the serve-ready
-`nq-p4rec-v1` repack (per-rank `rankN.json` + `res/` resident planes + `rankN.bin` streamed planes) from
-`jarrelscy/GLM-5.3-NestQuant-2-4bit` into `NQ_REPACK_DIR` on first run (~366 GB, once; needs the `hf` CLI,
-`pip install -U 'huggingface_hub[hf_transfer]'`). No repacking step. Override the source with `NQ_REPACK_REPO`
-or point `NQ_REPACK_DIR` at an existing copy to skip the download.
+Two large artifacts are **not** prerequisites you build — `start.sh` fetches both on first run:
+
+- **The serving image** (`NQ_IMAGE`, default `jarrelscy/glm53-nestquant-sm120:fixes12-...`): the SM120 vLLM
+  fork with the GLM-5.3 ARVQ/MLA kernels and the NestQuant hooks baked in, public on Docker Hub.
+  `start.sh` (and compose, `pull_policy: missing`) `docker pull`s it if absent (~20 GB, once). Non-repack
+  MoE layers run on this image's base (ARVQ) experts; that path lives inside the image and its single
+  overlay `sm120/serve/overlay/nvfp4_arvq_hybrid.py`, not as a separate package.
+- **The NestQuant repack** (`nq-p4rec-v1`: per-rank `rankN.json` + `res/` resident planes + `rankN.bin`
+  streamed planes): downloaded from `jarrelscy/GLM-5.3-NestQuant-2-4bit` into `NQ_REPACK_DIR` on first run
+  (~366 GB, once; needs the `hf` CLI, `pip install -U 'huggingface_hub[hf_transfer]'`). No repacking step.
+  Override the source with `NQ_REPACK_REPO`, or point `NQ_REPACK_DIR` at an existing copy to skip the download.
 
 **Overriding paths for a different host.** Every host path is an env var with a default matching the
 reference box; set what differs, e.g.:
