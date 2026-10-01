@@ -100,6 +100,9 @@ class Runtime:
         s.started=True;rp=os.environ['NQ_REPACK'];L_=sorted(s.lay);dev=s.dev
         s.rf=rf=SE.RankFile(rp,s.rank);rb=rf.rb
         fx,src,_=FS.load(layers=L_)
+        _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf')   # jF joint predictor: k0 layout (no fixed set, all floating)
+        nf=77 if _JOINT else NF
+        if _JOINT:fx={L:[] for L in L_};src='joint-k0'
         # fixed set: records -> resident pool, level 4 rows
         nfix=sum(len(fx[L]) for L in L_);s.fixpool=torch.empty(nfix,rb,dtype=torch.uint8,device=dev)
         buf=torch.empty(rb,dtype=torch.uint8).pin_memory();fd=os.open(rf.path,os.O_RDONLY);i=0;t=time.time();bad=set()
@@ -125,10 +128,20 @@ class Runtime:
             s.thread=threading.Thread(target=s.share_loop,args=(fm,),name='nq-share',daemon=True);s.thread.start();return
         nslot=int(os.environ.get('NQ_SLOTS_PER_LAYER','56'))*len(L_)
         T22=NQ_HOME+'/threads/22-boundary-experts/fixed_set.json';fj=json.load(open(T22))
-        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in L_}
+        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf]] for L in L_}
         lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
-        pred=(os.environ.get('NQ_PREDICTOR') or SC.DEFAULT_PREDICTOR) if (s.rank==0 or not lead) else 'ema'   # followers never step S
-        s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=NF,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
+        _steps=(s.rank==0 or not lead)   # this rank runs the real predictor; the others use 'ema'
+        if _JOINT and _steps:
+            _jd='/nqpred/joint'
+            if _jd not in sys.path:sys.path.insert(0,_jd)
+            import gpu_predictor as GJ
+            pred=GJ.GPUJointPredictor(L_,fx,os.environ.get('NQ_JOINT_NET','/nqpred/joint/jF.pt'),n_float=nf,
+                                      hm=float(os.environ.get('NQ_JOINT_HM','0.7')),device=dev,
+                                      v2_model=os.environ.get('NQ_JOINT_V2','/nqpred/joint/v2_sal_tweedie1.5.txt'),
+                                      graph=os.environ.get('NQ_JOINT_GRAPH','0')=='1')
+        else:
+            pred=(os.environ.get('NQ_PREDICTOR') or SC.DEFAULT_PREDICTOR) if _steps else 'ema'   # followers never step S
+        s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=nf,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
                          tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')),predictor=pred)
         log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
         s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=64,qd=8,device=dev.index,
@@ -208,7 +221,7 @@ class Runtime:
                     log.info('NestQuant rank %d: level-4 experts %d/%d, ups %d downs %d, read errors %d, op p50 %.1f ms',s.rank,
                              int((lv==4).sum()),lv.size,s.S.stats['ups'],s.S.stats['downs'],s.S.stats.get('read_errors',0),
                              float(np.median(s.X.lat[-256:]))*1e3 if s.X.lat else -1)
-                    if s.F is None and s.S.P is not None:log.info('NestQuant rank %d: predictor %s stats %s',s.rank,s.S.predictor_name,s.S.P.stats)
+                    if s.F is None and s.S.P is not None:log.info('NestQuant rank %d: predictor %s stats %s',s.rank,s.S.predictor_name,getattr(s.S.P,'stats',{}))
         except Exception as e:           # streaming stops; every expert keeps its current (valid) row
             s.err=e;log.exception('NestQuant streaming thread stopped')
 
