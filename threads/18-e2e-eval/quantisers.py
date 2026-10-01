@@ -26,6 +26,8 @@ Spec strings (``--cand NAME=SPEC``):
                                       legacy .bin; decoded by exllamav3 via orbit_duet.exl3_adapter)
     nvfp4:root=/path                  {root}/layer_{L:03d}/expert_{E:03d}/weights.pt (orbit-duet ModelOpt
                                       payload; decoded by orbit_duet.nvfp4_reference.decode)
+    tr3:root=/path                    T34: TR3 mixed-K EXL3 shards {root}/model-layer-{L:03d}.safetensors (davidsyoung
+                                      GLM-5.3-EXL3-TR3-3.42bpw), decoded on device by threads/34-tr3/tr3_decode.py
     py:/file.py:Class[:k=v,...]       any external class implementing the interface
 Optional ``layers=a-b`` in any spec restricts quantisation to those layers (others -> reference).
 """
@@ -838,6 +840,39 @@ class NVFP4(Base):
         return dict(zip(PROJ, ws))
 
 
+class TR3(Base):
+    """T34: davidsyoung/GLM-5.3-EXL3-TR3-3.42bpw (mixed K3/K4 EXL3 trellis, mcg, TP4 pre-sliced ranks) decoded from
+    the published shards {root}/model-layer-{L:03d}.safetensors by threads/34-tr3/tr3_decode.py (pure torch, on
+    device; fp64 Hadamards so GPU == CPU bitwise).  Routed experts only; returns fp16 values [out, in].
+    tr3:root=/tmp/nestquant/34-tr3/src"""
+    T34 = "/home/coder/git/nestquant/threads/34-tr3"
+
+    def __init__(self, root):
+        self.root = root
+        if self.T34 not in sys.path:
+            sys.path.insert(0, self.T34)
+        import tr3_decode
+        self.td = tr3_decode
+        self.rd = None
+        self.k_hist = {}
+
+    def begin_layer(self, layer, device):
+        self.dev = device
+        f = f"{self.root}/model-layer-{layer:03d}.safetensors"
+        self.rd = self.td.TR3Layer(self.root, layer) if self.active(layer) and os.path.exists(f) else None
+
+    def end_layer(self, layer):
+        self.rd = None
+
+    def expert(self, layer, expert, ref):
+        if not self.active(layer) or self.rd is None or self.rd.layer != layer or \
+                f"model.layers.{layer}.mlp.experts.{expert}.gate_proj.rank0.trellis" not in self.rd.hdr:
+            return None
+        k = self.rd.K(expert)
+        self.k_hist[k] = self.k_hist.get(k, 0) + 1
+        return self.rd.expert(expert, self.dev)
+
+
 def make(name, spec):
     kind, _, rest = spec.partition(":")
     if kind == "py":
@@ -877,6 +912,8 @@ def make(name, spec):
             q = EXL3(**kv)
         elif kind == "nvfp4":
             q = NVFP4(**kv)
+        elif kind == "tr3":
+            q = TR3(**kv)
         else:
             raise SystemExit(f"unknown quantiser kind {kind!r}")
     q.name = name

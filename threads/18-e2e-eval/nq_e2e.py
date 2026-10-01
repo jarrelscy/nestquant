@@ -67,6 +67,13 @@ TRACE_PROBS = bool(os.environ.get("NQ_TRACE_PROBS"))   # T32: + full 256-way rou
 TRACE_HID = [int(x) for x in os.environ.get("NQ_TRACE_HID", "").split(",") if x]
 TRACE_HID_PCA = os.environ.get("NQ_TRACE_HID_PCA")
 TRACE_HEAD = bool(os.environ.get("NQ_TRACE_HEAD"))
+# T34 BF16-teacher panel (default off): NQ_TEACHER=CORPUS=DIR scores every stream INCLUDING the FP8 reference
+#   (reported as "fp8") as KL(teacher || stream) on windows of corpus CORPUS, whose global window i has teacher logits
+#   DIR/confirmation-{i:04d}.safetensors ("logits" fp32 [SEQ-1, V]: row p predicts token p+1, as in their runner
+#   prefill_kld_53.py).  ce_ref / top-1 agreement are then vs the teacher.  Other corpora keep the FP8 reference.
+TEACHER = dict([os.environ["NQ_TEACHER"].split("=", 1)]) if os.environ.get("NQ_TEACHER") else {}
+# T34 fp8_ds_mla KV-cache emulation (default off): NQ_KVQ=kv|kvq|absorbed[:raw] -> threads/34-tr3/kvq.py (all streams)
+KVQ = os.environ.get("NQ_KVQ", "")
 
 
 def trace_hid(li, h):
@@ -187,6 +194,11 @@ class Backbone:
         with torch.device("meta"):
             layer = GlmMoeDsaDecoderLayer(self.cfg, li)
         layer.self_attn.indexer = None          # exact at SEQ <= index_topk (all causal keys kept)
+        if KVQ:
+            if "/home/coder/git/nestquant/threads/34-tr3" not in sys.path:
+                sys.path.insert(0, "/home/coder/git/nestquant/threads/34-tr3")
+            import kvq
+            kvq.install(layer.self_attn, KVQ)
         sparse = self.cfg.mlp_layer_types[li] == "sparse"
         if sparse:
             layer.mlp.experts = torch.nn.Module()   # routed experts are streamed per expert
@@ -672,6 +684,12 @@ def cmd_run(a):
     norm.load_state_dict({"weight": fp8.tensor("model.norm.weight", dev)})
     head = fp8.tensor("lm_head.weight", dev).float()      # [V, H] fp32
     ng = len(names)
+    if TEACHER:                                          # T34: the FP8 stream becomes a scored arm ("fp8")
+        assert not use_cache and set(TEACHER) <= set(names), (TEACHER, names)
+        cand = list(range(len(qs)))
+        qs[0].name = "fp8"
+        from safetensors import safe_open
+        wglob = [(n, int(i)) for n, mine in WIN_IDS for i in mine]          # local window -> (corpus, global id)
     res = {q.name: {"groups": [{"ce_ref": 0.0, "ce": 0.0, "ntok": 0, "klsum": 0.0,
                                 "agree": 0, "win_kl": []} for _ in range(ng)]}
            for i, q in enumerate(qs) if i in cand}
@@ -685,9 +703,17 @@ def cmd_run(a):
             tgt = ids_dev[w, 1:]
             hc = [norm(hid[i][w])[:-1] for i in cand]
             wk = [0.0] * len(cand)
+            tlog = None
+            if TEACHER and wglob[w][0] in TEACHER:
+                with safe_open(f"{TEACHER[wglob[w][0]]}/confirmation-{wglob[w][1]:04d}.safetensors", "pt") as tf_:
+                    tlog = tf_.get_tensor("logits")
+                assert tuple(tlog.shape) == (SEQ - 1, head.shape[0]), (tlog.shape, head.shape)
             for p0 in range(0, SEQ - 1, P):
                 p1 = min(p0 + P, SEQ - 1)
-                lr = torch.log_softmax(hr[p0:p1].float() @ head.T, -1)
+                if tlog is not None:
+                    lr = torch.log_softmax(tlog[p0:p1].to(dev).float(), -1)
+                else:
+                    lr = torch.log_softmax(hr[p0:p1].float() @ head.T, -1)
                 if TRACE_DIR and TRACE_HEAD:
                     head_ent.append(-(lr.exp() * lr).sum(-1).cpu()); head_p1.append(lr.max(-1).values.exp().cpu())
                 ce_r = float(-lr.gather(1, tgt[p0:p1, None]).sum())
@@ -707,6 +733,7 @@ def cmd_run(a):
                 del lr
             for j, i in enumerate(cand):
                 res[qs[i].name]["groups"][g]["win_kl"].append(wk[j] / (SEQ - 1))
+            del tlog
     if TRACE_DIR and TRACE_HEAD:                        # positions 0..SEQ-2 of each window (last: no logits here)
         hf = f"{TRACE_DIR}/head.r{RANK}of{WORLD}.npz"
         np.savez(hf + ".part.npz", ent=torch.cat(head_ent).reshape(N, SEQ - 1).numpy(),
@@ -723,7 +750,7 @@ def cmd_run(a):
         arr = {f"L{li}_{src}": v for li, d in rec.items() for src, v in d.items()}
         np.savez_compressed(f"{rdir}/la_{qs[s].name}_r{RANK}.npz", **arr)
     json.dump({"rank": RANK, "world": WORLD, "corpora": names, "corpus_sha": shas, "seq": SEQ,
-               "shard": SHARD, "windows": WIN_IDS,
+               "shard": SHARD, "windows": WIN_IDS, "teacher": TEACHER or None, "kvq": KVQ or None,
                "n_layers": nl, "groups_per_window": groups, "ref": "cache" if use_cache else "inline",
                "ref_stats": stats[0] if not use_cache else None,
                "layer_seconds": tl, "wall_seconds": time.time() - t_start, "results": res},
