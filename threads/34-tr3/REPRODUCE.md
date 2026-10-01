@@ -60,4 +60,6 @@ public inputs (larger n_float still runs from k0, filling the extra slots from t
 - `run.sh` hard-codes this box's venv (`/home/coder/git/glm52/.venv`), CUDA env and a lightgbm pylib path; edit those
   three lines for another machine.
 - The harness is an offline teacher-forced evaluator: it swaps 4-bit experts in and out per 16-token block the way the
-  server would, but it is not a serving engine. No server runs jF yet (see threads/33-search/joint/SERVE.md).
+  server would, but it is not a serving engine. For serving, sm120/serve/nq_vllm.py runs jF with `NQ_PREDICTOR=joint`
+  (commit 34bbaad), fixed at 77 floating experts per layer; its start set is the top-77 by routed count rather than the
+  k0 manifest order, so the first 16-token block can differ slightly from this harness.
