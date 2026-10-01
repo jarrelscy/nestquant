@@ -15,6 +15,7 @@
 #   NQ_MODELS_ROOT    host dir mounted at /data/models     (default /data/models); holds NQ_MODEL_DIR
 #   NQ_MODEL_DIR      base checkpoint path (container)     (default .../GLM-5.3-Vision-...-ARVQ-hybrid-...)
 #   NQ_REPACK_DIR     NestQuant repack (rankN.json + planes) (default /home/jarrelscy/nq-p4rec/hf)
+#   NQ_REPACK_REPO    HF repo to fetch the repack from if absent (default jarrelscy/GLM-5.3-NestQuant-2-4bit)
 #   NQ_PREDICTOR_DIR  predictor dir (jF.pt, gbdt, delta)   (default /data/Jarrel/nq-serve/predictor)
 #   NQ_LIBURING_DIR   liburing install                     (default /data/Jarrel/liburing)
 #   NQ_REPO           this repo                            (default /data/Jarrel/nestquant)
@@ -40,8 +41,18 @@ auth=(); [ -n "$VLLM_API_KEY" ] && auth=(-H "Authorization: Bearer $VLLM_API_KEY
 case "${1:-up}" in
 up)
   RP=${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}
+  NQ_REPACK_REPO=${NQ_REPACK_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}
+  # Fetch the serve-ready NestQuant repack from HF if it isn't here yet (no repacking needed).
+  need=0; for r in 0 1 2 3; do [ -f "$RP/rank$r.json" ] || need=1; done
+  if [ "$need" = 1 ]; then
+    echo "repack not found at $RP — downloading $NQ_REPACK_REPO from HF (~366 GB, once) ..."
+    command -v hf >/dev/null 2>&1 || { echo "need the 'hf' CLI: pip install -U 'huggingface_hub[hf_transfer]'"; exit 1; }
+    mkdir -p "$RP"
+    HF_HUB_ENABLE_HF_TRANSFER=1 hf download "$NQ_REPACK_REPO" --repo-type model \
+      --include 'rank*.json' 'rank*.bin' 'res/*' 'artifact_stamp.json' --local-dir "$RP"
+  fi
   for r in 0 1 2 3; do
-    [ -f "$RP/rank$r.json" ] || { echo "no repack at $RP (missing rank$r.json). Set NQ_REPACK_DIR."; exit 1; }
+    [ -f "$RP/rank$r.json" ] || { echo "repack still missing rank$r.json at $RP after download. Set NQ_REPACK_DIR / NQ_REPACK_REPO."; exit 1; }
   done
   echo "NQ layers in repack: $(python3 -c "import json;print(sorted(int(k) for k in json.load(open('$RP/rank0.json'))['layers']))")"
   if docker ps --format '{{.Ports}}' | grep -q ':8001->'; then

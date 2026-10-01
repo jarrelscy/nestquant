@@ -49,9 +49,14 @@ nothing in the image is shadowed.
   locally. Non-repack MoE layers run on this image's base (ARVQ) experts; that path lives inside the
   image and its single overlay `sm120/serve/overlay/nvfp4_arvq_hybrid.py`, not as a separate package.
 - The GLM-5.3 base checkpoint at `NQ_MODEL_DIR` (under the host dir `NQ_MODELS_ROOT` → `/data/models`).
-- The NestQuant P4 repack (per-rank `rankN.json` + resident planes) at `NQ_REPACK_DIR`.
 - The predictor dir at `NQ_PREDICTOR_DIR` (`joint/jF.pt`, `joint/v2_sal_tweedie1.5.txt`, `delta_table.json`)
   and a `liburing` install at `NQ_LIBURING_DIR` (SSD streaming).
+
+The NestQuant repack is **not** a prerequisite you build — `start.sh` downloads the serve-ready
+`nq-p4rec-v1` repack (per-rank `rankN.json` + `res/` resident planes + `rankN.bin` streamed planes) from
+`jarrelscy/GLM-5.3-NestQuant-2-4bit` into `NQ_REPACK_DIR` on first run (~366 GB, once; needs the `hf` CLI,
+`pip install -U 'huggingface_hub[hf_transfer]'`). No repacking step. Override the source with `NQ_REPACK_REPO`
+or point `NQ_REPACK_DIR` at an existing copy to skip the download.
 
 **Overriding paths for a different host.** Every host path is an env var with a default matching the
 reference box; set what differs, e.g.:
