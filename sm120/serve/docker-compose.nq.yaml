@@ -43,6 +43,10 @@ services:
       NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
       NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
+      NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
+      NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
+      NQ_JOINT_NET: ${NQ_JOINT_NET:-/nqpred/joint/jF.pt}
+      NQ_JOINT_V2: ${NQ_JOINT_V2:-/nqpred/joint/v2_sal_tweedie1.5.txt}
       NQ_GBDT_MODE: ${NQ_GBDT_MODE:-sync}
       NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
       NQ_GBDT_SCALE: ${NQ_GBDT_SCALE:-mps}
