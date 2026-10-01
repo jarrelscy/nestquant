@@ -27,23 +27,45 @@ Model weights are not included. Scripts expect the GLM FP8 experts in `/tmp/nest
 
 `sm120/serve/` runs the quantised GLM-5.3 as an OpenAI-compatible endpoint on `:8001`. Target box is 4x RTX PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP `ns=3`. The routed experts are served from the NestQuant repack: the 2-bit trellis base stays resident, 3/4-bit refinement planes stream from SSD (P4) into a per-layer slot pool. Layers absent from the repack fall back to the production ARVQ experts.
 
-One-command serve from the repo:
+One-command serve from the repo root:
 
 ```bash
-sm120/serve/serve_nq.sh up      # build kernels, start the container, wait for /v1/models
-sm120/serve/serve_nq.sh smoke   # "The capital of France is ..." coherence check
-sm120/serve/serve_nq.sh logs
-sm120/serve/serve_nq.sh down
+./start.sh            # build kernels, start the container, wait for /v1/models (up is the default)
+./start.sh smoke      # "The capital of France is ..." coherence check
+./start.sh logs
+./start.sh down
 ```
 
-It layers `docker-compose.nq.yaml` on the homeassistant compose stack and needs a P4 repack (records + resident planes) in `NQ_REPACK_DIR` (default `/home/jarrelscy/nq-p4rec/hf`, full 75-layer). The served name is `glm-5.3-nq` (the alias `local` also works). GBDT predictor deps (lightgbm/narwhals/scipy) are pip-installed into a mount on first run; nothing in the image is shadowed.
+`start.sh` is self-contained — it uses only `sm120/serve/docker-compose.standalone.yaml` (the resolved,
+single-file equivalent of the compose stack) and needs no files outside this repo. The served name is
+`glm-5.3-nq`. GBDT predictor deps (lightgbm/narwhals/scipy) are pip-installed into a mount on first run;
+nothing in the image is shadowed.
 
-From the homeassistant switcher:
+**Prerequisites (local artifacts, not shipped here):**
+
+- An SM120 host — 4x RTX PRO 6000 Blackwell (96 GB each).
+- The serving Docker image (`NQ_IMAGE`, default `glm53-arvq-sm120:fixes12-...`): the SM120 vLLM fork with
+  the GLM-5.3 ARVQ/MLA kernels and the NestQuant hooks baked in. `pull_policy: never` — build/load it
+  locally. Non-repack MoE layers run on this image's base (ARVQ) experts; that path lives inside the
+  image and its single overlay `sm120/serve/overlay/nvfp4_arvq_hybrid.py`, not as a separate package.
+- The GLM-5.3 base checkpoint at `NQ_MODEL_DIR` (under the host dir `NQ_MODELS_ROOT` → `/data/models`).
+- The NestQuant P4 repack (per-rank `rankN.json` + resident planes) at `NQ_REPACK_DIR`.
+- The predictor dir at `NQ_PREDICTOR_DIR` (`joint/jF.pt`, `joint/v2_sal_tweedie1.5.txt`, `delta_table.json`)
+  and a `liburing` install at `NQ_LIBURING_DIR` (SSD streaming).
+
+**Overriding paths for a different host.** Every host path is an env var with a default matching the
+reference box; set what differs, e.g.:
 
 ```bash
-./switch.sh glm5.3-nq       # GBDT floating-set predictor (default)
-./switch.sh glm5.3-nq-jf    # jF joint predictor (transformer-on-GBDT)
+NQ_IMAGE=my/glm53-sm120:tag \
+NQ_MODELS_ROOT=/mnt/models NQ_MODEL_DIR=/data/models/glm-5.3-base \
+NQ_REPACK_DIR=/mnt/nq-repack NQ_PREDICTOR_DIR=/mnt/nq-predictor \
+NQ_LIBURING_DIR=/opt/liburing ./start.sh
 ```
+
+Supply the API key via `VLLM_API_KEY` in the environment, or put a `VLLM_API_KEY=...` line in a
+gitignored `.env` at the repo root (`NQ_ENV_FILE` to point elsewhere). With no key the server runs
+without auth. `start.sh {up,down,logs,smoke}` and the compose file carry the full env-var surface.
 
 ### Expert predictors
 
@@ -62,7 +84,7 @@ Both learned predictors run one continuous EMA for the serve lifetime. Streaming
 | GBDT (sync) | 94.0 | 28.82 | 0.0268 |
 | jF (joint) | 94.2 | 28.61 | 0.0259 |
 
-jF matches GBDT decode speed at slightly lower KLD, for ~8% more swap traffic. See `sm120/serve/serve_nq.sh` for the full env-var surface and `docker-compose.nq.yaml` for defaults.
+jF matches GBDT decode speed at slightly lower KLD, for ~8% more swap traffic. See `start.sh` and `sm120/serve/docker-compose.standalone.yaml` for the full env-var surface and defaults.
 
 ### Trading KV cache for hot experts
 
@@ -76,7 +98,7 @@ Rough unit costs, per GPU:
 **Example — 170 hot experts.** From the default (~77 hot, long context), push more capability into the hot set:
 
 ```bash
-NQ_SLOTS_PER_LAYER=176 NQ_MAXLEN=500000 NQ_UTIL=0.92 sm120/serve/serve_nq.sh up
+NQ_SLOTS_PER_LAYER=176 NQ_MAXLEN=500000 NQ_UTIL=0.92 ./start.sh
 ```
 
 170 floating needs ~176 slots (the pool keeps a few slots of headroom per layer for in-flight swaps). Capping context near **500k** frees the ~17 GiB the extra experts occupy. This is approximate — confirm the fit at boot: the prefill-peak line in the logs should stay a few GiB under 97.9 GB/GPU; if it doesn't, trim `NQ_SLOTS_PER_LAYER` or `NQ_MAXLEN`, or nudge `NQ_UTIL`.
