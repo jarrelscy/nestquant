@@ -81,7 +81,7 @@ class Campaign:
         self.jobs = []                    # dict(kind, L, gpu, p, t0, n, log)
         self.env_base = worker_env(a.omp, self.cfg["base_K"])
         meta = dict(cfg=a.cfg, **self.cfg, order=self.order, stats=TXT, stats_mm=MM, mm_w=0.25, source=SRC,
-                    fixed_set=FIXED, encoder="threads/35-nq15/nq35_layer.py (T12 nq_layer + nq15)", started=now())
+                    fixed_set=FIXED, encoder="threads/35-nq15/nq35_layer.py (T12 nq_layer + nq15; L3-6 + nq35_t29 Had512 down as shipped v1)", started=now())
         old = jload(f"{self.root}/campaign.json")
         if old and (old["cfg"] != a.cfg or old.get("res_k") != self.cfg["res_k"]):
             raise SystemExit(f"{self.root} holds cfg {old['cfg']}, not {a.cfg}")

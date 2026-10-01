@@ -13,6 +13,9 @@ for p in (T12, T25, HERE):
 import nq15                      # noqa: E402,F401
 import harness as h              # noqa: E402
 import nq_patvit as PV           # noqa: E402
+import nq35_t29 as T29           # noqa: E402
+
+T29.install_decoder()            # nq/L2, nq/L4 rows decode the artifact honouring meta in_had_down (T29 layers)
 
 KB = float(os.environ.get("NQ35_BASE_K", "1.75"))
 _q = h.quantize_exl3_like
