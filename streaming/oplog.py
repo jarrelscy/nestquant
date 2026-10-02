@@ -71,6 +71,9 @@ class Follower:
         s.X=X;s.log=log;s.q=collections.deque();s.busy=set();s.up=set();s.stats=dict(ups=0,downs=0,dropped=0,read_errors=0)
         s.mask=None;s.li=None       # nq-io: optional [nL, NE] bool level-4 mask kept with s.up (per-rank served share), li = {L: row}
         s.chk=None                  # nq-io check (enable_check): the leader's intended level-4 set, folded from the raw log
+        s.nl=set()                  # nq-prefill: ups that ended here without landing and without a read error (cancelled: slot-wait
+                                    # cancel, borrowed-pool stale/pend_drop/engine cancel at reclaim): the log's down of such an
+                                    # expert is a no-op here as at the leader -> counted cancel_drop, not dropped
     def enable_check(s,init):
         """live consistency check: s.chk = the level-4 set the leader asked for up to the last consumed record (start =
         init, the floating_default every rank loads itself). Whenever this rank is quiescent (nothing pending or in
@@ -92,7 +95,7 @@ class Follower:
         return ok,miss,extra
     # executor feedback
     def landed(s,L,E):
-        s.busy.discard((L,E));s.up.add((L,E))
+        s.busy.discard((L,E));s.up.add((L,E));s.nl.discard((L,E))
         if s.mask is not None:s.mask[s.li[L],E]=True
         if s.chk is not None:s.rerr.discard((L,E))     # a retry (the log asked again after the failure) landed
     def released(s,L,E):
@@ -100,6 +103,8 @@ class Follower:
         if s.mask is not None:s.mask[s.li[L],E]=False
     def failed(s,L,E,read_error=False):
         s.busy.discard((L,E))
+        if not read_error:s.nl.add((L,E))
+        else:s.nl.discard((L,E))
         if read_error:
             s.stats['read_errors']+=1
             if s.chk is not None:s.rerr.add((L,E))
@@ -119,7 +124,10 @@ class Follower:
             if d in held or d in s.busy:keep.append((k,lv));held.add(d);continue                       # the log downed it since: drop both
             held.add(d)
             if lv==2:
-                if d not in s.up:s.stats['dropped']+=1;continue
+                if d not in s.up:
+                    if d in s.nl:s.nl.discard(d);s.stats['cancel_drop']=s.stats.get('cancel_drop',0)+1
+                    else:s.stats['dropped']+=1
+                    continue
                 downs.append(d)
             else:ups.append(k)
             s.busy.add(d)

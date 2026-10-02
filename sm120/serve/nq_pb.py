@@ -325,6 +325,7 @@ class PB:
                 xk|={d for d,(t,lv) in last.items() if t}
                 xk-={d for d,(t,lv) in last.items() if not t and lv==4}   # the leader re-upped it into the normal pool since
             forced=X.x_reclaim(F,log);F.busy.update(forced)
+            if hasattr(F,'nl'):F.nl.update(forced)              # forced to level 2 here by the reclaim: the leader's down of it is a no-op here
             if F.chk is not None:F.chk.difference_update(xk)
         if s.KO is not None and s.KO.on:s.KO.end()               # after x_reclaim: no expert in those storages
         s.n['reclaims']+=1;s.n['forced']+=len(forced)
