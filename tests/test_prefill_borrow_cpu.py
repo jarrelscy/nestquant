@@ -85,7 +85,7 @@ def part_a(seed=0,epochs=4):
     for r in range(3):
         lay={L:MB() for L in LAY};eng=FE(lay,random.Random(seed*7+r))
         X=EX.RankExecutor(RF(eng),{L:(None,lay[L],{E:None for E in range(NE)}) for L in LAY},SPL*len(LAY))
-        S=SC.Scheduler(LAY,fixed,dflt,RB,NE=NE,n_float=NF,slots=SPL*len(LAY),cap_GBps=1e6,predictor='ema')
+        S=(__import__('scheduler_tap').make_scheduler if os.environ.get('NQ_SCHED') else SC.Scheduler)(LAY,fixed,dflt,RB,NE=NE,n_float=NF,slots=SPL*len(LAY),cap_GBps=1e6,predictor='ema')
         init=[(L,E) for L in LAY for E in dflt[L]];[S.state.__setitem__((S.li[L],E),1) for L,E in init];X.apply(init,[],S)
         rt=types.SimpleNamespace(rank=r,dev=None,X=X,S=S,F=None,log=log0 if r==0 else None,cv=threading.Condition(),in_iter=False,pb_pause=0,lay=lay,eng=eng)
         if r:
@@ -170,10 +170,10 @@ def part_a(seed=0,epochs=4):
             rt.eng.tick()
         if not any(rt.X.busy() or rt.eng.q for rt in ranks) and all(not rt.F.q and not rt.F.busy for rt in ranks[1:]):break
     S=ranks[0].S;lead={(L,E) for L in LAY for E in range(NE) if S.state[S.li[L],E]==2}
-    assert not (S.state%2).any(),'leader ops still in flight'
+    assert not (S.state%2).any(),('leader ops still in flight',[(S.layers[i],int(e),int(S.state[i,e])) for i,e in zip(*np.nonzero(S.state%2))][:8],ranks[0].X.busy(),len(getattr(S,'todo',())),len(getattr(S,'doom',{})))
     for rt in ranks[1:]:
-        assert rt.F.up==lead,(rt.rank,sorted(rt.F.up^lead)[:8])
-        r=rt.F.check();assert r is not None and r[0],(rt.rank,r,rt.F.check_msg)
+        assert rt.F.up==lead,(rt.rank,'F-only',sorted(rt.F.up-lead)[:8],'lead-only',sorted(lead-rt.F.up)[:8],[(k,int(S.state[S.li[k[0]],k[1]])) for k in sorted(rt.F.up^lead)[:8]],S.stats.get('shrink_evict'),rt.F.stats)
+        r=rt.F.check();assert r is not None and r[0],(rt.rank,r,rt.F.check_msg,list(rt.F.q)[:6],sorted(rt.F.busy)[:6],rt.X.busy(),dict(list(rt.X.ops.items())[:4]),dict(list(rt.X.wait_apply.items())[:4]),rt.X.pend[:4],rt.X.xpend[:4],len(rt.eng.q))
     for rt in ranks:
         tab={(L,E) for L,m in rt.lay.items() for E in range(NE) if int(m.table[E,0])==4}
         assert tab==lead,(rt.rank,sorted(tab^lead)[:8])

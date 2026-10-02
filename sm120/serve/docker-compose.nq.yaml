@@ -57,6 +57,14 @@ services:
       NQ_FOLLOW_CHECK: ${NQ_FOLLOW_CHECK:-0}
       NQ_HOSTLOOP: ${NQ_HOSTLOOP:-py}
       NQ_SCHED: ${NQ_SCHED:-}
+      NQ_TAP_C: ${NQ_TAP_C:-1.0}              # NQ_SCHED=tap knobs (streaming/scheduler_tap.py); defaults = the code's
+      NQ_TAP_H: ${NQ_TAP_H:-256}
+      NQ_TAP_HA: ${NQ_TAP_HA:-0}
+      NQ_TAP_MLA: ${NQ_TAP_MLA:-1.0}
+      NQ_TAP_SVC_MS: ${NQ_TAP_SVC_MS:-2}
+      NQ_TAP_FAR: ${NQ_TAP_FAR:-tail:0.1}
+      NQ_TAP_TP: ${NQ_TAP_TP:-4}
+      NQ_TAP_RATE_GBPS: ${NQ_TAP_RATE_GBPS:-6}
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
       NQ_IOSTATS: ${NQ_IOSTATS:-0}
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}

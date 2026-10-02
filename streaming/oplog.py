@@ -12,7 +12,7 @@ nq-prefill (prefill-borrow): an upgrade key (L + XB*ep, E) = into the borrowed s
 yet: a borrowed-pool upgrade of an epoch this rank has not borrowed (X.x_have), or the reclaim marker of an epoch it
 has not reclaimed itself (X.x_done), so its own reclaim always sits at the same point of the op order as the leader's."""
 import os,collections,numpy as np
-MAGIC=0x4E514F50;ROT=16<<20;XB=65536
+MAGIC=0x4E514F50;ROT=16<<20;XB=65536;_XS=1<<20   # = executor.XS (borrowed slot id = nslot + XS*epoch + j)
 def _dk(k):return (k[0]%XB,k[1]) if k[0]>=XB else k    # nq-prefill: borrowed-pool upgrade key -> (L, E)
 
 class OpLog:
@@ -111,9 +111,12 @@ class Follower:
             for k in ups:s.q.append((k,4))
         if not issue or not s.q:return
         ups=[];downs=[];keep=collections.deque();held=set()
+        X=s.X;xp=getattr(X,'xpend',None)
         for k,lv in s.q:
             d=_dk(k)
-            if d in held or d in s.busy:keep.append((k,lv));held.add(d);continue
+            if s.gate is not None and lv==2 and d not in held and d in s.busy and d not in s.up and (d in X.pend or (xp and any(x[1]==d[1] and x[0]%XB==d[0] for x in xp))):
+                X.cancel_up(*d,s);s.stats['slot_wait_cancel']=s.stats.get('slot_wait_cancel',0)+1   # up still waiting for a slot here,
+            if d in held or d in s.busy:keep.append((k,lv));held.add(d);continue                       # the log downed it since: drop both
             held.add(d)
             if lv==2:
                 if d not in s.up:s.stats['dropped']+=1;continue
@@ -158,6 +161,13 @@ class CoalescingFollower(Follower):
                     if s.X.cancel_up(*k,s):s.stats['cancel_req']+=1
                 continue
             del s.pend[k];s._creq.discard(k)
+            if k in s.up and lv>=4:                          # nq-prefill: resident, but in the other slot pool than the
+                so=getattr(s.X,'slot_of',None);sl=so.get(k) if isinstance(so,dict) else None   # log's last up -> down here first, then that up
+                if sl is not None and sl>=getattr(s.X,'nslot',sl+1):
+                    pool=(sl-s.X.nslot)//_XS
+                else:pool=0
+                if pool!=(lv//8 if lv>4 else 0):
+                    downs.append(k);s.busy.add(k);s.pend[k]=lv;s.stats['repool']=s.stats.get('repool',0)+1;continue
             if (4 if k in s.up else 2)==min(lv,4):s.stats['moot']+=1;continue
             if lv>4:ups.append((k[0]+XB*(lv//8),k[1]));s.busy.add(k);continue
             (downs if lv==2 else ups).append(k);s.busy.add(k)

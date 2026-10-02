@@ -134,6 +134,13 @@ class TapScheduler(Scheduler):
                 if st[j, v] == 2: downs.append((s.layers[j], v)); st[j, v] = 3
             elif st[i, e] == 0:
                 del s.doom[i, e]; s.doomed[j, v] = False
+        if s.slots is not None:                          # the pool shrank under the set (nq-prefill reclaims its borrowed slots):
+            over = int(((st == 1) | (st == 2)).sum()) - s.slots   # tap has no want-driven downs, so drop the lowest-score
+            if over > 0:                                  # residents now, else the over-issued ups wait for a slot forever
+                r = (st == 2) & ~s.fixed & ~s.doomed; i, e = np.nonzero(r)
+                for k in np.argsort(s.score[i, e], kind='stable')[:over]:
+                    downs.append((s.layers[i[k]], int(e[k]))); st[i[k], e[k]] = 3
+                s.stats['shrink_evict'] = s.stats.get('shrink_evict', 0) + min(over, len(i))
         nfree = (s.slots - int((st > 0).sum())) if s.slots is not None else 10 ** 9
         while s.todo and nfree > 0:
             i, e = s.todo.popleft()

@@ -312,7 +312,10 @@ class PB:
             if F.chk is not None:                                 # debug check: every borrowed-pool expert leaves the leader's set
                 xk={k for k,sl in X.slot_of.items() if sl>=X.nslot}|{(L%65536,E) for L,E in X.xpend}
                 q=F.q.items() if isinstance(F.q,dict) else F.q
-                xk|={(k[0]%65536,k[1]) for k,lv in list(q) if k[0]>=65536 or lv>4}
+                last={}
+                for k,lv in list(q):last[(k[0]%65536,k[1])]=(k[0]>=65536 or lv>4,lv)
+                xk|={d for d,(t,lv) in last.items() if t}
+                xk-={d for d,(t,lv) in last.items() if not t and lv==4}   # the leader re-upped it into the normal pool since
             forced=X.x_reclaim(F,log);F.busy.update(forced)
             if F.chk is not None:F.chk.difference_update(xk)
         if s.KO is not None and s.KO.on:s.KO.end()               # after x_reclaim: no expert in those storages
