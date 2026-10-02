@@ -88,7 +88,7 @@ class TFGPUPredictor:
             return False
         if new_request or self.in_prefill:
             if self.in_prefill:
-                self.pf.copy_(self.pf_acc / max(self.pf_n, 1))
+                self.pf.copy_((self.pf_acc / max(self.pf_n, 1)).half())   # match trainer fp16 pf rounding (data.blocks_from_stream)
             elif new_request:
                 self.pf.zero_()
             self.in_prefill = False; self.req_blk0 = self.nblk; self.seg = 0
