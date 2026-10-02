@@ -37,6 +37,7 @@ try:
     from vllm.logger import init_logger;log=init_logger('vllm.nestquant.pb')
 except Exception:log=logging.getLogger('nestquant.pb')
 from nq_pb_engine import ON,PF_NF,ALIGN,carve_count,KV_OFF,mla_candidate,layer_idx
+PROTECT=int(os.environ.get('NQ_PB_PROTECT','0') or 0)   # nq-prefill D0-protect: top-K pre-borrow decode residents/layer pinned through the borrow (0 = off)
 
 def kv_storages(runner,nb):
     """[(base address, page bytes)] of the distinct KV storages whose block b is bytes [b*page, (b+1)*page) of the
@@ -238,7 +239,7 @@ class KVOff:
 
 class PB:
     def __init__(s,rt):
-        s.rt=rt;s.ep=0;s.dead=False;s.lead=rt.F is None;s.nf0=rt.S.nf;s.extra=0;s.D0=None;s.stor=None;s.n=collections.Counter()
+        s.rt=rt;s.ep=0;s.dead=False;s.lead=rt.F is None;s.nf0=rt.S.nf;s.extra=0;s.D0=None;s.stor=None;s.n=collections.Counter();s.pin=None
         s.KO=KVOff(rt) if KV_OFF else None
         s.last_log=0.
     # --- streaming loop pause (the loop runs X / S / F; we mutate them from the worker thread)
@@ -290,6 +291,10 @@ class PB:
         X.x_borrow(ep,addrs);s.ep=ep;s.extra=len(addrs)
         if s.lead:
             S=rt.S;s.D0=np.isin(S.state,(1,2))&~S.fixed
+            if PROTECT>0 and s.extra and getattr(S,'pin',None) is None:   # D0-protect: lookahead never downs, tap never evicts these
+                sc=np.where(np.isin(S.state,(2,))&~S.fixed,S.score,-np.inf);o=np.argsort(-sc,1,kind='stable')
+                m=np.zeros(S.state.shape,bool);np.put_along_axis(m,o[:,:PROTECT],True,1);m&=np.isfinite(sc)
+                S.pin=m;s.pin=m;s.n['protected']+=int(m.sum())
             if S.slots is not None:S.slots+=s.extra
             if s.extra:S.nf=PF_NF
             S.pb_lazy=bool(s.extra);X.xtag=phase=='borrow' and bool(s.extra)
@@ -305,6 +310,9 @@ class PB:
                 if S.state[i,E] in (1,2):S.state[i,E]=3
             if S.slots is not None:S.slots-=s.extra
             S.nf=s.nf0;S.pb_lazy=False
+            if s.pin is not None:
+                if getattr(S,'pin',None) is s.pin:S.pin=None   # ours only (a session restore may have replaced it)
+                s.pin=None
             if s.D0 is not None and getattr(S,'pin',None) is None:S.want=s.D0.copy()      # RESTORE
             if rt.log is not None:rt.log.put_reclaim(ep)
         else:
