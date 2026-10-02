@@ -31,6 +31,7 @@ ON=os.environ.get('NQ_PREFILL_BORROW','0')=='1'
 MIN_NEW=int(os.environ.get('NQ_PB_MIN_NEW','8192'));PF_NF=int(os.environ.get('NQ_PREFILL_SLOTS','155'))
 MARGIN=int(os.environ.get('NQ_PB_MARGIN','16'));OFF=os.environ.get('NQ_PB_OFF','/dev/shm/nq_pb_off')
 KV_OFF=os.environ.get('NQ_PREFILL_KV_OFFLOAD','0')=='1'
+KV_BELOW=int(os.environ.get('NQ_PREFILL_KV_BELOW','0'))   # phase 2 only while phase 1 has < this many slots (0 = no limit); its hot-% gain is near-full KV only
 KVOFF_FILE=os.environ.get('NQ_PB_KV_OFF','/dev/shm/nq_pb_kv_off');CAP_FILE=os.environ.get('NQ_PB_FREE_CAP','/dev/shm/nq_pb_free_cap')
 def free_cap():
     """test knob: an int in /dev/shm/nq_pb_free_cap caps the free blocks phase 1 may borrow (to make phase 2 fire)"""
@@ -230,7 +231,7 @@ class State:
             if len(s.tried)>4096:s.tried=set(list(s.tried)[-1024:])
             s.borrow(r)
         if ok and s.kv_ok and not first and s.mode!=2 and r.request_id not in s.tried2 and ns>s.max_graph and not os.path.exists(KVOFF_FILE) and \
-           (s.mode==0 or s.nslots<s.want):
+           (s.mode==0 or s.nslots<s.want) and (KV_BELOW<=0 or s.nslots<KV_BELOW):
             plan=s.kv_plan(r)
             if plan[2]>max(s.nslots*1.1,s.nslots+64):
                 s.tried2.add(r.request_id)
