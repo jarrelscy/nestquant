@@ -38,6 +38,8 @@ try:
 except Exception:log=logging.getLogger('nestquant.pb')
 from nq_pb_engine import ON,PF_NF,ALIGN,carve_count,KV_OFF,mla_candidate,layer_idx
 PROTECT=int(os.environ.get('NQ_PB_PROTECT','0') or 0)   # nq-prefill D0-protect: top-K pre-borrow decode residents/layer pinned through the borrow (0 = off)
+KVOFF_DRY=os.environ.get('NQ_KVOFF_DRY','0')=='1'      # phase 2 diagnostic: the whole KV swap path, but no storage carved (0 slots)
+KVOFF_SYNC=os.environ.get('NQ_KVOFF_SYNC','0')=='1'    # phase 2 diagnostic: device-synchronize around every swap op (no overlap)
 
 def kv_storages(runner,nb):
     """[(base address, page bytes)] of the distinct KV storages whose block b is bytes [b*page, (b+1)*page) of the
@@ -175,7 +177,7 @@ class KVOff:
             d=s.deferred
             def store(*a,**k):d.append((a,k))
             eng.store=store
-        addrs=carve([(c[4].data_ptr(),s.page) for c in s.off[2:]],[(0,s.nb)],rb,want)
+        addrs=[] if KVOFF_DRY else carve([(c[4].data_ptr(),s.page) for c in s.off[2:]],[(0,s.nb)],rb,want)
         s.on=True;s.n['begins']+=1
         log.info('NestQuant prefill-borrow rank %d: KV offload of %d layers, %d rows (%.2f GiB host), %d slots, %.0f ms',rt.rank,n_off,
                  len(s.order),n_off*s.rows*s.page/2**30,len(addrs),(time.time()-t0)*1e3)
@@ -203,6 +205,7 @@ class KVOff:
         s.holds=[-1,-1];s._load(0,0)
         if len(s.off)>1:s._load(1,1)
         s.n['steps']+=1
+        if KVOFF_SYNC:torch.cuda.synchronize(s.rt.dev)
     def touch(s,name):
         k=s.ord.get(name)
         if k is None or k==s.cur:return
@@ -214,6 +217,7 @@ class KVOff:
         if k+1<len(s.off) and s.holds[o]!=k+1:s._load(k+1,o)
         torch.cuda.current_stream(s.rt.dev).wait_event(s.hev[b])
         s._setkv(s.off[k][2],s.buf[b]);s.cur=k
+        if KVOFF_SYNC:torch.cuda.synchronize(s.rt.dev)
     def end(s):
         """after X.x_reclaim"""
         if not s.on:return
@@ -325,6 +329,7 @@ class PB:
                 xk|={d for d,(t,lv) in last.items() if t}
                 xk-={d for d,(t,lv) in last.items() if not t and lv==4}   # the leader re-upped it into the normal pool since
             forced=X.x_reclaim(F,log);F.busy.update(forced)
+            if hasattr(F,'nl'):F.nl.update(forced)              # forced to level 2 here by the reclaim: the leader's down of it is a no-op here
             if F.chk is not None:F.chk.difference_update(xk)
         if s.KO is not None and s.KO.on:s.KO.end()               # after x_reclaim: no expert in those storages
         s.n['reclaims']+=1;s.n['forced']+=len(forced)

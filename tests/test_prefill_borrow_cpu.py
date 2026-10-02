@@ -178,6 +178,8 @@ def part_a(seed=0,epochs=4):
     assert not (S.state%2).any(),('leader ops still in flight',[(S.layers[i],int(e),int(S.state[i,e])) for i,e in zip(*np.nonzero(S.state%2))][:8],ranks[0].X.busy(),len(getattr(S,'todo',())),len(getattr(S,'doom',{})))
     for rt in ranks[1:]:
         assert rt.F.up==lead,(rt.rank,'F-only',sorted(rt.F.up-lead)[:8],'lead-only',sorted(lead-rt.F.up)[:8],[(k,int(S.state[S.li[k[0]],k[1]])) for k in sorted(rt.F.up^lead)[:8]],S.stats.get('shrink_evict'),rt.F.stats)
+        st=rt.F.stats;assert st['dropped']<=st['read_errors'],(rt.rank,'real drop',st)   # cancels are cancel_drop, not dropped
+        stats['cancel_drop']+=st.get('cancel_drop',0);stats['swc']+=st.get('slot_wait_cancel',0)
         r=rt.F.check();assert r is not None and r[0],(rt.rank,r,rt.F.check_msg,list(rt.F.q)[:6],sorted(rt.F.busy)[:6],rt.X.busy(),dict(list(rt.X.ops.items())[:4]),dict(list(rt.X.wait_apply.items())[:4]),rt.X.pend[:4],rt.X.xpend[:4],len(rt.eng.q))
     for rt in ranks:
         tab={(L,E) for L,m in rt.lay.items() for E in range(NE) if int(m.table[E,0])==4}
@@ -187,7 +189,7 @@ def part_a(seed=0,epochs=4):
     assert ranks[0].PB.pin is None and getattr(ranks[0].S,'pin',None) is None,'protect pin left after reclaim'
     assert (PBM.PROTECT>0)==(ranks[0].PB.n['protected']>0),(PBM.PROTECT,dict(ranks[0].PB.n))
     print(f'A seed {seed}: {epochs} epochs, {stats["ticks"]} steps, max borrowed slots used {stats["x_slots_used"]}, '
-          f'leader xst {dict(ranks[0].X.xst)}, F1 {dict(ranks[1].X.xst)}, F2 {dict(ranks[2].X.xst)}, final level-4 floating {len(lead)}, protected {ranks[0].PB.n['protected']} over {stats['pinned_steps']} steps: OK')
+          f'leader xst {dict(ranks[0].X.xst)}, F1 {dict(ranks[1].X.xst)}, F2 {dict(ranks[2].X.xst)}, final level-4 floating {len(lead)}, protected {ranks[0].PB.n['protected']} over {stats['pinned_steps']} steps, follower cancel_drop {stats['cancel_drop']} (slot_wait_cancel {stats['swc']}): OK')
 
 # ------------------------------------------------------------------------------------------------ part B
 def part_b():
