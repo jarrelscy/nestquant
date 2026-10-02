@@ -163,22 +163,39 @@ class State:
     # --- phase 2
     def req_blocks(s,req):
         return [b.block_id for b in s.kvm.coordinator.single_type_managers[s.kv_gi].req_to_blocks.get(req.request_id,())]
-    def kv_slots(s,n_off):
-        return min(s.want,carve_count(s.nb,[s.kv_page]*max(0,n_off-2),s.rb))
+    def kv_runs(s,req):
+        """block-id runs phase 2 may carve in the offloaded layers' storages: every block except the null block (its
+        content is read as padding by the attention kernels and is never restored) and blocks other requests hold;
+        i.e. this request's blocks (restored at the end) + free blocks (as phase 1)"""
+        mine={b.block_id for m in s.kvm.coordinator.single_type_managers for b in m.req_to_blocks.get(req.request_id,())}|{b.block_id for b in s.blocks};pool=s.pool;ok=[]   # all groups + phase 1's
+        for b in pool.blocks:
+            if b.is_null:continue
+            if b.ref_cnt>0 and b.block_id not in mine:continue
+            ok.append(b.block_id)
+        ok.sort();runs=[];r0=prev=None
+        for i in ok:
+            if r0 is not None and i==prev+1:prev=i;continue
+            if r0 is not None:runs.append((r0,prev+1))
+            r0=prev=i
+        if r0 is not None:runs.append((r0,prev+1))
+        return tuple(runs)
+    def kv_slots(s,n_off,runs=None):
+        runs=runs if runs is not None else ((0,s.nb),)
+        return min(s.want,sum(carve_count(b1-b0,[s.kv_page]*max(0,n_off-2),s.rb) for b0,b1 in runs))
     def kv_plan(s,req):
         """(n_off, rows, slots) phase 2 can do now for req, from the RAM available at this moment"""
         have=len(s.req_blocks(req));bs=s.kvm.coordinator.single_type_managers[s.kv_gi].block_size
         rows=max(have,-(-(req.num_prompt_tokens+64)//bs))+8
         per=rows*s.kv_page;ma=mem_avail();room=(ma-FLOOR_GB*2**30)/max(1,s.world)
-        n_off=int(max(0.,min(HOST_GB*2**30,room))//per) if per else 0;n_off=min(n_off,s.n_cand)
-        while n_off>3 and s.kv_slots(n_off-1)>=s.want:n_off-=1   # fewest layers that reach the target (less PCIe)
-        return n_off,rows,(s.kv_slots(n_off) if n_off>=3 else 0),ma
+        n_off=int(max(0.,min(HOST_GB*2**30,room))//per) if per else 0;n_off=min(n_off,s.n_cand);runs=s.kv_runs(req)
+        while n_off>3 and s.kv_slots(n_off-1,runs)>=s.want:n_off-=1   # fewest layers that reach the target (less PCIe)
+        return n_off,rows,(s.kv_slots(n_off,runs) if n_off>=3 else 0),ma,runs
     def kv_borrow(s,req,plan):
-        n_off,rows,slots,ma=plan;pool=s.pool;ev=0
+        n_off,rows,slots,ma,runs=plan;pool=s.pool;ev=0
         if pool.enable_caching:                             # cached free blocks lose their GPU content
             for b in pool.blocks:
                 if b.ref_cnt==0 and not b.is_null and pool._maybe_evict_cached_block(b):ev+=1
-        s.ep+=1;s.mode=2;s.rid=req.request_id;s.runs=();s.nslots=slots;s.kv=dict(n_cand=s.n_cand,n_off=n_off,rows=rows,blocks=(),wb=())
+        s.ep+=1;s.mode=2;s.rid=req.request_id;s.runs=();s.nslots=slots;s.kv=dict(n_cand=s.n_cand,n_off=n_off,rows=rows,blocks=(),wb=(),runs=runs)
         s.n['kv_borrows']+=1;s.n['slots']+=slots
         log.info('NestQuant prefill-borrow: epoch %d req %s: KV offload of %d/%d MLA layers (host %.1f GiB/rank, %d rows, MemAvailable %.1f GiB)'
                  ' -> %d slots (want %d), %d cached free blocks evicted, %d prompt tokens to go',s.ep,req.request_id,n_off,s.n_cand,

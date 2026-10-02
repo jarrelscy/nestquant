@@ -163,17 +163,20 @@ def part_d():
     from vllm.v1.core.kv_cache_utils import BlockHash,make_block_hash_with_group_id
     for i,b in enumerate(ob[:300]):
         k=make_block_hash_with_group_id(BlockHash(i.to_bytes(8,'little')),0);b.set_block_hash(k);pool.cached_block_hash_to_block.insert(k,b)
-    pool.free_blocks(ob[:300][::-1])
+    pool.free_blocks(ob[:300][::-1]);pool.free_blocks(ob[300:-50][::-1])   # other keeps 50 live blocks
     assert sum(1 for b in pool.blocks if b.ref_cnt==0 and b.block_hash is not None)==300
+    td0=tempfile.mkdtemp();PE.CAP_FILE=td0+'/cap';open(PE.CAP_FILE,'w').write('300')   # phase 1 can't reach the target
     r=Req('a',60000);pb=step(r,4096)
     assert pb is not None and pb[4] is None,'phase 1 first';ns1=pb[3]
     assert ns1<st.want,(ns1,st.want)
     pb=step(r,4096);assert pb is not None and pb[4] is not None and pb[0]==2,'phase 2 takes over at step 2'
-    kv=pb[4];cc=lambda n:PE.carve_count(NB,[PG]*(n-2),RBb);assert not st.blocks and kv['n_cand']==NL and cc(kv['n_off'])>=st.want>cc(kv['n_off']-1) and pb[3]==st.want,(kv['n_off'],pb[3])
+    kv=pb[4];held={b.block_id for b in ob[-50:]};cov={i for b0,b1 in kv['runs'] for i in range(b0,b1)}
+    assert pool.null_block.block_id not in cov and not (held&cov) and cov|held|{pool.null_block.block_id}==set(range(NB)),('carve runs',sorted(set(range(NB))-cov-held)[:20],len(held&cov),kv['runs'][:5])
+    cc=lambda n:st.kv_slots(n,kv['runs']);assert not st.blocks and kv['n_cand']==NL and cc(kv['n_off'])>=st.want>cc(kv['n_off']-1) and pb[3]==st.want,(kv['n_off'],pb[3])
     bl=[b.block_id for b in mla.req_to_blocks['a']];assert list(kv['blocks'])==bl and list(kv['wb'])==bl[16:32],(kv['wb'],bl[16:32])
     assert all(b.block_hash is None for b in pool.blocks if b.ref_cnt==0),'cached free block not evicted'
     assert all(pool.cached_block_hash_to_block.get_one_block(make_block_hash_with_group_id(BlockHash(i.to_bytes(8,'little')),0)) is None for i in range(300))
-    rows0=kv['rows'];assert rows0>=-(-60000//BS)
+    rows0=kv['rows'];assert rows0>=-(-60000//BS);os.remove(PE.CAP_FILE)
     while r.num_computed_tokens<60000-20:
         n=min(4096,60000-20-r.num_computed_tokens);pb=step(r,n)
         assert pb is not None and pb[4] is not None and pb[0]==2 and pb[4]['rows']==rows0
@@ -181,13 +184,13 @@ def part_d():
     pb=step(r,1);assert pb is None
     # first step of a request never does phase 2; MemAvailable sizing for 4 ranks; floor release -> phase 1 again
     r2rows=-(-(90000+64)//BS)+8;MA[0]=int((38+4*NL*0.5*r2rows*PG/2**30)*2**30)+(1<<20)   # room for half the layers on 4 ranks
-    done(r);r2=Req('b',90000);pb=step(r2,4096);assert pb is None or pb[4] is None
-    pb=step(r2,4096);assert pb is not None and pb[4] is not None,'phase 2 (r2)'
+    done(r);open(PE.CAP_FILE,'w').write('300');r2=Req('b',90000);pb=step(r2,4096);assert pb is None or pb[4] is None
+    pb=step(r2,4096);assert pb is not None and pb[4] is not None,('phase 2 (r2)',pb and pb[:4],st.want)
     n_off=pb[4]['n_off'];assert abs(n_off-NL//2)<=1 and 4*n_off*pb[4]['rows']*PG<=MA[0]-38*2**30,(n_off,NL)
     MA[0]=30<<30;pb=step(r2,4096);assert pb is None or pb[4] is None,'floor release'
     assert 'b' in st.tried2
     MA[0]=200<<30;pb=step(r2,4096);assert pb is None or pb[4] is None,'phase 2 not retried for that request'
-    done(r2);r3=Req('c',90000);step(r3,4096);pb=step(r3,4096);assert pb[4] is not None
+    done(r2);r3=Req('c',90000);step(r3,4096);pb=step(r3,4096);assert pb[4] is not None;os.remove(PE.CAP_FILE)
     done(r3);pb=step(Req('d',90000),4096);assert pb is None or pb[4] is None,'request change releases'
     # runtime knobs: free cap (phase 1 takes <= N blocks), kv_off file (no phase 2)
     td=tempfile.mkdtemp();PE.CAP_FILE=td+'/cap';PE.KVOFF_FILE=td+'/kvoff';open(PE.CAP_FILE,'w').write('10');open(PE.KVOFF_FILE,'w').write('')
