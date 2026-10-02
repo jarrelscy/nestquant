@@ -36,6 +36,7 @@ services:
       CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
       NQ_DUMP: ${NQ_DUMP:-}
       NQ_TFCAP: ${NQ_TFCAP:-}                 # nq-tfpred decode-trace capture dir (in container); empty = off
+      NQ_TFCAP_CHUNK: ${NQ_TFCAP_CHUNK:-65536}   # rows per trace file (small = short runs still flush; nothing flushes at shutdown)
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
       NQ_ISSUE: ${NQ_ISSUE:-1}
