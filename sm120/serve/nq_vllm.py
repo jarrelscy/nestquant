@@ -144,6 +144,7 @@ class Runtime:
         s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=nf,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
                          tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')),predictor=pred)
         log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
+        s.S.io_all=lambda:io_all(s)    # nq-io: live per-rank I/O stats for scheduler policies ({} unless NQ_IOSTATS>0 and TP>1)
         IO=_io_cfg(s.rank,rp,rb)
         s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=IO['n_host'],qd=IO['qd'],device=dev.index,
                                shadow=os.environ.get('NQ_SHADOW','0')=='1',**IO['kw'])
@@ -160,8 +161,11 @@ class Runtime:
             pp=os.getppid();st=open(f'/proc/{pp}/stat').read().rsplit(')',1)[1].split()[19]
             s.log=OL.OpLog(f'/dev/shm/nq_oplog_{pp}_{st}.bin',writer=s.rank==0)
             if s.rank:
-                s.F=(OL.CoalescingFollower if os.environ.get('NQ_FOLLOW_COALESCE','0')=='1' else OL.Follower)(s.X,s.log);s.F.busy.update(init)
-                if RANK_SHARE:s.F.mask=np.zeros((len(L_),NE),bool);s.F.li={L:i for i,L in enumerate(L_)}
+                coal=os.environ.get('NQ_FOLLOW_COALESCE','0')=='1'
+                if HOSTLOOP=='cpp':s.F=OL.CppFollower(s.X,s.log,L_,coalesce=coal)        # nq-io upgrade 5
+                else:s.F=(OL.CoalescingFollower if coal else OL.Follower)(s.X,s.log)
+                s.F.mark_busy(init)
+                if RANK_SHARE and s.F.mask is None:s.F.mask=np.zeros((len(L_),NE),bool);s.F.li={L:i for i,L in enumerate(L_)}
                 if CHECK or os.environ.get('NQ_FOLLOW_CHECK','0')=='1':s.F.enable_check(init)
             s.iokey=f'/dev/shm/nq_io_{pp}_{st}'
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
@@ -195,7 +199,7 @@ class Runtime:
             H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time();tb=0.;nit=0;s4=st=0
             SH=[s.lay[L]['sal_host'].numpy() for L in s.L_] if 'sal_host' in s.lay[s.L_[0]] else None;sprev=np.zeros((len(s.L_),NE))
             fsh=RANK_SHARE and s.F is not None and s.F.mask is not None;fs4=fst=0;fprev=np.zeros((len(s.L_),NE),np.int64)   # nq-io follower share
-            iot=time.time();iok=getattr(s,'iokey',None) if IOSTATS else None;fct=0.
+            iot=time.time();iok=getattr(s,'iokey',None) if IOSTATS else None;fct=0.;s.hl_t=0.;s.hl_n=0
             while not s.stop:
                 s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
                 with s.cv:s.in_iter=True;cap=s.ncap>0
@@ -227,13 +231,13 @@ class Runtime:
                                 if s.log is not None:s.log.put(ups,downs)
                 finally:
                     with s.cv:s.in_iter=False;s.cv.notify_all()
-                    tb+=time.perf_counter()-t0;nit+=1
+                    _dt=time.perf_counter()-t0;tb+=_dt;nit+=1;s.hl_t+=_dt;s.hl_n+=1   # hl_*: cumulative (io stats)
                 if iok is not None and time.time()-iot>=IOSTATS:
                     iot=time.time();_io_publish(s,iok)
                 if time.time()-last>60:
                     last=time.time();lv=s.S.level()
                     if s.F is not None:
-                        log.info('NestQuant rank %d: follower, level-4 floating %d, stats %s, backlog %d',s.rank,s.F.level_count(),s.F.stats,len(s.F.q))
+                        log.info('NestQuant rank %d: follower, level-4 floating %d, stats %s, backlog %d',s.rank,s.F.level_count(),s.F.stats,s.F.backlog())
                     if st:log.info('NestQuant rank %d: level-4 hit share %.4f (%d/%d routed slots)',s.rank,s4/st,s4,st);s4=st=0
                     if fst:log.info('NestQuant rank %d: follower level-4 hit share %.4f (%d/%d routed slots)',s.rank,fs4/fst,fs4,fst);fs4=fst=0
                     log.info('NestQuant rank %d: host loop %.0f us/iter x %d iters (%.1f%% of wall)',s.rank,tb/max(nit,1)*1e6,nit,tb/60*100);tb=0.;nit=0
@@ -251,13 +255,14 @@ class Runtime:
 # NQ_IO_QD        reads in flight per rank per drive (default 8 = original); NQ_IO_QD_ALT for the alt drive (default NQ_IO_QD)
 # NQ_IO_NHOST     pinned bounce/LRU entries (default max(64, 4 x total QD))
 # NQ_RAMTIER_GB   pinned host-RAM tier per rank (GB, 0 = off); NQ_RAMTIER_LIST json [[L, E], ...] hottest first;
-#                 NQ_RAMTIER_MINAVAIL_GB (25): never load past, and drop the tier when MemAvailable falls below it
+#                 NQ_RAMTIER_MINAVAIL_GB (30; host memguard kills at 22): never load past, and drop the tier when MemAvailable falls below it
 #                 (also dropped while /dev/shm/nq_tier_drop exists)
 # NQ_FOLLOW_COALESCE=1  followers replay by net effect (oplog.CoalescingFollower)
+# NQ_HOSTLOOP=cpp  leader Scheduler.step array work + follower replay in C++ (streaming/nqhost.cpp, bit-exact)
 # NQ_FOLLOW_CHECK=1 (or NQ_CHECK=1) followers check, whenever quiescent, landed set == leader log's set (stats check_ok/bad)
 # NQ_RANK_SHARE=1 followers log their own served level-4 share; NQ_IOSTATS=<s> every rank writes its io_stats() JSON
 #                 to /dev/shm/nq_io_<boot>_r<rank>.json every <s> seconds (Runtime.io_all() reads them all)
-RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
+RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';HOSTLOOP=os.environ.get('NQ_HOSTLOOP','py');IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
 def _memavail_gb():
     for ln in open('/proc/meminfo'):
         if ln.startswith('MemAvailable:'):return int(ln.split()[1])/2**20
@@ -281,7 +286,7 @@ def _io_cfg(rank,rp,rb):
     if gb>0:
         lst=json.load(open(os.environ['NQ_RAMTIER_LIST']));lay=set(RT.lay)
         lst=[(int(L),int(E)) for L,E in lst if int(L) in lay]
-        floor=float(os.environ.get('NQ_RAMTIER_MINAVAIL_GB','25'))
+        floor=float(os.environ.get('NQ_RAMTIER_MINAVAIL_GB','30'))
         av=_memavail_gb();tp=max(RT.tp,1)
         fit=max(0.,(av-floor-4.)/tp)                     # all ranks load at once: leave floor + 4 GB margin after all of them
         g=min(gb,fit);n=min(len(lst),int(g*1e9//rb))
@@ -289,7 +294,7 @@ def _io_cfg(rank,rp,rb):
         if n>0:kw['tier']=lst[:n];msg.append(f'RAM tier {n} recs')
     return dict(qd=qd,n_host=nh,kw=kw,log=', '.join(msg))
 def _tier_watch(rt):
-    floor=float(os.environ.get('NQ_RAMTIER_MINAVAIL_GB','25'))
+    floor=float(os.environ.get('NQ_RAMTIER_MINAVAIL_GB','30'))
     def run():
         while not rt.stop:
             time.sleep(0.5);av=_memavail_gb()
@@ -298,8 +303,10 @@ def _tier_watch(rt):
     threading.Thread(target=run,name='nq-tierwatch',daemon=True).start()
 def _io_publish(rt,key):
     try:
-        d=rt.X.io_stats('publish');d.update(rank=rt.rank,t_wall=time.time(),backlog=len(rt.F.q) if rt.F is not None else 0,
+        d=rt.X.io_stats('publish');d.update(rank=rt.rank,t_wall=time.time(),backlog=rt.F.backlog() if rt.F is not None else 0,
                                    follower=dict(rt.F.stats) if rt.F is not None else None,memavail_gb=_memavail_gb())
+        st=rt.F.stats if rt.F is not None else rt.S.stats   # cumulative: host loop seconds / iterations, level ops issued
+        d.update(hostloop=HOSTLOOP,hl_s=getattr(rt,'hl_t',0.),hl_iters=getattr(rt,'hl_n',0),ops_issued=int(st['ups'])+int(st['downs']))
         tmp=f'{key}_r{rt.rank}.json.tmp';open(tmp,'w').write(json.dumps(d));os.replace(tmp,f'{key}_r{rt.rank}.json')
     except Exception:log.exception('NestQuant io stats publish failed')
 def io_all(rt=None):

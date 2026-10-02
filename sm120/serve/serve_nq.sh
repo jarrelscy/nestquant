@@ -27,7 +27,7 @@ up)
   docker run --rm --gpus '"device=0"' --entrypoint bash -e NQ_BUILD=/nqbuild -e LIBURING=/data/Jarrel/liburing \
     -e CUDA_HOME=/opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13 -v "${NQ_REPO:-/data/Jarrel/nestquant}":/nq:ro \
     -v ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild -v /data/Jarrel/liburing:/data/Jarrel/liburing:ro $IMG \
-    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod()"'
+    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod();import hostcore;hostcore.mod()"'
   docker compose --profile glm5.3-hybrid-1m up -d
   echo "waiting for /v1/models (loading takes a while) ..."
   for i in $(seq 1 360); do
