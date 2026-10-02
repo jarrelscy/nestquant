@@ -81,7 +81,7 @@ class RankExecutor:
                 if sched is not None:sched.failed(L,E)
                 continue
             MB=s.layers[L][1];st,sb,sq=s.pp[L];sl=fr.pop();s.slot_of[L,E]=sl;s.tag+=1;q=MB.hseq[E]+1
-            s.eng.upgrade(s.tag,s.rf.rec(L,E),s.slot0+sl*s.rb,st+sb*E,s._row(L,E,4,sl),sq+4*E,q)
+            s.eng.upgrade(s.tag,s.rf.rec(L,E),s.slot0+sl*s.rb if sl<s.nslot else s.xaddr[sl],st+sb*E,s._row(L,E,4,sl),sq+4*E,q)
             s.ops[s.tag]=(L,E,4,q);s.up_tag[L,E]=s.tag
     def poll(s,sched=None,issue=True):
         for tag,hit,trd,te2e in s.eng.poll():
