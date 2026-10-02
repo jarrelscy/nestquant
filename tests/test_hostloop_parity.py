@@ -269,21 +269,19 @@ def main_bench():
     recs,init=prep_recs(files);recs=recs[:int(os.environ.get('NREC','8000'))]
     for coal in (False,True):
         for hl in ('py','cpp'):
-            for backlog in (0,20000):
-                X=FakeX(6000,40 if not backlog else 2,(2,12),0.0,7);L=PyLog() if hl=='py' else WordLog()
+            for rate in (40,6):           # 40 reads/tick keeps up (live-like); 6 = a drive that falls behind (backlog grows)
+                X=FakeX(6000,rate,(2,12),0.0,7);L=PyLog() if hl=='py' else WordLog()
                 F=(OL.CoalescingFollower if coal else OL.Follower)(X,L) if hl=='py' else OL.CppFollower(X,L,LAYERS,coalesce=coal)
                 F.mark_busy(init)
                 for k in init:X.apply([k],[],F)
-                ts=[];i=0;rng=random.Random(1)
+                ts=[];bl=[];i=0;rng=random.Random(1)
                 while i<len(recs):
                     k=min(len(recs),i+rng.randint(1,3))
                     if hl=='py':L.buf.extend(recs[i:k])
                     else:L.write(recs[i:k])
-                    i=k
-                    if backlog and F.backlog()<backlog and i<len(recs):continue   # let the backlog build
-                    t=time.perf_counter();F.step();ts.append(time.perf_counter()-t);X.tick(F)
+                    i=k;t=time.perf_counter();F.step();ts.append(time.perf_counter()-t);X.tick(F);bl.append(F.backlog())
                 ts=np.array(ts)*1e3
-                print(f'  follower coalesce={coal!s:5s} {hl:3s} backlog~{F.backlog() if backlog else 0:>6}: mean {ts.mean():.3f} p50 {np.median(ts):.3f} p99 {np.percentile(ts,99):.3f} ms/step ({len(ts)} steps)')
+                print(f'  follower coalesce={coal!s:5s} {hl:3s} rate {rate:2d}: backlog mean {np.mean(bl):8.0f} max {max(bl):7d}: step mean {ts.mean():.3f} p50 {np.median(ts):.3f} p99 {np.percentile(ts,99):.3f} ms ({len(ts)} steps)',flush=True)
     return True
 
 if __name__=='__main__':
