@@ -80,7 +80,7 @@ class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
-        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None
+        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -100,7 +100,7 @@ class Runtime:
         s.started=True;rp=os.environ['NQ_REPACK'];L_=sorted(s.lay);dev=s.dev
         s.rf=rf=SE.RankFile(rp,s.rank);rb=rf.rb
         fx,src,_=FS.load(layers=L_)
-        _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf')   # jF joint predictor: k0 layout (no fixed set, all floating)
+        _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf')   # tf = nq-tfpred transformer (same k0 layout); jF joint predictor: k0 layout (no fixed set, all floating)
         nf=77 if _JOINT else NF
         if _JOINT:fx={L:[] for L in L_};src='joint-k0'
         # fixed set: records -> resident pool, level 4 rows
@@ -131,7 +131,11 @@ class Runtime:
         dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf]] for L in L_}
         lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
         _steps=(s.rank==0 or not lead)   # this rank runs the real predictor; the others use 'ema'
-        if _JOINT and _steps:
+        if _JOINT and _steps and os.environ.get('NQ_PREDICTOR')=='tf':   # nq-tfpred multi-window transformer (threads/36-tfpred)
+            import nq_tfpred_gpu as TFP
+            pred=TFP.TFGPUPredictor(L_,fx,os.environ.get('NQ_TF_CKPT',NQ_HOME+'/threads/36-tfpred/tf_ids.pt'),n_float=nf,
+                                    hm=float(os.environ.get('NQ_JOINT_HM','0.7')),device=dev,graph=os.environ.get('NQ_TF_GRAPH','1')=='1')
+        elif _JOINT and _steps:
             _jd='/nqpred/joint'
             if _jd not in sys.path:sys.path.insert(0,_jd)
             import gpu_predictor as GJ
@@ -180,6 +184,8 @@ class Runtime:
         _gate_captures(s)
         if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
         if s.F is None and s.rank==0:s.SR=SRM.SessionRestore(s);_hook_sched(s)   # per-session floating-set restore (nq_session.py)
+        if os.environ.get('NQ_TFCAP') and s.F is None and s.rank==0:   # nq-tfpred decode-trace capture (off unless set)
+            import nq_tfcap;s.CAP=nq_tfcap.install(s,L_,s.lay[L_[0]]['H'],dev)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
     def _sr(s,f,*a,dflt=None):
         """session restore is an optimization: any error turns it off (pin dropped), streaming goes on"""
@@ -387,6 +393,7 @@ def forward(L,x,topk_weights,topk_ids):
             torch.save(dict(L=L,x=x.cpu(),w=topk_weights.cpu(),ids=topk_ids.cpu(),table=M.table.cpu(),stride=x.stride(),dev=str(x.device),
                             cur=torch.cuda.current_device(),stream=torch.cuda.current_stream().cuda_stream),f"{os.environ['NQ_DUMP']}/in_r{RT.rank}.pt")
     d['MB'].apply()
+    if RT.CAP is not None:RT.CAP.layer(L,x,topk_weights,topk_ids)
     if CHECK and not torch.cuda.is_current_stream_capturing():
         try:torch.cuda.synchronize()
         except Exception as e:raise RuntimeError(f'NestQuant mailbox.apply faulted (L{L})') from e
