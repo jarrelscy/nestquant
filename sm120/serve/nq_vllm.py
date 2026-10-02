@@ -141,7 +141,8 @@ class Runtime:
                                       graph=os.environ.get('NQ_JOINT_GRAPH','0')=='1')
         else:
             pred=(os.environ.get('NQ_PREDICTOR') or SC.DEFAULT_PREDICTOR) if _steps else 'ema'   # followers never step S
-        s.S=SC.Scheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=nf,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
+        _SCH=SC.Scheduler if not os.environ.get('NQ_SCHED') else __import__('scheduler_tap').make_scheduler   # NQ_SCHED=tap: streaming/scheduler_tap.py (nq-tfpred 93beb7f)
+        s.S=_SCH(L_,fx,dflt,rb*s.tp,NE=NE,n_float=nf,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
                          tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')),predictor=pred)
         log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
         s.S.io_all=lambda:io_all(s)    # nq-io: live per-rank I/O stats for scheduler policies ({} unless NQ_IOSTATS>0 and TP>1)
@@ -199,6 +200,7 @@ class Runtime:
             H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time();tb=0.;nit=0;s4=st=0
             SH=[s.lay[L]['sal_host'].numpy() for L in s.L_] if 'sal_host' in s.lay[s.L_[0]] else None;sprev=np.zeros((len(s.L_),NE))
             fsh=RANK_SHARE and s.F is not None and s.F.mask is not None;fs4=fst=0;fprev=np.zeros((len(s.L_),NE),np.int64)   # nq-io follower share
+            sp4=[0,0];spt=[0,0];s.shc=[0,0,0,0]   # nq-io NQ_RANK_SHARE: level-4 share split [decode, prefill] (poll interval > PF_NTOK tokens = prefill)
             iot=time.time();iok=getattr(s,'iokey',None) if IOSTATS else None;fct=0.;s.hl_t=0.;s.hl_n=0
             while not s.stop:
                 s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
@@ -213,7 +215,9 @@ class Runtime:
                                 log.error('NestQuant rank %d: follower != leader log when quiescent: %d missing %d extra (%s)',s.rank,r[1],r[2],s.F.check_msg)
                         if fsh and not cap:          # this rank's served level-4 share (its own landed set, not the leader's)
                             cur=np.stack(H).astype(np.int64);c=cur-fprev;fprev=cur
-                            if c[0].sum()>0:fs4+=int(c[s.S.fixed|s.F.mask].sum());fst+=int(c.sum())
+                            if c[0].sum()>0:
+                                a4=int(c[s.S.fixed|s.F.mask].sum());at=int(c.sum());fs4+=a4;fst+=at
+                                k=int(int(c[0].sum())//TOPK>PF_NTOK);sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
                     else:
                         s.X.poll(s.S,issue=not cap)
                     if s.LA is not None and s.F is None and not cap and issue:s.LA.service(s.S,s.X,s.log)
@@ -224,6 +228,7 @@ class Runtime:
                             sal=None
                             if SH is not None:scur=np.stack(SH);sal=np.maximum(scur-sprev,0.);sprev=scur   # cumulative fp64, diffed like the hits
                             lv=s.S.fixed|(s.S.state==2);s4+=int(c[lv].sum());st+=int(c.sum())   # share at the levels served this step
+                            if RANK_SHARE:k=int(ntok>PF_NTOK);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
                             if s.SR is not None and issue:ntok=s._sr(s.SR.on_counts,s.S,c,ntok,lv,dflt=ntok)   # handover / prefill residue / window share
                             ups,downs=s.S.step(c,ntok,sal=sal)
                             if issue:
@@ -240,6 +245,10 @@ class Runtime:
                         log.info('NestQuant rank %d: follower, level-4 floating %d, stats %s, backlog %d',s.rank,s.F.level_count(),s.F.stats,s.F.backlog())
                     if st:log.info('NestQuant rank %d: level-4 hit share %.4f (%d/%d routed slots)',s.rank,s4/st,s4,st);s4=st=0
                     if fst:log.info('NestQuant rank %d: follower level-4 hit share %.4f (%d/%d routed slots)',s.rank,fs4/fst,fs4,fst);fs4=fst=0
+                    if spt[0] or spt[1]:
+                        log.info('NestQuant rank %d: level-4 hit share split decode %.4f (%d slots) prefill %.4f (%d slots)',s.rank,
+                                 sp4[0]/max(spt[0],1),spt[0],sp4[1]/max(spt[1],1),spt[1])
+                        sp4=[0,0];spt=[0,0]
                     log.info('NestQuant rank %d: host loop %.0f us/iter x %d iters (%.1f%% of wall)',s.rank,tb/max(nit,1)*1e6,nit,tb/60*100);tb=0.;nit=0
                     log.info('NestQuant rank %d: level-4 experts %d/%d, ups %d downs %d, read errors %d, op p50 %.1f ms',s.rank,
                              int((lv==4).sum()),lv.size,s.S.stats['ups'],s.S.stats['downs'],s.S.stats.get('read_errors',0),
@@ -262,7 +271,7 @@ class Runtime:
 # NQ_FOLLOW_CHECK=1 (or NQ_CHECK=1) followers check, whenever quiescent, landed set == leader log's set (stats check_ok/bad)
 # NQ_RANK_SHARE=1 followers log their own served level-4 share; NQ_IOSTATS=<s> every rank writes its io_stats() JSON
 #                 to /dev/shm/nq_io_<boot>_r<rank>.json every <s> seconds (Runtime.io_all() reads them all)
-RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';HOSTLOOP=os.environ.get('NQ_HOSTLOOP','py');IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
+RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';PF_NTOK=int(os.environ.get('NQ_SHARE_PF_NTOK','32'));HOSTLOOP=os.environ.get('NQ_HOSTLOOP','py');IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
 def _memavail_gb():
     for ln in open('/proc/meminfo'):
         if ln.startswith('MemAvailable:'):return int(ln.split()[1])/2**20
@@ -306,7 +315,7 @@ def _io_publish(rt,key):
         d=rt.X.io_stats('publish');d.update(rank=rt.rank,t_wall=time.time(),backlog=rt.F.backlog() if rt.F is not None else 0,
                                    follower=dict(rt.F.stats) if rt.F is not None else None,memavail_gb=_memavail_gb())
         st=rt.F.stats if rt.F is not None else rt.S.stats   # cumulative: host loop seconds / iterations, level ops issued
-        d.update(hostloop=HOSTLOOP,hl_s=getattr(rt,'hl_t',0.),hl_iters=getattr(rt,'hl_n',0),ops_issued=int(st['ups'])+int(st['downs']))
+        d.update(share4=getattr(rt,'shc',None),hostloop=HOSTLOOP,hl_s=getattr(rt,'hl_t',0.),hl_iters=getattr(rt,'hl_n',0),ops_issued=int(st['ups'])+int(st['downs']))
         tmp=f'{key}_r{rt.rank}.json.tmp';open(tmp,'w').write(json.dumps(d));os.replace(tmp,f'{key}_r{rt.rank}.json')
     except Exception:log.exception('NestQuant io stats publish failed')
 def io_all(rt=None):
