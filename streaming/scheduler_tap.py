@@ -11,6 +11,7 @@ Every predictor refresh (16 tokens, P.step() -> True):
   V(x) = expected hits in [lat, lat + H) after the end of the block, two horizons, normalised per layer to hit units:
          near: jF score S (predicted hits in the next 64 tokens) as a flat rate inside [0, 64)
          far : the scheduler's EMA512 rate, rescaled per layer to jF's mass, beyond 64 tokens
+               (NQ_TAP_FAR=tail:<x>: x times the jF rate instead; sim tap-jfw = tail:0.1)
          V *= 512 / sum_e S[l]   (jF mass of a layer = 64 tok x top-8)
   V0(v)= the victim's expected hits during the flight [0, lat)
   Per layer, pair the best idle candidates with the weakest landed residents while V(e) - V(v) > c (one read per
@@ -18,9 +19,9 @@ Every predictor refresh (16 tokens, P.step() -> True):
   v is downed now only if V(e) - V(v) - V0(v) > c, and e is issued when a slot frees.
   Issue budget: only as many reads as land within mla x H tokens at the measured rate (no backlog); the sorted pair
   list is truncated (highest gain first).
-Env: NQ_TAP_C (0.5 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = clip(k x lat, 64, 1024))
+Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = clip(k x lat, 64, 1024))
      NQ_TAP_MLA (1.0; 0 = no budget) NQ_TAP_RATE_GBPS (6, per rank, before the first measurement) NQ_TAP_SVC_MS (2)
-     NQ_TAP_TP (ranks, for the per-rank record size when io_all is empty; default 4)
+     NQ_TAP_FAR (tail:0.1 default | ema) NQ_TAP_TP (ranks, for the per-rank record size when io_all is empty; default 4)
 Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalised two-horizon value)."""
 import os, time, collections
 import numpy as np
@@ -32,8 +33,9 @@ class TapScheduler(Scheduler):
         super().__init__(*a, **k)
         s.core = None                                   # python step only (the C++ host loop mirrors the base policy)
         e = os.environ.get
-        s.tc = float(e('NQ_TAP_C', '0.5')); s.tH = float(e('NQ_TAP_H', '256')); s.tHa = float(e('NQ_TAP_HA', '0'))
+        s.tc = float(e('NQ_TAP_C', '1.0')); s.tH = float(e('NQ_TAP_H', '256')); s.tHa = float(e('NQ_TAP_HA', '0'))
         s.tmla = float(e('NQ_TAP_MLA', '1.0')); s.tsvc = float(e('NQ_TAP_SVC_MS', '2')) / 1e3
+        fr = e('NQ_TAP_FAR', 'tail:0.1'); s.tfar = float(fr.split(':')[1]) if fr.startswith('tail:') else None   # far window: EMA512 | tail:<x> = x * jF rate
         s.tp_n = int(e('NQ_TAP_TP', '4')); s.rb_rank = s.rb / max(1, s.tp_n)
         s.rate0 = float(e('NQ_TAP_RATE_GBPS', '6')) * 1e9 / s.rb_rank      # records/s per rank before measurement
         s.clock = clock or time.monotonic
@@ -83,8 +85,11 @@ class TapScheduler(Scheduler):
         S = np.asarray(s.P.S, np.float32); S = np.where(s.fixed, 0, np.maximum(S, 0))
         mass = S.sum(1).astype(np.float32); ok = mass > 0; m = np.where(ok, mass, 1.0)
         rn = S / s.span
-        rf = (s.score * (1 - s.a)).astype(np.float32); rf = np.where(s.fixed, 0, rf)
-        rs = rf.sum(1); rf = rf * np.where(rs > 0, (m / s.span) / np.where(rs > 0, rs, 1), 0)[:, None]
+        if s.tfar is not None:
+            rf = s.tfar * rn
+        else:
+            rf = (s.score * (1 - s.a)).astype(np.float32); rf = np.where(s.fixed, 0, rf)
+            rs = rf.sum(1); rf = rf * np.where(rs > 0, (m / s.span) / np.where(rs > 0, rs, 1), 0)[:, None]
         def v(lo, h):
             hi = lo + h; near = max(0.0, min(hi, s.span) - lo); far = max(0.0, hi - max(lo, s.span))
             return rn * near + rf * far
