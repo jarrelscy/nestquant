@@ -228,20 +228,22 @@ class Runtime:
                                 log.error('NestQuant rank %d: follower != leader log when quiescent: %d missing %d extra (%s)',s.rank,r[1],r[2],s.F.check_msg)
                         if fsh and not cap:          # this rank's served level-4 share (its own landed set, not the leader's)
                             cur=np.stack(H).astype(np.int64);c=cur-fprev;fprev=cur
-                            if c[0].sum()>0:
+                            if c.sum()>0:                  # every interval (a decode step's later layers often land after layer 0's poll)
                                 a4=int(c[s.S.fixed|s.F.mask].sum());at=int(c.sum());fs4+=a4;fst+=at
-                                k=int(int(c[0].sum())//TOPK>PF_NTOK);sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
+                                k=_pfk(c);sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
                     else:
                         s.X.poll(s.S,issue=not cap)
                     if s.LA is not None and s.F is None and not cap and issue:s.LA.service(s.S,s.X,s.log)
                     if s.SR is not None and not cap and issue:s._sr(s.SR.service,s.S,s.X,s.log)
                     if s.F is None and not cap:        # hits counted during a capture are dropped with it (warmup inputs)
                         cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
+                        if RANK_SHARE and ntok==0 and c.sum()>0:   # nq-io share: intervals without layer-0 hits (prod path ignores them)
+                            lv=s.S.fixed|(s.S.state==2);k=_pfk(c);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
                         if ntok>0:
                             sal=None
                             if SH is not None:scur=np.stack(SH);sal=np.maximum(scur-sprev,0.);sprev=scur   # cumulative fp64, diffed like the hits
                             lv=s.S.fixed|(s.S.state==2);s4+=int(c[lv].sum());st+=int(c.sum())   # share at the levels served this step
-                            if RANK_SHARE:k=int(ntok>PF_NTOK);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
+                            if RANK_SHARE:k=_pfk(c);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
                             if s.SR is not None and issue:ntok=s._sr(s.SR.on_counts,s.S,c,ntok,lv,dflt=ntok)   # handover / prefill residue / window share
                             ups,downs=s.S.step(c,ntok,sal=sal)
                             if issue:
@@ -286,6 +288,7 @@ class Runtime:
 # NQ_RANK_SHARE=1 followers log their own served level-4 share; NQ_IOSTATS=<s> every rank writes its io_stats() JSON
 #                 to /dev/shm/nq_io_<boot>_r<rank>.json every <s> seconds (Runtime.io_all() reads them all)
 RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';PF_NTOK=int(os.environ.get('NQ_SHARE_PF_NTOK','32'));HOSTLOOP=os.environ.get('NQ_HOSTLOOP','py');IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
+def _pfk(c):return int(int(c.sum(1).max())//TOPK>PF_NTOK)   # nq-io share: 1 = prefill interval (busiest layer saw > PF_NTOK tokens)
 def _memavail_gb():
     for ln in open('/proc/meminfo'):
         if ln.startswith('MemAvailable:'):return int(ln.split()[1])/2**20
