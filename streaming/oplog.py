@@ -49,9 +49,14 @@ class Follower:
     """stand-in scheduler for the executor callbacks + in-order replay of the leader's ops"""
     def __init__(s,X,log):
         s.X=X;s.log=log;s.q=collections.deque();s.busy=set();s.up=set();s.stats=dict(ups=0,downs=0,dropped=0,read_errors=0)
+        s.mask=None;s.li=None       # nq-io: optional [nL, NE] bool level-4 mask kept with s.up (per-rank served share), li = {L: row}
     # executor feedback
-    def landed(s,L,E):s.busy.discard((L,E));s.up.add((L,E))
-    def released(s,L,E):s.busy.discard((L,E));s.up.discard((L,E))
+    def landed(s,L,E):
+        s.busy.discard((L,E));s.up.add((L,E))
+        if s.mask is not None:s.mask[s.li[L],E]=True
+    def released(s,L,E):
+        s.busy.discard((L,E));s.up.discard((L,E))
+        if s.mask is not None:s.mask[s.li[L],E]=False
     def failed(s,L,E,read_error=False):
         s.busy.discard((L,E))
         if read_error:s.stats['read_errors']+=1
@@ -71,4 +76,43 @@ class Follower:
             s.busy.add(k)
         s.q=keep;s.stats['ups']+=len(ups);s.stats['downs']+=len(downs)
         if ups or downs:s.X.apply(ups,downs,s)
+    def level_count(s):return len(s.up)
+
+class CoalescingFollower(Follower):
+    """nq-io (NQ_FOLLOW_COALESCE=1): replay the log by net effect instead of op by op.
+    The log is folded per expert into the level the leader last asked for (an up+down pair, or a down+up pair,
+    that is still queued collapses to nothing; up, down, up = one up). When an expert is free here, its pending level
+    is compared with its level here: equal -> moot (no op), else one op. A stale upgrade (the log has since downed the
+    expert) that has not started yet is cancelled in the executor (cancel_up), so it never reads the SSD.
+    Invariant (tests/test_follower_coalesce.py): once quiescent after consuming the log up to record n, the level-4
+    set here equals the leader's at record n (minus read errors), exactly as for the in-order Follower.
+    Order: pending experts are served oldest-decision first (a re-decided expert moves to the back)."""
+    def __init__(s,X,log):
+        super().__init__(X,log);s.pend=collections.OrderedDict()   # (L, E) -> last level the log asked for
+        s._creq=set()                                                 # stale ups we asked the executor to cancel
+        s.stats.update(log_ops=0,merged=0,moot=0,cancel_req=0,cancelled=0)
+        s.q=s.pend                                                    # len(F.q) = backlog, as before
+    def cancelled(s,L,E):s.busy.discard((L,E));s.stats['cancelled']+=1
+    def step(s,issue=True):
+        for ups,downs in s.log.get():
+            for k in downs:s._add(k,2)
+            for k in ups:s._add(k,4)
+        if not issue or not s.pend:return
+        ups=[];downs=[]
+        for k,lv in list(s.pend.items()):
+            if k in s.busy:
+                # in flight here: a pending down means the upgrade in flight is stale -> try to cancel it once
+                if lv==2 and k not in s.up and k not in s._creq:
+                    s._creq.add(k)
+                    if s.X.cancel_up(*k,s):s.stats['cancel_req']+=1
+                continue
+            del s.pend[k];s._creq.discard(k)
+            if (4 if k in s.up else 2)==lv:s.stats['moot']+=1;continue
+            (downs if lv==2 else ups).append(k);s.busy.add(k)
+        s.stats['ups']+=len(ups);s.stats['downs']+=len(downs)
+        if ups or downs:s.X.apply(ups,downs,s)
+    def _add(s,k,lv):
+        s.stats['log_ops']+=1
+        if k in s.pend:s.stats['merged']+=1;del s.pend[k]
+        s.pend[k]=lv
     def level_count(s):return len(s.up)

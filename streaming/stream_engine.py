@@ -20,5 +20,6 @@ class RankFile:
         s.path=f'{repack_dir}/rank{rank}.bin';s.idx=json.load(open(f'{repack_dir}/rank{rank}.json'))
         s.rb=s.idx['rec_bytes'];s.lay=dict(seg=s.idx['seg'],rec_bytes=s.rb)
     def rec(s,L,E):return (L-s.idx['L0'])*s.idx['NE']+E
-    def engine(s,n_host=64,qd=8,device=None):
-        return mod().Engine(s.path,s.rb,n_host,qd,torch.cuda.current_device() if device is None else device)
+    def engine(s,n_host=64,qd=8,device=None,alt_path='',qd_alt=0):
+        """alt_path: identical copy of this record file on a second drive (nq-io dual path; '' = one drive)"""
+        return mod().Engine(s.path,s.rb,n_host,qd,torch.cuda.current_device() if device is None else device,alt_path,qd_alt)

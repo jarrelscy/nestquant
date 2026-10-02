@@ -42,6 +42,19 @@ services:
       NQ_SHADOW: ${NQ_SHADOW:-0}
       NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
       NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
+      # nq-io I/O upgrades (sm120/serve/nq_vllm.py "nq-io" block); every default = the original serve
+      NQ_IO_MODE: ${NQ_IO_MODE:-}                # '' | dual | split
+      NQ_REPACK_ALT: /nqrepack1
+      NQ_IO_SPLIT_RANKS: ${NQ_IO_SPLIT_RANKS:-2,3}
+      NQ_IO_QD: ${NQ_IO_QD:-8}
+      NQ_IO_QD_ALT: ${NQ_IO_QD_ALT:-}
+      NQ_IO_NHOST: ${NQ_IO_NHOST:-}
+      NQ_RAMTIER_GB: ${NQ_RAMTIER_GB:-0}
+      NQ_RAMTIER_LIST: ${NQ_RAMTIER_LIST:-/nq/streaming/results/ramtier_jf.json}
+      NQ_RAMTIER_MINAVAIL_GB: ${NQ_RAMTIER_MINAVAIL_GB:-25}
+      NQ_FOLLOW_COALESCE: ${NQ_FOLLOW_COALESCE:-0}
+      NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
+      NQ_IOSTATS: ${NQ_IOSTATS:-0}
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
@@ -73,7 +86,8 @@ services:
     volumes:
     - ${NQ_REPO:-/data/Jarrel/nestquant}:/nq:ro
     - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}:/nqrepack:ro
-    - /data/Jarrel/nq-build-container:/nqbuild
+    - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
+    - ${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}:/nqrepack1:ro   # nq-io: copy of the record files on nvme1 (/data)
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
     - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
     - /data/Jarrel/nq-serve/dbg:/dbg
