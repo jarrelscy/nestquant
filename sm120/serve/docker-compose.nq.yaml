@@ -35,6 +35,7 @@ services:
       NQ_CHECK: ${NQ_CHECK:-0}
       CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
       NQ_DUMP: ${NQ_DUMP:-}
+      NQ_TFCAP: ${NQ_TFCAP:-}                 # nq-tfpred decode-trace capture dir (in container); empty = off
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
       NQ_ISSUE: ${NQ_ISSUE:-1}
@@ -77,6 +78,7 @@ services:
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
     - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
     - /data/Jarrel/nq-serve/dbg:/dbg
+    - /rawdata/Jarrel/nq-tfpred/traces:/tfcap
     - /data/Jarrel/nq-serve/predictor:/nqpred:ro
     - /data/lmcache/glm5.3-nq:/lmcache/disk                 # replaces the ARVQ /lmcache/disk mount (unused while disk size is 0)
     - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro     # lightgbm + narwhals + scipy for NQ_PREDICTOR=gbdt (serve_nq.sh installs it)
