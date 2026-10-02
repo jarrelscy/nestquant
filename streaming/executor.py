@@ -27,7 +27,7 @@ nq-prefill (prefill-borrow, sm120/serve/nq_pb.py; nothing changes unless x_borro
                       write their level-2 rows into the mailbox on the current stream (seq bumped, so the next apply of
                       every layer switches them), sync; returns the experts it downgraded (they release normally
                       when applied; their dead slots are never reused)"""
-import time,collections,torch,numpy as np
+import os,time,collections,torch,numpy as np
 XB=65536;XS=1<<20         # nq-prefill: borrowed-pool key L + XB*epoch; borrowed slot id = nslot + XS*epoch + j
 import p4rec as PR
 from moe import entry
@@ -43,6 +43,7 @@ class RankExecutor:
         s.tier_n=s.eng.tier_load([rf.rec(L,E) for L,E in tier]) if tier else 0
         s.wait_apply={}                                           # (L, E) -> (kind, seq) device writes done, not yet applied
         s.n_refused=0;s.n_failed=0;s.n_waited=0;s.lat=[];s.wait=wait_for_slot;s.pend=[]
+        s.odst={}                                                 # tag -> device destination of an in-flight borrowed-pool upgrade
         s.nslot=nslot;s.xep=0;s.xfree=[];s.xaddr={};s.xpend=[];s.xtag=False;s.x_have=0;s.x_done=0;s.xst=collections.Counter()   # nq-prefill borrowed pool
         # host-loop cost is GIL time taken from the serving thread: rows are precomputed numpy (level-4 row = template +
         # slot address on the P4 fields), mailbox counters are read through numpy views
@@ -81,11 +82,13 @@ class RankExecutor:
                 if sched is not None:sched.failed(L,E)
                 continue
             MB=s.layers[L][1];st,sb,sq=s.pp[L];sl=fr.pop();s.slot_of[L,E]=sl;s.tag+=1;q=MB.hseq[E]+1
-            s.eng.upgrade(s.tag,s.rf.rec(L,E),s.slot0+sl*s.rb if sl<s.nslot else s.xaddr[sl],st+sb*E,s._row(L,E,4,sl),sq+4*E,q)
+            dst=s.slot0+sl*s.rb if sl<s.nslot else s.xaddr[sl]
+            s.eng.upgrade(s.tag,s.rf.rec(L,E),dst,st+sb*E,s._row(L,E,4,sl),sq+4*E,q)
             s.ops[s.tag]=(L,E,4,q);s.up_tag[L,E]=s.tag
+            if sl>=s.nslot:s.odst[s.tag]=dst                   # borrowed-pool destination: x_reclaim fences on it
     def poll(s,sched=None,issue=True):
         for tag,hit,trd,te2e in s.eng.poll():
-            L,E,kind,q=s.ops.pop(tag)
+            L,E,kind,q=s.ops.pop(tag);s.odst.pop(tag,None)
             if kind==4:s.up_tag.pop((L,E),None)
             if trd<=-1e8:                                         # cancelled before it started (cancel_up)
                 s.n_cancel+=1;s._rel(s.slot_of.pop((L,E)))
@@ -169,10 +172,15 @@ class RankExecutor:
             if t is not None and k not in s.wait_apply:
                 try:s.eng.cancel(t);s.xst['cancel_req']+=1
                 except Exception:pass
-        nw=0;tw=t0
+        X0=xs();ex=sum(1 for t in s.odst if t in s.ops and (s.ops[t][0],s.ops[t][1]) not in X0)
+        if ex:s.xst['fence_extra']+=ex                            # in-flight writes into lent memory the mapping no longer shows
+        nw=0;tw=t0;nofence=os.path.exists('/dev/shm/nq_kvoff_nofence')   # diagnostic: the pre-fence (mapping-only) wait
+        if nofence:s.xst['nofence']+=1
         while True:                                       # every op on a borrowed-slot expert must have written
             X=xs()
-            if not any((o[0],o[1]) in X for o in s.ops.values()):break
+            # by mapping (ops of experts in borrowed slots) AND by destination (any op still writing into lent memory,
+            # whatever the expert -> slot mapping says now)
+            if not any((o[0],o[1]) in X for o in s.ops.values()) and (nofence or not any(t in s.ops for t in s.odst)):break
             s.poll(sched,issue=False);time.sleep(2e-4);nw+=1
             if time.time()-tw>warn_s:
                 tw=time.time()
@@ -192,6 +200,7 @@ class RankExecutor:
             MB.stage.index_copy_(0,ix,rows);MB.seq.index_copy_(0,ix,torch.tensor(q,dtype=MB.seq.dtype,device=dev))
             for E,qq in zip(Es,q):MB.hseq[E]=qq;s.wait_apply[L,E]=(2,qq);forced.append((L,E))
         torch.cuda.synchronize(dev)
+        if s.odst:s.xst['odst_stale']+=len(s.odst);s.odst={k:v for k,v in s.odst.items() if k in s.ops}
         s.xep=0;s.xfree=[];s.x_done=ep
         for sl in [sl for sl in s.xaddr if sl not in set(s.slot_of.values())]:del s.xaddr[sl]
         s.xst['forced']+=len(forced);s.xst['reclaims']+=1;s.xst['wait_iters']+=nw;s.xst['reclaim_ms']+=int((time.time()-t0)*1e3)
