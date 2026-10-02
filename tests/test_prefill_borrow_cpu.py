@@ -51,6 +51,7 @@ class FE:
         raise AssertionError('bad stage address')
     def post(s,tag,st,row,sq,q):s.q[tag]=dict(k='d',ix=s._ix(st),row=row.clone(),q=q,t=s.t+1,started=True,dst=None)
     def upgrade(s,tag,rec,dst,st,row,sq,q):
+        assert dst==int(row[1]),f"engine dst {dst:#x} != the slot the table row points at {int(row[1]):#x}"   # the SSD read lands where the table says
         s.q[tag]=dict(k='u',ix=s._ix(st),row=row.clone(),q=q,t=s.t+s.rng.randint(1,6),started=False,dst=dst)
     def cancel(s,tag):
         o=s.q.get(tag)
