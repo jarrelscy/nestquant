@@ -109,8 +109,11 @@ def main_follower(files):
     recs,init=prep_recs(files);NREC=int(os.environ.get('NREC',len(recs)));recs=recs[:NREC]
     print(f'follower parity: {len(recs)} records, init {len(init)} experts')
     ok=True
-    for coal in (False,True):
-        for rate,perr in ((40,0.0),(40,0.002),(8,0.002)):
+    CS=[(c,r,p) for c in (False,True) for r,p in ((40,0.0),(40,0.002),(8,0.002))]
+    if os.environ.get('CASES'):   # e.g. CASES="1:40:0,1:40:0.002,0:8:0.002" (coalesce:rate:perr)
+        CS=[(x.split(':')[0]=='1',int(x.split(':')[1]),float(x.split(':')[2])) for x in os.environ['CASES'].split(',')]
+    for coal,rate,perr in CS:
+        if True:
             t=time.time();r,info=follower_parity(recs,coal,6000,rate,perr,7,init);ok&=r
             print(f'  coalesce={coal!s:5s} rate {rate:3d} perr {perr}: {"IDENTICAL" if r else "DIFFER"}  ticks {info["ticks"]} checkpoints {info["checks"]} '
                   f'reads {info["reads"]} cancels {info["cancels"]} read_err {info["errs"]} rotations {info["rot"]} final check {info["check"]} ({time.time()-t:.0f}s)')
