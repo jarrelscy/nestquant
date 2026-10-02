@@ -162,6 +162,7 @@ class Runtime:
             if s.rank:
                 s.F=(OL.CoalescingFollower if os.environ.get('NQ_FOLLOW_COALESCE','0')=='1' else OL.Follower)(s.X,s.log);s.F.busy.update(init)
                 if RANK_SHARE:s.F.mask=np.zeros((len(L_),NE),bool);s.F.li={L:i for i,L in enumerate(L_)}
+                if CHECK or os.environ.get('NQ_FOLLOW_CHECK','0')=='1':s.F.enable_check(init)
             s.iokey=f'/dev/shm/nq_io_{pp}_{st}'
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
         if s.F is None and s.S.wants_sal:        # GBDT x mps128: rank 0 exports per-expert decode salience next to the hits
@@ -194,7 +195,7 @@ class Runtime:
             H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time();tb=0.;nit=0;s4=st=0
             SH=[s.lay[L]['sal_host'].numpy() for L in s.L_] if 'sal_host' in s.lay[s.L_[0]] else None;sprev=np.zeros((len(s.L_),NE))
             fsh=RANK_SHARE and s.F is not None and s.F.mask is not None;fs4=fst=0;fprev=np.zeros((len(s.L_),NE),np.int64)   # nq-io follower share
-            iot=time.time();iok=getattr(s,'iokey',None) if IOSTATS else None
+            iot=time.time();iok=getattr(s,'iokey',None) if IOSTATS else None;fct=0.
             while not s.stop:
                 s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
                 with s.cv:s.in_iter=True;cap=s.ncap>0
@@ -202,6 +203,10 @@ class Runtime:
                 try:
                     if s.F is not None:
                         s.X.poll(s.F,issue=not cap);s.F.step(issue=issue and not cap)
+                        if s.F.chk is not None and time.time()-fct>1.:
+                            fct=time.time();r=s.F.check()
+                            if r is not None and not r[0] and s.F.stats['check_bad']<=5:
+                                log.error('NestQuant rank %d: follower != leader log when quiescent: %d missing %d extra (%s)',s.rank,r[1],r[2],s.F.check_msg)
                         if fsh and not cap:          # this rank's served level-4 share (its own landed set, not the leader's)
                             cur=np.stack(H).astype(np.int64);c=cur-fprev;fprev=cur
                             if c[0].sum()>0:fs4+=int(c[s.S.fixed|s.F.mask].sum());fst+=int(c.sum())
@@ -249,6 +254,7 @@ class Runtime:
 #                 NQ_RAMTIER_MINAVAIL_GB (25): never load past, and drop the tier when MemAvailable falls below it
 #                 (also dropped while /dev/shm/nq_tier_drop exists)
 # NQ_FOLLOW_COALESCE=1  followers replay by net effect (oplog.CoalescingFollower)
+# NQ_FOLLOW_CHECK=1 (or NQ_CHECK=1) followers check, whenever quiescent, landed set == leader log's set (stats check_ok/bad)
 # NQ_RANK_SHARE=1 followers log their own served level-4 share; NQ_IOSTATS=<s> every rank writes its io_stats() JSON
 #                 to /dev/shm/nq_io_<boot>_r<rank>.json every <s> seconds (Runtime.io_all() reads them all)
 RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)

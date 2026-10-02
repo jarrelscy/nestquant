@@ -50,18 +50,40 @@ class Follower:
     def __init__(s,X,log):
         s.X=X;s.log=log;s.q=collections.deque();s.busy=set();s.up=set();s.stats=dict(ups=0,downs=0,dropped=0,read_errors=0)
         s.mask=None;s.li=None       # nq-io: optional [nL, NE] bool level-4 mask kept with s.up (per-rank served share), li = {L: row}
+        s.chk=None                  # nq-io check (enable_check): the leader's intended level-4 set, folded from the raw log
+    def enable_check(s,init):
+        """live consistency check: s.chk = the level-4 set the leader asked for up to the last consumed record (start =
+        init, the floating_default every rank loads itself). Whenever this rank is quiescent (nothing pending or in
+        flight) its landed set must equal s.chk minus experts whose read failed here (s.rerr, until the log touches
+        them again). Mismatches are counted (stats check_bad) and the first few logged by check(); never raises."""
+        s.chk=set(init);s.rerr=set();s.stats.update(check_ok=0,check_bad=0);s.check_msg=None
+    def _fold(s,ups,downs):
+        if s.chk is None:return
+        for k in downs:s.chk.discard(k);s.rerr.discard(k)
+        for k in ups:s.chk.add(k);s.rerr.discard(k)
+    def check(s):
+        """-> None (not quiescent / check off) or (ok, n_missing, n_extra)"""
+        if s.chk is None or s.q or s.busy:return None
+        want=s.chk-s.rerr;miss=len(want-s.up);extra=len(s.up-want);ok=not miss and not extra
+        s.stats['check_ok' if ok else 'check_bad']+=1
+        if not ok and s.check_msg is None:s.check_msg=f'missing {sorted(want-s.up)[:4]} extra {sorted(s.up-want)[:4]}'
+        return ok,miss,extra
     # executor feedback
     def landed(s,L,E):
         s.busy.discard((L,E));s.up.add((L,E))
         if s.mask is not None:s.mask[s.li[L],E]=True
+        if s.chk is not None:s.rerr.discard((L,E))     # a retry (the log asked again after the failure) landed
     def released(s,L,E):
         s.busy.discard((L,E));s.up.discard((L,E))
         if s.mask is not None:s.mask[s.li[L],E]=False
     def failed(s,L,E,read_error=False):
         s.busy.discard((L,E))
-        if read_error:s.stats['read_errors']+=1
+        if read_error:
+            s.stats['read_errors']+=1
+            if s.chk is not None:s.rerr.add((L,E))
     def step(s,issue=True):
         for ups,downs in s.log.get():
+            s._fold(ups,downs)
             for k in downs:s.q.append((k,2))
             for k in ups:s.q.append((k,4))
         if not issue or not s.q:return
@@ -95,6 +117,7 @@ class CoalescingFollower(Follower):
     def cancelled(s,L,E):s.busy.discard((L,E));s.stats['cancelled']+=1
     def step(s,issue=True):
         for ups,downs in s.log.get():
+            s._fold(ups,downs)
             for k in downs:s._add(k,2)
             for k in ups:s._add(k,4)
         if not issue or not s.pend:return

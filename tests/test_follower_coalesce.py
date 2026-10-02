@@ -3,7 +3,7 @@ CoalescingFollower against a fake executor with RankExecutor's semantics (slot p
 op per expert, asynchronous completion at a modelled drive rate, read errors, best-effort cancel of ops not yet
 started), and check after every checkpoint (log consumed up to record n, then run until quiescent):
     follower level-4 set == leader level-4 set after record n   (minus experts whose read failed)
-for both followers, plus slot-pool consistency at every tick (in use == landed + in flight + draining <= nslot).
+for both followers (and the serve's live check, Follower.check(), must agree), plus slot-pool consistency at every tick (in use == landed + in flight + draining <= nslot).
   python tests/test_follower_coalesce.py [oplog files ...]   (default: the jF serve log in /data/Jarrel/nq-io/oplogs)
 Prints SSD reads issued / cancelled / backlog for both followers (the I/O the coalescer saves)."""
 import os,sys,glob,random,collections
@@ -77,7 +77,7 @@ def leader_tables(recs,ck):
     return snap
 
 def run(recs,cls,ck,snap,nslot,rate,lat,perr,seed,init=()):
-    log=FakeLog();X=FakeX(nslot,rate,lat,perr,seed);F=cls(X,log);rng=random.Random(seed+1)
+    log=FakeLog();X=FakeX(nslot,rate,lat,perr,seed);F=cls(X,log);F.enable_check(());rng=random.Random(seed+1)
     i=0;maxb=0;bl=[];failed=set();fails=0
     F_failed=F.failed
     def failed_hook(L,E,read_error=False):failed.add((L,E));F_failed(L,E,read_error)
@@ -91,6 +91,8 @@ def run(recs,cls,ck,snap,nslot,rate,lat,perr,seed,init=()):
         # an expert whose read failed stays at level 2 here until the log ups it again (then it is retried)
         bad=(want^got)-failed
         if bad:fails+=1;print(f'  {cls.__name__}: MISMATCH at record {c}: {len(bad)} experts differ, e.g. {sorted(bad)[:5]}')
+        lc=F.check()          # the serve's live check (NQ_FOLLOW_CHECK) must agree with this independent one
+        if lc is None or lc[0]!=(not bad):fails+=1;print(f'  {cls.__name__}: live check {lc} disagrees at record {c} (bad {len(bad)})')
         failed&=want   # keep only failures still relevant
     return dict(reads=X.reads,cancels=X.cancels,errs=X.errs,max_backlog=maxb,mean_backlog=float(np.mean(bl)),fails=fails,ticks=X.t,
                 stats=dict(F.stats))
