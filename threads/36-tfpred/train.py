@@ -14,6 +14,7 @@ ap.add_argument('--dev', default='cuda:0'); ap.add_argument('--max_train_blocks'
 ap.add_argument('--tasks', default=''); ap.add_argument('--val', default=''); ap.add_argument('--nval', type=int, default=256)
 ap.add_argument('--data_dev', default='cpu'); ap.add_argument('--mem_gb', type=float, default=0); ap.add_argument('--noans', type=int, default=0)
 ap.add_argument('--init', default=''); ap.add_argument('--frac', type=float, default=1.0); ap.add_argument('--exclude', default='')
+ap.add_argument('--max_min', type=float, default=0)   # wall budget: after 200 its, shrink --steps so the cosine run ends in time
 ap.add_argument('--mmap', type=int, default=0)   # page-cache-backed big arrays (ids pretrain; not with --sal)
 a = ap.parse_args()
 dev = torch.device(a.dev); torch.manual_seed(0)
@@ -35,8 +36,9 @@ if a.data == 'ids':
 else:
     all_t = sorted(os.path.basename(f)[4:-4] for f in glob.glob('/rawdata/Jarrel/nq-tfpred/ds/cap-*.npz'))
 ex_t = a.exclude.split(',') if a.exclude else []
-tr_t = [t for t in all_t if t not in D.TEST_TASKS + D.VAL_TASKS + ex_t] if not a.tasks else a.tasks.split(',')
+tr_t = [t for t in all_t if t not in D.TEST_TASKS + D.VAL_TASKS + D.CAP_HOLDOUT + ex_t] if not a.tasks else a.tasks.split(',')
 va_t = [t for t in all_t if t in D.VAL_TASKS] if not a.val else a.val.split(',')
+assert not set(tr_t + va_t) & set(D.TEST_TASKS + D.CAP_HOLDOUT), ('held-out task in train/val', tr_t, va_t)
 print('train', tr_t, 'val', va_t, flush=True)
 tr = streams(a.data, tr_t); va = streams(a.data, va_t)
 if a.frac < 1:                           # learning curve: the first frac of each training stream
@@ -94,8 +96,14 @@ def evaluate():
     net.train(); return L / n, rec / n, base / n
 
 
-t0 = time.time(); best = 1e9; hist = []
-for it in range(a.steps + 1):
+t0 = time.time(); best = 1e9; hist = []; it = -1; t200 = None
+while True:
+    it += 1
+    if a.max_min and it == 50: t200 = time.time()
+    if a.max_min and it == 250:
+        per = (time.time() - t200) / 200; left = a.max_min * 60 - (time.time() - t0)
+        ns = max(300, int(left / (per * (1 + 0.02 * 1000 / a.eval_every)) + it))      # ~2% per eval
+        if ns < a.steps: print('max_min: steps', a.steps, '->', ns, '(%.1f ms/it)' % (per * 1e3), flush=True); a.steps = ns
     if it % a.eval_every == 0:
         vl, rec, orc = evaluate()
         hist.append(dict(it=it, val=vl, rec77=rec.round(4).tolist(), oracle77=orc.round(4).tolist(), secs=round(time.time() - t0)))

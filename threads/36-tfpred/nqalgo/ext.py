@@ -35,7 +35,34 @@ class EMAScore(Q.EMAFC):
     def score(s, b): return s.rate(b) * 64.0
 
 
+class AnsFC:
+    """answer-phase fix (expert-stability: think experts linger ~256 tok after </think>): for K tokens after a
+    think->answer switch, blend the base rate with a bias-corrected fast EMA (half-life hl) of counts since </think>,
+    weight 1 -> 0 linearly over K.  -> base rate elsewhere.  rate = hits/token; score = 64 x rate."""
+    def __init__(s, base, K=256, hl=32): s.base = base; s.K = K; s.d = 0.5 ** (Q.G / hl); s.name = f'{base.name}+ans{K}h{hl}'
+    def reset(s, tr):
+        s.base.reset(tr); s.tr = tr; s.b = -1; s.E = np.zeros(NX); s.W = 0.0; s.since = None; s.n = len(tr.ans)
+    def _adv(s, b):
+        G = Q.G; A = s.tr.ans
+        while s.b < b:
+            s.b += 1; i0 = s.b * G; i1 = min(i0 + G, s.n) - 1
+            if i0 >= s.n: continue
+            a0 = bool(A[i0 - 1]) if i0 > 0 else False; a1 = bool(A[i1])
+            if a1 and (not a0 or not bool(A[i0])):          # </think> inside / at the start of this block
+                s.E[:] = 0; s.W = 0.0; s.since = 0
+            if not a1: s.since = None
+            if s.since is not None:
+                s.E = s.E * s.d + s.tr.C[s.b].ravel(); s.W = s.W * s.d + G; s.since += G
+    def rate(s, b):
+        r = s.base.rate(b); s._adv(b)
+        if s.since is not None and s.since < s.K and s.W > 0:
+            w = 1.0 - s.since / s.K; r = ((1 - w) * r + w * s.E / s.W).astype(np.float32)
+        return r
+    def score(s, b): return s.rate(b) * 64.0
+
+
 def _src(n):
+    if n.endswith('a') and n[:-1] in ('jf', 'gbdt'): return AnsFC(_src(n[:-1]))
     if n in ('jf', 'gbdt'): return Q.ScoreFC(n)
     m = re.fullmatch(r'ema(\d+)', n)
     if m: return EMAScore(int(m[1]))
@@ -87,12 +114,12 @@ class _FakeP:
 class SrvTapPolicy(Q.Policy):
     """the SERVE class streaming/scheduler_tap.TapScheduler driven inside the sim (sim clock; sim.rank_state() as
     io_all; executor feedback from sim state transitions) -> checks the deployable code against ext.py tap-jfe512."""
-    def __init__(s, src, c=0.5, H=256, mla=1.0, svc_ms=None, name=None):
-        s.src = _src(src); s.c = c; s.H = H; s.mla = mla; s.svc = svc_ms; s.name = name or f'srvtap[{src},c{c},H{H},mla{mla}]'
+    def __init__(s, src, c=0.5, H=256, mla=1.0, svc_ms=None, name=None, far='ema'):
+        s.far = far; s.src = _src(src); s.c = c; s.H = H; s.mla = mla; s.svc = svc_ms; s.name = name or f'srvtap[{src},c{c},H{H},mla{mla}]'
         s.stats = collections.Counter()
     def reset(s, sim):
         sys.path.insert(0, '/data/Jarrel/nq-tfpred/nq-src/streaming')
-        os.environ.update(NQ_TAP_C=str(s.c), NQ_TAP_H=str(s.H), NQ_TAP_MLA=str(s.mla), NQ_TAP_TP='4',
+        os.environ.update(NQ_TAP_FAR=s.far, NQ_TAP_C=str(s.c), NQ_TAP_H=str(s.H), NQ_TAP_MLA=str(s.mla), NQ_TAP_TP='4',
                           NQ_TAP_SVC_MS=str(s.svc if s.svc is not None else (RB / sim._drv[0].B * 1e3 if sim._drv[0].B else 0.0) + sim.c['ovh_s'] * 1e3 + sim.c['fixed_lat_tok'] * sim.dt * 1e3))
         import scheduler_tap as TS
         s.src.reset(sim.tr); s.P = _FakeP(s.src); s.t = 0
@@ -118,7 +145,7 @@ class SrvTapPolicy(Q.Policy):
 def fcs(n):
     if n.startswith('shift1:'):
         return ShiftFC(n[7:])
-    m = re.fullmatch(r'(jf|gbdt|ema\d+?)(?:w|e(\d+))', n)
+    m = re.fullmatch(r'(jfa?|gbdta?|ema\d+?)(?:w|e(\d+))', n)
     if m:
         return JFLandFC(m[1], far=int(m[2]) if m[2] else None)
     return RN.fcs(n)
@@ -186,10 +213,22 @@ class _SimRef:
     """ValuePolicy._pairs has no sim argument: stash it per step"""
 
 
+class LandWinFC:
+    """TF window forecast as the serve TFGPUPredictor scores it: S = expected hits in [lat, lat+H) after the block
+    (NQ_TF_LAT / NQ_TF_H), fed to the prod cur scheduler (SchedPolicy) -> candidate row on the identical setup"""
+    def __init__(s, name, lat=64, H=256): s.W = Q.WindowFC(name); s.lat = lat; s.H = H; s.name = f'{name}[{lat},+{H}]'
+    def reset(s, tr): s.W.reset(tr)
+    def score(s, b): return s.W.value(b, s.lat, s.H)
+    def value(s, b, a, h): return s.W.value(b, a, h)
+
+
 def pol(p):
-    m = re.fullmatch(r'srvtap-(jf|gbdt|ema\d+)-c([\d.]+)-H(\d+)-mla([\d.]+)', p)
+    m = re.fullmatch(r'curwin-(\w+)-a(\d+)-h(\d+)', p)
+    if m: return Q.SchedPolicy(LandWinFC(m[1], int(m[2]), int(m[3])), name='curwin:' + p)
+    if p in ('cur-jfa', 'cur-gbdta'): return Q.SchedPolicy(_src(p[4:]))
+    m = re.fullmatch(r'srvtap-(jfa?|gbdt|ema\d+?)(w?)-c([\d.]+)-H(\d+)-mla([\d.]+)', p)
     if m:
-        return SrvTapPolicy(m[1], c=float(m[2]), H=int(m[3]), mla=float(m[4]), name='srvtap:' + p)
+        return SrvTapPolicy(m[1], c=float(m[3]), H=int(m[4]), mla=float(m[5]), name='srvtap:' + p, far='tail:0.1' if m[2] else 'ema')
     m = re.fullmatch(r'tap-(.+?)-c([\d.]+)((?:-H\d+|-Ha[\d.]+)?)((?:-ml\d+|-mla[\d.]+)?)((?:-cs)?)((?:-g)?)((?:-ls\w+)?)', p)
     if not m:
         return RN.pol(p) if not p.startswith(('val-shift1', 'cur-shift1')) else None

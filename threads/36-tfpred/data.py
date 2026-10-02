@@ -16,6 +16,7 @@ WIN = [0, 16, 64, 128, 256, 512, 1024]
 TASKS_IDS = ['embedding-drift-monitor', 'fin-saccr-rwa', 'formal-crypto', 'freight-dispatch-shift', 'pretrain-shard-corruption', 'sound-change-cascade']
 TEST_TASKS = ['freight-dispatch-shift', 'sound-change-cascade', 'embedding-drift-monitor']   # = nq-algo held-out (not in GBDT v1 / jF training)
 VAL_TASKS = ['formal-crypto']
+CAP_HOLDOUT = ['satb-audio-transcription']   # reserved TRUE held-out capture (long prefills 67K/96K), never train/val; final-window live load part 2
 
 
 def _block_hist(ex, nb, NL, wts=None, chunk=4096):
