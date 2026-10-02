@@ -93,6 +93,7 @@ services:
       NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}   # floating experts per layer planned while borrowed
       NQ_PB_PROTECT: ${NQ_PB_PROTECT:-0}           # D0-protect: top-K pre-borrow decode residents per layer pinned during a borrow (0 = off)
       NQ_PREFILL_KV_OFFLOAD: ${NQ_PREFILL_KV_OFFLOAD:-0}   # phase 2 (needs NQ_PREFILL_BORROW=1): USED KV of some MLA layers to pinned host during long prefills, streamed per layer
+      NQ_PREFILL_KV_BELOW: ${NQ_PREFILL_KV_BELOW:-1500}   # phase 2 engages only while phase 1 got < this many slots (near-full KV: 950K 992 -> +22 pts prefill hot; 750K 1905 -> +1.5 pts for -3.7% prefill)
       NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}   # phase 2 pinned host cap per rank (sized from MemAvailable at each borrow, all ranks)
       NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}   # phase 2 never borrows / releases mid-borrow below this MemAvailable
       NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-8192}        # borrow only for prefills with >= this many new (uncached) tokens
