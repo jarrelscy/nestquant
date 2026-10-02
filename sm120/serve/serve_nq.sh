@@ -19,15 +19,15 @@ up)
   for r in 0 1 2 3; do [ -f "$RP/rank$r.json" ] || { echo "no repack at $RP (rank$r.json)"; exit 1; }; done
   echo "NQ layers in repack: $(python3 -c "import json;print(sorted(int(k) for k in json.load(open('$RP/rank0.json'))['layers']))")"
   if docker ps --format '{{.Ports}}' | grep -q ':8001->'; then echo "port 8001 is in use; stop the running model first (switch.sh)"; exit 1; fi
-  mkdir -p /data/Jarrel/nq-build-container /data/Jarrel/nq-serve/vllm-cache
+  mkdir -p ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container} /data/Jarrel/nq-serve/vllm-cache
   # GBDT floating-set predictor deps (the image has none of them); appended to sys.path, so nothing in the image is shadowed
   LGB=${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}
   [ -d "$LGB/lightgbm" ] || uv pip install -q --python-version 3.12 --target "$LGB" lightgbm==4.7.0 narwhals scipy
   # build the NestQuant kernels once for the image's torch (the 4 workers would otherwise race on the build)
   docker run --rm --gpus '"device=0"' --entrypoint bash -e NQ_BUILD=/nqbuild -e LIBURING=/data/Jarrel/liburing \
     -e CUDA_HOME=/opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13 -v "${NQ_REPO:-/data/Jarrel/nestquant}":/nq:ro \
-    -v /data/Jarrel/nq-build-container:/nqbuild -v /data/Jarrel/liburing:/data/Jarrel/liburing:ro $IMG \
-    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod()"'
+    -v ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild -v /data/Jarrel/liburing:/data/Jarrel/liburing:ro $IMG \
+    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod();import hostcore;hostcore.mod()"'
   docker compose --profile glm5.3-hybrid-1m up -d
   echo "waiting for /v1/models (loading takes a while) ..."
   for i in $(seq 1 360); do

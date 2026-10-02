@@ -35,6 +35,8 @@ services:
       NQ_CHECK: ${NQ_CHECK:-0}
       CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
       NQ_DUMP: ${NQ_DUMP:-}
+      NQ_TFCAP: ${NQ_TFCAP:-}                 # nq-tfpred decode-trace capture dir (in container); empty = off
+      NQ_TFCAP_CHUNK: ${NQ_TFCAP_CHUNK:-65536}   # rows per trace file (small = short runs still flush; nothing flushes at shutdown)
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
       NQ_ISSUE: ${NQ_ISSUE:-1}
@@ -42,6 +44,30 @@ services:
       NQ_SHADOW: ${NQ_SHADOW:-0}
       NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
       NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
+      # nq-io I/O upgrades (sm120/serve/nq_vllm.py "nq-io" block); every default = the original serve
+      NQ_IO_MODE: ${NQ_IO_MODE:-}                # '' | dual | split
+      NQ_REPACK_ALT: /nqrepack1
+      NQ_IO_SPLIT_RANKS: ${NQ_IO_SPLIT_RANKS:-2,3}
+      NQ_IO_QD: ${NQ_IO_QD:-8}
+      NQ_IO_QD_ALT: ${NQ_IO_QD_ALT:-}
+      NQ_IO_NHOST: ${NQ_IO_NHOST:-}
+      NQ_RAMTIER_GB: ${NQ_RAMTIER_GB:-0}
+      NQ_RAMTIER_LIST: ${NQ_RAMTIER_LIST:-/nq/streaming/results/ramtier_jf.json}
+      NQ_RAMTIER_MINAVAIL_GB: ${NQ_RAMTIER_MINAVAIL_GB:-30}
+      NQ_FOLLOW_COALESCE: ${NQ_FOLLOW_COALESCE:-0}
+      NQ_FOLLOW_CHECK: ${NQ_FOLLOW_CHECK:-0}
+      NQ_HOSTLOOP: ${NQ_HOSTLOOP:-py}
+      NQ_SCHED: ${NQ_SCHED:-}
+      NQ_TAP_C: ${NQ_TAP_C:-1.0}              # NQ_SCHED=tap knobs (streaming/scheduler_tap.py); defaults = the code's
+      NQ_TAP_H: ${NQ_TAP_H:-256}
+      NQ_TAP_HA: ${NQ_TAP_HA:-0}
+      NQ_TAP_MLA: ${NQ_TAP_MLA:-1.0}
+      NQ_TAP_SVC_MS: ${NQ_TAP_SVC_MS:-2}
+      NQ_TAP_FAR: ${NQ_TAP_FAR:-tail:0.1}
+      NQ_TAP_TP: ${NQ_TAP_TP:-4}
+      NQ_TAP_RATE_GBPS: ${NQ_TAP_RATE_GBPS:-6}
+      NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
+      NQ_IOSTATS: ${NQ_IOSTATS:-0}
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
@@ -63,6 +89,14 @@ services:
       NQ_LA_BUDGET: ${NQ_LA_BUDGET:-45}
       NQ_PF_RANK: ${NQ_PF_RANK:-gate}          # gate | salience | count
       NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
+      NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-0}   # nq-prefill: free KV blocks -> extra expert slots during long prefills (nq_pb*.py)
+      NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}   # floating experts per layer planned while borrowed
+      NQ_PB_PROTECT: ${NQ_PB_PROTECT:-0}           # D0-protect: top-K pre-borrow decode residents per layer pinned during a borrow (0 = off)
+      NQ_PREFILL_KV_OFFLOAD: ${NQ_PREFILL_KV_OFFLOAD:-0}   # phase 2 (needs NQ_PREFILL_BORROW=1): USED KV of some MLA layers to pinned host during long prefills, streamed per layer
+      NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}   # phase 2 pinned host cap per rank (sized from MemAvailable at each borrow, all ranks)
+      NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}   # phase 2 never borrows / releases mid-borrow below this MemAvailable
+      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-8192}        # borrow only for prefills with >= this many new (uncached) tokens
+      NQ_PB_MARGIN: ${NQ_PB_MARGIN:-16}            # KV blocks always left free beyond the request's own prompt
       NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
       NQ_DELTA_TABLE: /nqpred/delta_table.json
       NQ_LA_OUT: /dbg/la_stats.json
@@ -73,10 +107,12 @@ services:
     volumes:
     - ${NQ_REPO:-/data/Jarrel/nestquant}:/nq:ro
     - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}:/nqrepack:ro
-    - /data/Jarrel/nq-build-container:/nqbuild
+    - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
+    - ${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}:/nqrepack1:ro   # nq-io: copy of the record files on nvme1 (/data)
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
     - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
     - /data/Jarrel/nq-serve/dbg:/dbg
+    - /rawdata/Jarrel/nq-tfpred/traces:/tfcap
     - /data/Jarrel/nq-serve/predictor:/nqpred:ro
     - /data/lmcache/glm5.3-nq:/lmcache/disk                 # replaces the ARVQ /lmcache/disk mount (unused while disk size is 0)
     - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro     # lightgbm + narwhals + scipy for NQ_PREDICTOR=gbdt (serve_nq.sh installs it)

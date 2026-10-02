@@ -11,6 +11,17 @@
 //   e.post(tag, stage_ptr, row, seq_ptr, seq)                                       # downgrade / row-only op
 //   e.poll() -> [(tag, hit, t_read_s, t_e2e_s)]  ops whose device writes are complete (the mailbox may apply them)
 //   e.stats() -> dict ;  e.close()
+// nq-io extensions (all off by default; with them off the control flow is the original one):
+//   Engine(path, rec_bytes, n_host, qd, device, alt_path="", qd_alt=0)
+//       alt_path = an identical copy of the record file on a second drive. Each SSD read goes to the drive with fewer
+//       of this engine's reads in flight (each drive capped at its own qd: qd for path, qd_alt or qd for alt_path), so
+//       the faster drive naturally takes the larger share.
+//   e.tier_load(recs[int64]) -> n   pinned host-RAM tier: read these records once (blocking, caller's thread) into
+//       their own pinned buffer; an upgrade of a tier record then skips the SSD (straight H2D from the tier)
+//   e.tier_drop()                   release the tier (RAM back-off): no new tier hits; freed once no copy uses it
+//   e.cancel(tag)                   best effort: an op that has not started (no read, no device write) is dropped and
+//       reported by poll() as (tag, False, -1e9, -1e9); an op already started completes normally
+//   stats() adds per-drive inflight / reads / bytes / read-time sums, tier_* counters
 #include <torch/extension.h>
 #include <cuda_runtime.h>
 #include <liburing.h>
@@ -34,10 +45,17 @@ constexpr int ROW_W = 20;   // moe.py TBL_W
 struct Op {
     int64_t tag, rec; bool read; uint64_t slot, stage, seqp; int seq; int64_t row[ROW_W];
     double t0 = 0, t_rd = 0; int entry = -1, ring = -1; bool hit = false; cudaEvent_t ev = nullptr;
+    int drv = -1; double t_sub = 0; const uint8_t* tsrc = nullptr;   // drive the read went to; tier source (tier hit)
 };
 
 struct Engine {
     int fd = -1, dev = 0, qd; size_t rb; int nh;
+    int nd = 1, fds[2] = {-1, -1}, qdd[2] = {0, 0}, infl[2] = {0, 0}, qtot = 0;   // drives (fds[0] == fd)
+    int64_t d_reads[2] = {0, 0}, d_bytes[2] = {0, 0}; double d_rdt[2] = {0, 0};
+    // RAM tier: tier_state 0 none, 1 active, 2 drop requested, 3 dropped
+    uint8_t* tier_mem = nullptr; size_t tier_n = 0; std::unordered_map<int64_t, const uint8_t*> tier_at;
+    std::vector<int64_t> cancel_req; int64_t n_cancel = 0; std::atomic<int64_t> n_wait{0};   // ops waiting for an entry / drive / ring slot (worker-side queue)
+    std::atomic<int> tier_state{0}; int tier_inflight = 0; int64_t n_tier_hit = 0, tier_bytes_served = 0;
     uint8_t* host = nullptr;                     // nh entries of rb bytes (pinned, 4 KiB aligned)
     int64_t* rows = nullptr; int* seqs = nullptr; // pinned per-ring-slot row + seq staging (qd * 4 ring slots)
     int nring; std::vector<int> ring_free;
@@ -51,18 +69,26 @@ struct Engine {
     // rec_bytes / spacing), NQ_FAULT_FAIL_PPM = share of completed reads reported as failed (a failing drive)
     double fault_gap = 0, next_ok = 0; int64_t fault_ppm = 0, n_fault = 0; uint64_t frng = 88172645463325252ull;
 
-    Engine(std::string path, int64_t rec_bytes, int64_t n_host, int64_t qd_, int64_t device) : dev(device), qd(qd_), rb(rec_bytes), nh(n_host)
+    Engine(std::string path, int64_t rec_bytes, int64_t n_host, int64_t qd_, int64_t device, std::string alt_path, int64_t qd_alt)
+        : dev(device), qd(qd_), rb(rec_bytes), nh(n_host)
     {
-        TORCH_CHECK(rb % 4096 == 0 && nh >= qd && qd >= 1, "rec_bytes % 4096, n_host >= qd >= 1");
-        fd = open(path.c_str(), O_RDONLY | O_DIRECT); TORCH_CHECK(fd >= 0, "open ", path);
+        qdd[0] = qd; if (!alt_path.empty()) { nd = 2; qdd[1] = qd_alt > 0 ? (int)qd_alt : qd; }
+        qtot = qdd[0] + qdd[1];
+        TORCH_CHECK(rb % 4096 == 0 && nh >= qtot && qd >= 1, "rec_bytes % 4096, n_host >= qd (+qd_alt) >= 1");
+        fd = open(path.c_str(), O_RDONLY | O_DIRECT); TORCH_CHECK(fd >= 0, "open ", path); fds[0] = fd;
+        if (nd == 2)
+        {
+            fds[1] = open(alt_path.c_str(), O_RDONLY | O_DIRECT); TORCH_CHECK(fds[1] >= 0, "open ", alt_path);
+            struct stat a, b; fstat(fd, &a); fstat(fds[1], &b); TORCH_CHECK(a.st_size == b.st_size, "alt_path size differs from path");
+        }
         CK(cudaSetDevice(dev)); CK(cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking));
         CK(cudaHostAlloc((void**)&host, (size_t)nh * rb, cudaHostAllocPortable));
-        nring = qd * 4; CK(cudaHostAlloc((void**)&rows, (size_t)nring * ROW_W * 8, cudaHostAllocPortable));
+        nring = qtot * 4; CK(cudaHostAlloc((void**)&rows, (size_t)nring * ROW_W * 8, cudaHostAllocPortable));
         CK(cudaHostAlloc((void**)&seqs, (size_t)nring * 4, cudaHostAllocPortable));
         for (int i = 0; i < nring; ++i) ring_free.push_back(i);
         ent_rec.assign(nh, -1); ent_pin.assign(nh, 0); lru_it.resize(nh);
         for (int i = 0; i < nh; ++i) { lru.push_back(i); lru_it[i] = std::prev(lru.end()); }
-        TORCH_CHECK(io_uring_queue_init(qd, &ring, 0) == 0, "io_uring_queue_init");
+        TORCH_CHECK(io_uring_queue_init(qtot, &ring, 0) == 0, "io_uring_queue_init");
         if (const char* v = getenv("NQ_FAULT_READ_MS")) fault_gap = atof(v) * 1e-3;
         if (const char* v = getenv("NQ_FAULT_FAIL_PPM")) fault_ppm = atoll(v);
         th = std::thread([this] { loop(); });
@@ -72,10 +98,12 @@ struct Engine {
     {
         if (stop.exchange(true)) return;
         cv.notify_all(); if (th.joinable()) th.join();
-        cudaStreamSynchronize(st); io_uring_queue_exit(&ring); ::close(fd);
+        cudaStreamSynchronize(st); io_uring_queue_exit(&ring); ::close(fd); if (fds[1] >= 0) ::close(fds[1]);
         for (auto e : evpool) cudaEventDestroy(e);
+        if (tier_mem) { cudaFreeHost(tier_mem); tier_mem = nullptr; }
         cudaFreeHost(host); cudaFreeHost(rows); cudaFreeHost(seqs); cudaStreamDestroy(st);
     }
+    void cancel(int64_t tag) { { std::lock_guard<std::mutex> g(mu); cancel_req.push_back(tag); } cv.notify_one(); }
     void enqueue(Op* o) { { std::lock_guard<std::mutex> g(mu); q.push_back(o); } cv.notify_one(); }
     void upgrade(int64_t tag, int64_t rec, uint64_t slot, uint64_t stage, torch::Tensor row, uint64_t seqp, int64_t seq)
     {
@@ -99,7 +127,43 @@ struct Engine {
         std::lock_guard<std::mutex> g(mu); py::dict d;
         d["upgrades"] = n_up; d["posts"] = n_post; d["host_hits"] = n_hit; d["bytes_read"] = bytes;
         d["fault_injected"] = n_fault; d["queued"] = (int64_t)q.size(); d["reading"] = (int64_t)reading.size(); d["copying"] = (int64_t)copying.size();
+        py::list fi, fr, fb, ft, fq;
+        for (int i = 0; i < nd; ++i) { fi.append(infl[i]); fr.append(d_reads[i]); fb.append(d_bytes[i]); ft.append(d_rdt[i]); fq.append(qdd[i]); }
+        d["drives"] = nd; d["drive_qd"] = fq; d["drive_inflight"] = fi; d["drive_reads"] = fr; d["drive_bytes"] = fb; d["drive_read_s"] = ft;
+        d["n_host"] = nh; d["tier_state"] = tier_state.load(); d["tier_recs"] = (int64_t)tier_n; d["tier_hits"] = n_tier_hit;
+        d["tier_bytes"] = tier_bytes_served; d["cancelled"] = n_cancel; d["waiting"] = n_wait.load(); d["now"] = now();
         return d;
+    }
+    // ---- RAM tier ----
+    int64_t tier_load(std::vector<int64_t> recs)
+    {
+        TORCH_CHECK(tier_state.load() == 0, "tier_load: tier already loaded / dropped");
+        if (recs.empty()) return 0;
+        CK(cudaSetDevice(dev)); size_t n = recs.size(); uint8_t* m = nullptr;
+        CK(cudaHostAlloc((void**)&m, n * rb, cudaHostAllocPortable));
+        std::atomic<size_t> nxt{0}; std::atomic<int64_t> bad{0}; int nt = 8; std::vector<std::thread> ths;
+        for (int t = 0; t < nt; ++t) ths.emplace_back([&, t] {
+            int f = fds[t % nd];
+            for (size_t i; (i = nxt.fetch_add(1)) < n;)
+            {
+                size_t got = 0;
+                while (got < rb) { ssize_t r = pread(f, m + i * rb + got, rb - got, (off_t)(recs[i] * rb + got)); if (r <= 0) break; got += r; }
+                if (got != rb) bad++;
+            }
+        });
+        for (auto& t : ths) t.join();
+        TORCH_CHECK(bad.load() == 0, "tier_load: ", bad.load(), " short reads");
+        tier_mem = m; tier_n = n;
+        for (size_t i = 0; i < n; ++i) tier_at[recs[i]] = m + i * rb;
+        tier_state.store(1, std::memory_order_release); cv.notify_one();
+        return (int64_t)n;
+    }
+    void tier_drop() { int one = 1; tier_state.compare_exchange_strong(one, 2); cv.notify_one(); }
+    int pick_drive() const   // drive with the fewest reads in flight that is under its cap (ties: drive 0); -1 if all full
+    {
+        int b = -1;
+        for (int i = 0; i < nd; ++i) if (infl[i] < qdd[i] && (b < 0 || infl[i] < infl[b])) b = i;
+        return b;
     }
     // ---- worker thread ----
     int take_entry(int64_t rec, bool& hit)    // caller holds no lock; entries are owned by this thread
@@ -120,7 +184,7 @@ struct Engine {
     {
         o->ring = ring_free.back(); ring_free.pop_back();
         int64_t* r = rows + (size_t)o->ring * ROW_W; memcpy(r, o->row, sizeof o->row); seqs[o->ring] = o->seq;
-        if (o->read) CK(cudaMemcpyAsync((void*)o->slot, host + (size_t)o->entry * rb, rb, cudaMemcpyHostToDevice, st));
+        if (o->read) CK(cudaMemcpyAsync((void*)o->slot, o->tsrc ? (const void*)o->tsrc : (const void*)(host + (size_t)o->entry * rb), rb, cudaMemcpyHostToDevice, st));
         CK(cudaMemcpyAsync((void*)o->stage, r, ROW_W * 8, cudaMemcpyHostToDevice, st));
         CK(cudaMemcpyAsync((void*)o->seqp, seqs + o->ring, 4, cudaMemcpyHostToDevice, st));
         o->ev = get_ev(); CK(cudaEventRecord(o->ev, st)); copying.push_back(o);
@@ -137,6 +201,15 @@ struct Engine {
                 if (q.empty() && reading.empty() && copying.empty() && wait_entry.empty() && ready.empty())
                     cv.wait_for(g, std::chrono::milliseconds(2));
                 while (!q.empty()) { wait_entry.push_back(q.front()); q.pop_front(); }
+                if (!cancel_req.empty())
+                {   // ops still waiting here have touched neither the drive nor the device
+                    std::unordered_map<int64_t, int> cs; for (auto t : cancel_req) cs[t] = 1; cancel_req.clear();
+                    std::deque<Op*> keep;
+                    for (Op* o : wait_entry)
+                        if (cs.count(o->tag)) { done.emplace_back(o->tag, false, -1e9, -1e9); n_cancel++; delete o; }
+                        else keep.push_back(o);
+                    wait_entry.swap(keep);
+                }
             }
             // retire completed copies
             for (size_t i = 0; i < copying.size();)
@@ -144,10 +217,14 @@ struct Engine {
                 Op* o = copying[i];
                 if (cudaEventQuery(o->ev) != cudaSuccess) { ++i; continue; }
                 evpool.push_back(o->ev); ring_free.push_back(o->ring);
-                if (o->read) ent_pin[o->entry]--;
+                if (o->tsrc) tier_inflight--; else if (o->read) ent_pin[o->entry]--;
                 { std::lock_guard<std::mutex> g(mu); done.emplace_back(o->tag, o->hit, o->t_rd - o->t0, now() - o->t0); }
                 delete o; copying[i] = copying.back(); copying.pop_back();
             }
+            // RAM tier back-off: free the tier once no copy reads from it
+            if (tier_state.load(std::memory_order_acquire) == 2 && tier_inflight == 0)
+            { tier_at.clear(); CK(cudaFreeHost(tier_mem)); tier_mem = nullptr; tier_n = 0; tier_state.store(3); }
+            const bool tier_on = tier_state.load(std::memory_order_acquire) == 1;
             // start ops in arrival order (per-expert order matters: the host keeps one outstanding op per expert)
             bool sub = false, throttled = false;
             while (!ready.empty() && !ring_free.empty()) { issue_copies(ready.front()); ready.pop_front(); }
@@ -155,13 +232,23 @@ struct Engine {
             {
                 Op* o = wait_entry.front();
                 if (!o->read) { wait_entry.pop_front(); o->t_rd = o->t0; issue_copies(o); n_post++; continue; }
-                if ((int)reading.size() >= qd) break;
+                if (tier_on)
+                {
+                    auto ti = tier_at.find(o->rec);
+                    if (ti != tier_at.end())
+                    {
+                        wait_entry.pop_front(); o->tsrc = ti->second; o->hit = true; n_up++; n_tier_hit++; tier_inflight++;
+                        tier_bytes_served += rb; o->t_rd = now(); issue_copies(o); continue;
+                    }
+                }
+                int dv = pick_drive(); if (dv < 0) break;
                 if (fault_gap > 0 && !where.count(o->rec) && now() < next_ok) { throttled = true; break; }
                 bool hit; int e = take_entry(o->rec, hit); if (e < 0) break;
                 wait_entry.pop_front(); o->entry = e; o->hit = hit; n_up++;
                 if (hit) { n_hit++; o->t_rd = now(); issue_copies(o); continue; }
                 io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-                io_uring_prep_read(sqe, fd, host + (size_t)e * rb, rb, (uint64_t)o->rec * rb);
+                io_uring_prep_read(sqe, fds[dv], host + (size_t)e * rb, rb, (uint64_t)o->rec * rb);
+                o->drv = dv; infl[dv]++; o->t_sub = now();
                 io_uring_sqe_set_data(sqe, o); reading.push_back(o); sub = true; if (fault_gap > 0) next_ok = now() + fault_gap;
             }
             if (sub) io_uring_submit(&ring);
@@ -173,18 +260,20 @@ struct Engine {
             {
                 Op* o = (Op*)io_uring_cqe_get_data(cqe); ++n;
                 for (size_t i = 0; i < reading.size(); ++i) if (reading[i] == o) { reading[i] = reading.back(); reading.pop_back(); break; }
+                infl[o->drv]--; d_reads[o->drv]++; d_rdt[o->drv] += now() - o->t_sub;
                 bool inj = false;
                 if (fault_ppm) { frng ^= frng << 13; frng ^= frng >> 7; frng ^= frng << 17; inj = (int64_t)(frng % 1000000) < fault_ppm; n_fault += inj; }
                 if (cqe->res != (int)rb || inj)
                 {   // failed read: the expert stays at level 2 (row never posted); report with t_read < 0
                     ent_pin[o->entry]--; std::lock_guard<std::mutex> g(mu); done.emplace_back(o->tag, false, (double)std::min(cqe->res, -1), -1.0); delete o; continue;
                 }
-                o->t_rd = now(); ent_rec[o->entry] = o->rec; where[o->rec] = o->entry; bytes += rb;
+                o->t_rd = now(); ent_rec[o->entry] = o->rec; where[o->rec] = o->entry; bytes += rb; d_bytes[o->drv] += rb;
                 if (ring_free.empty()) ready.push_back(o); else issue_copies(o);
             }
             if (n) io_uring_cq_advance(&ring, n);
             if (!n && reading.empty() && !copying.empty()) usleep(20);   // copies in flight only: don't spin a core
             if (throttled && !n) usleep(200);
+            n_wait.store((int64_t)(wait_entry.size() + ready.size()), std::memory_order_relaxed);
         }
         // drain
         while (!reading.empty()) { io_uring_cqe* c; if (io_uring_wait_cqe(&ring, &c)) break; Op* o = (Op*)io_uring_cqe_get_data(c); io_uring_cqe_seen(&ring, c);
@@ -196,7 +285,9 @@ struct Engine {
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
     py::class_<Engine>(m, "Engine")
-        .def(py::init<std::string, int64_t, int64_t, int64_t, int64_t>())
+        .def(py::init<std::string, int64_t, int64_t, int64_t, int64_t, std::string, int64_t>(),
+             py::arg("path"), py::arg("rec_bytes"), py::arg("n_host"), py::arg("qd"), py::arg("device"), py::arg("alt_path") = "", py::arg("qd_alt") = 0)
         .def("upgrade", &Engine::upgrade).def("post", &Engine::post)
+        .def("tier_load", &Engine::tier_load, py::call_guard<py::gil_scoped_release>()).def("tier_drop", &Engine::tier_drop).def("cancel", &Engine::cancel)
         .def("poll", &Engine::poll).def("stats", &Engine::stats).def("close", &Engine::close);
 }
