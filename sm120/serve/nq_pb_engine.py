@@ -19,9 +19,7 @@ ON=os.environ.get('NQ_PREFILL_BORROW','0')=='1'
 MIN_NEW=int(os.environ.get('NQ_PB_MIN_NEW','8192'));PF_NF=int(os.environ.get('NQ_PREFILL_SLOTS','155'))
 MARGIN=int(os.environ.get('NQ_PB_MARGIN','16'));OFF=os.environ.get('NQ_PB_OFF','/dev/shm/nq_pb_off')
 ALIGN=4096
-try:
-    from vllm.logger import init_logger;log=init_logger('vllm.nestquant.pb')
-except Exception:log=logging.getLogger('nestquant.pb')
+log=logging.getLogger('vllm.nestquant.pb')   # child of vllm's logger (its handler / level); no vllm import at site time
 
 def carve_count(nblk,pages,rb):
     """slots a run of nblk consecutive blocks yields over all KV storages: per storage floor((run bytes - ALIGN) / rb)
