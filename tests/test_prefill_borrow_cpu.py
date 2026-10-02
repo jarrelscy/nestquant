@@ -215,7 +215,7 @@ def part_b():
     f0=pool.get_num_free_blocks()
     r=Req('a',60000);pb=step(r,4096)
     assert pb is not None and pb[1]=='borrow',pb
-    ep,ph,runs,ns=pb;nblk=sum(b1-b0 for b0,b1 in runs)
+    ep,ph,runs,ns=pb[:4];nblk=sum(b1-b0 for b0,b1 in runs)
     assert ns==min(st.want,sum(PE.carve_count(b1-b0,pages,RB) for b0,b1 in runs)),ns
     for b0,b1 in runs:
         for i in range(b0,b1):

@@ -82,6 +82,9 @@ services:
       NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
       NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-0}   # nq-prefill: free KV blocks -> extra expert slots during long prefills (nq_pb*.py)
       NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}   # floating experts per layer planned while borrowed
+      NQ_PREFILL_KV_OFFLOAD: ${NQ_PREFILL_KV_OFFLOAD:-0}   # phase 2 (needs NQ_PREFILL_BORROW=1): USED KV of some MLA layers to pinned host during long prefills, streamed per layer
+      NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}   # phase 2 pinned host cap per rank (sized from MemAvailable at each borrow, all ranks)
+      NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}   # phase 2 never borrows / releases mid-borrow below this MemAvailable
       NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-8192}        # borrow only for prefills with >= this many new (uncached) tokens
       NQ_PB_MARGIN: ${NQ_PB_MARGIN:-16}            # KV blocks always left free beyond the request's own prompt
       NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
