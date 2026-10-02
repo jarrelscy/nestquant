@@ -81,6 +81,7 @@ class Runtime:
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
         s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None
+        s.PB=None;s.pb_pause=0      # nq-prefill prefill-borrow (nq_pb.py), NQ_PREFILL_BORROW=1 only
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -184,6 +185,10 @@ class Runtime:
         _gate_captures(s)
         if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
         if s.F is None and s.rank==0:s.SR=SRM.SessionRestore(s);_hook_sched(s)   # per-session floating-set restore (nq_session.py)
+        if os.environ.get('NQ_PREFILL_BORROW','0')=='1':     # nq-prefill: KV blocks lent to the slot pool during long prefills
+            if HOSTLOOP=='cpp':log.warning('NestQuant prefill-borrow: NQ_HOSTLOOP=cpp not supported, off')
+            else:
+                import nq_pb;s.PB=nq_pb.install(s)
         if os.environ.get('NQ_TFCAP') and s.F is None and s.rank==0:   # nq-tfpred decode-trace capture (off unless set)
             import nq_tfcap;s.CAP=nq_tfcap.install(s,L_,s.lay[L_[0]]['H'],dev)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
@@ -210,7 +215,9 @@ class Runtime:
             iot=time.time();iok=getattr(s,'iokey',None) if IOSTATS else None;fct=0.;s.hl_t=0.;s.hl_n=0
             while not s.stop:
                 s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
-                with s.cv:s.in_iter=True;cap=s.ncap>0
+                with s.cv:
+                    if s.PB is not None:s.cv.wait_for(lambda:not s.pb_pause)   # prefill-borrow / reclaim in progress
+                    s.in_iter=True;cap=s.ncap>0
                 t0=time.perf_counter()
                 try:
                     if s.F is not None:
@@ -238,6 +245,7 @@ class Runtime:
                             if s.SR is not None and issue:ntok=s._sr(s.SR.on_counts,s.S,c,ntok,lv,dflt=ntok)   # handover / prefill residue / window share
                             ups,downs=s.S.step(c,ntok,sal=sal)
                             if issue:
+                                if s.PB is not None:ups=s.X.pool_tag(ups)
                                 s.X.apply(ups,downs,s.S)
                                 if s.log is not None:s.log.put(ups,downs)
                 finally:

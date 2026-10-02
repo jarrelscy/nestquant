@@ -17,8 +17,18 @@ nq-io extensions (defaults = original behaviour):
   cancel_up(L, E)     best-effort skip of a stale upgrade: dropped if still waiting for a slot here or still queued in
                       the engine (sched.cancelled(L, E) on the poll that reports it); False if it is already reading
   io_stats()          live I/O numbers since the previous call (delivered GB/s, per-drive GB/s / in-flight, queue
-                      depths, tier hit share, op latency p50/p99) - the API the throughput-aware scheduler reads"""
+                      depths, tier hit share, op latency p50/p99) - the API the throughput-aware scheduler reads
+nq-prefill (prefill-borrow, sm120/serve/nq_pb.py; nothing changes unless x_borrow() is called):
+  x_borrow(ep, addrs) a second, temporary slot pool at device addresses lent by vLLM's KV cache (free blocks) for
+                      epoch ep; an upgrade key (L + XB*ep, E) goes to that pool (followers get the same keys from the
+                      oplog, so every rank has the same experts there); a stale epoch's key is refused (sched.failed)
+  pool_tag(ups)       leader: tag ups for the borrowed pool while it has room and xtag is set
+  x_reclaim(sched)    give the pool back: refuse its waiting ups, cancel / wait out every op on its experts, then
+                      write their level-2 rows into the mailbox on the current stream (seq bumped, so the next apply of
+                      every layer switches them), sync; returns the experts it downgraded (they release normally
+                      when applied; their dead slots are never reused)"""
 import time,collections,torch,numpy as np
+XB=65536;XS=1<<20         # nq-prefill: borrowed-pool key L + XB*epoch; borrowed slot id = nslot + XS*epoch + j
 import p4rec as PR
 from moe import entry
 
@@ -33,6 +43,7 @@ class RankExecutor:
         s.tier_n=s.eng.tier_load([rf.rec(L,E) for L,E in tier]) if tier else 0
         s.wait_apply={}                                           # (L, E) -> (kind, seq) device writes done, not yet applied
         s.n_refused=0;s.n_failed=0;s.n_waited=0;s.lat=[];s.wait=wait_for_slot;s.pend=[]
+        s.nslot=nslot;s.xep=0;s.xfree=[];s.xaddr={};s.xpend=[];s.xtag=False;s.x_have=0;s.x_done=0;s.xst=collections.Counter()   # nq-prefill borrowed pool
         # host-loop cost is GIL time taken from the serving thread: rows are precomputed numpy (level-4 row = template +
         # slot address on the P4 fields), mailbox counters are read through numpy views
         s.slot0=s.slots.data_ptr();s.rc={};s.ah={L:MB.applied_host.numpy() for L,(M,MB,_) in layers.items()}
@@ -46,18 +57,30 @@ class RankExecutor:
     def _row(s,L,E,lv,slot=None):
         r2,z,m=s.rc[L,E]
         if lv==2 or s.shadow:return r2            # shadow (A/B only): every read / copy / mailbox op happens, the row stays level 2
-        return torch.from_numpy(z+m*(s.slot0+slot*s.rb))
+        return torch.from_numpy(z+m*(s.slot0+slot*s.rb if slot<s.nslot else s.xaddr[slot]))
+    def _rel(s,sl):
+        if sl<s.nslot:s.free.append(sl)
+        elif s.xep and (sl-s.nslot)//XS==s.xep:s.xfree.append(sl)
+        else:s.xaddr.pop(sl,None)                          # borrowed slot of a reclaimed epoch: never reused
     def apply(s,ups,downs,sched=None):
         for L,E in downs:
             MB=s.layers[L][1];st,sb,sq=s.pp[L];s.tag+=1;q=MB.hseq[E]+1
             s.eng.post(s.tag,st+sb*E,s._row(L,E,2),sq+4*E,q);s.ops[s.tag]=(L,E,2,q)
         for L,E in ups:
-            if not s.free and s.wait:s.pend.append((L,E));s.n_waited+=1;continue
-            if not s.free:
+            fr,pd,k=s.free,s.pend,(L,E)
+            if L>=XB:                                       # nq-prefill: upgrade into the borrowed pool of epoch ep
+                ep,L=divmod(L,XB)
+                if ep!=s.xep:
+                    s.xst['stale']+=1
+                    if sched is not None:sched.failed(L,E)
+                    continue
+                fr,pd=s.xfree,s.xpend
+            if not fr and s.wait:pd.append(k);s.n_waited+=1;continue
+            if not fr:
                 s.n_refused+=1
                 if sched is not None:sched.failed(L,E)
                 continue
-            MB=s.layers[L][1];st,sb,sq=s.pp[L];sl=s.free.pop();s.slot_of[L,E]=sl;s.tag+=1;q=MB.hseq[E]+1
+            MB=s.layers[L][1];st,sb,sq=s.pp[L];sl=fr.pop();s.slot_of[L,E]=sl;s.tag+=1;q=MB.hseq[E]+1
             s.eng.upgrade(s.tag,s.rf.rec(L,E),s.slot0+sl*s.rb,st+sb*E,s._row(L,E,4,sl),sq+4*E,q)
             s.ops[s.tag]=(L,E,4,q);s.up_tag[L,E]=s.tag
     def poll(s,sched=None,issue=True):
@@ -65,11 +88,11 @@ class RankExecutor:
             L,E,kind,q=s.ops.pop(tag)
             if kind==4:s.up_tag.pop((L,E),None)
             if trd<=-1e8:                                         # cancelled before it started (cancel_up)
-                s.n_cancel+=1;s.free.append(s.slot_of.pop((L,E)))
+                s.n_cancel+=1;s._rel(s.slot_of.pop((L,E)))
                 if sched is not None:(getattr(sched,'cancelled',None) or sched.failed)(L,E)
                 continue
             if trd<0:                                             # read failed: row never posted
-                s.n_failed+=1;s.free.append(s.slot_of.pop((L,E)))
+                s.n_failed+=1;s._rel(s.slot_of.pop((L,E)))
                 if sched is not None:sched.failed(L,E,read_error=True)
                 continue
             s.layers[L][1].hseq[E]=q;s.wait_apply[L,E]=(kind,q)
@@ -80,17 +103,21 @@ class RankExecutor:
             if kind==4:
                 if sched is not None:sched.landed(L,E)
             else:
-                s.free.append(s.slot_of.pop((L,E)))
+                s._rel(s.slot_of.pop((L,E)))
                 if sched is not None:sched.released(L,E)
         if issue and s.pend and s.free:
             n=min(len(s.pend),len(s.free));go,s.pend=s.pend[:n],s.pend[n:];s.apply(go,[],sched)
+        if issue and s.xpend and s.xfree:
+            n=min(len(s.xpend),len(s.xfree));go,s.xpend=s.xpend[:n],s.xpend[n:];s.apply(go,[],sched)
     def cancel_up(s,L,E,sched=None):
         """best effort: drop a not-yet-started upgrade of (L, E). Waiting for a slot here: dropped now (True, callback
         sched.cancelled now). Queued in the engine: cancel requested (True; poll() reports it, or it completes normally
         if it had already started). Otherwise False."""
         k=(L,E)
-        if k in s.pend:
-            s.pend.remove(k);s.n_cancel+=1
+        xk=next((x for x in s.xpend if x[1]==E and x[0]%XB==L),None) if s.xpend else None
+        if xk is not None:s.xpend.remove(xk);s.n_cancel+=1
+        if xk is not None or k in s.pend:
+            if xk is None:s.pend.remove(k);s.n_cancel+=1
             if sched is not None:(getattr(sched,'cancelled',None) or sched.failed)(L,E)
             return True
         t=s.up_tag.get(k)
@@ -115,5 +142,58 @@ class RankExecutor:
             free_slots=len(s.free),cancelled=s.n_cancel+0,
             op_p50_ms=float(np.percentile(lat,50))*1e3 if lat is not None else None,
             op_p99_ms=float(np.percentile(lat,99))*1e3 if lat is not None else None)
-    def busy(s):return bool(s.ops or s.wait_apply or s.pend)
+    def busy(s):return bool(s.ops or s.wait_apply or s.pend or s.xpend)
+    # ---- nq-prefill borrowed pool
+    def _isx(s,sl):return sl>=s.nslot
+    def x_borrow(s,ep,addrs):
+        assert not s.xep and ep>s.x_have,(s.xep,ep,s.x_have)
+        ids=[s.nslot+XS*ep+j for j in range(len(addrs))]
+        s.xaddr.update(zip(ids,addrs));s.xfree=ids[::-1];s.xep=ep;s.x_have=ep;s.xst['borrows']+=1;s.xst['slots']+=len(ids)
+    def pool_tag(s,ups):
+        if not s.xtag or not ups:return ups
+        n=len(s.xfree)-len(s.xpend)
+        if n<=0:return ups
+        ep=XB*s.xep;s.xst['tagged']+=min(n,len(ups))
+        return [(L+ep,E) if j<n else (L,E) for j,(L,E) in enumerate(ups)]
+    def x_reclaim(s,sched=None,log=None,warn_s=5.):
+        ep=s.xep
+        if not ep:return []
+        s.xtag=False;t0=time.time()
+        for k in s.xpend:
+            s.xst['pend_drop']+=1
+            if sched is not None:sched.failed(k[0]%XB,k[1])
+        s.xpend=[]
+        xs=lambda:{k for k,sl in s.slot_of.items() if sl>=s.nslot}
+        for k in xs():
+            t=s.up_tag.get(k)
+            if t is not None and k not in s.wait_apply:
+                try:s.eng.cancel(t);s.xst['cancel_req']+=1
+                except Exception:pass
+        nw=0;tw=t0
+        while True:                                       # every op on a borrowed-slot expert must have written
+            X=xs()
+            if not any((o[0],o[1]) in X for o in s.ops.values()):break
+            s.poll(sched,issue=False);time.sleep(2e-4);nw+=1
+            if time.time()-tw>warn_s:
+                tw=time.time()
+                if log is not None:log.warning('NestQuant prefill-borrow: reclaim of epoch %d still waiting for %d ops (%.1fs)',ep,
+                                               sum((o[0],o[1]) in X for o in s.ops.values()),tw-t0)
+        forced=[];by=collections.defaultdict(list)
+        for (L,E),sl in s.slot_of.items():
+            if sl<s.nslot:continue
+            w=s.wait_apply.get((L,E))
+            if w is not None and w[0]==2:continue          # its level-2 row is already staged
+            by[L].append(E)
+        dev=s.slots.device
+        for L,Es in by.items():
+            MB=s.layers[L][1];q=[MB.hseq[E]+1 for E in Es]
+            rows=torch.stack([s.rc[L,E][0] for E in Es]).to(device=dev,dtype=MB.stage.dtype)
+            ix=torch.tensor(Es,dtype=torch.long,device=dev)
+            MB.stage.index_copy_(0,ix,rows);MB.seq.index_copy_(0,ix,torch.tensor(q,dtype=MB.seq.dtype,device=dev))
+            for E,qq in zip(Es,q):MB.hseq[E]=qq;s.wait_apply[L,E]=(2,qq);forced.append((L,E))
+        torch.cuda.synchronize(dev)
+        s.xep=0;s.xfree=[];s.x_done=ep
+        for sl in [sl for sl in s.xaddr if sl not in set(s.slot_of.values())]:del s.xaddr[sl]
+        s.xst['forced']+=len(forced);s.xst['reclaims']+=1;s.xst['wait_iters']+=nw;s.xst['reclaim_ms']+=int((time.time()-t0)*1e3)
+        return forced
     def close(s):s.eng.close()

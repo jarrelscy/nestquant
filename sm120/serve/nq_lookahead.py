@@ -191,6 +191,7 @@ class LA:
             for Lp,b,tc in jobs:
                 ups,downs,dfr,chosen=s._plan(S,Lp,b,bud)
                 if ups or downs:
+                    if ups and getattr(X,'xtag',False):ups=X.pool_tag(ups)       # nq-prefill: into the borrowed pool
                     X.apply(ups,downs,S)
                     if oplog is not None:oplog.put(ups,downs)
                 s.plan[(Lp,tc)]=(np.array([e for _,e in ups],np.int64),chosen)
@@ -219,7 +220,8 @@ class LA:
         dc=[int(e) for e in np.nonzero((st==2)&~want&~fx)[0]]
         if S.slots is not None and len(dc):
             dc.sort(key=lambda e:(b[e],S.score[i,e]))          # least valuable first
-            dc=dc[:min(len(dc),max(len(ups),2*budget-(free-len(ups))))]
+            nd=2*budget-(free-len(ups))
+            dc=dc[:min(len(dc),max(0,nd) if getattr(S,'pb_lazy',False) else max(len(ups),nd))]   # nq-prefill borrowed pool: reserve downs only
         downs=dc
         S.want[i]=want
         for e in ups:S.state[i,e]=1

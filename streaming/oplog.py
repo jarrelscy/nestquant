@@ -6,9 +6,14 @@ waits for its slowest rank, and independently scheduled ranks drift apart by up 
                         expert (an op on an expert whose previous op is still in flight here waits, in order); a
                         downgrade of an expert that never landed here (read error) is dropped
 Record: int32 [MAGIC, n_ups, n_downs, L0, E0, L1, E1, ...] (ups then downs), one os.write per record. The log rotates
-every ROT bytes: [MAGIC, -1, 0] = continue in path.<gen+1>; the leader deletes generation gen-2 when it rotates."""
+every ROT bytes: [MAGIC, -1, 0] = continue in path.<gen+1>; the leader deletes generation gen-2 when it rotates.
+nq-prefill (prefill-borrow): an upgrade key (L + XB*ep, E) = into the borrowed slot pool of epoch ep (executor.py);
+[MAGIC, -2, ep] = the leader reclaimed epoch ep. With get(gate=X) a reader stops before a record it may not replay
+yet: a borrowed-pool upgrade of an epoch this rank has not borrowed (X.x_have), or the reclaim marker of an epoch it
+has not reclaimed itself (X.x_done), so its own reclaim always sits at the same point of the op order as the leader's."""
 import os,collections,numpy as np
-MAGIC=0x4E514F50;ROT=16<<20
+MAGIC=0x4E514F50;ROT=16<<20;XB=65536
+def _dk(k):return (k[0]%XB,k[1]) if k[0]>=XB else k    # nq-prefill: borrowed-pool upgrade key -> (L, E)
 
 class OpLog:
     def __init__(s,path,writer):
@@ -18,6 +23,7 @@ class OpLog:
     def _open_w(s):s.fd=os.open(s._p(s.gen),os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_APPEND,0o600);s.off=0
     def _w(s,a):
         n=os.write(s.fd,a.tobytes());assert n==a.nbytes,(n,a.nbytes);s.off+=n
+    def put_reclaim(s,ep):s._w(np.array([MAGIC,-2,int(ep)],np.int32))
     def put(s,ups,downs):
         if not ups and not downs:return
         s._w(np.array([MAGIC,len(ups),len(downs)]+[x for p in list(ups)+list(downs) for x in p],np.int32))
@@ -25,7 +31,7 @@ class OpLog:
             s._w(np.array([MAGIC,-1,0],np.int32));os.close(s.fd);s.gen+=1;s._open_w()
             try:os.unlink(s._p(s.gen-2))
             except FileNotFoundError:pass
-    def get(s):
+    def get(s,gate=None):
         out=[]
         while True:
             if s.fd is None:
@@ -35,9 +41,13 @@ class OpLog:
             while i+3<=len(a):
                 assert a[i]==MAGIC,f'oplog {s._p(s.gen)}: bad record at byte {s.off+4*i}'
                 nu,nd=int(a[i+1]),int(a[i+2])
+                if nu==-2:                                    # nq-prefill reclaim marker
+                    if gate is not None and gate.x_done<nd:break
+                    i+=3;continue
                 if nu<0:nxt=True;i+=3;break
                 j=i+3+2*(nu+nd)
                 if j>len(a):break                             # record still being written
+                if gate is not None and nu and int(a[i+3:i+3+2*nu:2].max())>=XB and gate.x_have<int(a[i+3:i+3+2*nu:2].max())//XB:break
                 p=a[i+3:j].reshape(-1,2).tolist();out.append(([tuple(x) for x in p[:nu]],[tuple(x) for x in p[nu:]]));i=j
             s.off+=4*i
             if not nxt:return out
@@ -70,7 +80,9 @@ class Follower:
     def _fold(s,ups,downs):
         if s.chk is None:return
         for k in downs:s.chk.discard(k);s.rerr.discard(k)
-        for k in ups:s.chk.add(k);s.rerr.discard(k)
+        for k in ups:
+            if k[0]>=XB and k[0]//XB!=getattr(s.X,'xep',0):continue    # borrowed-pool up of a reclaimed epoch: refused here, forced down at the leader
+            k=_dk(k);s.chk.add(k);s.rerr.discard(k)
     def check(s):
         """-> None (not quiescent / check off) or (ok, n_missing, n_extra)"""
         if s.chk is None or s.q or s.busy:return None
@@ -91,21 +103,23 @@ class Follower:
         if read_error:
             s.stats['read_errors']+=1
             if s.chk is not None:s.rerr.add((L,E))
+    gate=None                       # nq-prefill: the executor when prefill-borrow is on (OpLog.get gate)
     def step(s,issue=True):
-        for ups,downs in s.log.get():
+        for ups,downs in (s.log.get(s.gate) if s.gate is not None else s.log.get()):
             s._fold(ups,downs)
             for k in downs:s.q.append((k,2))
             for k in ups:s.q.append((k,4))
         if not issue or not s.q:return
         ups=[];downs=[];keep=collections.deque();held=set()
         for k,lv in s.q:
-            if k in held or k in s.busy:keep.append((k,lv));held.add(k);continue
-            held.add(k)
+            d=_dk(k)
+            if d in held or d in s.busy:keep.append((k,lv));held.add(d);continue
+            held.add(d)
             if lv==2:
-                if k not in s.up:s.stats['dropped']+=1;continue
-                downs.append(k)
+                if d not in s.up:s.stats['dropped']+=1;continue
+                downs.append(d)
             else:ups.append(k)
-            s.busy.add(k)
+            s.busy.add(d)
         s.q=keep;s.stats['ups']+=len(ups);s.stats['downs']+=len(downs)
         if ups or downs:s.X.apply(ups,downs,s)
     def level_count(s):return len(s.up)
@@ -128,10 +142,12 @@ class CoalescingFollower(Follower):
         s.q=s.pend                                                    # len(F.q) = backlog, as before
     def cancelled(s,L,E):s.busy.discard((L,E));s.stats['cancelled']+=1
     def step(s,issue=True):
-        for ups,downs in s.log.get():
+        for ups,downs in (s.log.get(s.gate) if s.gate is not None else s.log.get()):
             s._fold(ups,downs)
             for k in downs:s._add(k,2)
-            for k in ups:s._add(k,4)
+            for k in ups:
+                if k[0]>=XB:s._add(_dk(k),4+8*(k[0]//XB))      # nq-prefill: borrowed-pool upgrade of epoch k[0]//XB
+                else:s._add(k,4)
         if not issue or not s.pend:return
         ups=[];downs=[]
         for k,lv in list(s.pend.items()):
@@ -142,7 +158,8 @@ class CoalescingFollower(Follower):
                     if s.X.cancel_up(*k,s):s.stats['cancel_req']+=1
                 continue
             del s.pend[k];s._creq.discard(k)
-            if (4 if k in s.up else 2)==lv:s.stats['moot']+=1;continue
+            if (4 if k in s.up else 2)==min(lv,4):s.stats['moot']+=1;continue
+            if lv>4:ups.append((k[0]+XB*(lv//8),k[1]));s.busy.add(k);continue
             (downs if lv==2 else ups).append(k);s.busy.add(k)
         s.stats['ups']+=len(ups);s.stats['downs']+=len(downs)
         if ups or downs:s.X.apply(ups,downs,s)
