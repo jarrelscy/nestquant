@@ -29,11 +29,21 @@ CFGS = {"b175": dict(base_K=1.75, res_k="2.25,2.25,2.5625"), "b15": dict(base_K=
         "b20": dict(base_K=2.0, res_k=None)}
 
 
+def driver_major():
+    try:
+        import re
+        return int(re.search(r"Kernel Module.*?\s(\d+)\.\d+", open("/proc/driver/nvidia/version").read()).group(1))
+    except Exception:
+        return 0
+
+
 def worker_env(omp, base_K):
     """T25 nq25_campaign.worker_env: cuda-compat libcuda (the box driver is older than the venv's CUDA), T06 lib,
     harness + orbit-duet on PYTHONPATH; no HF tokens in workers."""
     env = dict(os.environ)
     compat = "/home/coder/git/glm52/artifacts/shared-bit-graphs/runtime/cuda-compat/usr/local/cuda-13.0/compat"
+    if driver_major() >= 580:            # driver already supports CUDA 13: the 13.0 compat libcuda gives error 803
+        compat = ""
     lib06 = f"{NQ}/threads/06-expert-objective/lib"
     env["LD_LIBRARY_PATH"] = ":".join(x for x in (lib06, compat, env.get("LD_LIBRARY_PATH", "")) if x)
     env["PYTHONPATH"] = ":".join(x for x in (f"{NQ}/threads/05-exl3-harness", "/home/coder/git/orbit-duet",
