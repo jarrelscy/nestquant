@@ -189,6 +189,14 @@ def part_d():
     MA[0]=200<<30;pb=step(r2,4096);assert pb is None or pb[4] is None,'phase 2 not retried for that request'
     done(r2);r3=Req('c',90000);step(r3,4096);pb=step(r3,4096);assert pb[4] is not None
     done(r3);pb=step(Req('d',90000),4096);assert pb is None or pb[4] is None,'request change releases'
+    # runtime knobs: free cap (phase 1 takes <= N blocks), kv_off file (no phase 2)
+    td=tempfile.mkdtemp();PE.CAP_FILE=td+'/cap';PE.KVOFF_FILE=td+'/kvoff';open(PE.CAP_FILE,'w').write('10');open(PE.KVOFF_FILE,'w').write('')
+    sched.running=[];st.after(sched,types.SimpleNamespace(num_scheduled_tokens={}))
+    for m_ in (mla,idx):
+        for k_ in list(m_.req_to_blocks):pool.free_blocks(m_.req_to_blocks.pop(k_)[::-1])
+    r5=Req('e',90000);pb=step(r5,4096);assert pb is not None and pb[4] is None and len(st.blocks)<=10,len(st.blocks)
+    pb=step(r5,4096);assert pb is not None and pb[4] is None,'kv_off file blocks phase 2'
+    os.remove(PE.KVOFF_FILE);done(r5);r6=Req('f',90000);step(r6,4096);pb=step(r6,4096);assert pb[4] is not None,'phase 2 back'
     print(f'D: phase 1 {ns1} slots -> phase 2 {PE.carve_count(NB,[PG]*(NL-2),RBb)} (want {st.want}), RAM-sized n_off {n_off}/{NL}, releases OK, {st.n}')
 
 if __name__=='__main__':

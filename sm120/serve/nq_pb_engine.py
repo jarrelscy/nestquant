@@ -13,7 +13,8 @@ Release: the step after the last prefill chunk (first decode step), the request 
 or allocate_slots runs short (released inside that schedule() call, then retried: the same output says None).
 NQ_PREFILL_SLOTS (155) floating experts per layer wanted during prefill -> extra slots (NQ_PREFILL_SLOTS - nf) x layers;
 the block count is sized from the KV tensors' page sizes with the workers' rank-independent carve rule (carve_count).
-In-boot off switch: while /dev/shm/nq_pb_off exists no new borrow starts (NQ_PB_OFF).
+In-boot off switch: while /dev/shm/nq_pb_off exists no new borrow starts (NQ_PB_OFF); /dev/shm/nq_pb_kv_off: no new phase 2
+borrow (phase 1 still runs); test knob /dev/shm/nq_pb_free_cap = N caps the free blocks phase 1 may take.
 
 Phase 2, NQ_PREFILL_KV_OFFLOAD=1 (also needs NQ_PREFILL_BORROW=1): when the free blocks can't give the target (long
 context), from the request's 2nd scheduled step on (its LMCache load, if any, is done) and with >= NQ_PB_MIN_NEW prompt
@@ -30,6 +31,11 @@ ON=os.environ.get('NQ_PREFILL_BORROW','0')=='1'
 MIN_NEW=int(os.environ.get('NQ_PB_MIN_NEW','8192'));PF_NF=int(os.environ.get('NQ_PREFILL_SLOTS','155'))
 MARGIN=int(os.environ.get('NQ_PB_MARGIN','16'));OFF=os.environ.get('NQ_PB_OFF','/dev/shm/nq_pb_off')
 KV_OFF=os.environ.get('NQ_PREFILL_KV_OFFLOAD','0')=='1'
+KVOFF_FILE=os.environ.get('NQ_PB_KV_OFF','/dev/shm/nq_pb_kv_off');CAP_FILE=os.environ.get('NQ_PB_FREE_CAP','/dev/shm/nq_pb_free_cap')
+def free_cap():
+    """test knob: an int in /dev/shm/nq_pb_free_cap caps the free blocks phase 1 may borrow (to make phase 2 fire)"""
+    try:return int(open(CAP_FILE).read().strip())
+    except (OSError,ValueError):return None
 HOST_GB=min(float(os.environ.get('NQ_PB_KV_HOST_GB','8')),64.);FLOOR_GB=float(os.environ.get('NQ_PB_RAM_FLOOR_GB','38'))
 ALIGN=4096
 log=logging.getLogger('vllm.nestquant.pb')   # child of vllm's logger (its handler / level); no vllm import at site time
@@ -114,6 +120,8 @@ class State:
         return n
     def borrow(s,req):
         pool=s.pool;avail=pool.get_num_free_blocks()-s.need(req)-MARGIN
+        c=free_cap()
+        if c is not None:avail=min(avail,c)
         if avail<s.minrun:return False
         free=[b for b in pool.blocks if b.ref_cnt==0 and not b.is_null and b.prev_free_block is not None]
         # contiguous id runs, hashless (never-hit) first, then cached ones; longest first (least carve waste)
@@ -204,7 +212,7 @@ class State:
             s.tried.add(r.request_id)
             if len(s.tried)>4096:s.tried=set(list(s.tried)[-1024:])
             s.borrow(r)
-        if ok and s.kv_ok and not first and s.mode!=2 and r.request_id not in s.tried2 and ns>s.max_graph and \
+        if ok and s.kv_ok and not first and s.mode!=2 and r.request_id not in s.tried2 and ns>s.max_graph and not os.path.exists(KVOFF_FILE) and \
            (s.mode==0 or s.nslots<s.want):
             plan=s.kv_plan(r)
             if plan[2]>max(s.nslots*1.1,s.nslots+64):
