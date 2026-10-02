@@ -9,7 +9,7 @@ A stream (one task: its requests' decode rows in order) becomes per-16-token-blo
   tok  [nb, 16] i32       token ids; hp [nb, P, 256] f16 block-mean MoE-input projections (capture only)
 History inputs are raw block counts at two resolutions (no EMAs): the last F=32 blocks and the last C=32 chunks of 8 blocks.
 Targets: hits in windows WIN after the block end (sim.WIN)."""
-import numpy as np, torch, glob, json
+import numpy as np, torch, glob, json, os
 
 G = 16; F = 32; C = 32; CK = 8
 WIN = [0, 16, 64, 128, 256, 512, 1024]
@@ -36,7 +36,7 @@ def blocks_from_stream(z, rsf=2.5, cache=None):
     ex = z['ex']; N = (len(ex) // G) * G; nb = N // G; NL = ex.shape[1]
     import os
     if cache and os.path.exists(cache):
-        cnt = np.load(cache, mmap_mode="r")
+        cnt = np.load(cache, mmap_mode="r"); assert len(cnt) == nb, ('stale block cache', cache, len(cnt), nb)
     else:
         cnt = _block_hist(ex, nb, NL)
         if cache: np.save(cache, cnt)
@@ -194,9 +194,18 @@ def npz_mmap(f):
     return out
 
 
+def short(n):
+    """cache-dir-safe name: long task lists -> prefix + content hash (includes the streams' mtimes via the caller's cache logic)"""
+    if len(n) <= 120: return n
+    import hashlib; return n[:60] + '-' + hashlib.sha1(n.encode()).hexdigest()[:12]
+
+
 def ids_blocks(task, kind='ids'):
     f = f'/rawdata/Jarrel/nq-tfpred/ds/{kind}-{task}.npz'
-    return blocks_from_stream(npz_mmap(f), cache=f'/rawdata/Jarrel/nq-tfpred/ds/cnt-{kind}-{task}.npy')
+    c = f'/rawdata/Jarrel/nq-tfpred/ds/cnt-{kind}-{task}.npy'
+    for cf in (c, c.replace('cnt-', 'pf16-')):          # caches older than the stream are stale (re-prepped data)
+        if os.path.exists(cf) and os.path.getmtime(cf) < os.path.getmtime(f): os.remove(cf)
+    return blocks_from_stream(npz_mmap(f), cache=c)
 
 
 def load_ids(task):

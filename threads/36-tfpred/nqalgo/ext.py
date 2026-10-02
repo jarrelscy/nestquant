@@ -61,7 +61,29 @@ class AnsFC:
     def score(s, b): return s.rate(b) * 64.0
 
 
+class WinRate:
+    """TF window forecast as a jF-style score: rate = expected hits in [0, 64) / 64 (serve: NQ_PREDICTOR=tf NQ_TF_LAT=0 NQ_TF_H=64)"""
+    def __init__(s, name): s.W = Q.WindowFC(name)
+    def reset(s, tr): s.W.reset(tr)
+    def rate(s, b): return np.asarray(s.W.value(b, 0, 64), np.float64).ravel() / 64.0
+    def score(s, b): return s.rate(b) * 64.0
+
+
+class EnsRate:
+    """w x TF rate + (1-w) x jF rate rescaled per layer to the TF's per-layer mass (serve: both predictors on rank 0)"""
+    def __init__(s, name, w): s.T = WinRate(name); s.J = Q.ScoreFC('jf'); s.w = w
+    def reset(s, tr): s.T.reset(tr); s.J.reset(tr)
+    def rate(s, b):
+        t = s.T.rate(b).reshape(NL, NE); j = np.maximum(s.J.rate(b).reshape(NL, NE), 0)
+        js = j.sum(1, keepdims=True); j = j * (t.sum(1, keepdims=True) / np.where(js > 0, js, 1))
+        return (s.w * t + (1 - s.w) * j).ravel()
+    def score(s, b): return s.rate(b) * 64.0
+
+
 def _src(n):
+    if n.startswith('win:'): return WinRate(n[4:])
+    if n.startswith('ens'):
+        m = re.fullmatch(r'ens(\d+):([A-Za-z0-9]+)', n); return EnsRate(m[2], int(m[1]) / 100)
     if n.endswith('a') and n[:-1] in ('jf', 'gbdt'): return AnsFC(_src(n[:-1]))
     if n in ('jf', 'gbdt'): return Q.ScoreFC(n)
     m = re.fullmatch(r'ema(\d+)', n)
@@ -226,7 +248,7 @@ def pol(p):
     m = re.fullmatch(r'curwin-(\w+)-a(\d+)-h(\d+)', p)
     if m: return Q.SchedPolicy(LandWinFC(m[1], int(m[2]), int(m[3])), name='curwin:' + p)
     if p in ('cur-jfa', 'cur-gbdta'): return Q.SchedPolicy(_src(p[4:]))
-    m = re.fullmatch(r'srvtap-(jfa?|gbdt|ema\d+?)(w?)-c([\d.]+)-H(\d+)-mla([\d.]+)', p)
+    m = re.fullmatch(r'srvtap-(jfa?|gbdt|ema\d+?|win:[A-Za-z0-9_]+?|ens\d+:[A-Za-z0-9]+?)(w?)-c([\d.]+)-H(\d+)-mla([\d.]+)', p)
     if m:
         return SrvTapPolicy(m[1], c=float(m[3]), H=int(m[4]), mla=float(m[5]), name='srvtap:' + p, far='tail:0.1' if m[2] else 'ema')
     m = re.fullmatch(r'tap-(.+?)-c([\d.]+)((?:-H\d+|-Ha[\d.]+)?)((?:-ml\d+|-mla[\d.]+)?)((?:-cs)?)((?:-g)?)((?:-ls\w+)?)', p)
@@ -257,6 +279,7 @@ def main():
     else:
         P = pol(p)
     kw = RN.env(e)
+    if kw.get('prefill'): tr.load_prefill()
     S = Q.Sim(tr, P, **kw)
     if isinstance(P, TapPolicy):
         P._sim = S; P._ml_now = None

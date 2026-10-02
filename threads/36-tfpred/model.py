@@ -75,10 +75,11 @@ class TFPred(nn.Module):
         return s.head(s.nf(x))
 
 
-def tweedie(lr, y, m, wlen, rho=1.5):
+def tweedie(lr, y, m, wlen, rho=1.5, ww=None):
     """lr log rate [B,NL,NE,W]; y window totals; m [B,W] valid; wlen [W] window lengths. mean deviance-like loss with each
     window weighted 1/sqrt(len) so near and far windows contribute comparably."""
     lmu = lr.float() + torch.log(wlen)
     l = -y * torch.exp(lmu * (1 - rho)) / (1 - rho) + torch.exp(lmu * (2 - rho)) / (2 - rho)
     w = m.float()[:, None, None, :] / wlen.sqrt()
+    if ww is not None: w = w * ww                    # extra per-window weights (--wnear: tap uses [0, 64))
     return (l * w).sum() / (w.sum() * NL * NE + 1e-9)

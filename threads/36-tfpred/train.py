@@ -15,7 +15,7 @@ ap.add_argument('--tasks', default=''); ap.add_argument('--val', default=''); ap
 ap.add_argument('--data_dev', default='cpu'); ap.add_argument('--mem_gb', type=float, default=0); ap.add_argument('--noans', type=int, default=0)
 ap.add_argument('--init', default=''); ap.add_argument('--frac', type=float, default=1.0); ap.add_argument('--exclude', default='')
 ap.add_argument('--max_min', type=float, default=0)   # wall budget: after 200 its, shrink --steps so the cosine run ends in time
-ap.add_argument('--mmap', type=int, default=0)   # page-cache-backed big arrays (ids pretrain; not with --sal)
+ap.add_argument('--gpu_data', type=int, default=0); ap.add_argument('--wnear', type=float, default=1.0); ap.add_argument('--mmap', type=int, default=0)   # page-cache-backed big arrays (ids pretrain; not with --sal)
 a = ap.parse_args()
 dev = torch.device(a.dev); torch.manual_seed(0)
 if a.mem_gb and dev.type == 'cuda':      # hard cap: this process OOMs itself before it can squeeze a co-resident serve
@@ -25,20 +25,26 @@ if a.mem_gb and dev.type == 'cuda':      # hard cap: this process OOMs itself be
 def streams(kind, tasks):
     out = []
     for t in tasks:
-        f = f'/rawdata/Jarrel/nq-tfpred/ds/{kind}-{t}.npz'
+        k_, t_ = t.split(':', 1) if kind == 'mix' else (kind, t)      # mix: '<ids|cap>:<task>'
+        f = f'/rawdata/Jarrel/nq-tfpred/ds/{k_}-{t_}.npz'
         if os.path.exists(f):
-            out.append((t, D.ids_blocks(t, kind)))
+            out.append((t, D.ids_blocks(t_, k_)))
     return out
 
 
+cap_all = sorted(os.path.basename(f)[4:-4] for f in glob.glob('/rawdata/Jarrel/nq-tfpred/ds/cap-*.npz'))
 if a.data == 'ids':
     all_t = D.TASKS_IDS
+elif a.data == 'mix':                    # ids-only streams of both sources (content must be 0)
+    assert not a.content
+    all_t = ['ids:' + t for t in D.TASKS_IDS] + ['cap:' + t for t in cap_all]
 else:
-    all_t = sorted(os.path.basename(f)[4:-4] for f in glob.glob('/rawdata/Jarrel/nq-tfpred/ds/cap-*.npz'))
+    all_t = cap_all
+bare = lambda t: t.split(':', 1)[-1]
 ex_t = a.exclude.split(',') if a.exclude else []
-tr_t = [t for t in all_t if t not in D.TEST_TASKS + D.VAL_TASKS + D.CAP_HOLDOUT + ex_t] if not a.tasks else a.tasks.split(',')
-va_t = [t for t in all_t if t in D.VAL_TASKS] if not a.val else a.val.split(',')
-assert not set(tr_t + va_t) & set(D.TEST_TASKS + D.CAP_HOLDOUT), ('held-out task in train/val', tr_t, va_t)
+tr_t = [t for t in all_t if bare(t) not in D.TEST_TASKS + D.VAL_TASKS + D.CAP_HOLDOUT and t not in ex_t and bare(t) not in ex_t] if not a.tasks else a.tasks.split(',')
+va_t = [t for t in all_t if bare(t) in D.VAL_TASKS] if not a.val else a.val.split(',')
+assert not set(map(bare, tr_t + va_t)) & set(D.TEST_TASKS + D.CAP_HOLDOUT), ('held-out task in train/val', tr_t, va_t)
 print('train', tr_t, 'val', va_t, flush=True)
 tr = streams(a.data, tr_t); va = streams(a.data, va_t)
 if a.frac < 1:                           # learning curve: the first frac of each training stream
@@ -51,9 +57,19 @@ if a.sal:
                         for _, d in tr]).reshape(len(tr), -1).mean(0)
     scale = s
 ddev = torch.device(a.data_dev)
-mmd = (lambda ts, tag: f'/rawdata/Jarrel/nq-tfpred/mm/{a.data}-{tag}-' + '+'.join(ts) + f'-f{a.frac}-m{a.max_train_blocks}') if (a.mmap and not a.sal and ddev.type == 'cpu') else (lambda ts, tag: None)
+mmd = (lambda ts, tag: f'/rawdata/Jarrel/nq-tfpred/mm/{a.data}-{tag}-' + D.short('+'.join(ts)) + f'-f{a.frac}-m{a.max_train_blocks}') if (a.mmap and not a.sal and ddev.type == 'cpu') else (lambda ts, tag: None)
 Btr = D.Blocks([d for _, d in tr], ddev, use_sal=bool(a.sal), cdev=dev, mmap_dir=mmd([t for t, _ in tr], 'tr'))
 Bva = D.Blocks([d for _, d in va], ddev, use_sal=bool(a.sal), cdev=dev, mmap_dir=mmd([t for t, _ in va], 'va'))
+if a.gpu_data and ddev.type == 'cpu' and dev.type == 'cuda':   # mmap cache -> compute GPU (chunked, no anon host copy)
+    for B_ in (Btr, Bva):
+        for k in ('cnt', 'sal', 'ans', 'rq', 'rpos', 'pf', 'tok', 'hp', 'lo', 'hi', 'ch', 'clo'):
+            t = getattr(B_, k, None)
+            if t is None or not torch.is_tensor(t): continue
+            g = torch.empty(t.shape, dtype=t.dtype, device=dev)
+            for i in range(0, len(t), 8192): g[i:i + 8192] = t[i:i + 8192].to(dev)
+            setattr(B_, k, g)
+        B_.dev = dev
+    print('data moved to', dev, 'GB %.1f' % (torch.cuda.memory_allocated(dev) / 2**30), flush=True)
 if a.sal:
     for B_ in (Btr, Bva):
         B_.sal = (B_.sal.float() / torch.as_tensor(scale, device=ddev)[None, :, None]).half(); B_.ch = (B_.ch.float() / torch.as_tensor(scale, device=ddev)[None, :, None]).half()
@@ -96,6 +112,7 @@ def evaluate():
     net.train(); return L / n, rec / n, base / n
 
 
+WW = torch.tensor([a.wnear if e <= 64 else 1.0 for e in D.WIN[1:]], dtype=torch.float32, device=dev) if a.wnear != 1 else None
 t0 = time.time(); best = 1e9; hist = []; it = -1; t200 = None
 while True:
     it += 1
@@ -115,7 +132,7 @@ while True:
     if it == a.steps: break
     b = Btr.sample_index(a.bs, gen)
     lr = fwd(Btr, b); y, m = Btr.targets(b)
-    loss = M.tweedie(lr, y, m, wlen)
+    loss = M.tweedie(lr, y, m, wlen, ww=WW)
     opt.zero_grad(set_to_none=True); loss.backward(); torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0); opt.step(); sched.step()
     if it % 100 == 0:
         print(it, round(loss.item(), 5), '%.0fs' % (time.time() - t0), flush=True)
