@@ -1,0 +1,45 @@
+{
+ "ranks": 4,
+ "kvq": "kvq",
+ "teacher": {
+  "bf16conf": "/tmp/nestquant/34-tr3/teacher/reference-full-panel/logits/confirmation"
+ },
+ "arms": {
+  "fp8": {
+   "spec": "ref",
+   "win_kld": {
+    "0": 0.008052451469633832,
+    "1": 0.02428354003339729,
+    "2": 0.005976281168406104,
+    "3": 0.008845538410490527
+   },
+   "mean_kld": 0.01178945277048194,
+   "pooled_kld": 0.01178945277048194,
+   "ntok": 8188
+  },
+  "real175_45": {
+   "spec": "adapt:lo=/tmp/nestquant/35-nq15/pd175/nq2,hi=/tmp/nestquant/35-nq15/pd175/nq4,chain=map,salstat=1,predictor=gbdt,gmode=sync,joint=/tmp/nestquant/33-search/joint/models/jF_all.pt,manifest=/tmp/nestquant/32-gbdt-sal/k0_manifest.json,hm=0.7,n_float=45",
+   "win_kld": {
+    "0": 0.0335013958437593,
+    "1": 0.09159087016632572,
+    "2": 0.02509944777868408,
+    "3": 0.022390507230772645
+   },
+   "mean_kld": 0.043145555254885434,
+   "pooled_kld": 0.043145555254885434,
+   "ntok": 8188,
+   "H": 45,
+   "hot_share_sal": 0.6736372707508453,
+   "hot_share_routed": 0.480162353515625,
+   "hot_share_sal_layer_mean": 0.6374094953733799,
+   "eff_bpw": 2.19160393359375
+  }
+ },
+ "ref": {
+  "TR3 3.42 (EXL3)": 0.0241,
+  "fp8 (T34)": 0.01179,
+  "nq4 2-4 (T34)": 0.01566,
+  "jF128 2-4 (T34)": 0.0215,
+  "jF77 2-4 (T34)": 0.02607
+ }
+}

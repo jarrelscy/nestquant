@@ -24,6 +24,8 @@ log "stamp $(cat $R/repo/artifact_stamp.json)"
 # wait for the res uploader to finish its last batch
 while pgrep -f "uploade[r].sh" >/dev/null; do sleep 30; done
 up(){ nice -n 10 hf upload-large-folder $REPO $S --repo-type model --num-workers 6 --no-bars "$@" >> $R/logs/upload_final.log 2>&1; }
+for L in $(seq 3 77); do for r in 0 1 2 3; do mkdir -p $S/res/rank$r; [ -e $S/res/rank$r/L$L.pt ] || ln $R/repo/res/rank$r/L$L.pt $S/res/rank$r/L$L.pt; done; done
+[ "$(ls $S/res/rank*/L*.pt | wc -l)" = 300 ] || die "res staging"
 for r in 0 1 2 3; do [ -e $S/rank$r.bin ] || ln $R/repo/rank$r.bin $S/rank$r.bin; done
 t0=$(date +%s); log "bins upload start"
 up --include 'res/*' --include 'README.md' --include 'NQ_RES_V2.md' --include 'rank*.bin' --exclude 'rank*.json' --exclude 'artifact_stamp.json' || die "bin upload rc"
