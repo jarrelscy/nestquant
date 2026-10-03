@@ -103,7 +103,7 @@ class Proj:
         else:s.flags,s.fl=make_flags(S,C,nm,gen)
     def to(s,dev):
         for k in ['base','p4','d4','flags','p4w','Mb','Nn','var','bw']:
-            if getattr(s,k) is not None:setattr(s,k,getattr(s,k).to(dev))
+            if getattr(s,k,None) is not None:setattr(s,k,getattr(s,k).to(dev))
         return s
 
 K0=np.float32(-3.453125)

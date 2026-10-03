@@ -34,7 +34,10 @@
 //   [14] low-rank plane, resident with the base (0 = none): half[V_gu r_gu x H | U2_g r_gu x I | U2_u r_gu x I |
 //        V_dn r_dn x I | U2_d r_dn x H]   [15] level-4 part, lives with P4 (0 = none): half[U4_g | U4_u | U4_d]
 //   [16] r_gu, [17] r_dn (<= 4)   [18] in_had_down: width of the down projection's input Hadamard (0 or 128 = Had128
-//        blocks; 512 = one sign + Sylvester Hadamard-512 block per 512 SwiGLU columns, threads/29; must divide I)  [19] reserved
+//        blocks; 512 = one sign + Sylvester Hadamard-512 block per 512 SwiGLU columns, threads/29; must divide I)
+//   [19] base K code bk_gu | bk_dn << 8 (nq-res-v2, sm120/NQ_RES_V2.md; RK numbering): 0 = K=2 ring base (uint4 per
+//        record); 1 = K=1.75 (1,0xEEEE), 112 bits per record in the P4 sub-array layout (uint2 | uint | ushort over all
+//        S*C*32 records). Codes outside NQ_BK_CODES / NQ_BK_GU / NQ_BK_DN fall back to 0 (MoELayer.set asserts).
 //   in_had_down w > 128: K1's finisher stores WHT128(sw * su_d) in fp32 into the (already consumed) gate columns of
 //   acc_gu[slot]; the last-arriving of the w/128 column groups of a (run, w-block) applies the cross-block Sylvester
 //   H_{w/128} / sqrt(w/128) (WHT_w = H_{w/128} (x) WHT128), rounds to fp16 once into h[slot] and re-zeroes those columns.
@@ -63,6 +66,18 @@
 #ifndef NQ_RK_DN
 #define NQ_RK_DN NQ_RK_CODES
 #endif
+// Base K codes compiled in (bit c = base code c; code 0 always), table [19]. Default: K=2 base only (shipped 2-4 bit).
+// b1.75/4 (threads/35): NQ_BK_CODES=0x3 with residual codes 3 (gate|up) and 9 (down), e.g.
+// NQ_RK_CODES=0x209 NQ_RK_GU=0x9 NQ_RK_DN=0x201 NQ_BK_CODES=0x3 (each extra base code doubles the instantiations).
+#ifndef NQ_BK_CODES
+#define NQ_BK_CODES 0x1
+#endif
+#ifndef NQ_BK_GU
+#define NQ_BK_GU NQ_BK_CODES
+#endif
+#ifndef NQ_BK_DN
+#define NQ_BK_DN NQ_BK_CODES
+#endif
 #include <ATen/cuda/CUDAContext.h>
 
 // ============================== decoder (swappable; thread 15 nqk15.cu: greedy-funnel mul1 base + RM_P int-fold residual)
@@ -71,7 +86,9 @@
 //     F = (Mb S(sb) + N S(sr) + 128) >> 8;  A' = fp16(256A / Mb);  C = fp16((N/Mb) K0 + K0 - 1024 A');  Q4 = fp16(A'(1024+F) + C)
 // Residual window pattern per projection (runtime code in the table, compile-time per instantiation):
 //     code 0: K=2   1: K=1.75 (1,0xEEEE)   2: K=2.5 (2,0xAAAA)   3: K=2.25 (2,0x8888)   4: K=3 (3,0)   5: K=1.5 (1,0xAAAA)
-//     6: K=1.9375 (1,0xFFFE)   7: K=2.3125 (2,0x9248)       (step p has KA + ((MASK >> (p%16)) & 1) bits == nq_decode.PATTERNS)
+//     6: K=1.9375 (1,0xFFFE)   7: K=2.3125 (2,0x9248)   8: K=1.875 (1,0xFEFE)   9: K=2.5625 (2,0xD5AA)
+//     Template code RC = residual code | base code << 4 (base code: the same windows over the level-2 base plane)
+//     (step p has KA + ((MASK >> (p%16)) & 1) bits == nq_decode.PATTERNS)
 // Bit-level spec: ref15_spec.py (copied from thread 15, LSB-first ring streams, tail-biting over G lanes).
 namespace nqdec {
 #define MUL1_A 0x1eee1eeeu
@@ -135,13 +152,16 @@ template <> struct RK<5> { static constexpr int KA = 1, M = 0xAAAA; };
 template <> struct RK<6> { static constexpr int KA = 1, M = 0xFFFE; };   // K = 1.9375 (T14 pattern-rate, gate|up)
 template <> struct RK<7> { static constexpr int KA = 2, M = 0x9248; };   // K = 2.3125 (T14 pattern-rate, down)
 template <> struct RK<8> { static constexpr int KA = 1, M = 0xFEFE; };   // K = 1.875 (T14 pattern-rate)
-template <int RC> struct RKB { static constexpr int BITS = 4 * (16 * RK<RC>::KA + popc16(RK<RC>::M)), NW = (BITS + 31) / 32; };
+template <> struct RK<9> { static constexpr int KA = 2, M = 0xD5AA; };   // K = 2.5625 (threads/35 b1.75 down residual, bres(9))
+// residual record bits of template code RC (low 4 bits); BKB = base record bits (high bits: 0 -> 128, 1 -> 112)
+template <int RC> struct RKB { static constexpr int BITS = 4 * (16 * RK<(RC & 15)>::KA + popc16(RK<(RC & 15)>::M)), NW = (BITS + 31) / 32; };
+template <int RC> struct BKB { static constexpr int KA = RK<(RC >> 4)>::KA, M = RK<(RC >> 4)>::M, BITS = RKB<(RC >> 4)>::BITS; };
 
 // Planes of one projection of one expert. p4/d4 are indexed densely (every chunk refined) when flags == nullptr,
 // otherwise compactly over the flagged chunks of each strip (mask mode, nm flagged chunks per strip).
 // base: uint4 per record. p4: sub-arrays (uint4 x n4 | uint2 | uint | ushort) each contiguous over the nrec records.
 struct Planes { const uint4* base; const uint8_t* p4; const uint32_t* d4; const uint64_t* flags; const uint8_t* var; };
-struct Ctx { int strip, C, nm; uint64_t fl; size_t nrec_r; };
+struct Ctx { int strip, C, nm; uint64_t fl; size_t nrec_r, nrec_b; };   // nrec_b: base records (S*C*32), bk != 0 only
 
 template <int BITS>
 __device__ __forceinline__ void load_plane(uint32_t* w, const uint8_t* __restrict__ p, size_t rec, size_t nrec)
@@ -193,8 +213,12 @@ __device__ __forceinline__ void load_stage(Stage<LV, CPW, RC>& S, const Planes& 
     {
         const int ch = ch0 + c;
         const size_t rec = (size_t)X.strip * X.C + ch;
-        uint4 v = P.base[rec * 32 + lane];
-        S.wb[c][0] = v.x; S.wb[c][1] = v.y; S.wb[c][2] = v.z; S.wb[c][3] = v.w;
+        if constexpr ((RC >> 4) == 0)
+        {
+            uint4 v = P.base[rec * 32 + lane];
+            S.wb[c][0] = v.x; S.wb[c][1] = v.y; S.wb[c][2] = v.z; S.wb[c][3] = v.w;
+        }
+        else load_plane<BKB<RC>::BITS>(S.wb[c], (const uint8_t*)P.base, rec * 32 + lane, X.nrec_b);   // sub-array layout
         if (P.var) S.on |= ((uint32_t)(__ldg(P.var + rec) >> (lane >> 2)) & 1u) << (16 + c);   // base variant sign of this lane's ring
         if constexpr (LV >= 4)
         {
@@ -231,12 +255,14 @@ struct Consts { uint32_t Mrep, Nrep, Ah, Ch; };
 template <bool RES, int RC, int P>
 __device__ __forceinline__ uint32_t dec_pair(const uint32_t* w, const uint32_t* r, const Consts& k)
 {
-    const uint32_t xb0 = wv<4 * P, 2, 0>(w) * HC, xb1 = wv<4 * P + 2, 2, 0>(w) * HC;
+    // base windows (code 0: offsets 4P, 4P + 2 as before)
+    constexpr int BKA = BKB<RC>::KA, BM = BKB<RC>::M, b0 = step_off(2 * P, BKA, BM), b1 = step_off(2 * P + 1, BKA, BM);
+    const uint32_t xb0 = wv<b0, BKA, BM>(w) * HC, xb1 = wv<b1, BKA, BM>(w) * HC;
     if constexpr (!RES)
         return hfma2u(__byte_perm(dp4u(xb0, 0x01010101u, 0x6400u), dp4u(xb1, 0x01010101u, 0x6400u), 0x5410), k.Ah, k.Ch);
     else
     {
-        constexpr int KA = RK<RC>::KA, M = RK<RC>::M;
+        constexpr int KA = RK<(RC & 15)>::KA, M = RK<(RC & 15)>::M;
         constexpr int o0 = step_off(2 * P, KA, M), o1 = step_off(2 * P + 1, KA, M);
         uint32_t t0 = dp4u(xb0, k.Mrep, 0x640080u), t1 = dp4u(xb1, k.Mrep, 0x640080u);
         t0 = dp4u(wv<o0, KA, M>(r) * HC, k.Nrep, t0); t1 = dp4u(wv<o1, KA, M>(r) * HC, k.Nrep, t1);
@@ -306,7 +332,7 @@ __device__ __forceinline__ void compute_stage(const Stage<LV, CPW, RC>& S, float
         uint32_t w[6], r[NWR + 2];
         #pragma unroll
         for (int i = 0; i < 4; ++i) w[i] = S.wb[c][i];
-        ext_words<128, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
+        ext_words<BKB<RC>::BITS, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
         const int kc = kc0 + c * 128;
         const uint32_t sgm = ((S.on >> (16 + c)) & 1u) * 0x80008000u;
 #ifdef NQ_WDUMP
@@ -460,7 +486,7 @@ __device__ __forceinline__ void gemv_body(const Planes& P, int strip, int C, int
                                           const half* xs, int kslice, int lane, int ntok WDP)
 {
     Ctx X; X.strip = strip; X.C = C; X.nm = nm; X.fl = 0;
-    X.nrec_r = (size_t)nstrips * (LV == 5 ? nm : C) * 32;
+    X.nrec_r = (size_t)nstrips * (LV == 5 ? nm : C) * 32; X.nrec_b = (size_t)nstrips * C * 32;
     if constexpr (LV == 5) X.fl = __ldg((const unsigned long long*)P.flags + strip);
     Stage<LV, CPW, RC> SA, SB_;
     load_stage<LV, CPW, RC>(SA, P, X, chunk0, lane);
@@ -538,7 +564,14 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
 #define WDX
 #endif
     const int NS = N / 16, rc = (int)R.ent[10 + MODE];
-#define BODY(LVv, RCv) gemv_body<LVv, G, CPW, RCv>(P, strip, C, nm, NS, chunk0, a.NST, acc, xs, kslice, lane, ntok WDX)
+    constexpr unsigned BKM = ((MODE == 0 ? NQ_BK_GU : NQ_BK_DN) & NQ_BK_CODES) | 1;
+    const int bk = (int)(R.ent[19] >> (8 * MODE)) & 0xFF, bkm = bk < 16 && ((BKM >> bk) & 1) ? bk : 0;
+#if NQ_BK_CODES & 2
+#define BODY(LVv, RCv) do { if constexpr ((BKM & 2) != 0) { if (bkm == 1) BODY1(LVv, (RCv) | 16); else BODY1(LVv, RCv); } else BODY1(LVv, RCv); } while (0)
+#else
+#define BODY(LVv, RCv) BODY1(LVv, RCv)
+#endif
+#define BODY1(LVv, RCv) gemv_body<LVv, G, CPW, RCv>(P, strip, C, nm, NS, chunk0, a.NST, acc, xs, kslice, lane, ntok WDX)
 #ifdef NQ_NO_MASK
 #define LV45(RCv) BODY(4, RCv)
 #else
@@ -573,9 +606,13 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
 #if NQ_RK_CODES & 256
         case 8: if constexpr (RKM & 256) LV45(8); break;
 #endif
+#if NQ_RK_CODES & 512
+        case 9: if constexpr (RKM & 512) LV45(9); break;
+#endif
         default: LV45(0); break;
     }
 #undef BODY
+#undef BODY1
 #undef LV45
 #undef WDX
 
@@ -938,6 +975,7 @@ int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
 // compiled residual K codes per kernel (bit c = code c): {gate|up, down}. Codes outside a mask silently decode as code 0,
 // so hosts must check (MoELayer.set does).
 std::vector<int64_t> rk_codes() { return {(NQ_RK_GU & NQ_RK_CODES) | 1, (NQ_RK_DN & NQ_RK_CODES) | 1}; }
+std::vector<int64_t> bk_codes() { return {(NQ_BK_GU & NQ_BK_CODES) | 1, (NQ_BK_DN & NQ_BK_CODES) | 1}; }
 
 // ============================== prefill (T > BMAX): dense decode + grouped GEMM =================================
 // The decode kernels above re-decode every routed expert once per <= 8-token call. For prefill, forward() instead
@@ -987,7 +1025,7 @@ template <int LV, int RC>
 __device__ __forceinline__ void unit_dec(const Planes& P, int strip, int ch, int C, int NS, int nm, uint32_t* tile, int lane)
 {
     Ctx X; X.strip = strip; X.C = C; X.nm = nm; X.fl = 0;
-    X.nrec_r = (size_t)NS * (LV == 5 ? nm : C) * 32;
+    X.nrec_r = (size_t)NS * (LV == 5 ? nm : C) * 32; X.nrec_b = (size_t)NS * C * 32;
     if constexpr (LV == 5) X.fl = __ldg((const unsigned long long*)P.flags + strip);
     Stage<LV, 1, RC> S;
     load_stage<LV, 1, RC>(S, P, X, ch, lane);
@@ -996,7 +1034,7 @@ __device__ __forceinline__ void unit_dec(const Planes& P, int strip, int ch, int
     uint32_t w[6], r[NWR + 2];
     #pragma unroll
     for (int i = 0; i < 4; ++i) w[i] = S.wb[0][i];
-    ext_words<128, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
+    ext_words<BKB<RC>::BITS, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
     const uint32_t sgm = ((S.on >> 16) & 1u) * 0x80008000u;
     if constexpr (LV == 2) chunk_dec<false, RC>(w, r, 0, sgm, tile, lane);
     else
@@ -1030,7 +1068,14 @@ __global__ void __launch_bounds__(256) nq_pf_decode(const int64_t* table, const 
     }
     const Planes P = planes_of(ent, MODE == 0 ? 1 : 5);
     const int nm = MODE == 0 ? nm_gu : nm_dn, rc = (int)ent[10 + MODE];
-#define UD(LVv, RCv) unit_dec<LVv, RCv>(P, strip, ch, C, NS, nm, tile, lane)
+    const unsigned BKM = ((MODE == 0 ? NQ_BK_GU : NQ_BK_DN) & NQ_BK_CODES) | 1;
+    const int bk = (int)(ent[19] >> (8 * MODE)) & 0xFF, bkm = bk < 16 && ((BKM >> bk) & 1) ? bk : 0;
+#if NQ_BK_CODES & 2
+#define UD(LVv, RCv) do { if (bkm == 1) UD1(LVv, (RCv) | 16); else UD1(LVv, RCv); } while (0)
+#else
+#define UD(LVv, RCv) UD1(LVv, RCv)
+#endif
+#define UD1(LVv, RCv) unit_dec<LVv, RCv>(P, strip, ch, C, NS, nm, tile, lane)
 #ifdef NQ_NO_MASK
 #define UD45(RCv) UD(4, RCv)
 #else
@@ -1066,9 +1111,13 @@ __global__ void __launch_bounds__(256) nq_pf_decode(const int64_t* table, const 
 #if NQ_RK_CODES & 256
         case 8: UD45(8); break;
 #endif
+#if NQ_RK_CODES & 512
+        case 9: UD45(9); break;
+#endif
         default: UD45(0); break;
     }
 #undef UD
+#undef UD1
 #undef UD45
     __syncwarp();
     #pragma unroll
@@ -1235,7 +1284,11 @@ __global__ void __launch_bounds__(256) nq_pf_post(const float* y, const float* z
             #pragma unroll
             for (int i = 0; i < 4; ++i) v[i] += z[r] * u2[i] + z[r] * u4[i];
         }
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 900   // float4 atomics are sm_90+; scalar adds for sm_80 test builds
+        { float* q = op + col; atomicAdd(q, w * v[0]); atomicAdd(q + 1, w * v[1]); atomicAdd(q + 2, w * v[2]); atomicAdd(q + 3, w * v[3]); }
+#else
         atomicAdd((float4*)(op + col), make_float4(w * v[0], w * v[1], w * v[2], w * v[3]));
+#endif
     }
 }
 __global__ void nq_pf_hits(const int* counts, int* hits, int E)
@@ -1291,5 +1344,5 @@ void pf_hits(torch::Tensor counts, int64_t hits_ptr)
     const int E = counts.numel(); TORCH_CHECK(counts.scalar_type() == at::kInt);
     nq_pf_hits<<<(E + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream()>>>((const int*)counts.data_ptr(), (int*)hits_ptr, E);
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("rk_codes", &rk_codes); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump);
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("rk_codes", &rk_codes); m.def("bk_codes", &bk_codes); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump);
     m.def("pf_decode", &pf_decode); m.def("pf_pre", &pf_pre); m.def("pf_mid", &pf_mid); m.def("pf_post", &pf_post); m.def("pf_hits", &pf_hits); }

@@ -16,6 +16,8 @@ nq-io extensions (defaults = original behaviour):
                       pinned RAM tier at construction (records whose upgrade then skips the SSD)
   cancel_up(L, E)     best-effort skip of a stale upgrade: dropped if still waiting for a slot here or still queued in
                       the engine (sched.cancelled(L, E) on the poll that reports it); False if it is already reading
+  unified=True        unified memory (NQ_UNIFIED, stream_engine.unified_default): the slot pool is host-mapped pinned memory
+                      (Engine.alloc_slots) and each SSD read lands straight in its slot; no bounce, no H2D record copy
   io_stats()          live I/O numbers since the previous call (delivered GB/s, per-drive GB/s / in-flight, queue
                       depths, tier hit share, op latency p50/p99) - the API the throughput-aware scheduler reads
 nq-prefill (prefill-borrow, sm120/serve/nq_pb.py; nothing changes unless x_borrow() is called):
@@ -33,11 +35,17 @@ import p4rec as PR
 from moe import entry
 
 class RankExecutor:
-    def __init__(s,rf,layers,nslot,n_host=64,qd=8,device=None,wait_for_slot=True,shadow=False,alt_path=None,qd_alt=0,tier=None):
+    def __init__(s,rf,layers,nslot,n_host=64,qd=8,device=None,wait_for_slot=True,shadow=False,alt_path=None,qd_alt=0,tier=None,unified=False):
         s.shadow=shadow;s.rf=rf;s.lay=rf.lay;s.rb=rf.rb;s.layers=layers
         dev=torch.device('cuda',torch.cuda.current_device() if device is None else device)
-        s.slots=torch.empty(nslot,s.rb,dtype=torch.uint8,device=dev);s.free=list(range(nslot))[::-1];s.slot_of={}
-        s.eng=rf.engine(n_host,qd,dev.index) if not alt_path else rf.engine(n_host,qd,dev.index,alt_path=alt_path,qd_alt=qd_alt)
+        s.unified=unified
+        if unified:
+            assert not tier,'RAM tier is off in unified mode (the slots are already host memory)'
+            s.eng=rf.engine(n_host,qd,dev.index,alt_path=alt_path or '',qd_alt=qd_alt,direct=True);s.slots=s.eng.alloc_slots(nslot)
+        else:
+            s.slots=torch.empty(nslot,s.rb,dtype=torch.uint8,device=dev)
+            s.eng=rf.engine(n_host,qd,dev.index) if not alt_path else rf.engine(n_host,qd,dev.index,alt_path=alt_path,qd_alt=qd_alt)
+        s.free=list(range(nslot))[::-1];s.slot_of={}
         s.tag=0;s.ops={}                                          # tag -> (L, E, kind, seq)
         s.up_tag={};s.n_cancel=0;s.n_landed=0;s.lat_w=collections.deque(maxlen=4096);s._prev={}   # nq-io bookkeeping
         s.tier_n=s.eng.tier_load([rf.rec(L,E) for L,E in tier]) if tier else 0
@@ -150,6 +158,7 @@ class RankExecutor:
     def _isx(s,sl):return sl>=s.nslot
     def x_borrow(s,ep,addrs):
         assert not s.xep and ep>s.x_have,(s.xep,ep,s.x_have)
+        assert not s.unified,'prefill-borrow lends device (KV cache) addresses; unified mode reads into host-mapped slots only (NQ_PREFILL_BORROW=0)'
         ids=[s.nslot+XS*ep+j for j in range(len(addrs))]
         s.xaddr.update(zip(ids,addrs));s.xfree=ids[::-1];s.xep=ep;s.x_have=ep;s.xst['borrows']+=1;s.xst['slots']+=len(ids)
     def pool_tag(s,ups):
