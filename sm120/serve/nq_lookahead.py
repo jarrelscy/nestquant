@@ -202,16 +202,16 @@ class LA:
         return n
     def _plan(s,S,Lt,b,budget=None):
         budget=BUDGET if budget is None else budget
-        i=S.li[Lt];fx=S.fixed[i];st=S.state[i]
-        sc=np.where(fx|(b<=0),-np.inf,b);o=np.argsort(-sc,kind='stable');top=[int(e) for e in o[:S.nf] if sc[e]>-np.inf]
+        i=S.li[Lt];fx=S.fixed[i];st=S.state[i];nfl=S.nf+(0 if getattr(S,'nfo',None) is None else int(S.nfo[i]))   # step 3b NQ_KVEC
+        sc=np.where(fx|(b<=0),-np.inf,b);o=np.argsort(-sc,kind='stable');top=[int(e) for e in o[:nfl] if sc[e]>-np.inf]
         want=np.zeros(NE,bool);want[top]=True
         pin=getattr(S,'pin',None);pin=None if pin is None else pin[i]&~fx      # session restore: pinned experts stay
         if pin is not None:
             want|=pin
             if s.rt is not None and getattr(s.rt,'SR',None) is not None and s.rt.SR.restoring():budget=min(budget,SRB)
-        if len(top)<S.nf:                           # fill with experts already at (or on the way to) level 4: no churn
+        if len(top)<nfl:                           # fill with experts already at (or on the way to) level 4: no churn
             keep=[int(e) for e in np.nonzero(np.isin(st,(1,2))&~want&~fx)[0]]
-            keep.sort(key=lambda e:-S.score[i,e]);want[keep[:S.nf-len(top)]]=True
+            keep.sort(key=lambda e:-S.score[i,e]);want[keep[:nfl-len(top)]]=True
         cand=[e for e in top if st[e]==0 and S.hold[i,e]<=S.tok][:budget]
         free=S.slots-int((S.state>0).sum()) if S.slots is not None else len(cand)
         ups=cand[:max(0,min(len(cand),free))]

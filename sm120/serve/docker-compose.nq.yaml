@@ -110,6 +110,7 @@ services:
       NQ_PRED_INPUTS: ${NQ_PRED_INPUTS:-0}               # /dev/shm/nq_pred_inputs overrides
       NQ_TAP_QREAL: ${NQ_TAP_QREAL:-0}                   # /dev/shm/nq_tap_ctl qreal= overrides
       NQ_TAP_TODO_FIX: ${NQ_TAP_TODO_FIX:-0}             # 1 = fix the step 2 rc post-reclaim decode-I/O livelock (nf shrink + todo room); tests/test_tap_reclaim.py
+      NQ_KVEC: ${NQ_KVEC:-}                              # step 3b: per-layer floating width K_l (.npy | .npz:key, container path, e.g. /nq/streaming/kvec/salcnt2.npy); unset = 77 every layer
       NQ_DBG_NO_BF16_RED: ${NQ_DBG_NO_BF16_RED:-}        # S4: 1 = no reduced-precision bf16 split-K reductions (nq_dbg_numerics.py)
       NQ_DBG_FP8_OPROJ_ONLY: ${NQ_DBG_FP8_OPROJ_ONLY:-}  # 1 = e4m3 W8A16 o_proj, fused multi-slot gemv csrc/nq_fp8o.cu (needs the two VLLM_ knobs below)
       VLLM_ENABLE_NVFP4_P4_O_PROJ: ${VLLM_ENABLE_NVFP4_P4_O_PROJ:-1}   # prod D: P4 o_proj

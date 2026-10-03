@@ -136,7 +136,9 @@ class Runtime:
             s.thread=threading.Thread(target=s.share_loop,args=(fm,),name='nq-share',daemon=True);s.thread.start();return
         nslot=int(os.environ.get('NQ_SLOTS_PER_LAYER','56'))*len(L_)
         T22=NQ_HOME+'/threads/22-boundary-experts/fixed_set.json';fj=json.load(open(T22))
-        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf]] for L in L_}
+        _kv=__import__('scheduler_tap').kvec(L_) if os.environ.get('NQ_KVEC') else None   # step 3b: per-layer width K_l (start set too)
+        if _kv is not None:assert os.environ.get('NQ_SCHED')=='tap' and _JOINT,'NQ_KVEC needs NQ_SCHED=tap + joint predictor'
+        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf if _kv is None else int(_kv[i])]] for i,L in enumerate(L_)}
         lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
         _steps=(s.rank==0 or not lead)   # this rank runs the real predictor; the others use 'ema'
         if _JOINT and _steps and os.environ.get('NQ_PREDICTOR')=='tf':   # nq-tfpred multi-window transformer (threads/36-tfpred)
@@ -396,7 +398,9 @@ def _set_reset(S):
         fj=json.load(open(NQ_HOME+'/threads/22-boundary-experts/fixed_set.json'));T=np.zeros(S.state.shape,bool)
         for i,L in enumerate(S.layers):     # k0 = fixed26 + floating_default51 (live D has no fixed set: all 77 float)
             k0=[int(e) for e in fj['fixed_set'][str(L)]]+[int(e) for e in fj['floating_default'][str(L)]]
-            T[i,[e for e in k0 if not S.fixed[i,e]][:S.nf]]=True
+            nfl=S.nf+(0 if getattr(S,'nfo',None) is None else int(S.nfo[i]))   # step 3b NQ_KVEC: per-layer width
+            if nfl>len(k0):k0=k0+[int(e) for e in np.argsort(-np.array(fj['n_routed'][str(L)]),kind='stable') if int(e) not in k0]
+            T[i,[e for e in k0 if not S.fixed[i,e]][:nfl]]=True
         _K0[0]=T
     T=_K0[0];fx=S.fixed
     if hasattr(S,'doom'):S.doom.clear();S.doomed[:]=False;S.todo.clear()

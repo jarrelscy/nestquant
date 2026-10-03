@@ -19,7 +19,8 @@ from test_hostloop_parity import routing_steps, LeaderX, cfgs, LAYERS, NE
 
 TAPENV = ('NQ_TAP_C', 'NQ_TAP_H', 'NQ_TAP_HA', 'NQ_TAP_MLA', 'NQ_TAP_SVC_MS', 'NQ_TAP_FAR', 'NQ_TAP_TP', 'NQ_TAP_RATE_GBPS',
           'NQ_TAP_LAT', 'NQ_TAP_LAT_HL', 'NQ_TAP_LAT_Q', 'NQ_TAP_LAT_N', 'NQ_S3', 'NQ_S3_B', 'NQ_S3_BHL', 'NQ_S3_A',
-          'NQ_S3_AHL', 'NQ_S3_P', 'NQ_S3_BAND', 'NQ_S3_BW', 'NQ_S3_BK', 'NQ_S3_RESET', 'NQ_S3_TRACK', 'NQ_TAP_CTL')
+          'NQ_S3_AHL', 'NQ_S3_P', 'NQ_S3_BAND', 'NQ_S3_BW', 'NQ_S3_BK', 'NQ_S3_RESET', 'NQ_S3_TRACK', 'NQ_TAP_CTL',
+          'NQ_KVEC', 'NQ_TAP_TODO_FIX')
 
 
 class StubS:
@@ -161,6 +162,10 @@ def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True,
             pm = np.random.default_rng(seed).random((75, NE)) < 0.05; A.pin = pm.copy(); B.pin = pm.copy()
         if pin and n == 2 * len(steps) // 3: A.pin = B.pin = None
     st = {k: A.stats[k] for k in ('ups', 'downs', 'refreshes', 'promotions', 'budget_cut', 'eager_evict', 'no_slot_skip', 'big_steps')}
+    if A.nfo is not None:                                # step 3b NQ_KVEC: occupancy follows the per-layer width
+        occ = ((A.state == 1) | (A.state == 2)).sum(1); K = A.nf + A.nfo
+        print(f'  {name}: per-layer occupancy vs K_l: corr {np.corrcoef(occ, K)[0, 1]:.3f}, max |occ-K| {int(np.abs(occ - K).max())}, '
+              f'occ L3 {occ[0]}/{K[0]} L73 {occ[70]}/{K[70]}', flush=True)
     print(f'  {name:34s} IDENTICAL over {len(steps)} steps, {nref} refreshes, {nops} ops, {st}; step() py {1e3*tA/len(steps):.3f} '
           f'cpp {1e3*tB/len(steps):.3f} ms/iter (incl. predictor)', flush=True)
     return True
@@ -171,6 +176,11 @@ def main():
     steps = routing_steps(nf); print(f'tap parity: {len(steps)} model steps, {sum(s[1] for s in steps)} tokens from {nf} routing-log files', flush=True)
     k0, b = cfgs()
     k0s = dict(k0, slots=5200)                       # fewer slots than 75 x 77: no-slot paths (todo, eager eviction)
+    # step 3b NQ_KVEC: per-layer width K_l (sum 75 x 77); start set = K_l per layer (as nq_vllm's dflt)
+    KV = os.environ.get('KVEC', '/data/Jarrel/nq-step3b/kvec/salcnt2.npy'); Kl = np.load(KV)
+    rk = np.random.default_rng(13)
+    k0k = dict(k0, dflt={L: [int(x) for x in rk.permutation(NE)[:int(Kl[i])]] for i, L in enumerate(LAYERS)})
+    k0ks = dict(k0k, slots=5200)
     ok = True
     C = [('stub k0 default env', k0, {}, dict(seed=1)),
          ('stub k0 slot-bound c1 kv+pin', k0s, dict(NQ_TAP_C='1'), dict(seed=2, kv=True, pin=True)),
@@ -185,14 +195,19 @@ def main():
                                                  NQ_TAP_MLA='0.3'), dict(seed=10, sal=True, pin=True)),
          ('stub b s3 norst band10 bk1 hl16/32', b, dict(NQ_TAP_C='0', NQ_S3='1', NQ_S3_RESET='0', NQ_S3_BAND='10', NQ_S3_BK='1',
                                                  NQ_S3_BHL='16', NQ_S3_AHL='32', NQ_S3_P='1'), dict(seed=11, sal=True, kv=True)),
-         ('stub k0 s3 track only (s3=0)', k0, dict(NQ_S3_TRACK='1'), dict(seed=12, sal=True))]
+         ('stub k0 s3 track only (s3=0)', k0, dict(NQ_S3_TRACK='1'), dict(seed=12, sal=True)),
+         ('stub k0 kvec default env', k0k, dict(NQ_KVEC=KV), dict(seed=13, kv=True, pin=True)),
+         ('stub k0s kvec slot-bound fix2 c1', k0ks, dict(NQ_KVEC=KV, NQ_TAP_C='1', NQ_TAP_TODO_FIX='2'), dict(seed=14, kv=True)),
+         ('stub k0 kvec s3 arm c0 mla0.3', k0k, dict(NQ_KVEC=KV, NQ_TAP_C='0', NQ_S3='1', NQ_TAP_MLA='0.3'), dict(seed=15, sal=True, pin=True))]
     sel = os.environ.get('CASES')
     for i, (nm, cfg, env, kw) in enumerate(C):
         if sel and str(i) not in sel.split(','): continue
         ok &= tap_parity(nm, steps, lambda kw=kw: (StubS(kw['seed']), StubS(kw['seed'])), cfg, env, **kw)
+    js = [x for x in steps if x[1] <= 16][:int(os.environ.get('JF_STEPS', '1500'))]
     if os.environ.get('NQ_TEST_JF', '1') == '1' and (not sel or 'jf' in sel.split(',')):
-        js = [x for x in steps if x[1] <= 16][:int(os.environ.get('JF_STEPS', '1500'))]
         ok &= tap_parity('jF joint (CPU) rec/replay, c1', js, jf_pair, k0, dict(NQ_TAP_C='1'), seed=7, kv=True)
+    if os.environ.get('NQ_TEST_JF', '1') == '1' and (not sel or 'jfk' in sel.split(',')):
+        ok &= tap_parity('jF joint (CPU) kvec fix2, c1', js, jf_pair, k0k, dict(NQ_TAP_C='1', NQ_KVEC=KV, NQ_TAP_TODO_FIX='2'), seed=16, kv=True)
     return ok
 
 

@@ -301,7 +301,7 @@ struct TapCore
     // refresh part of step(): value, pin, pairs, issue loop. -> (promotions, budget_cut, eager_evict, no_slot_skip)
     py::tuple refresh(py::array Sa, py::array score_, py::array fixed, py::array state, py::array doomed, py::array hold,
                       py::object pin_, double tok, long nf, double one_minus_a, double tail, double span, py::tuple w,
-                      double tc, long budget, py::object lw_)
+                      double tc, long budget, py::object lw_, py::object nfo_)
     {
         const float* S0 = buf<float>(Sa, N, "S", false); const double* score = buf<double>(score_, N, "score", false);
         const bool* fx = buf<bool>(fixed, N, "fixed", false); int8_t* st = buf<int8_t>(state, N, "state", true);
@@ -314,6 +314,9 @@ struct TapCore
             for (size_t i = 0; i < N; ++i) if (pn[i] && !fx[i]) V[i] = 1e9;
         }
         const bool d = V64, d0 = V064;
+        // step 3b NQ_KVEC: per-layer width nf + nfo[l] (None = nf for every layer)
+        const int64_t* nfo = nullptr; py::array nfa;
+        if (!nfo_.is_none()) { nfa = nfo_.cast<py::array>(); nfo = buf<int64_t>(nfa, (size_t)NL, "nfo", false); }
         struct P { double g; int32_t l, e, v; };
         std::vector<P> out; std::vector<int32_t> ce, rv;
         for (int l = 0; l < NL; ++l)
@@ -351,7 +354,7 @@ struct TapCore
                 std::stable_sort(ce.begin(), ce.end(), [&](int32_t a, int32_t b) { return neg_less(kc[a], kc[b]); });
                 std::stable_sort(rv.begin(), rv.end(), [&](int32_t a, int32_t b) { return alt(kr[a], kr[b]); });
             }
-            long free = nf - oc, k = 0;
+            long free = nf + (nfo ? (long)nfo[l] : 0L) - oc, k = 0;
             while (k < ncand)
             {
                 int32_t e = ce[k]; double ve = Vl[e];
@@ -593,7 +596,7 @@ PYBIND11_MODULE(nqhost, m)
         .def(py::init<std::vector<int>, int>())
         .def("pre", &TapCore::pre).def("queued", &TapCore::queued).def("refresh", &TapCore::refresh, py::arg("S"), py::arg("score"), py::arg("fixed"), py::arg("state"), py::arg("doomed"),
              py::arg("hold"), py::arg("pin"), py::arg("tok"), py::arg("nf"), py::arg("one_minus_a"), py::arg("tail"), py::arg("span"),
-             py::arg("w"), py::arg("tc"), py::arg("budget"), py::arg("lw") = py::none()).def("finish", &TapCore::finish)
+             py::arg("w"), py::arg("tc"), py::arg("budget"), py::arg("lw") = py::none(), py::arg("nfo") = py::none()).def("finish", &TapCore::finish)
         .def("V", [](TapCore& t) { return t.vcopy(t.V, t.V64); }).def("V0", [](TapCore& t) { return t.vcopy(t.V0, t.V064); })
         .def("todo_list", &TapCore::todo_list).def("doom_list", &TapCore::doom_list).def("todo_len", &TapCore::todo_len)
         .def_readwrite("fix", &TapCore::fix);

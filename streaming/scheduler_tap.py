@@ -120,6 +120,12 @@ class TapScheduler(Scheduler):
         if s.tcore is not None: s.tcore.fix = s.tfixm if s.tfix else 0
         if s.tfix: s.stats.update(nf_shrink_evict=0, todo_full_skip=0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
+        # step 3b NQ_KVEC (default off): static per-layer lookahead width K_l (sum = NL * nf, same slot pool). The layer's
+        # width is s.nf + s.nfo[l], so the prefill-borrow nf swap (77 -> 155 -> 77) shifts every layer by the same amount
+        s.nfo = None; kv = kvec(s.layers)
+        if kv is not None:
+            s.nfo = np.ascontiguousarray(kv - int(s.nf), np.int64)
+            assert not s.tshrink, 'NQ_KVEC needs NQ_TAP_TODO_FIX != 1 (TapCore.pre shrink is scalar-nf)'
         s.sched_name = 'tap'
         # step 3 policy arm (default off; see module doc)
         s.s3 = dict(on=int(float(e('NQ_S3', '0') or 0)), b=float(e('NQ_S3_B', '0.25') or 0), bhl=float(e('NQ_S3_BHL', '256') or 256),
@@ -381,7 +387,7 @@ class TapScheduler(Scheduler):
         ce = np.argsort(-np.where(cand, V, -np.inf), 1, kind='stable'); rv = np.argsort(np.where(res, V, np.inf), 1, kind='stable')
         ncand = cand.sum(1); nres = res.sum(1); oc = occ.sum(1)
         for l in range(s.NL):
-            free = s.nf - int(oc[l]); k = 0
+            free = s.nf + (0 if s.nfo is None else int(s.nfo[l])) - int(oc[l]); k = 0
             while k < ncand[l]:
                 e = ce[l, k]; ve = V[l, e]
                 if k < free:
@@ -432,7 +438,7 @@ class TapScheduler(Scheduler):
             lw = s._lw() if s.s3on else None
             k, cut, ee, sk, full = T.refresh(np.ascontiguousarray(s._srcS(), np.float32), s.score, s.fixed, st, s.doomed, s.hold, pin,
                                        float(s.tok), int(s.nf), 1 - s.a, -1.0 if s.tfar is None else float(s.tfar), s.span,
-                                       w, s.tc, int(min(budget, 2 ** 62)), lw)
+                                       w, s.tc, int(min(budget, 2 ** 62)), lw, nfo=s.nfo)
             s.stats['budget_cut'] += cut; s.stats['eager_evict'] += ee; s.stats['no_slot_skip'] += sk; s.stats['promotions'] += k
             if s.tfix: s.stats['todo_full_skip'] += full
         if not (s.want.dtype == bool and s.want.flags.c_contiguous and s.want.flags.writeable): s.want = np.zeros(st.shape, bool)
@@ -519,6 +525,21 @@ class TapScheduler(Scheduler):
     def _mark_issue(s, now, ups):
         """NQ_TAP_LAT=meas: issue time of each emitted up (landed() turns it into an issue->land latency sample)"""
         li = s.li; s.t_iss[[li[L] for L, _ in ups], [e for _, e in ups]] = now
+
+
+def kvec(layers):
+    """step 3b: NQ_KVEC=<file.npy> | <file.npz>:<key> -> int64 [len(layers)] per-layer floating width K_l (layers in
+    sorted order, e.g. L3..L77), or None when unset. A file with one entry per layer of 3..77 is sliced to `layers`."""
+    v = os.environ.get('NQ_KVEC', '')
+    if not v: return None
+    f, key = v.rsplit(':', 1) if ':' in v else (v, '')
+    a = np.load(f)
+    if key: a = a[key]
+    a = np.asarray(a).astype(np.int64).ravel(); L = list(layers)
+    if len(a) != len(L):
+        assert len(a) == 75 and all(3 <= x <= 77 for x in L), (len(a), len(L)); a = a[[x - 3 for x in L]]
+    assert (a >= 1).all() and (a <= 256).all(), a
+    return a
 
 
 def make_scheduler(*a, **k):
