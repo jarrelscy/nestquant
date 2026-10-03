@@ -89,8 +89,9 @@ class PFBlock:
             try:s.dms=float(open(DKNOB).read().split()[0]);s.dkm=m
             except Exception:s.dms=s.denv
         return s.dms
-    def dec_wait(s):
+    def dec_wait(s,ms_over=None):
         ms=s._dknob()
+        if ms_over is not None and ms!=0:ms=ms_over
         if ms==0:return
         rt=s.rt;s.dseq+=1;n=s.dseq;torch.cuda.synchronize();t0=time.perf_counter()
         dl=t0+(ms*len(s.L_)/1e3 if ms>0 else CAP_S);ok=False
@@ -119,17 +120,20 @@ class PFBlock:
 
 DKNOB=os.environ.get('NQ_DEC_BLOCK_KNOB','/dev/shm/nq_dec_block')
 
-# NQ_DEC_BLOCK_FIRSTN (eval knob, file /dev/shm/nq_dec_block_firstn overrides env; 0/absent = off): block decode steps only
-# while every scheduled request is within its first N generated tokens (num_computed_tokens - prompt_len < N). Same
+# NQ_DEC_BLOCK_FIRSTN (eval knob, file /dev/shm/nq_dec_block_firstn "N [after_ms]" overrides env; 0/absent = off): the
+# nq_dec_block budget applies only while a scheduled request is within its first N generated tokens
+# (num_computed_tokens - prompt_len < N); after that the per-layer budget is after_ms (NQ_DEC_BLOCK_AFTER_MS, 0 = no wait). Same
 # scheduler_output on every rank -> the same decision everywhere (keeps the rank-0/follower step counters in lockstep).
-FNKNOB=os.environ.get('NQ_DEC_BLOCK_FIRSTN_KNOB','/dev/shm/nq_dec_block_firstn');_FN=dict(m=None,v=int(os.environ.get('NQ_DEC_BLOCK_FIRSTN','0')),pl={})
+FNKNOB=os.environ.get('NQ_DEC_BLOCK_FIRSTN_KNOB','/dev/shm/nq_dec_block_firstn');_FN=dict(m=None,v=int(os.environ.get('NQ_DEC_BLOCK_FIRSTN','0')),after=0.0,pl={})
 def _firstn_skip(so):
     try:m=os.stat(FNKNOB).st_mtime_ns
     except OSError:m=-1
     if m!=_FN['m']:
         _FN['m']=m
-        try:_FN['v']=int(float(open(FNKNOB).read().split()[0])) if m!=-1 else int(os.environ.get('NQ_DEC_BLOCK_FIRSTN','0'))
-        except Exception:_FN['v']=0
+        try:
+            f=open(FNKNOB).read().split() if m!=-1 else [os.environ.get('NQ_DEC_BLOCK_FIRSTN','0'),os.environ.get('NQ_DEC_BLOCK_AFTER_MS','0')]
+            _FN['v']=int(float(f[0]));_FN['after']=float(f[1]) if len(f)>1 else 0.0
+        except Exception:_FN['v']=0;_FN['after']=0.0
     pl=_FN['pl']
     for r in getattr(so,'scheduled_new_reqs',None) or []:
         pl[r.req_id]=len(r.prompt_token_ids or ())
@@ -148,10 +152,11 @@ def install_dec():
     def execute_model(self,scheduler_output,*a,**k):
         if not k.get('dummy_run',False) and getattr(scheduler_output,'scheduled_new_reqs',None):PI.new=True   # NQ_PRED_INPUTS new_request
         if not k.get('dummy_run',False) and 0<scheduler_output.total_num_scheduled_tokens<=MX:
-            if _firstn_skip(scheduler_output):return orig(self,scheduler_output,*a,**k)
+            late=_firstn_skip(scheduler_output)
+            if late and _FN['after']==0:return orig(self,scheduler_output,*a,**k)
             import nq_vllm
             P=getattr(nq_vllm.RT,'PFB',None)
-            if P is not None:P.dec_wait()
+            if P is not None:P.dec_wait(_FN['after'] if late else None)
         return orig(self,scheduler_output,*a,**k)
     R.execute_model=execute_model;R._nq_dec_block=True
     log.info('NestQuant dec-block: execute_model wrapped (knob %s)',DKNOB)
