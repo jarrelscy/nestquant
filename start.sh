@@ -1,7 +1,11 @@
 #!/bin/bash
 # NestQuant GLM-5.3 serve: OpenAI-compatible API on :8001, served as "glm-5.3-nq" (alias "local").
 #
-#   ./start.sh [up|down|logs|smoke]        (up is the default)
+#   ./start.sh [up|down|logs|smoke] [2-4|1.75]   (up and 2-4 are the defaults)
+#
+# Builds: 2-4 = jarrelscy/GLM-5.3-NestQuant-2-4bit (production). 1.75 = jarrelscy/GLM-5.3-NestQuant-1.75-4bit
+# (1.75-bit base, nq-res-v2): its own records + kernel build (NQ_DEFS), 98 slots/layer at 1M, one drive, and the
+# same base checkpoint and predictor as 2-4 (downloaded from the 2-4 repo). Same as NQ_VARIANT=1.75.
 #
 # Boots the production config. All serving defaults live in sm120/serve/docker-compose.standalone.yaml;
 # any of them can be overridden from the environment (e.g. NQ_MAXLEN=400000 NQ_SLOTS_PER_LAYER=124 ./start.sh).
@@ -14,8 +18,8 @@
 #                     routed experts (attention, shared experts, dense layers, MTP layer, vision, tokenizer, ~44 GB); it is
 #                     downloaded from NQ_BASE_REPO (base/) if absent
 #   NQ_REPACK_DIR     NestQuant records (rank*.json/bin + res/), downloaded from NQ_REPACK_REPO if absent (~393 GB)
-#   NQ_REPACK_ALT_DIR copy of rank*.bin, rank*.json, artifact_stamp.json on a second NVMe; without it reads use one drive
-#   NQ_PREDICTOR_DIR  jF predictor + delta table, downloaded from NQ_REPACK_REPO (serving/predictor/) if absent
+#   NQ_REPACK_ALT_DIR copy of rank*.bin, rank*.json, artifact_stamp.json on a second NVMe; without it (or =none) reads use one drive
+#   NQ_PREDICTOR_DIR  jF predictor + delta table, downloaded from NQ_PREDICTOR_REPO (serving/predictor/) if absent
 #   NQ_LIBURING_DIR   liburing 2.5 install (include/, lib/), built in the image if absent
 #   NQ_LGB_DIR        lightgbm + narwhals + scipy for the predictor (numpy comes from the image), installed if absent
 #   NQ_BUILD_DIR NQ_VLLM_CACHE NQ_LMCACHE_DIR NQ_TRITON_CACHE_DIR NQ_FLASHINFER_CACHE NQ_TORCHEXT_CACHE NQ_DBG_DIR NQ_PROFILES_DIR
@@ -25,6 +29,18 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 export COMPOSE_FILE="$HERE/sm120/serve/docker-compose.standalone.yaml" COMPOSE_PROJECT_NAME=nestquant
 export NQ_REPO=${NQ_REPO:-$HERE}
+NQ_VARIANT=${2:-${NQ_VARIANT:-2-4}}
+case "$NQ_VARIANT" in
+2-4) ;;
+1.75)   # 1.75-bit base + 4-bit residual (base K code 1, down residual code 9): records ~400 GB, no second-drive copy by default
+  export NQ_REPACK_REPO=${NQ_REPACK_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}
+  export NQ_REPACK_DIR=${NQ_REPACK_DIR:-/home/jarrelscy/nq-175/hf}
+  export NQ_REPACK_ALT_DIR=${NQ_REPACK_ALT_DIR:-none}
+  # the smaller resident base frees ~3.6 GiB/GPU at 80 slots: 98 slots/layer (95 floating) keeps the 1M KV pool of 2-4
+  export NQ_SLOTS_PER_LAYER=${NQ_SLOTS_PER_LAYER:-98}
+  export NQ_VLLM_CACHE=${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache-step2-b175} ;;
+*) echo "unknown build '$NQ_VARIANT' (2-4 or 1.75)"; exit 2 ;;
+esac
 export NQ_IMAGE=${NQ_IMAGE:-jarrelscy/glm53-nestquant-sm120:fixes12-mtp-buffer-rng-20260917}
 export NQ_REPACK_DIR=${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}
 export NQ_REPACK_ALT_DIR=${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}
@@ -34,8 +50,9 @@ export NQ_LGB_DIR=${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}
 export NQ_BUILD_DIR=${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}
 export NQ_MODELS_ROOT=${NQ_MODELS_ROOT:-/data/models}
 export NQ_MODEL_DIR=${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-NQ-base}
-NQ_REPACK_REPO=${NQ_REPACK_REPO:-${NQ_HF_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}}   # NestQuant records + predictor
-NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/)
+NQ_REPACK_REPO=${NQ_REPACK_REPO:-${NQ_HF_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}}   # NestQuant records
+NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/), shared by both builds
+NQ_PREDICTOR_REPO=${NQ_PREDICTOR_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}            # jF predictor (serving/predictor/), shared
 
 NQ_ENV_FILE=${NQ_ENV_FILE:-$HERE/.env}
 if [ -z "${VLLM_API_KEY:-}" ] && [ -f "$NQ_ENV_FILE" ]; then VLLM_API_KEY=$(grep -oP 'VLLM_API_KEY=\K\S+' "$NQ_ENV_FILE" || true); fi
@@ -68,12 +85,18 @@ up)
   # NestQuant records (no repacking needed)
   RP=$NQ_REPACK_DIR
   if ! ls "$RP"/rank{0,1,2,3}.json >/dev/null 2>&1; then
-    echo "downloading the NestQuant records to $RP (~393 GB, once) ..."; mkdir -p "$RP"
+    echo "downloading the NestQuant records from $NQ_REPACK_REPO to $RP (~393 GB, once) ..."; mkdir -p "$RP"
     hfget "$NQ_REPACK_REPO" --include 'rank*.json' --include 'rank*.bin' --include 'res/*' --include 'artifact_stamp.json' --local-dir "$RP"
   fi
   echo "NQ layers in repack: $(python3 -c "import json;print(sorted(int(k) for k in json.load(open('$RP/rank0.json'))['layers']))")"
+  # nq-res-v2 records (1.75-bit base) need a kernel built with base code 1 + down residual code 9
+  if [ "$(python3 -c "import json;print(json.load(open('$RP/rank0.json'))['rec_bytes'])")" = 2854912 ] && [ -z "${NQ_DEFS:-}" ]; then
+    export NQ_DEFS=NQ_RK_CODES=0x209,NQ_RK_GU=0x9,NQ_RK_DN=0x201,NQ_BK_CODES=0x3
+    echo "1.75-4 bit records: kernel built with $NQ_DEFS"
+  fi
 
   # dual-drive reads need an identical copy of the record files on a second drive
+  [ "$NQ_REPACK_ALT_DIR" = none ] && export NQ_IO_MODE='' NQ_REPACK_ALT_DIR=$RP
   if [ "${NQ_IO_MODE-dual}" = dual ]; then
     ok=1; for f in rank0.json rank1.json rank2.json rank3.json artifact_stamp.json; do cmp -s "$RP/$f" "$NQ_REPACK_ALT_DIR/$f" || ok=0; done
     if [ $ok = 0 ]; then
@@ -85,7 +108,7 @@ up)
   # jF predictor (serving/predictor/ on HF -> NQ_PREDICTOR_DIR)
   if [ ! -f "$NQ_PREDICTOR_DIR/joint/jF.pt" ]; then
     echo "downloading the predictor to $NQ_PREDICTOR_DIR ..."; mkdir -p "$NQ_PREDICTOR_DIR"
-    hfget "$NQ_REPACK_REPO" --include 'serving/predictor/*' --local-dir "$NQ_PREDICTOR_DIR/.dl"
+    hfget "$NQ_PREDICTOR_REPO" --include 'serving/predictor/*' --local-dir "$NQ_PREDICTOR_DIR/.dl"
     cp -r "$NQ_PREDICTOR_DIR/.dl/serving/predictor/." "$NQ_PREDICTOR_DIR/"
   fi
 
@@ -105,7 +128,7 @@ up)
         /dev/shm/nq_hit_carry /dev/shm/nq_pred_inputs /dev/shm/nq_tap_ctl /dev/shm/nq_pf_block
 
   # build the NestQuant kernels once for the image's torch (the 4 workers would otherwise race on the build)
-  docker run --rm --gpus '"device=0"' --entrypoint bash -e NQ_BUILD=/nqbuild -e LIBURING=/data/Jarrel/liburing \
+  docker run --rm --gpus '"device=0"' --entrypoint bash -e NQ_BUILD=/nqbuild -e LIBURING=/data/Jarrel/liburing -e NQ_DEFS="${NQ_DEFS:-}" \
     -e CUDA_HOME=/opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13 -v "$NQ_REPO":/nq:ro -v "$NQ_BUILD_DIR":/nqbuild \
     -v "$NQ_LIBURING_DIR":/data/Jarrel/liburing:ro "$NQ_IMAGE" \
     -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod();import hostcore;hostcore.mod()"'
@@ -125,5 +148,5 @@ smoke)
     -d '{"model":"local","prompt":"The capital of France is","max_tokens":24,"temperature":0}' \
     | python3 -c "import sys,json;print(json.load(sys.stdin)['choices'][0]['text'])"
   docker logs glm53-nestquant 2>&1 | grep NestQuant | tail -8 ;;
-*) echo "usage: $0 [up|down|logs|smoke]"; exit 2 ;;
+*) echo "usage: $0 [up|down|logs|smoke] [2-4|1.75]"; exit 2 ;;
 esac

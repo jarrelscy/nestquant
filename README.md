@@ -61,7 +61,7 @@ OpenAI-compatible on `:8001`, served as `glm-5.3-nq` (alias `local`). Weights:
   `NQ_BASE_REPO` selects the HF repo it comes from (default this one);
 - the NestQuant records `NQ_REPACK_DIR` (~393 GB from the HF repo root: `rankN.json`, `rankN.bin`, `res/`);
 - the jF predictor `NQ_PREDICTOR_DIR` (HF `serving/predictor/`);
-  records and predictor come from `NQ_REPACK_REPO` (default this one);
+  records come from `NQ_REPACK_REPO`, the predictor from `NQ_PREDICTOR_REPO` (both default to this one);
 - liburing 2.5 and lightgbm, built/installed inside the image;
 - the NestQuant kernels. The first boot also builds the torch.compile cache and takes longer.
 
@@ -97,6 +97,23 @@ NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 ./start.sh
 +44 slots ≈ +8.4 GiB/GPU ≈ 640k tokens, leaving ~440k. Approximate; check the KV pool size in the boot
 log and keep the prefill-peak line a few GiB under 97.9 GB/GPU. If not, trim `NQ_SLOTS_PER_LAYER` or
 `NQ_MAXLEN`. This trade was not measured for speed or KLD.
+
+### 1.75-4 bit build
+
+[jarrelscy/GLM-5.3-NestQuant-1.75-4bit](https://huggingface.co/jarrelscy/GLM-5.3-NestQuant-1.75-4bit)
+has a 1.75-bit resident base with a 4-bit residual (format `nq-res-v2`, record 2,854,912 B, ~393 GB).
+It ships only the records; the base checkpoint and the jF predictor come from the 2-4 bit repo above.
+
+```bash
+./start.sh up 1.75          # or NQ_VARIANT=1.75 ./start.sh
+```
+
+The preset sets `NQ_REPACK_REPO` to the 1.75 repo, `NQ_REPACK_DIR` (default `/home/jarrelscy/nq-175/hf`),
+one-drive reads, `NQ_SLOTS_PER_LAYER=98` and a separate torch.compile cache. Every value can be overridden.
+`start.sh` detects `nq-res-v2` records from `rank0.json` and builds the kernel with
+`NQ_DEFS=NQ_RK_CODES=0x209,NQ_RK_GU=0x9,NQ_RK_DN=0x201,NQ_BK_CODES=0x3`. Without that the server refuses
+to load the records. The smaller base frees ~5.3 GiB/GPU; one slot per layer costs ~204 MiB here, so 98
+slots (95 floating) keep the same 1M KV pool as 2-4 at 80.
 
 ## Repo layout
 
