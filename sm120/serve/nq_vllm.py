@@ -80,6 +80,23 @@ def _stack_limit(need=2048):
         r=lib.cudaDeviceSetLimit(0,ctypes.c_size_t(need));assert r==0,f'cudaDeviceSetLimit(stack,{need}) failed: {r}'
     lib.cudaDeviceGetLimit(ctypes.byref(v),0);return old,v.value
 
+def jf_nfloat():
+    """jF floating experts per layer: NQ_JF_NFLOAT, else NQ_SLOTS_PER_LAYER - 3 (3 slots/layer stay free for swaps in flight), else 77"""
+    v=os.environ.get('NQ_JF_NFLOAT') or ''
+    if v:return int(v)
+    sl=os.environ.get('NQ_SLOTS_PER_LAYER') or ''
+    return int(sl)-3 if sl else 77
+
+def _codes_guard(Md,L,ex):
+    """Rows are written straight into the table (no MoELayer.set): refuse a layer whose base K / residual K codes the
+    kernel was not compiled for (nq-res-v2 b1.75 base = code 1, down residual = code 9), instead of decoding garbage."""
+    from moe import base_code
+    bk=Md.bk_codes() if hasattr(Md,'bk_codes') else [1,1];rk=Md.rk_codes()
+    for E,x in ex.items():
+        for i,p in enumerate((x.gu,x.dn)):
+            b=base_code(p);assert bk[i]>>b&1,f'NestQuant L{L} E{E}: base K code {b} not compiled (bk_codes {bk}; build with NQ_BK_CODES)'
+            assert rk[i]>>p.rk&1,f'NestQuant L{L} E{E}: residual K code {p.rk} not compiled (rk_codes {rk}; build with NQ_RK_CODES/NQ_RK_GU/NQ_RK_DN)'
+
 class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
@@ -92,7 +109,7 @@ class Runtime:
         from moe import MoELayer,Mailbox,entry
         if not s.lay:log.info('NestQuant rank %d: CUDA stack limit %d -> %d B/thread',rank,*_stack_limit())
         t=time.time();ex,H,I=RS.load(f"{os.environ['NQ_REPACK']}/res/rank{rank}/L{L}.pt",dev)
-        M=MoELayer(NE,H,I,Bmax=BMAX,dev=dev);MB=Mailbox(M)
+        M=MoELayer(NE,H,I,Bmax=BMAX,dev=dev);MB=Mailbox(M);_codes_guard(M.M,L,ex)
         for E,x in ex.items():M.table[E].copy_(entry(x,2))
         hits=torch.zeros(NE,dtype=torch.int32).pin_memory()
         if os.environ.get('NQ_HITS','1')!='0':M.hits_ptr=hits.data_ptr()
@@ -106,7 +123,7 @@ class Runtime:
         s.rf=rf=SE.RankFile(rp,s.rank);rb=rf.rb
         fx,src,_=FS.load(layers=L_)
         _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf')   # tf = nq-tfpred transformer (same k0 layout); jF joint predictor: k0 layout (no fixed set, all floating)
-        nf=77 if _JOINT else NF
+        nf=jf_nfloat() if _JOINT else NF
         if _JOINT:fx={L:[] for L in L_};src='joint-k0'
         if os.environ.get('NQ_STREAM','1')=='0' and os.environ.get('NQ_STATIC_FLOAT','0')=='1' and not _JOINT:   # nq-kld static arm: fixed set U floating_default (nqfloat0), no streaming
             fj=json.load(open(NQ_HOME+'/threads/22-boundary-experts/fixed_set.json'))

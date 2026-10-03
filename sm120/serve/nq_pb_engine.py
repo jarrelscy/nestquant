@@ -73,7 +73,9 @@ def mla_candidate(name,n_layers):
     i=layer_idx(name);return i is not None and i<n_layers
 
 def nf0():
-    return 77 if os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf') else 51
+    if os.environ.get('NQ_PREDICTOR','') not in ('joint','jf','tf'):return 51
+    v=os.environ.get('NQ_JF_NFLOAT') or '';sl=os.environ.get('NQ_SLOTS_PER_LAYER') or ''   # same rule as nq_vllm.jf_nfloat
+    return int(v) if v else (int(sl)-3 if sl else 77)
 
 def target_extra():
     """(extra slots wanted, rec bytes) from the rank-0 record index"""

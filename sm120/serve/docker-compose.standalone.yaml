@@ -65,6 +65,8 @@ services:
       NQ_STREAM: ${NQ_STREAM:-1}
       NQ_STATIC_FLOAT: ${NQ_STATIC_FLOAT:-0}
       NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-80}          # 77 floating + 3 for swaps in flight
+      NQ_JF_NFLOAT: ${NQ_JF_NFLOAT:-}                        # jF floating experts per layer; empty = NQ_SLOTS_PER_LAYER - 3
+      NQ_DEFS: ${NQ_DEFS:-}                                  # kernel -D macros (1.75-4 bit: base code 1 + down residual code 9, see start.sh)
       NQ_CAP_GBPS: ${NQ_CAP_GBPS:-0}                         # 0 = uncapped
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}

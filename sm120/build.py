@@ -1,7 +1,7 @@
 import os,torch
 os.environ.setdefault('CUDA_HOME','/home/jarrelscy/cuda128')
 import sys;os.environ['PATH']=os.environ['CUDA_HOME']+'/bin:'+os.path.dirname(sys.executable)+':'+os.environ['PATH']
-os.environ['TORCH_CUDA_ARCH_LIST']='12.0a'
+os.environ.setdefault('TORCH_CUDA_ARCH_LIST','12.0a')   # Spark (GB10): 12.1a; A100 test builds: 8.0
 from torch.utils.cpp_extension import load
 D=os.path.dirname(os.path.abspath(__file__))
 def get(defs=None):
