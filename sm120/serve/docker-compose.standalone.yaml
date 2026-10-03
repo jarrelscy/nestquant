@@ -28,7 +28,7 @@ services:
       # --- serving identity / sizing ---
       VLLM_API_KEY: ${VLLM_API_KEY:-}
       SERVED_NAME: ${NQ_SERVED_NAME:-glm-5.3-nq}     # "local" is always served as an alias
-      MODEL_DIR: ${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-Vision-NVFP4-ARVQ-hybrid-pv-d4a105dc50dd}
+      MODEL_DIR: ${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-NQ-base}   # base checkpoint without routed experts (start.sh downloads it)
       PARALLEL: ${PARALLEL:-tp4-1m-mtp}              # entrypoint preset: TP4 + DCP4 + MTP
       MAXLEN: ${NQ_MAXLEN:-1048576}
       UTIL: ${NQ_UTIL:-0.925}                        # 0.92 fails the 1M KV check (the FP8 o_proj adds 0.79 GiB/GPU)

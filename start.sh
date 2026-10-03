@@ -9,10 +9,13 @@
 #
 # Host paths (defaults = the reference box):
 #   NQ_IMAGE          serving image, public on Docker Hub, pulled if absent
-#   NQ_MODELS_ROOT    host dir mounted at /data/models (/data/models); NQ_MODEL_DIR = checkpoint path inside it
-#   NQ_REPACK_DIR     NestQuant records (rank*.json/bin + res/), downloaded from NQ_HF_REPO if absent (~393 GB)
+#   NQ_MODELS_ROOT    host dir mounted at /data/models (/data/models); NQ_MODEL_DIR = base checkpoint path inside it
+#                     (container path, default /data/models/jarrelscy/GLM-5.3-NQ-base). The base = everything except the
+#                     routed experts (attention, shared experts, dense layers, MTP layer, vision, tokenizer, ~44 GB); it is
+#                     downloaded from NQ_BASE_REPO (base/) if absent
+#   NQ_REPACK_DIR     NestQuant records (rank*.json/bin + res/), downloaded from NQ_REPACK_REPO if absent (~393 GB)
 #   NQ_REPACK_ALT_DIR copy of rank*.bin, rank*.json, artifact_stamp.json on a second NVMe; without it reads use one drive
-#   NQ_PREDICTOR_DIR  jF predictor + delta table, downloaded from NQ_HF_REPO (serving/predictor/) if absent
+#   NQ_PREDICTOR_DIR  jF predictor + delta table, downloaded from NQ_REPACK_REPO (serving/predictor/) if absent
 #   NQ_LIBURING_DIR   liburing 2.5 install (include/, lib/), built in the image if absent
 #   NQ_LGB_DIR        lightgbm + narwhals + scipy for the predictor (numpy comes from the image), installed if absent
 #   NQ_BUILD_DIR NQ_VLLM_CACHE NQ_LMCACHE_DIR NQ_TRITON_CACHE_DIR NQ_FLASHINFER_CACHE NQ_TORCHEXT_CACHE NQ_DBG_DIR NQ_PROFILES_DIR
@@ -29,7 +32,10 @@ export NQ_PREDICTOR_DIR=${NQ_PREDICTOR_DIR:-/data/Jarrel/nq-serve/predictor}
 export NQ_LIBURING_DIR=${NQ_LIBURING_DIR:-/data/Jarrel/liburing}
 export NQ_LGB_DIR=${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}
 export NQ_BUILD_DIR=${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}
-NQ_HF_REPO=${NQ_HF_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}
+export NQ_MODELS_ROOT=${NQ_MODELS_ROOT:-/data/models}
+export NQ_MODEL_DIR=${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-NQ-base}
+NQ_REPACK_REPO=${NQ_REPACK_REPO:-${NQ_HF_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}}   # NestQuant records + predictor
+NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/)
 
 NQ_ENV_FILE=${NQ_ENV_FILE:-$HERE/.env}
 if [ -z "${VLLM_API_KEY:-}" ] && [ -f "$NQ_ENV_FILE" ]; then VLLM_API_KEY=$(grep -oP 'VLLM_API_KEY=\K\S+' "$NQ_ENV_FILE" || true); fi
@@ -38,19 +44,32 @@ auth=(); [ -n "$VLLM_API_KEY" ] && auth=(-H "Authorization: Bearer $VLLM_API_KEY
 
 # run a one-off shell in the serving image (CPU only), files it writes are handed back to the caller
 inimg(){ local v=$1; shift; docker run --rm --entrypoint bash -v "$v" "$NQ_IMAGE" -c "$* && chown -R $(id -u):$(id -g) ${v#*:}"; }
-hfget(){ command -v hf >/dev/null || { echo "need the 'hf' CLI: pip install -U 'huggingface_hub[hf_transfer]'"; exit 1; }
-         HF_HUB_ENABLE_HF_TRANSFER=1 hf download "$NQ_HF_REPO" --repo-type model "$@"; }
+hfget(){ local repo=$1; shift; command -v hf >/dev/null || { echo "need the 'hf' CLI: pip install -U 'huggingface_hub[hf_transfer]'"; exit 1; }
+         HF_HUB_ENABLE_HF_TRANSFER=1 hf download "$repo" --repo-type model "$@"; }
+# every shard the checkpoint index names is present
+shards_ok(){ [ -f "$1/config.json" ] && [ -f "$1/model.safetensors.index.json" ] && python3 -c "import json,os,sys
+d=sys.argv[1];sys.exit(any(not os.path.exists(os.path.join(d,f)) for f in set(json.load(open(d+'/model.safetensors.index.json'))['weight_map'].values())))" "$1"; }
 
 case "${1:-up}" in
 up)
   if docker ps --format '{{.Ports}}' | grep -q ':8001->'; then echo "port 8001 is in use; stop the running model first"; exit 1; fi
   docker image inspect "$NQ_IMAGE" >/dev/null 2>&1 || docker pull "$NQ_IMAGE"
 
+  # base checkpoint (base/ on HF -> NQ_MODELS_ROOT/<NQ_MODEL_DIR below /data/models>)
+  case "$NQ_MODEL_DIR" in /data/models/*) ;; *) echo "NQ_MODEL_DIR must be a container path under /data/models"; exit 1 ;; esac
+  MD=$NQ_MODELS_ROOT/${NQ_MODEL_DIR#/data/models/}
+  if ! shards_ok "$MD"; then
+    echo "downloading the base checkpoint to $MD (~44 GB, once) ..."; mkdir -p "$MD"
+    hfget "$NQ_BASE_REPO" --include 'base/*' --local-dir "$MD/.dl"
+    mv -f "$MD/.dl/base/"* "$MD/" && rm -rf "$MD/.dl"
+    shards_ok "$MD" || { echo "base checkpoint at $MD is incomplete"; exit 1; }
+  fi
+
   # NestQuant records (no repacking needed)
   RP=$NQ_REPACK_DIR
   if ! ls "$RP"/rank{0,1,2,3}.json >/dev/null 2>&1; then
     echo "downloading the NestQuant records to $RP (~393 GB, once) ..."; mkdir -p "$RP"
-    hfget --include 'rank*.json' --include 'rank*.bin' --include 'res/*' --include 'artifact_stamp.json' --local-dir "$RP"
+    hfget "$NQ_REPACK_REPO" --include 'rank*.json' --include 'rank*.bin' --include 'res/*' --include 'artifact_stamp.json' --local-dir "$RP"
   fi
   echo "NQ layers in repack: $(python3 -c "import json;print(sorted(int(k) for k in json.load(open('$RP/rank0.json'))['layers']))")"
 
@@ -66,7 +85,7 @@ up)
   # jF predictor (serving/predictor/ on HF -> NQ_PREDICTOR_DIR)
   if [ ! -f "$NQ_PREDICTOR_DIR/joint/jF.pt" ]; then
     echo "downloading the predictor to $NQ_PREDICTOR_DIR ..."; mkdir -p "$NQ_PREDICTOR_DIR"
-    hfget --include 'serving/predictor/*' --local-dir "$NQ_PREDICTOR_DIR/.dl"
+    hfget "$NQ_REPACK_REPO" --include 'serving/predictor/*' --local-dir "$NQ_PREDICTOR_DIR/.dl"
     cp -r "$NQ_PREDICTOR_DIR/.dl/serving/predictor/." "$NQ_PREDICTOR_DIR/"
   fi
 

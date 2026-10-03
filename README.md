@@ -55,22 +55,25 @@ OpenAI-compatible on `:8001`, served as `glm-5.3-nq` (alias `local`). Weights:
 `start.sh` fetches or builds, once:
 - the serving image `NQ_IMAGE` (public on Docker Hub): SM120 vLLM fork with the GLM-5.3 kernels and
   NestQuant hooks;
+- the base checkpoint `NQ_MODEL_DIR` (~44 GB from HF `base/`): the GLM-5.3 NVFP4/ARVQ hybrid without its
+  routed experts, i.e. attention, shared experts, dense layers 0-2, the MTP layer, embeddings/lm_head, the
+  vision tower, tokenizer and config. Downloaded to `$NQ_MODELS_ROOT/jarrelscy/GLM-5.3-NQ-base` by default;
+  `NQ_BASE_REPO` selects the HF repo it comes from (default this one);
 - the NestQuant records `NQ_REPACK_DIR` (~393 GB from the HF repo root: `rankN.json`, `rankN.bin`, `res/`);
 - the jF predictor `NQ_PREDICTOR_DIR` (HF `serving/predictor/`);
+  records and predictor come from `NQ_REPACK_REPO` (default this one);
 - liburing 2.5 and lightgbm, built/installed inside the image;
 - the NestQuant kernels. The first boot also builds the torch.compile cache and takes longer.
 
 You supply:
 - 4× RTX PRO 6000 Blackwell (SM120, 96 GB each), records on fast NVMe (~11 GB/s plane-read ceiling);
-- the GLM-5.3 ARVQ hybrid base checkpoint at `NQ_MODEL_DIR` (non-expert weights and the non-NestQuant
-  layers come from it);
 - optionally a copy of `rank*.bin`, `rank*.json`, `artifact_stamp.json` on a second NVMe at
   `NQ_REPACK_ALT_DIR` for dual-drive reads. Without it `start.sh` reads from one drive.
 
 Every host path is an env var with a default matching the reference box:
 
 ```bash
-NQ_MODELS_ROOT=/mnt/models NQ_MODEL_DIR=/data/models/glm-5.3-base \
+NQ_MODELS_ROOT=/mnt/models NQ_MODEL_DIR=/data/models/glm-5.3-nq-base \
 NQ_REPACK_DIR=/mnt/nq-repack NQ_REPACK_ALT_DIR=/mnt2/nq-repack \
 NQ_PREDICTOR_DIR=/mnt/nq-predictor ./start.sh
 ```
