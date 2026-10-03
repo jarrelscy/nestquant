@@ -114,8 +114,10 @@ class TapScheduler(Scheduler):
         # excess (a prefill-borrow reclaim leaves the pool full and unbalanced per layer); (b) with no free slot, a free-slot
         # pair joins todo only while todo is shorter than the downs in flight (else todo filled with reads no slot will take,
         # len(todo) drove the qreal latency over H -> budget 0 -> no eager evictions, no downs: zero I/O until the next borrow)
-        s.tfix = e('NQ_TAP_TODO_FIX', '0') == '1'
-        if s.tcore is not None: s.tcore.fix = s.tfix
+        # 2 = (b) only, no (a): overfull layers drain through normal eviction scoring; q0 / nt count only the issuable todo
+        # (min(len(todo), downs in flight + free slots)) so stale todo cannot pin the budget at 0
+        s.tfixm = int(e('NQ_TAP_TODO_FIX', '0') or 0); s.tfix = s.tfixm in (1, 2); s.tshrink = s.tfixm == 1; s.tiss = s.tfixm == 2
+        if s.tcore is not None: s.tcore.fix = s.tfixm if s.tfix else 0
         if s.tfix: s.stats.update(nf_shrink_evict=0, todo_full_skip=0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
         s.sched_name = 'tap'
@@ -415,7 +417,11 @@ class TapScheduler(Scheduler):
         if s.tfix: s.stats['nf_shrink_evict'] += nnf
         if big: s.stats['big_steps'] += 1
         if ref and not big and s.P is not None and getattr(s.P, 'S', None) is not None:
-            lat, H, budget = s._plan(now, T.queued(st), T.todo_len())
+            q0, nt = T.queued(st), T.todo_len()
+            if s.tiss:
+                n3 = int((st == 3).sum()); nfr = (int(s.slots) - int((st > 0).sum())) if s.slots is not None else 10 ** 9
+                nti = min(nt, n3 + max(nfr, 0)); q0 -= nt - nti; nt = nti
+            lat, H, budget = s._plan(now, q0, nt)
             pin = s.pin if s.pin is not None else None
             if pin is not None and (pin.dtype != bool or not pin.flags.c_contiguous): pin = np.ascontiguousarray(pin, bool)
             # the window lengths exactly as _value's v() computes them; numpy scalars (strong) make _value float64 math
@@ -463,7 +469,7 @@ class TapScheduler(Scheduler):
                     downs.append((s.layers[i[k]], int(e[k]))); st[i[k], e[k]] = 3
                 s.stats['shrink_evict'] += min(over, len(i))
         nfree = (s.slots - int((st > 0).sum())) if s.slots is not None else 10 ** 9
-        if s.tfix and s.slots is not None and nfree <= 0:   # pool full: layers over the lookahead width nf give their excess back
+        if s.tshrink and s.slots is not None and nfree <= 0:   # pool full: layers over the lookahead width nf give their excess back
             ov = (((st == 1) | (st == 2)) & ~s.fixed & ~s.doomed).sum(1) - s.nf
             for l in np.nonzero(ov > 0)[0]:
                 e = np.nonzero((st[l] == 2) & ~s.fixed[l] & ~s.doomed[l])[0]
@@ -479,8 +485,10 @@ class TapScheduler(Scheduler):
             n1 = int((st == 1).sum()); nx = s.xq() if s.xq is not None else -1
             s.stats['q_st1'] = n1; s.stats['q_todo'] = len(s.todo); s.stats['q_x'] = nx   # nq-kld: queue-model inputs (last refresh)
             s.stats['q_st1_sum'] = s.stats.get('q_st1_sum', 0) + n1; s.stats['q_x_sum'] = s.stats.get('q_x_sum', 0) + nx
-            q0 = (nx if (s.tqreal and nx >= 0) else n1) + len(s.todo)
-            lat, H, budget = s._plan(now, q0, len(s.todo))
+            nt = len(s.todo)
+            if s.tiss: nt = min(nt, int((st == 3).sum()) + max(nfree, 0))
+            q0 = (nx if (s.tqreal and nx >= 0) else n1) + nt
+            lat, H, budget = s._plan(now, q0, nt)
             V, V0 = s._value(lat, H)
             pin = s.pin & ~s.fixed if s.pin is not None else None
             if pin is not None: V = np.where(pin, np.float32(1e9), V)

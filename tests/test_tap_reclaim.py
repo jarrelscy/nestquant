@@ -5,7 +5,8 @@ layers under nf keep emitting free-slot pairs -> those (and re-appended duplicat
 qreal latency model -> lat > H -> budget 0 -> the budget cut also blocks eager evictions, the only source of downs -> no
 slot ever frees. This drives TapScheduler.step (py and cpp hostloop) through warm decode, a borrow epoch (slots += X,
 nf = 155) and its reclaim (borrowed-pool residents forced to state 3, slots -= X, nf back) and asserts reads resume
-(and that NQ_TAP_TODO_FIX=0, the step 2 rc code, still wedges here).
+(for NQ_TAP_TODO_FIX=1 and =2 (no nf shrink), and that =0, the step 2 rc code, still wedges here); prints the hot share
+of activated experts in the first 500 steps after the reclaim and after.
   python tests/test_tap_reclaim.py          (NFILES routing-log files, default 8)"""
 import os, sys, collections
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE + '/../streaming'); sys.path.insert(0, HERE)
@@ -67,6 +68,9 @@ def run(hl, steps, seed=0, pw=0.1, cap=8, env=None):
                 a, b = occ[j]; S.state[a, b] = 3; X.dq.append((S.layers[a], b))
             S.slots -= EXTRA; S.nf = k0['nf']
         c = c.astype(np.float64); S.clock.adv(ntok)
+        if i >= b1:                                                 # hot share of the activated experts, before this step's I/O
+            a = c > 0; h = int((a & ((S.state == 2) | S.fixed)).sum()); w = 'h500' if i < b1 + 500 else 'hrest'
+            post[w] += h; post[w + 'n'] += int(a.sum())
         r0 = S.stats['refreshes']
         u, d = S.step(c, ntok, tid, nr, sal=c)
         X.apply(u, d); X.tick(S)
@@ -83,13 +87,14 @@ def main():
     steps = [x for x in routing_steps(int(os.environ.get('NFILES', '8'))) if x[1] <= 16]
     steps = (steps * (1 + 4000 // max(len(steps), 1)))[:4000]
     ok = True
-    for fix in ('1', '0'):                     # 0 = step 2 rc behaviour: must wedge (the test sees the bug)
+    for fix in ('1', '2', '0'):                # 0 = step 2 rc behaviour: must wedge (the test sees the bug); 2 = no nf shrink
         for hl in ('py', 'cpp'):
             pre, post, mz, tl, st = run(hl, steps, env=dict(NQ_TAP_TODO_FIX=fix))
             wedged = mz >= 50 or post['ups'] < post['ref']
             print(f'fix={fix} {hl}: warm ups {pre["ups"]} / {pre["ref"]} refreshes; after reclaim ups {post["ups"]} downs {post["downs"]} '
                   f'refreshes {post["ref"]}, longest stuck run (todo waiting, no ups) {mz}, todo {tl}, budget_cut {st["budget_cut"]} '
                   f'shrink {st.get("shrink_evict", 0)} nf_shrink {st.get("nf_shrink_evict", 0)} todo_full_skip {st.get("todo_full_skip", 0)} '
+                  f'hot first 500 post-reclaim {post["h500"] / max(post["h500n"], 1):.3f} rest {post["hrest"] / max(post["hrestn"], 1):.3f} '
                   f'-> {"WEDGED" if wedged else "ok"}')
             ok &= pre['ups'] > 0 and wedged == (fix == '0')
     print('PASS' if ok else 'FAIL'); return ok
