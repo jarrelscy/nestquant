@@ -30,6 +30,15 @@ outgrowing rows, MemAvailable < floor mid-borrow (then phase 1 may run for the r
 import os,sys,json,logging,functools
 ON=os.environ.get('NQ_PREFILL_BORROW','1')=='1'
 MIN_NEW=int(os.environ.get('NQ_PB_MIN_NEW','8192'));PF_NF=int(os.environ.get('NQ_PREFILL_SLOTS','155'))
+MIN_NEW_FILE=os.environ.get('NQ_PB_MIN_NEW_FILE','/dev/shm/nq_pb_min_new');_mn=[None,MIN_NEW]
+def _min_new():
+    # in-boot override of NQ_PB_MIN_NEW: the integer in /dev/shm/nq_pb_min_new while it exists (eval knob)
+    try:m=os.stat(MIN_NEW_FILE).st_mtime_ns
+    except OSError:return MIN_NEW
+    if m!=_mn[0]:
+        try:_mn[1]=int(open(MIN_NEW_FILE).read().split()[0]);_mn[0]=m
+        except Exception:return MIN_NEW
+    return _mn[1]
 MARGIN=int(os.environ.get('NQ_PB_MARGIN','16'));OFF=os.environ.get('NQ_PB_OFF','/dev/shm/nq_pb_off')
 KV_OFF=os.environ.get('NQ_PREFILL_KV_OFFLOAD','1')=='1'
 KV_BELOW=int(os.environ.get('NQ_PREFILL_KV_BELOW','1500'))   # phase 2 only while phase 1 has < this many slots (0 = no limit); its hot-% gain is near-full KV only
@@ -219,7 +228,7 @@ class State:
         if r is not None:
             s.seen.add(r.request_id)
             if len(s.seen)>4096:s.seen=set(list(s.seen)[-1024:])
-        ok=pf and not s.dead and left>0 and r.num_prompt_tokens-before>=MIN_NEW and not os.path.exists(OFF)
+        ok=pf and not s.dead and left>0 and r.num_prompt_tokens-before>=_min_new() and not os.path.exists(OFF)
         if ok and not s.mode and r.request_id not in s.tried:
             s.tried.add(r.request_id)
             if len(s.tried)>4096:s.tried=set(list(s.tried)[-1024:])

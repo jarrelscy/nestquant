@@ -2,7 +2,7 @@
 
 Dynamic 2–4 bit quantisation for MoE models, in one artifact. A 2-bit trellis base stays resident in
 VRAM; the 3- and 4-bit refinement planes stream from SSD on demand, so only the experts that matter this
-step are held at 4-bit. 4-bit quality where it counts, ~2-bit memory. Running on GLM-5.3 (vision), 4× RTX
+step are held at 4-bit. Memory stays near the 2-bit size. Running on GLM-5.3 (vision), 4× RTX
 PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
 
 ## How it works
@@ -10,68 +10,77 @@ PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
 - **One nested artifact.** Each routed expert is a 2-bit trellis base plus stacked 3/4-bit refinement
   bytes. The base is always loaded; refinement planes promote an expert to 3 or 4 bit.
 - **Only the hot experts float.** A few experts per layer carry most of each token. A predictor picks that
-  hot set every decode step and the streamer promotes/demotes planes to match — the rest sit at the 2-bit
-  base.
-- **Two predictors.** `gbdt` (default) — a GBDT on v2 salience features, 51 floating + 26 fixed per layer.
-  `jF` (joint) — a small GPU transformer on top of those features, 77 floating per layer, refreshed every
-  16 decode tokens on a background thread that overlaps decode.
+  hot set and the streamer promotes/demotes planes to match. The rest sit at the 2-bit base.
+- **Predictor.** Prod uses `jF` (joint): a small GPU transformer on v2 salience features, 77 floating
+  experts per layer out of 80 slots, refreshed on a background thread that overlaps decode. A tap scheduler
+  (horizon 64) orders the plane reads. `gbdt` (a GBDT on the same features, 26 fixed + 51 floating) is
+  still available with `NQ_PREDICTOR=gbdt NQ_SLOTS_PER_LAYER=56`; it has not been re-measured on the
+  current config.
+- **Prefill.** During prefill the pool borrows free KV pages to hold 155 slots per layer and returns them
+  for decode. When the KV pool is nearly full, used KV of some layers is parked in host RAM for the borrow.
 - **Hot experts trade against KV.** The floating pool and the KV cache share one VRAM budget, so you pick
-  more hot experts (quality) or more context. ~77 hot at ~1M context; push to ~120 hot and context falls
-  to ~400k.
+  more hot experts (quality) or more context. See below.
 
-## Quality
+## Measured
 
-KLD against the FP8 reference. NestQuant beats AQLM by **~1.5× / 5× / 1.6×** (id / wiki / code) and beats
-our own ARVQ hybrid. On 64K prefill, router lookahead lifts the served share of correctly-promoted 4-bit
-experts from 0.24→0.60 (wiki) and 0.29→0.52 (code), within 0.02 of oracle.
+2026-10-03, commit 8c8f9d5, default `./start.sh` config: 1M context (KV pool 1,083,392 tokens),
+`NQ_UTIL=0.925`, 80 slots/layer, jF predictor, dual-NVMe reads, concurrency 1, MTP ns=3.
 
-Measured 2026-09-30, single stream, 1024-tok decode:
+| | |
+|---|---|
+| Decode, empty context | 83.0 tok/s (32.6 steps/s, 2.60 accepted/step; median of 3) |
+| Decode, 16K context | 78.8 tok/s (31.6 steps/s) |
+| Prefill | ~1900–2000 tok/s |
+| KLD vs BF16 teacher | 0.0256 mean over 4 windows (0.0147 / 0.0612 / 0.0136 / 0.0130) |
+| Hot share in decode | 0.627 of activated experts served at 4 bit (held-out generations) |
+| Needles | retrieved at 43K and 947K |
 
-| Predictor | tok/s | ms/step | iso-bpw KLD |
-|---|---|---|---|
-| GBDT (default) | 94.0 | 28.82 | 0.0268 |
-| jF (joint)     | 94.2 | 28.61 | 0.0259 |
-
-jF matches GBDT decode speed at slightly lower KLD, for ~8% more swap traffic. Prefill ~1850 tok/s at 4K,
-~2100 at 64K; 1M-token cold prefill ramps 408→1488 tok/s (needle intact). Caveats: concurrency 1,
-SSD-bandwidth bound (~11 GB/s plane ceiling), terminal-bench 4.0 pending.
+Decode runs range 77–89 tok/s with MTP acceptance; steps/s stays at ~31–33. KLD is full-vocab,
+teacher-forced on the live server (`NQ_KLD_HOOK=1`) over the same four windows as
+`threads/34-tr3/REPRODUCE.md`. Tensor-parallel all-reduce uses the b12x PCIe kernel with fused
+add+RMSNorm (NCCL alone was 2.5% slower).
 
 ## Run it
 
-One command from the repo root. No repacking — `start.sh` pulls the serving image from Docker Hub and the
-repack from Hugging Face on first run.
-
 ```bash
-./start.sh            # pull image + repack, build kernels, start, wait for /v1/models (up is default)
+./start.sh            # fetch what is missing, build kernels, start, wait for /v1/models (up is default)
 ./start.sh smoke      # "The capital of France is ..." coherence check
 ./start.sh logs
 ./start.sh down
 ```
 
-OpenAI-compatible on `:8001`, served as `glm-5.3-nq`. Weights live at
+OpenAI-compatible on `:8001`, served as `glm-5.3-nq` (alias `local`). Weights:
 [huggingface.co/jarrelscy/GLM-5.3-NestQuant-2-4bit](https://huggingface.co/jarrelscy/GLM-5.3-NestQuant-2-4bit).
 
-**You supply (local artifacts, not shipped):** an SM120 host (4× RTX PRO 6000, 96 GB each); the GLM-5.3
-base checkpoint at `NQ_MODEL_DIR`; the predictor dir at `NQ_PREDICTOR_DIR` (`joint/jF.pt`,
-`joint/v2_sal_tweedie1.5.txt`, `delta_table.json`); a `liburing` install at `NQ_LIBURING_DIR`.
+`start.sh` fetches or builds, once:
+- the serving image `NQ_IMAGE` (public on Docker Hub): SM120 vLLM fork with the GLM-5.3 kernels and
+  NestQuant hooks;
+- the base checkpoint `NQ_MODEL_DIR` (~44 GB from HF `base/`): the GLM-5.3 NVFP4/ARVQ hybrid without its
+  routed experts, i.e. attention, shared experts, dense layers 0-2, the MTP layer, embeddings/lm_head, the
+  vision tower, tokenizer and config. Downloaded to `$NQ_MODELS_ROOT/jarrelscy/GLM-5.3-NQ-base` by default;
+  `NQ_BASE_REPO` selects the HF repo it comes from (default this one);
+- the NestQuant records `NQ_REPACK_DIR` (~393 GB from the HF repo root: `rankN.json`, `rankN.bin`, `res/`);
+- the jF predictor `NQ_PREDICTOR_DIR` (HF `serving/predictor/`);
+  records and predictor come from `NQ_REPACK_REPO` (default this one);
+- liburing 2.5 and lightgbm, built/installed inside the image;
+- the NestQuant kernels. The first boot also builds the torch.compile cache and takes longer.
 
-**`start.sh` fetches (once):** the serving image (`NQ_IMAGE`, ~20 GB) — the SM120 vLLM fork with the
-GLM-5.3 ARVQ/MLA kernels and NestQuant hooks baked in; the repack (`NQ_REPACK_DIR`, ~366 GB) —
-per-rank `rankN.json` + `res/` resident planes + `rankN.bin` streamed planes. Non-repack MoE layers fall
-back to the image's ARVQ experts.
+You supply:
+- 4× RTX PRO 6000 Blackwell (SM120, 96 GB each), records on fast NVMe (~11 GB/s plane-read ceiling);
+- optionally a copy of `rank*.bin`, `rank*.json`, `artifact_stamp.json` on a second NVMe at
+  `NQ_REPACK_ALT_DIR` for dual-drive reads. Without it `start.sh` reads from one drive.
 
-Every host path is an env var with a default matching the reference box; set what differs:
+Every host path is an env var with a default matching the reference box:
 
 ```bash
-NQ_IMAGE=my/glm53-sm120:tag \
-NQ_MODELS_ROOT=/mnt/models NQ_MODEL_DIR=/data/models/glm-5.3-base \
-NQ_REPACK_DIR=/mnt/nq-repack NQ_PREDICTOR_DIR=/mnt/nq-predictor \
-NQ_LIBURING_DIR=/opt/liburing ./start.sh
+NQ_MODELS_ROOT=/mnt/models NQ_MODEL_DIR=/data/models/glm-5.3-nq-base \
+NQ_REPACK_DIR=/mnt/nq-repack NQ_REPACK_ALT_DIR=/mnt2/nq-repack \
+NQ_PREDICTOR_DIR=/mnt/nq-predictor ./start.sh
 ```
 
-The serve path is a single configuration, **D** (below); the streaming budget is `NQ_SLOTS_PER_LAYER`. API key via `VLLM_API_KEY` in the environment or a gitignored `.env` at the repo root
-(`NQ_ENV_FILE` to point elsewhere); no key = no auth. `start.sh` and
-`sm120/serve/docker-compose.standalone.yaml` carry the full env-var surface.
+All serving defaults live in `sm120/serve/docker-compose.standalone.yaml`; each can be overridden from
+the environment. API key via `VLLM_API_KEY` or a gitignored `.env` at the repo root (`NQ_ENV_FILE`);
+no key = no auth.
 
 ### Serving (D)
 
@@ -112,20 +121,19 @@ The GBDT/EMA predictors, the base `Scheduler`, and the tf predictor are offline 
 
 ### Trading KV cache for hot experts
 
-`NQ_SLOTS_PER_LAYER` (how many experts are hot) and `NQ_MAXLEN` (max context) draw from the same VRAM
-budget, so set them together. Per GPU: one floating plane ≈ 2.5 MiB/expert, so one more hot expert on
-*every* layer ≈ **+190 MiB**; KV ≈ 14 KiB/token (MLA, DCP4), so **~14k tokens of context per hot
-expert per layer**. At the default ~1M context the KV pool is nearly full at 77 hot.
+`NQ_SLOTS_PER_LAYER` (hot experts) and `NQ_MAXLEN` (max context) draw from the same VRAM budget, so set
+them together. Per GPU, one more slot on every layer ≈ **195 MiB**; KV ≈ 13.4 KiB/token (MLA, DCP4), so
+**one slot per layer ≈ 15k tokens of context**. At `NQ_UTIL=0.925`, 80 slots (77 floating + 3 for swaps
+in flight) leaves a 1.08M-token KV pool.
 
 ```bash
-# push capability into the hot set: ~120 hot, context down to 400k
-NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 NQ_UTIL=0.92 ./start.sh
+# ~120 hot experts per layer, context down to 400k
+NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 ./start.sh
 ```
 
-120 floating needs ~124 slots (headroom for in-flight swaps). The +43 hot experts/layer ≈ +8 GiB/GPU ≈
-~570k tokens of KV. Approximate — confirm at boot: the prefill-peak log line should stay a few GiB under
-97.9 GB/GPU; if not, trim `NQ_SLOTS_PER_LAYER`/`NQ_MAXLEN` or nudge `NQ_UTIL`. More hot experts lowers
-per-layer KLD; more KV extends usable context.
++44 slots ≈ +8.4 GiB/GPU ≈ 640k tokens, leaving ~440k. Approximate; check the KV pool size in the boot
+log and keep the prefill-peak line a few GiB under 97.9 GB/GPU. If not, trim `NQ_SLOTS_PER_LAYER` or
+`NQ_MAXLEN`. This trade was not measured for speed or KLD.
 
 ## Repo layout
 

@@ -29,7 +29,10 @@ services:
       NQ_REPACK: /nqrepack
       NQ_BUILD: /nqbuild
       NQ_LAYERS: ${NQ_LAYERS:-}
-      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-80}
+      NQ_STREAM: ${NQ_STREAM:-1}
+      NQ_STATIC_FLOAT: ${NQ_STATIC_FLOAT:-0}         # nq-kld: with NQ_STREAM=0, fixed set U floating_default 51 (static 77)
+      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-56}
+      NQ_CAP_GBPS: ${NQ_CAP_GBPS:-0}          # 0 = uncapped (drive ~11 GB/s + slot pool limit); else aggregate GB/s over the TP ranks
       NQ_CHECK: ${NQ_CHECK:-0}
       CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
       NQ_DUMP: ${NQ_DUMP:-}
@@ -38,32 +41,65 @@ services:
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
       NQ_ISSUE: ${NQ_ISSUE:-1}
+      NQ_LEADER: ${NQ_LEADER:-1}
       NQ_SHADOW: ${NQ_SHADOW:-0}
       NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
       NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
-      # nq-io (sm120/serve/nq_vllm.py "nq-io" block): dual drive (each read to the less busy of NQ_REPACK / NQ_REPACK_ALT)
+      # nq-io I/O upgrades (sm120/serve/nq_vllm.py "nq-io" block); every default = the original serve
+      NQ_IO_MODE: ${NQ_IO_MODE:-}                # '' | dual | split
       NQ_REPACK_ALT: /nqrepack1
+      NQ_IO_SPLIT_RANKS: ${NQ_IO_SPLIT_RANKS:-2,3}
       NQ_IO_QD: ${NQ_IO_QD:-8}
-      NQ_IO_QD_ALT: ${NQ_IO_QD_ALT:-4}
+      NQ_IO_QD_ALT: ${NQ_IO_QD_ALT:-}
       NQ_IO_NHOST: ${NQ_IO_NHOST:-}
       NQ_RAMTIER_GB: ${NQ_RAMTIER_GB:-0}
       NQ_RAMTIER_LIST: ${NQ_RAMTIER_LIST:-/nq/streaming/results/ramtier_jf.json}
       NQ_RAMTIER_MINAVAIL_GB: ${NQ_RAMTIER_MINAVAIL_GB:-30}
+      NQ_FOLLOW_COALESCE: ${NQ_FOLLOW_COALESCE:-0}
       NQ_FOLLOW_CHECK: ${NQ_FOLLOW_CHECK:-0}
-      NQ_TAP_C: ${NQ_TAP_C:-1.0}              # tap scheduler knobs (streaming/scheduler_tap.py); defaults = the code's
-      NQ_TAP_H: ${NQ_TAP_H:-64}
+      NQ_HOSTLOOP: ${NQ_HOSTLOOP:-py}
+      NQ_SCHED: ${NQ_SCHED:-}
+      NQ_TAP_C: ${NQ_TAP_C:-1.0}              # NQ_SCHED=tap knobs (streaming/scheduler_tap.py); defaults = the code's
+      NQ_TAP_H: ${NQ_TAP_H:-256}
       NQ_TAP_HA: ${NQ_TAP_HA:-0}
       NQ_TAP_MLA: ${NQ_TAP_MLA:-1.0}
       NQ_TAP_SVC_MS: ${NQ_TAP_SVC_MS:-2}
       NQ_TAP_FAR: ${NQ_TAP_FAR:-tail:0.1}
       NQ_TAP_TP: ${NQ_TAP_TP:-4}
       NQ_TAP_RATE_GBPS: ${NQ_TAP_RATE_GBPS:-6}
+      NQ_TAP_RATE_FLOOR_GBPS: ${NQ_TAP_RATE_FLOOR_GBPS:-0}   # nq-kld: per-rank floor of the tap peak-held read rate (0 off); /dev/shm/nq_tap_ctl floor= mla= overrides
+      NQ_TAP_LAT: ${NQ_TAP_LAT:-model}           # model | meas (nq-tapc measured issue->land latency); /dev/shm/nq_tap_ctl lat= overrides
+      NQ_TAP_IO: ${NQ_TAP_IO:-1}                 # nq-kld: 0 = tap ignores follower io stats (= prod NQ_IOSTATS=0) while NQ_IOSTATS still publishes
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
       NQ_IOSTATS: ${NQ_IOSTATS:-0}
-      NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (the serve predictor, rank 0): resident hysteresis
+      NQ_KLD_HOOK: ${NQ_KLD_HOOK:-0}                 # nq-kld prompt-logprob dump hook (nq_kld.py), eval only
+      NQ_PF_BLOCK: ${NQ_PF_BLOCK:-0}                 # nq-kld: install the prefill block-on-planes knob (nq_pfblock.py)
+      NQ_PF_BLOCK_MS: ${NQ_PF_BLOCK_MS:-0}           # its budget per layer (0 off, <0 unlimited); /dev/shm/nq_pf_block overrides
+      NQ_LA_PERLAYER: ${NQ_LA_PERLAYER:-0}           # nq-kld: per-layer planned / landed-in-time per prefill chunk -> /dev/shm/nq_la_perlayer.jsonl
+      NQ_ROWHOT: ${NQ_ROWHOT:-0}                     # nq-kld: rank-0 level-4 hot share per decode row (committed vs all rows) -> io stats
+      # step 2 (nq-kld) serving knobs; compose defaults = prod D, switch.sh glm5.3-nq-jf sets the step-2 values (NQ_STEP2=0 = prod D)
+      NQ_DEC_BLOCK_MS: ${NQ_DEC_BLOCK_MS:-0}             # decode-step wait budget ms/MoE layer (0 off, <0 unlimited, 20 s cap); /dev/shm/nq_dec_block overrides (needs NQ_PF_BLOCK=1)
+      NQ_DEC_BLOCK_FIRSTN: ${NQ_DEC_BLOCK_FIRSTN:-0}     # NQ_DEC_BLOCK_MS applies only to a request's first N generated tokens ...
+      NQ_DEC_BLOCK_AFTER_MS: ${NQ_DEC_BLOCK_AFTER_MS:-0} # ... and this budget after them; /dev/shm/nq_dec_block_firstn "N after_ms" overrides
+      NQ_DEC_ASYNC: ${NQ_DEC_ASYNC:-0}                   # 0 sync wait | 2 late host wait before the FULL decode graph | 3 = 2 started at the previous main-graph end; /dev/shm/nq_dec_async overrides
+      NQ_HIT_CARRY: ${NQ_HIT_CARRY:-0}                   # /dev/shm/nq_hit_carry overrides
+      NQ_PRED_INPUTS: ${NQ_PRED_INPUTS:-0}               # /dev/shm/nq_pred_inputs overrides
+      NQ_TAP_QREAL: ${NQ_TAP_QREAL:-0}                   # /dev/shm/nq_tap_ctl qreal= overrides
+      NQ_TAP_TODO_FIX: ${NQ_TAP_TODO_FIX:-0}             # 1 = fix the step 2 rc post-reclaim decode-I/O livelock (nf shrink + todo room); tests/test_tap_reclaim.py
+      NQ_DBG_NO_BF16_RED: ${NQ_DBG_NO_BF16_RED:-}        # S4: 1 = no reduced-precision bf16 split-K reductions (nq_dbg_numerics.py)
+      NQ_DBG_FP8_OPROJ_ONLY: ${NQ_DBG_FP8_OPROJ_ONLY:-}  # 1 = e4m3 W8A16 o_proj, fused multi-slot gemv csrc/nq_fp8o.cu (needs the two VLLM_ knobs below)
+      VLLM_ENABLE_NVFP4_P4_O_PROJ: ${VLLM_ENABLE_NVFP4_P4_O_PROJ:-1}   # prod D: P4 o_proj
+      VLLM_DISABLE_FP8_W8A16: ${VLLM_DISABLE_FP8_W8A16:-1}             # prod D: image default
+      VLLM_DISABLE_COMPILE_CACHE: ${VLLM_DISABLE_COMPILE_CACHE:-0}     # 1 = no AOT compile cache (eval boots)
+      NQ_PREDICTOR: ${NQ_PREDICTOR:-}
+      NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
       NQ_JOINT_NET: ${NQ_JOINT_NET:-/nqpred/joint/jF.pt}
       NQ_JOINT_V2: ${NQ_JOINT_V2:-/nqpred/joint/v2_sal_tweedie1.5.txt}
+      NQ_GBDT_MODE: ${NQ_GBDT_MODE:-sync}
+      NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
+      NQ_GBDT_SCALE: ${NQ_GBDT_SCALE:-mps}
+      NQ_GBDT_BAND: ${NQ_GBDT_BAND:-ema256}
       NQ_SESSION_RESTORE: ${NQ_SESSION_RESTORE:-1}   # per-session floating-set restore (nq_session.py); in-boot toggle /dev/shm/nq_sr_ctl
       NQ_PF: ${NQ_PF:-1}                      # prefill path (moe.MoELayer.prefill) for >= NQ_PF_MIN tokens
       NQ_PF_MIN: ${NQ_PF_MIN:-384}
@@ -76,9 +112,10 @@ services:
       NQ_LA_BUDGET: ${NQ_LA_BUDGET:-45}
       NQ_PF_RANK: ${NQ_PF_RANK:-gate}          # gate | salience | count
       NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
-      NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-1}   # nq-prefill: free KV blocks -> extra expert slots during long prefills (nq_pb*.py)
+      NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-0}   # nq-prefill: free KV blocks -> extra expert slots during long prefills (nq_pb*.py)
       NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}   # floating experts per layer planned while borrowed
-      NQ_PREFILL_KV_OFFLOAD: ${NQ_PREFILL_KV_OFFLOAD:-1}   # phase 2 (needs NQ_PREFILL_BORROW=1): USED KV of some MLA layers to pinned host during long prefills, streamed per layer
+      NQ_PB_PROTECT: ${NQ_PB_PROTECT:-0}           # D0-protect: top-K pre-borrow decode residents per layer pinned during a borrow (0 = off)
+      NQ_PREFILL_KV_OFFLOAD: ${NQ_PREFILL_KV_OFFLOAD:-0}   # phase 2 (needs NQ_PREFILL_BORROW=1): USED KV of some MLA layers to pinned host during long prefills, streamed per layer
       NQ_PREFILL_KV_BELOW: ${NQ_PREFILL_KV_BELOW:-1500}   # phase 2 engages only while phase 1 got < this many slots (near-full KV: 950K 992 -> +22 pts prefill hot; 750K 1905 -> +1.5 pts for -3.7% prefill)
       NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}   # phase 2 pinned host cap per rank (sized from MemAvailable at each borrow, all ranks)
       NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}   # phase 2 never borrows / releases mid-borrow below this MemAvailable
@@ -97,10 +134,10 @@ services:
     - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
     - ${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}:/nqrepack1:ro   # nq-io: copy of the record files on nvme1 (/data)
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
-    - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
+    - ${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache}:/root/.cache/vllm   # step 2 uses its own dir (the o_proj swap is invisible to the compile-cache key)
     - /data/Jarrel/nq-serve/dbg:/dbg
     - /rawdata/Jarrel/nq-tfpred/traces:/tfcap
     - /data/Jarrel/nq-serve/predictor:/nqpred:ro
     - /data/lmcache/glm5.3-nq:/lmcache/disk                 # replaces the ARVQ /lmcache/disk mount (unused while disk size is 0)
-    - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro     # lightgbm + narwhals + scipy for the jF trees (serve_nq.sh installs it)
+    - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro     # lightgbm + narwhals + scipy for NQ_PREDICTOR=gbdt (serve_nq.sh installs it)
     - ${NQ_REPO:-/data/Jarrel/nestquant}/sm120/serve/overlay/nvfp4_arvq_hybrid.py:/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro

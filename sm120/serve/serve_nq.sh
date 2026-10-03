@@ -9,7 +9,7 @@
 # Layers missing from the repack serve with the production ARVQ experts.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd);HA=${HA:-/home/jarrelscy/homeassistant}
-export COMPOSE_FILE="$HA/docker-compose.yaml:$HA/docker-compose.glm53-arvq.yaml:$HERE/docker-compose.nq.yaml"
+export COMPOSE_FILE="$HA/docker-compose.yaml:$HA/docker-compose.glm53-arvq.yaml:$HERE/docker-compose.nq.yaml"${NQ_COMPOSE_EXTRA:+:$NQ_COMPOSE_EXTRA}
 export COMPOSE_PROJECT_NAME=nestquant
 IMG=glm53-arvq-sm120:fixes12-mtp-buffer-rng-20260917
 key(){ grep -oP 'VLLM_API_KEY=\K\S+' "$HA/.env"; }

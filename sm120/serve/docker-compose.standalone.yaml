@@ -1,15 +1,9 @@
-# Self-contained NestQuant GLM-5.3 serve (OpenAI API on :8001).
+# Self-contained NestQuant GLM-5.3 serve (OpenAI API on :8001). Started by ../../start.sh.
 #
-# This is the resolved, single-file equivalent of the three-file overlay that serve_nq.sh used to chain
-# ($HA/docker-compose.yaml : $HA/docker-compose.glm53-arvq.yaml : docker-compose.nq.yaml). It needs NO
-# files outside this repo. Bring it up with ../../start.sh (repo root), which sets the path/key env vars
-# and runs the one-off host prep. Every host path below is an env var with a default; override as needed.
-#
-# Required local artifacts (NOT shipped in this repo — see README "Serving"):
-#   - the SM120 vLLM fork image (public: jarrelscy/glm53-nestquant-sm120); auto-pulled if absent
-#   - the GLM-5.3 base checkpoint at NQ_MODEL_DIR (under NQ_MODELS_ROOT)
-#   - the NestQuant repack at NQ_REPACK_DIR, the predictor at NQ_PREDICTOR_DIR, liburing at NQ_LIBURING_DIR
-# MoE layers present in the repack run the NestQuant SSD-streaming kernel; the rest keep the base experts.
+# Every default below is the production config (switch.sh glm5.3-nq-jf on the reference box, nestquant main 8c8f9d5):
+# jF predictor, 80 slots/layer (77 floating), tap scheduler, prefill borrow 155, dual-drive reads, step 2 rc decode
+# settings, NQ_TAP_TODO_FIX=2, UTIL 0.925, 1M context, one request slot, MTP ns=3. This file is the one place the
+# defaults live; override any of them from the environment. Host paths are env vars too (see start.sh).
 services:
   glm53-nestquant:
     image: ${NQ_IMAGE:-jarrelscy/glm53-nestquant-sm120:fixes12-mtp-buffer-rng-20260917}
@@ -20,6 +14,7 @@ services:
     shm_size: "16g"
     security_opt:
       - seccomp=unconfined          # io_uring (the default docker seccomp profile blocks io_uring_setup)
+      - label=disable
     ports:
       - "0.0.0.0:8001:8001"
     deploy:
@@ -30,23 +25,23 @@ services:
               count: 4
               capabilities: [gpu]
     environment:
-      # --- serving identity / sizing (NestQuant overrides) ---
+      # --- serving identity / sizing ---
       VLLM_API_KEY: ${VLLM_API_KEY:-}
-      SERVED_NAME: ${NQ_SERVED_NAME:-glm-5.3-nq}
-      MODEL_DIR: ${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-Vision-NVFP4-ARVQ-hybrid-pv-d4a105dc50dd}
-      PARALLEL: ${PARALLEL:-tp4-1m-mtp}        # entrypoint preset: TP4 + DCP4 + MTP
-      MAXLEN: ${NQ_MAXLEN:-131072}
-      UTIL: ${NQ_UTIL:-0.88}
-      MAX_NUM_SEQS: ${NQ_MAX_NUM_SEQS:-4}
+      SERVED_NAME: ${NQ_SERVED_NAME:-glm-5.3-nq}     # "local" is always served as an alias
+      MODEL_DIR: ${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-NQ-base}   # base checkpoint without routed experts (start.sh downloads it)
+      PARALLEL: ${PARALLEL:-tp4-1m-mtp}              # entrypoint preset: TP4 + DCP4 + MTP
+      MAXLEN: ${NQ_MAXLEN:-1048576}
+      UTIL: ${NQ_UTIL:-0.925}                        # 0.92 fails the 1M KV check (the FP8 o_proj adds 0.79 GiB/GPU)
+      MAX_NUM_SEQS: ${NQ_MAX_NUM_SEQS:-1}
       MAX_NUM_BATCHED_TOKENS: ${NQ_MNBT:-4096}
       NUM_SPEC: ${NUM_SPEC:-3}
       VLLM_SERVER_DEV_MODE: ${NQ_DEV_MODE:-0}
       CUDAGRAPH_MODE: FULL_AND_PIECEWISE
       VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
-      # --- LMCache: CPU-RAM tier only (no disk tier; it would compete with the SSD expert stream) ---
+      # --- LMCache: CPU-RAM tier only (a disk tier would compete with the SSD expert stream) ---
       ENABLE_LMCACHE: ${NQ_LMCACHE:-1}
       LMCACHE_LOCAL_CPU: 'True'
-      LMCACHE_MAX_LOCAL_CPU_SIZE: ${NQ_LMCACHE_CPU_GB:-18}   # GB per TP rank (x4 -> ~72 GB pinned host RAM)
+      LMCACHE_MAX_LOCAL_CPU_SIZE: ${NQ_LMCACHE_CPU_GB:-18}   # GB per TP rank (x4 = 72 GB pinned host RAM)
       LMCACHE_LOCAL_DISK: file:///lmcache/disk/unused
       LMCACHE_MAX_LOCAL_DISK_SIZE: '0'                       # 0 = no disk backend
       LMCACHE_CHUNK_SIZE: '256'
@@ -54,34 +49,85 @@ services:
       LMCACHE_PRE_CACHING_HASH_ALGORITHM: sha256_cbor
       LMCACHE_LOOKUP_SERVER_WORKER_IDS: 0,1,2,3
       PYTHONHASHSEED: '0'
-      # --- NestQuant kernel wiring ---
+      # --- NestQuant wiring (container paths) ---
       PYTHONPATH: /nq/sm120/serve
       NQ_HOME: /nq
       NQ_REPACK: /nqrepack
-      NQ_REPACK_ALT: /nqrepack1                              # second copy of the records (dual-drive reads; defaults to the same dir)
+      NQ_REPACK_ALT: ${NQ_REPACK_ALT:-/nqrepack1}           # none = one drive (start.sh sets it when there is no second copy)
       NQ_BUILD: /nqbuild
       NQ_LGB_PATH: /nqlgb
-      LIBURING: /data/Jarrel/liburing                        # container path (mount target below)
+      NQ_DELTA_TABLE: /nqpred/delta_table.json
+      NQ_LA_OUT: /dbg/la_stats.json
+      LIBURING: /data/Jarrel/liburing
       CUDA_HOME: /opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13
-      NQ_LAYERS: ${NQ_LAYERS:-}                              # empty = every layer in the repack
-      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-80}
-      NQ_CHECK: ${NQ_CHECK:-0}
-      CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
-      NQ_DUMP: ${NQ_DUMP:-}
+      # --- streaming ---
+      NQ_LAYERS: ${NQ_LAYERS:-3-77}
+      NQ_STREAM: ${NQ_STREAM:-1}
+      NQ_STATIC_FLOAT: ${NQ_STATIC_FLOAT:-0}
+      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-80}          # 77 floating + 3 for swaps in flight
+      NQ_JF_NFLOAT: ${NQ_JF_NFLOAT:-}                        # jF floating experts per layer; empty = NQ_SLOTS_PER_LAYER - 3
+      NQ_DEFS: ${NQ_DEFS:-}                                  # kernel -D macros (1.75-4 bit: base code 1 + down residual code 9, see start.sh)
+      NQ_CAP_GBPS: ${NQ_CAP_GBPS:-0}                         # 0 = uncapped
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
       NQ_ISSUE: ${NQ_ISSUE:-1}
+      NQ_LEADER: ${NQ_LEADER:-1}
       NQ_SHADOW: ${NQ_SHADOW:-0}
-      NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
-      NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
-      # --- expert predictor: jF joint predictor + tap scheduler (serve config D; README "Serving (D)") ---
+      NQ_HOSTLOOP: ${NQ_HOSTLOOP:-py}
+      NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
+      # --- I/O: dual = each read goes to the less busy of NQ_REPACK / NQ_REPACK_ALT (start.sh drops to '' without a copy)
+      NQ_IO_MODE: ${NQ_IO_MODE-dual}
+      NQ_IO_SPLIT_RANKS: ${NQ_IO_SPLIT_RANKS:-2,3}
+      NQ_IO_QD: ${NQ_IO_QD:-8}
+      NQ_IO_QD_ALT: ${NQ_IO_QD_ALT:-4}
+      NQ_IO_NHOST: ${NQ_IO_NHOST:-}
+      NQ_FOLLOW_COALESCE: ${NQ_FOLLOW_COALESCE:-1}
+      NQ_FOLLOW_CHECK: ${NQ_FOLLOW_CHECK:-0}
+      NQ_RAMTIER_GB: ${NQ_RAMTIER_GB:-0}
+      NQ_RAMTIER_LIST: ${NQ_RAMTIER_LIST:-/nq/streaming/results/ramtier_jf.json}
+      NQ_RAMTIER_MINAVAIL_GB: ${NQ_RAMTIER_MINAVAIL_GB:-30}
+      # --- expert predictor: joint (jF, default) | gbdt | ema ---
+      NQ_PREDICTOR: ${NQ_PREDICTOR:-joint}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}
       NQ_JOINT_NET: ${NQ_JOINT_NET:-/nqpred/joint/jF.pt}
       NQ_JOINT_V2: ${NQ_JOINT_V2:-/nqpred/joint/v2_sal_tweedie1.5.txt}
-      NQ_SESSION_RESTORE: ${NQ_SESSION_RESTORE:-1}
-      NQ_DELTA_TABLE: /nqpred/delta_table.json
-      # --- prefill path ---
+      NQ_PRED_INPUTS: ${NQ_PRED_INPUTS:-3}
+      NQ_HIT_CARRY: ${NQ_HIT_CARRY:-1}
+      NQ_GBDT_MODE: ${NQ_GBDT_MODE:-sync}
+      NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
+      NQ_GBDT_SCALE: ${NQ_GBDT_SCALE:-mps}
+      NQ_GBDT_BAND: ${NQ_GBDT_BAND:-ema256}
+      NQ_SESSION_RESTORE: ${NQ_SESSION_RESTORE:-0}
+      # --- tap scheduler (streaming/scheduler_tap.py) ---
+      NQ_SCHED: ${NQ_SCHED-tap}
+      NQ_TAP_H: ${NQ_TAP_H:-64}
+      NQ_TAP_C: ${NQ_TAP_C:-1.0}
+      NQ_TAP_HA: ${NQ_TAP_HA:-0}
+      NQ_TAP_MLA: ${NQ_TAP_MLA:-1.0}
+      NQ_TAP_SVC_MS: ${NQ_TAP_SVC_MS:-2}
+      NQ_TAP_FAR: ${NQ_TAP_FAR:-tail:0.1}
+      NQ_TAP_TP: ${NQ_TAP_TP:-4}
+      NQ_TAP_RATE_GBPS: ${NQ_TAP_RATE_GBPS:-6}
+      NQ_TAP_RATE_FLOOR_GBPS: ${NQ_TAP_RATE_FLOOR_GBPS:-0}
+      NQ_TAP_LAT: ${NQ_TAP_LAT:-model}
+      NQ_TAP_IO: ${NQ_TAP_IO:-1}
+      NQ_TAP_QREAL: ${NQ_TAP_QREAL:-1}
+      NQ_TAP_TODO_FIX: ${NQ_TAP_TODO_FIX:-2}                 # 2 = bound the todo queue after a prefill-borrow reclaim
+      # --- decode wait (step 2 rc): wait for predicted experts on a request's first 64 tokens, then 0.04 ms/layer ---
+      NQ_PF_BLOCK: ${NQ_PF_BLOCK:-1}
+      NQ_PF_BLOCK_MS: ${NQ_PF_BLOCK_MS:-0}
+      NQ_DEC_BLOCK_MS: ${NQ_DEC_BLOCK_MS:--1}
+      NQ_DEC_BLOCK_FIRSTN: ${NQ_DEC_BLOCK_FIRSTN:-64}
+      NQ_DEC_BLOCK_AFTER_MS: ${NQ_DEC_BLOCK_AFTER_MS:-0.04}
+      NQ_DEC_ASYNC: ${NQ_DEC_ASYNC:-3}
+      # --- numerics (step 2 rc): FP8 W8A16 o_proj (converted from bf16 at load) + no bf16 split-K reductions ---
+      NQ_DBG_NO_BF16_RED: ${NQ_DBG_NO_BF16_RED:-1}
+      NQ_DBG_FP8_OPROJ_ONLY: ${NQ_DBG_FP8_OPROJ_ONLY:-1}
+      VLLM_ENABLE_NVFP4_P4_O_PROJ: ${VLLM_ENABLE_NVFP4_P4_O_PROJ:-0}
+      VLLM_DISABLE_FP8_W8A16: ${VLLM_DISABLE_FP8_W8A16:-0}
+      VLLM_DISABLE_COMPILE_CACHE: ${VLLM_DISABLE_COMPILE_CACHE:-0}
+      # --- prefill ---
       NQ_PF: ${NQ_PF:-1}
       NQ_PF_MIN: ${NQ_PF_MIN:-384}
       NQ_PF_ROWS: ${NQ_PF_ROWS:-8192}
@@ -90,11 +136,31 @@ services:
       NQ_PREFILL_ADAPT: ${NQ_PREFILL_ADAPT:-lookahead}
       NQ_LA_D: ${NQ_LA_D:-1}
       NQ_LA_BUDGET: ${NQ_LA_BUDGET:-45}
+      NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
       NQ_PF_RANK: ${NQ_PF_RANK:-gate}
       NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
-      NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
-      NQ_LA_OUT: /dbg/la_stats.json
-      # --- base GLM-5.3 ARVQ stack flags (baked-image behaviour; keep as-is) ---
+      NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-1}             # free KV blocks -> extra expert slots during long prefills
+      NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}
+      NQ_PREFILL_KV_OFFLOAD: ${NQ_PREFILL_KV_OFFLOAD:-1}     # near-full KV: offload used KV of some layers to host during the borrow
+      NQ_PREFILL_KV_BELOW: ${NQ_PREFILL_KV_BELOW:-1500}
+      NQ_PB_PROTECT: ${NQ_PB_PROTECT:-0}
+      NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}
+      NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}
+      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-8192}
+      NQ_PB_MARGIN: ${NQ_PB_MARGIN:-16}
+      # --- debug / eval hooks (all off in prod) ---
+      NQ_CHECK: ${NQ_CHECK:-0}
+      CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
+      NQ_DUMP: ${NQ_DUMP:-}
+      NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
+      NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
+      NQ_TFCAP: ${NQ_TFCAP:-}
+      NQ_TFCAP_CHUNK: ${NQ_TFCAP_CHUNK:-65536}
+      NQ_IOSTATS: ${NQ_IOSTATS:-0}
+      NQ_KLD_HOOK: ${NQ_KLD_HOOK:-0}
+      NQ_LA_PERLAYER: ${NQ_LA_PERLAYER:-0}
+      NQ_ROWHOT: ${NQ_ROWHOT:-0}
+      # --- GLM-5.3 ARVQ base stack (image behaviour; keep as-is) ---
       VLLM_ARVQ_CHUNK_TOKENS: '128'
       VLLM_ARVQ_GROUPED_PREFILL: '1'
       VLLM_ARVQ_COMPACT_PREFILL: '1'
@@ -104,7 +170,9 @@ services:
       GLM_MOE_LANE_ROWS: '1'
       GLM_NVFP4_LUT256: '1'
       NCCL_P2P_LEVEL: SYS
+      NCCL_ALGO: RING,TREE
       DCP_BACKEND: ag_rs
+      # all-reduce: b12x PCIe all-reduce with fused add+RMSNorm
       VLLM_ENABLE_PCIE_ALLREDUCE: '1'
       VLLM_PCIE_ALLREDUCE_BACKEND: b12x
       B12X_PCIE_TP4_REMOTE_PUSH: '1'
@@ -116,18 +184,16 @@ services:
       VLLM_PCIE_DMA_MIN_BYTES: 24MB
       VLLM_PCIE_DMA_FP8: 'off'
       VLLM_GLM_PCIE_FUSED_AR_RMS: '1'
-      VLLM_ENABLE_NVFP4_P4_O_PROJ: '1'
+      VLLM_FORCE_CUSTOM_ALLREDUCE: '0'
       VLLM_NVFP4_P4_MAX_TOKENS: '16'
       VLLM_NVFP4_P4_PAIRED: '1'
+      VLLM_EXPERIMENT_DCP_BYTEPACK: '1'
+      VLLM_EXPERIMENT_DCP_BYTEPACK_SHADOW: '0'
       VLLM_EXPERIMENT_DCP_BYTEPACK_OWNER: '1'
       VLLM_EXPERIMENT_DCP_BYTEPACK_OWNER_SHADOW: '0'
       VLLM_ARVQ_FUSED_GATE_PACK: '1'
       VLLM_ARVQ_FUSED_COLD_SCATTER: '1'
       VLLM_ARVQ_DIRECT_COLD_OUTPUT: '1'
-      NCCL_ALGO: RING,TREE
-      NCCL_BUFFSIZE: '1048576'
-      NCCL_MAX_NCHANNELS: '4'
-      NCCL_VERSION: 2.27.3-1
       VLLM_ARVQ_FUSED_ACTIVATION_PACK: '1'
       VLLM_ARVQ_FUSED_COLD_ACTIVATION: '1'
       VLLM_ARVQ_FUSED_COLD_GATHER: '1'
@@ -135,8 +201,6 @@ services:
       VLLM_ARVQ_PAIRED_HOT_PREFILL: '1'
       VLLM_ARVQ_SHARED_HOT_ACTIVATION: '1'
       VLLM_ARVQ_WIDE_HOT_PREFILL: '1'
-      VLLM_EXPERIMENT_DCP_BYTEPACK: '1'
-      VLLM_EXPERIMENT_DCP_BYTEPACK_SHADOW: '0'
       VLLM_GLM_COMM_COALESCE: '0'
       VLLM_GLM_COMM_OVERLAP: '1'
       VLLM_GLM_DCP_AG_RAW_TOPK: '1'
@@ -150,18 +214,16 @@ services:
       VLLM_GLM_Q_BEFORE_ABSORB: '1'
       VLLM_GLM_RAW_KV_GATHER: '1'
       VLLM_GLM_SKIP_EMPTY_FILL: '1'
-      VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: '256'
       VLLM_EXPERIMENT_C1_INDEXER_BUDGET: '0'
       VLLM_C8_SAMPLER_DEBUG_DIR: ''
-      VLLM_FORCE_CUSTOM_ALLREDUCE: '0'
-      AQLM_GEMV_PIPELINE: '1'
+      VLLM_DCP_A2A_EXACT: '0'
       VLLM_SM120_ROUTER_GEMM: '1'
+      AQLM_GEMV_PIPELINE: '1'
       AQLM_GEMV_BF16IN: '1'
       AQLM_FUSED_COMBINE: '1'
       AQLM_GLUE_OPT: '1'
       AQLM_GEMV_ROWMAP: '1'
       AQLM_FUSED_SILU: '1'
-      VLLM_DCP_A2A_EXACT: '0'
       LOCAL_ARGMAX: ''
       CUTE_DSL_ARCH: sm_120a
       TRITON_CACHE_DIR: /data/triton_cache
@@ -170,7 +232,7 @@ services:
       - ${NQ_REPO:-/data/Jarrel/nestquant}:/nq:ro
       - ${NQ_REPO:-/data/Jarrel/nestquant}/sm120/serve/overlay/nvfp4_arvq_hybrid.py:/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro
       - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}:/nqrepack:ro
-      - ${NQ_REPACK_ALT_DIR:-${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}}:/nqrepack1:ro   # copy on a 2nd NVMe (default: same dir = one drive, two queues)
+      - ${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}:/nqrepack1:ro   # copy of rank*.bin/json + artifact_stamp.json on a 2nd NVMe
       - ${NQ_PREDICTOR_DIR:-/data/Jarrel/nq-serve/predictor}:/nqpred:ro
       - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
       - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro
@@ -179,8 +241,8 @@ services:
       # base checkpoint + tokenizer/config
       - ${NQ_MODELS_ROOT:-/data/models}:/data/models:ro
       - ${HF_HOME_DIR:-/data/huggingface}:/data/huggingface:ro
-      # caches + outputs (host paths default to this box; override for a fresh host)
-      - ${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache}:/root/.cache/vllm
+      # caches (the FP8 o_proj swap is not in vLLM's compile-cache key, so keep this dir apart from other configs)
+      - ${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache-step2}:/root/.cache/vllm
       - ${NQ_LMCACHE_DIR:-/data/lmcache/glm5.3-nq}:/lmcache/disk
       - ${NQ_TRITON_CACHE_DIR:-/data/triton_cache/glm5.3-arvq}:/data/triton_cache
       - ${NQ_FLASHINFER_CACHE:-/data/Jarrel/nq-serve/flashinfer-cache}:/root/.cache/flashinfer
@@ -199,4 +261,4 @@ services:
       - --profiler-config.torch_profiler_with_stack=false
       - --enable-prefix-caching
       - --compilation-config
-      - '{"mode":3,"cudagraph_mode":"FULL_AND_PIECEWISE","compile_sizes":[1],"cudagraph_capture_sizes":${ARVQ_CAPTURE_SIZES:-[1,2,4,8,16,32]}}'
+      - '{"mode":3,"cudagraph_mode":"FULL_AND_PIECEWISE","compile_sizes":[1],"cudagraph_capture_sizes":${ARVQ_CAPTURE_SIZES:-[1,2,3,4,5,6,8,16,32]}}'
