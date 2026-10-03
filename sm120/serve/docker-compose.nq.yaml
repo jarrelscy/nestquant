@@ -89,6 +89,10 @@ services:
       NQ_S3_XRING: ${NQ_S3_XRING:-1024}          #   per-request decode history rows kept for the hook
       NQ_S3_XPOS: ${NQ_S3_XPOS:-0}               #   0 = blend in share space before x512 (Combo e1); 1 = on the finished v, layer mass kept
       NQ_S3_XRESET: ${NQ_S3_XRESET:-1}           #   0 = hook history ring rolls across requests
+      NQ_S3X_GB_ASYNC: ${NQ_S3X_GB_ASYNC:-1}     #   streaming/s3x_gbdt.py hook (p-phase GBDT count head): 1 = predict in a worker thread, 1 refresh late
+      NQ_S3X_GB_THREADS: ${NQ_S3X_GB_THREADS:-2} #     LightGBM threads
+      NQ_S3X_GB_HEAD: ${NQ_S3X_GB_HEAD:-pcnt_x6} #     pcnt_x6 (250 trees) | pcnt_s_x6 (80 trees); model dir NQ_S3X_GB_DIR (default streaming/s3x)
+      NQ_S3X_GB_DIR: ${NQ_S3X_GB_DIR:-}
       NQ_TAP_IO: ${NQ_TAP_IO:-1}                 # nq-kld: 0 = tap ignores follower io stats (= prod NQ_IOSTATS=0) while NQ_IOSTATS still publishes
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
       NQ_IOSTATS: ${NQ_IOSTATS:-0}
