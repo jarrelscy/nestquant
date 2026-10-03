@@ -53,6 +53,12 @@ class TapScheduler(Scheduler):
         fr = e('NQ_TAP_FAR', 'tail:0.1'); s.tfar = float(fr.split(':')[1]) if fr.startswith('tail:') else None   # far window: EMA512 | tail:<x> = x * jF rate
         s.tp_n = int(e('NQ_TAP_TP', '4')); s.rb_rank = s.rb / max(1, s.tp_n)
         s.rate0 = float(e('NQ_TAP_RATE_GBPS', '6')) * 1e9 / s.rb_rank      # records/s per rank before measurement
+        # nq-kld (default off): NQ_TAP_RATE_FLOOR_GBPS per rank = lower bound of the peak-held rate (the 0.999 decay can't pull
+        # it under); in-boot override of floor / mla / lat via /dev/shm/nq_tap_ctl ("floor=<GB/s> mla=<x> lat=model|meas"), re-read on change
+        s.tfloor = float(e('NQ_TAP_RATE_FLOOR_GBPS', '0')) * 1e9 / s.rb_rank; s.tctl = e('NQ_TAP_CTL', '/dev/shm/nq_tap_ctl'); s.tctl_m = None
+        # nq-kld (default off): NQ_TAP_PEAK_GBPS = TOTAL (all ranks) cap on the held peak rate (and rate0) the issue budget and
+        # landing-latency model use (nq-io STAGE.md option #1, mirror of stage_sim +cap<GBps>); ctl key cap=<GB/s total>, 0 = off
+        s.tcap = 0.0; s._setcap(float(e('NQ_TAP_PEAK_GBPS', '0')))
         s.clock = clock or time.monotonic
         s.tlat = e('NQ_TAP_LAT', 'model'); assert s.tlat in ('model', 'meas'), s.tlat
         s.tlat_q = float(e('NQ_TAP_LAT_Q', '0.5')); s.tlat_hl = float(e('NQ_TAP_LAT_HL', '4'))
@@ -65,6 +71,12 @@ class TapScheduler(Scheduler):
         s.stats.update(refreshes=0, promotions=0, budget_cut=0, eager_evict=0, no_slot_skip=0, lat_tok_sum=0.0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
         s.sched_name = 'tap'
+
+    def _setcap(s, g):
+        if not hasattr(s, 'rate00'): s.rate00 = s.rate0
+        s.tcap = g * 1e9 / max(1, s.tp_n) / s.rb_rank if g > 0 else 0.0
+        s.rate0 = min(s.rate00, s.tcap) if s.tcap > 0 else s.rate00
+        if s.tcap > 0 and getattr(s, 'peak', None) is not None: np.minimum(s.peak, s.tcap, out=s.peak)
 
     # ---- executor feedback (counts landings for the live rank-0 rate)
     def landed(s, L, e):
@@ -79,6 +91,7 @@ class TapScheduler(Scheduler):
     def _plan(s, now, q0, nt=0):
         """refresh scalars: -> (lat tokens, H tokens, issue budget reads); q0 = rank-0 reads queued (in flight + todo), nt = todo only"""
         tps = s.tps or 94.0
+        s._ctl()
         if s.tlat == 'meas':
             mo, me = s._rates(now, q0, nt)
             lm = max(mo) * tps; lat = max(lm, max(me) * tps)
@@ -95,6 +108,24 @@ class TapScheduler(Scheduler):
             rate = float(s.peak.min()) if s.peak is not None else s.rate0
             budget = max(0, int((s.tmla * H - el) / tps * rate))
         return lat, H, budget
+
+    def _ctl(s):
+        try: m = os.stat(s.tctl).st_mtime_ns
+        except OSError: return
+        if m == s.tctl_m: return
+        s.tctl_m = m
+        try: kv = dict(x.split('=', 1) for x in open(s.tctl).read().split() if '=' in x)
+        except (OSError, ValueError): return
+        if 'floor' in kv: s.tfloor = float(kv['floor']) * 1e9 / s.rb_rank
+        if 'mla' in kv: s.tmla = float(kv['mla'])
+        if 'cap' in kv: s._setcap(float(kv['cap']))
+        if kv.get('lat') in ('model', 'meas') and kv['lat'] != s.tlat:
+            s.tlat = kv['lat']
+            if s.tlat == 'meas' and s.t_iss is None:
+                s.t_iss = np.full((len(s.layers), s.NE), np.nan); s.lat0 = collections.deque(maxlen=int(os.environ.get('NQ_TAP_LAT_N', '256')))
+                s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
+            elif s.tlat == 'model': s.t_iss = None; s.lat0 = None
+        import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap ctl: floor %.2f GB/s/rank, mla %s, lat %s, cap %.2f GB/s total', s.tfloor * s.rb_rank / 1e9, s.tmla, s.tlat, s.tcap * s.rb_rank * max(1, s.tp_n) / 1e9)
 
     def _rates(s, now, q0, nt=None):
         """-> (lat_s per rank list). Rank 0 live; followers from io_all() if available.
@@ -115,6 +146,8 @@ class TapScheduler(Scheduler):
         nr = max(len(io), 1)
         if s.peak is None or len(s.peak) != nr: s.peak = np.full(nr, s.rate0)
         s.peak *= 0.999
+        if s.tfloor > 0: np.maximum(s.peak, s.tfloor, out=s.peak)
+        if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
         if r0 is not None: s.peak[0] = max(s.peak[0], r0)
         out.append(q0 / max(s.peak[0], 1.0) + s.tsvc); me = []
         meas = nt is not None
@@ -133,6 +166,7 @@ class TapScheduler(Scheduler):
                 p = d.get('op_p50_ms')
                 me.append(out[-1] if not isinstance(p, (int, float)) or not p == p else
                           pre / max(s.peak[r], 1.0) + min(max(p / 1e3, 0.0), 30.0))
+        if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
         return (out, me) if meas else out
 
     def _value(s, lat, H):

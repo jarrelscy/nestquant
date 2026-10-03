@@ -67,9 +67,16 @@ services:
       NQ_TAP_FAR: ${NQ_TAP_FAR:-tail:0.1}
       NQ_TAP_TP: ${NQ_TAP_TP:-4}
       NQ_TAP_RATE_GBPS: ${NQ_TAP_RATE_GBPS:-6}
+      NQ_TAP_RATE_FLOOR_GBPS: ${NQ_TAP_RATE_FLOOR_GBPS:-0}   # nq-kld: per-rank floor of the tap peak-held read rate (0 off); /dev/shm/nq_tap_ctl floor= mla= overrides
+      NQ_TAP_LAT: ${NQ_TAP_LAT:-model}           # model | meas (nq-tapc measured issue->land latency); /dev/shm/nq_tap_ctl lat= overrides
+      NQ_TAP_IO: ${NQ_TAP_IO:-1}                 # nq-kld: 0 = tap ignores follower io stats (= prod NQ_IOSTATS=0) while NQ_IOSTATS still publishes
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
       NQ_IOSTATS: ${NQ_IOSTATS:-0}
       NQ_KLD_HOOK: ${NQ_KLD_HOOK:-0}                 # nq-kld prompt-logprob dump hook (nq_kld.py), eval only
+      NQ_PF_BLOCK: ${NQ_PF_BLOCK:-0}                 # nq-kld: install the prefill block-on-planes knob (nq_pfblock.py)
+      NQ_PF_BLOCK_MS: ${NQ_PF_BLOCK_MS:-0}           # its budget per layer (0 off, <0 unlimited); /dev/shm/nq_pf_block overrides
+      NQ_LA_PERLAYER: ${NQ_LA_PERLAYER:-0}           # nq-kld: per-layer planned / landed-in-time per prefill chunk -> /dev/shm/nq_la_perlayer.jsonl
+      NQ_ROWHOT: ${NQ_ROWHOT:-0}                     # nq-kld: rank-0 level-4 hot share per decode row (committed vs all rows) -> io stats
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
