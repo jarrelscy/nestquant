@@ -124,7 +124,7 @@ class SrvTapPolicy(Q.Policy):
         import scheduler_tap as TS
         s.src.reset(sim.tr); s.P = _FakeP(s.src); s.t = 0
         L_ = list(range(Q.L0, Q.L0 + NL)); fx = {L: [] for L in L_}; dflt = {L: [] for L in L_}
-        s.S = TS.TapScheduler(L_, fx, dflt, RB * 4, NE=NE, n_float=Q.NF, slots=Q.NS, cap_GBps=1e6, predictor=s.P, clock=lambda: s.t * sim.dt)
+        s.S = TS.TapScheduler(L_, fx, dflt, RB * 4, NE=NE, n_float=Q.NF, slots=Q.NS, predictor=s.P, clock=lambda: s.t * sim.dt)
         s.S.state[:] = sim.st.reshape(NL, NE)
         def io_all():
             return {r: dict(delivered_GBps=d['achieved_Bps'] / 1e9, ops_outstanding=d['queued_ops'], slot_wait=d['slot_waits'],

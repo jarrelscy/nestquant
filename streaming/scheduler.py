@@ -1,4 +1,5 @@
-"""Level scheduler (work item B5): fixed set (always level 4, loaded at startup) + floating set chosen from decayed
+"""OFFLINE ONLY (sims, evals, GBDT/EMA studies): the serve path uses scheduler_tap.TapScheduler + the jF predictor.
+Level scheduler (work item B5): fixed set (always level 4, loaded at startup) + floating set chosen from decayed
 routing counts. Pure policy: it sees per-step routing counts (the kernel's `hits` export, summed over the step's
 tokens) and returns level ops; the executor carries them out. Every rank runs an identical copy on identical counts,
 and the byte budget is per token (not wall time), so all ranks make the same decisions.
@@ -53,7 +54,7 @@ def make_predictor(name,layers,fixed,n_float=51,NE=256,**kw):
 class Scheduler:
     def __init__(s,layers,fixed,floating_default,rec_bytes,NE=256,n_float=51,half_life=512,refresh=64,
                  cap_GBps=6.0,tok_per_s=111.0,big_frac=0.5,burst_tokens=64,slots=None,retry_tokens=None,
-                 predictor=None,predictor_kw=None,hostloop=None):
+                 predictor=None,predictor_kw=None):
         s.layers=list(layers);s.li={L:i for i,L in enumerate(s.layers)};s.NE=NE;s.nf=n_float;s.R=refresh
         s.a=0.5**(1/half_life);s.big=big_frac;s.rb=rec_bytes
         s.fixed=np.zeros((len(s.layers),NE),bool)
@@ -72,16 +73,9 @@ class Scheduler:
         s.P=make_predictor(predictor,s.layers,fixed,n_float,NE=NE,**(predictor_kw or {})) if isinstance(predictor,str) else predictor
         s.wants_sal=s.P is not None and hasattr(s.P,'bs')              # GBDTPredictorV2 accumulates salience
         s.pin=None          # optional [len(layers), NE] bool: floating experts kept wanted (never downed) while set (session restore)
-        # nq-io upgrade 5: NQ_HOSTLOOP=cpp runs the mechanical part of step() in C++ (nqhost.SchedCore, bit-exact:
-        # tests/test_hostloop_parity.py); hostloop= overrides the env (tests)
-        hl=hostloop if hostloop is not None else os.environ.get('NQ_HOSTLOOP','py')
-        s.core=None
-        if hl=='cpp':
-            import hostcore;s.core=hostcore.mod().SchedCore(s.layers,NE)
     def step(s,counts,ntok=1,token_ids=None,new_request=False,sal=None):
         """sal: optional [len(layers),NE] per-step salience (sum over the step's routed slots of w^2*|x|^2), forwarded
         to predictors that take it (GBDTPredictorV2); ignored otherwise."""
-        if s.core is not None:return s._step_cpp(counts,ntok,token_ids,new_request,sal)
         c=np.asarray(counts,np.float64)
         s.score=s.score*s.a**ntok+c;s.tok+=ntok
         s.budget=min(s.cap,s.budget+s.per_tok*ntok)
@@ -111,41 +105,6 @@ class Scheduler:
             if len(o)>n:s.stats['deferred_steps']+=1
             for k in take:ups.append((s.layers[i[k]],int(e[k])));s.state[i[k],e[k]]=1
             s.budget-=len(take)*s.rb;s.stats['bytes']+=len(take)*s.rb
-        s.stats['ups']+=len(ups);s.stats['downs']+=len(downs)
-        return ups,downs
-    def _step_cpp(s,counts,ntok,token_ids,new_request,sal):
-        """step() with the array work in nqhost.SchedCore (same ops, same order, same score / state bits)"""
-        K=s.core;c=np.ascontiguousarray(counts,np.float64)
-        for n,dt in (('score',np.float64),('want',bool),('state',np.int8),('hold',np.float64)):   # other modules may rebind these
-            a=getattr(s,n)
-            if a.dtype!=dt or not a.flags.c_contiguous or not a.flags.writeable:setattr(s,n,np.ascontiguousarray(a,dt).copy())
-        K.decay(s.score,c,s.a**ntok);s.tok+=ntok
-        s.budget=min(s.cap,s.budget+s.per_tok*ntok)
-        osc=None
-        if s.P is not None:
-            if (s.P.step(c,ntok,token_ids,new_request,sal=sal) if s.wants_sal else s.P.step(c,ntok,token_ids,new_request)):
-                w=s.P.target(K.resident(s.state))
-                if w is not None:s.want=np.ascontiguousarray(w&~s.fixed)
-        elif s.tok>=s.next_refresh:
-            s.next_refresh+=s.R;K.ema_refresh(s.score,s.fixed,s.want,s.nf)
-        if s.pin is not None:s.want|=s.pin&~s.fixed
-        downs=K.downs(s.state,s.want)
-        ups=[]
-        big,anyc=K.select(c,s.state,s.want,s.hold,float(s.tok),s.big*s.NE)
-        if big:s.stats['big_steps']+=1
-        elif anyc:
-            if s.P is not None:osc=s.P.order_score(K.resident(s.state))
-            n=int(s.budget//s.rb)
-            if s.slots is not None:n=max(0,min(n,s.slots-K.count_busy(s.state)))
-            key=s.score if osc is None else np.ascontiguousarray(osc)
-            r=K.take(key,s.state,n)
-            if r is None:                                  # key dtype other than f64/f32: numpy ordering
-                cand=(s.state==0)&s.want&(s.hold<=s.tok);i,e=np.nonzero(cand);o=np.argsort(-key[i,e],kind='stable')
-                take=o[:n];more=len(o)>n
-                for k in take:ups.append((s.layers[i[k]],int(e[k])));s.state[i[k],e[k]]=1
-            else:ups,more=r
-            if more:s.stats['deferred_steps']+=1
-            s.budget-=len(ups)*s.rb;s.stats['bytes']+=len(ups)*s.rb
         s.stats['ups']+=len(ups);s.stats['downs']+=len(downs)
         return ups,downs
     def close(s):

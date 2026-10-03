@@ -1,4 +1,4 @@
-"""nq-prefill: prefill-borrow, worker side (every TP rank; NQ_PREFILL_BORROW=1, see nq_pb_engine.py for the engine side).
+"""nq-prefill: prefill-borrow, worker side (every TP rank; NQ_PREFILL_BORROW=1 = default, see nq_pb_engine.py for the engine side).
 
 The scheduler hands free KV blocks to the expert slot pool during a long prefill and states it on every
 SchedulerOutput (nq_pb = (epoch, phase, runs, n_slots) or None). Worker.execute_model is wrapped; before the step's
@@ -31,19 +31,12 @@ Phase 2 (nq_pb[4] = kv dict, NQ_PREFILL_KV_OFFLOAD=1), class KVOff:
   end     (after X.x_reclaim: no expert lives there any more) write-back, synchronize, every row back into its original
           storage, original tensors re-bound (decode cudagraphs keep their pointers), host unregistered and freed, the
           deferred LMCache stores replayed in order (same kwargs: the slots hold the same KV again), synchronize."""
-import os,time,functools,logging,collections
+import time,functools,logging,collections
 import numpy as np,torch
 try:
     from vllm.logger import init_logger;log=init_logger('vllm.nestquant.pb')
 except Exception:log=logging.getLogger('nestquant.pb')
 from nq_pb_engine import ON,PF_NF,ALIGN,carve_count,KV_OFF,mla_candidate,layer_idx
-PROTECT=int(os.environ.get('NQ_PB_PROTECT','0') or 0)   # nq-prefill D0-protect: top-K pre-borrow decode residents/layer pinned through the borrow (0 = off)
-KVOFF_DRY=os.environ.get('NQ_KVOFF_DRY','0')=='1'      # phase 2 diagnostic: the whole KV swap path, but no storage carved (0 slots)
-KVOFF_SYNC=os.environ.get('NQ_KVOFF_SYNC','0')=='1'    # phase 2 diagnostic: device-synchronize around every swap op (no overlap)
-def _knob(name,dflt):
-    """runtime override (read at each begin): /dev/shm/nq_kvoff_<name> containing 0/1"""
-    try:return open(f'/dev/shm/nq_kvoff_{name}').read().strip()=='1'
-    except OSError:return dflt
 
 def kv_storages(runner,nb):
     """[(base address, page bytes)] of the distinct KV storages whose block b is bytes [b*page, (b+1)*page) of the
@@ -80,7 +73,7 @@ def carve(stor,runs,rb,want):
 class KVOff:
     """phase 2 on one rank (see the module doc)"""
     def __init__(s,rt):
-        s.rt=rt;s.on=False;s.dead=False;s.cand=None;s.wb0=None;s.cs=None;s.n=collections.Counter();s.lm=None;s.deferred=[]
+        s.rt=rt;s.on=False;s.dead=False;s.cand=None;s.cs=None;s.n=collections.Counter();s.lm=None;s.deferred=[]
     @staticmethod
     def _kv(L):
         kv=getattr(L,'kv_cache',None)
@@ -154,9 +147,6 @@ class KVOff:
             s.dead=True;return []
         eng,ok=s._lmcache()
         if not ok:log.warning('NestQuant prefill-borrow rank %d: KV connector without a reachable LMCache engine.store: phase 2 off',rt.rank);s.dead=True;return []
-        global KVOFF_DRY,KVOFF_SYNC
-        KVOFF_DRY=_knob('dry',KVOFF_DRY);KVOFF_SYNC=_knob('sync',KVOFF_SYNC);s.chk=_knob('check',False)
-        log.info('NestQuant prefill-borrow rank %d: KV offload dry=%d sync=%d check=%d',rt.rank,KVOFF_DRY,KVOFF_SYNC,s.chk)
         n_off=kv['n_off'];s.off=s.cand[:n_off];s.rows=kv['rows'];s.page=s.off[0][5];s.nb=runner.kv_cache_config.num_blocks;t0=time.time()
         s.host=None;s.host_raw=None
         try:
@@ -166,8 +156,6 @@ class KVOff:
             for k,c in enumerate(s.off):
                 for r0,r1,b0 in s.all_runs:s.host[k,r0:r1].copy_(c[4][b0:b0+r1-r0])
             torch.cuda.synchronize(dev)
-            s.b0rows=list(s.order)
-            s.null0=[c[4][0].clone() for c in s.off[2:]] if _knob('check',False) else None   # diagnostic: block 0 (vLLM's null block)
         except Exception:
             log.exception('NestQuant prefill-borrow rank %d: KV offload begin failed, phase 2 off',rt.rank)
             s._host_free();s.dead=True;return []
@@ -186,8 +174,7 @@ class KVOff:
             d=s.deferred
             def store(*a,**k):d.append((a,k))
             eng.store=store
-        s.wb0=None;s.ranges=[(c[4].data_ptr(),c[4].data_ptr()+s.nb*s.page) for c in s.off]
-        addrs=[] if KVOFF_DRY else carve([(c[4].data_ptr(),s.page) for c in s.off[2:]],([(0,s.nb)] if _knob('carvenull',False) else list(kv.get('runs') or [(1,s.nb)])),rb,want)   # never the null block
+        addrs=carve([(c[4].data_ptr(),s.page) for c in s.off[2:]],list(kv.get('runs') or [(1,s.nb)]),rb,want)   # never block 0 (vLLM's null block)
         s.on=True;s.n['begins']+=1
         log.info('NestQuant prefill-borrow rank %d: KV offload of %d layers, %d rows (%.2f GiB host), %d slots, %.0f ms',rt.rank,n_off,
                  len(s.order),n_off*s.rows*s.page/2**30,len(addrs),(time.time()-t0)*1e3)
@@ -212,11 +199,9 @@ class KVOff:
         ev=torch.cuda.Event();ev.record(torch.cuda.current_stream(s.rt.dev));s.cs.wait_event(ev)  # buffers free of the last step
         s._set_blocks(kv['blocks'])
         s.wb_runs=s._runs([s.row_of[b] for b in kv['wb']],kv['wb'])
-        if s.wb0 is None:s.wb0=set(kv['wb'])
         s.holds=[-1,-1];s._load(0,0)
         if len(s.off)>1:s._load(1,1)
         s.n['steps']+=1
-        if KVOFF_SYNC:torch.cuda.synchronize(s.rt.dev)
     def touch(s,name):
         k=s.ord.get(name)
         if k is None or k==s.cur:return
@@ -228,67 +213,16 @@ class KVOff:
         if k+1<len(s.off) and s.holds[o]!=k+1:s._load(k+1,o)
         torch.cuda.current_stream(s.rt.dev).wait_event(s.hev[b])
         s._setkv(s.off[k][2],s.buf[b]);s.cur=k
-        if KVOFF_SYNC:torch.cuda.synchronize(s.rt.dev)
-    def _check(s):
-        """diagnostic: (a) dry: begin rows never rewritten (all but the last) of layers 2.. still equal their original
-        storage; (b) the staging buffers hold the last two layers' rows == host (the last step's write-back landed)"""
-        rt=s.rt;wb=set();bad=collections.Counter();tot=0
-        for r0,r1,b0 in s.wb_runs:wb.update(range(b0,b0+r1-r0))
-        rows=[b for b in s.b0rows[:-1] if b not in getattr(s,'wb0',())]
-        if KVOFF_DRY:
-            for k in range(2,len(s.off)):
-                c=s.off[k]
-                for b in rows:
-                    tot+=1
-                    if not torch.equal(s.host[k,s.row_of[b]],c[4][b].cpu()):bad['dry_begin_row']+=1
-        for bi in (0,1):
-            k=s.holds[bi]
-            if k<0:continue
-            for b in s.order:
-                tot+=1
-                if not torch.equal(s.host[k,s.row_of[b]],s.bflat[bi][b].cpu()):bad[f'staging_vs_host_L{k}']+=1
-        if getattr(s,'null0',None) is not None:
-            nn=sum(1 for c,z in zip(s.off[2:],s.null0) if not torch.equal(c[4][0],z))
-            if nn:bad['null_block_changed_layers']=nn
-        log.warning('NestQuant prefill-borrow rank %d: KV offload CHECK %d rows compared, mismatches %s (holds %s, %d begin rows, %d total rows)',
-                    rt.rank,tot,dict(bad),s.holds,len(s.b0rows),len(s.order))
-    def _check_restored(s):
-        """diagnostic: after the restore (+1.5 s for any late write into the carved storages), every row of every offloaded
-        layer's original storage == host"""
-        time.sleep(1.5);torch.cuda.synchronize(s.rt.dev)
-        ix=torch.tensor(s.order,dtype=torch.long,device=s.off[0][4].device);bad={}
-        for k,c in enumerate(s.off):
-            g=c[4].index_select(0,ix).cpu();h=s.host[k,:len(s.order)]
-            m=(g!=h).any(1)
-            if bool(m.any()):bad[c[0]]=int(m.sum())
-        log.warning('NestQuant prefill-borrow rank %d: KV offload RESTORE-CHECK %d layers x %d rows, mismatching rows per layer %s',
-                    s.rt.rank,len(s.off),len(s.order),bad)
-    def scan_tables(s,tag):
-        """diagnostic: device-table (applied) and mailbox-stage int64 entries pointing into the offloaded MLA storages"""
-        rng=getattr(s,'ranges',None)
-        if not rng:return
-        X=s.rt.X;hit=collections.Counter();hs=collections.Counter();ex=[]
-        lo=torch.tensor([a for a,_ in rng],dtype=torch.int64);hi=torch.tensor([b for _,b in rng],dtype=torch.int64)
-        for L,(M,MB,_) in X.layers.items():
-            for nm,t in (('table',M.table),('stage',MB.stage)):
-                v=t.cpu();m=((v.unsqueeze(-1)>=lo)&(v.unsqueeze(-1)<hi)).any(-1).any(-1)
-                if bool(m.any()):
-                    (hit if nm=='table' else hs)[L]+=int(m.sum())
-                    if len(ex)<6 and nm=='table':ex.extend((L,int(e),X.slot_of.get((L,int(e)))) for e in m.nonzero().flatten()[:2])
-        log.warning('NestQuant prefill-borrow rank %d: TABLE-SCAN %s: experts whose applied row points into the offloaded KV: %d (layers %d), staged: %d; e.g. %s',
-                    s.rt.rank,tag,sum(hit.values()),len(hit),sum(hs.values()),ex)
     def end(s):
         """after X.x_reclaim"""
         if not s.on:return
         rt=s.rt;t0=time.time();nd=len(s.deferred)
         try:
             s._wb();torch.cuda.synchronize(rt.dev)
-            if getattr(s,'chk',False):s._check();s.scan_tables('end');s.scan_left=3
             with torch.cuda.stream(s.cs):
                 for k,c in enumerate(s.off):
                     for r0,r1,b0 in s.all_runs:c[4][b0:b0+r1-r0].copy_(s.host[k,r0:r1],non_blocking=True)
             torch.cuda.synchronize(rt.dev)
-            if getattr(s,'chk',False):s._check_restored()
         finally:
             for c in s.off:s._setkv(c[2],c[3])
             s.on=False;s._host_free()
@@ -304,7 +238,7 @@ class KVOff:
 
 class PB:
     def __init__(s,rt):
-        s.rt=rt;s.ep=0;s.dead=False;s.lead=rt.F is None;s.nf0=rt.S.nf;s.extra=0;s.D0=None;s.stor=None;s.n=collections.Counter();s.pin=None
+        s.rt=rt;s.ep=0;s.dead=False;s.lead=rt.F is None;s.nf0=rt.S.nf;s.extra=0;s.D0=None;s.stor=None;s.n=collections.Counter()
         s.KO=KVOff(rt) if KV_OFF else None
         s.last_log=0.
     # --- streaming loop pause (the loop runs X / S / F; we mutate them from the worker thread)
@@ -318,11 +252,6 @@ class PB:
         with rt.cv:rt.pb_pause-=1;rt.cv.notify_all()
     def on_sched(s,runner,so):
         pb=getattr(so,'nq_pb',None)
-        ko=s.KO
-        if ko is not None and getattr(ko,'scan_left',0)>0:
-            ko.scan_left-=1
-            try:torch.cuda.synchronize(s.rt.dev);ko.scan_tables(f'end+{3-ko.scan_left}')
-            except Exception:log.exception('TABLE-SCAN failed')
         if s.dead:return
         if pb is None and not s.ep:return
         if pb is not None and pb[0]==s.ep:                 # same epoch: phase only (+ phase 2 step)
@@ -350,7 +279,6 @@ class PB:
     def _borrow(s,runner,ep,phase,runs,nslots,kv=None):
         rt=s.rt;X=rt.X;t0=time.time()
         torch.cuda.synchronize(rt.dev)
-        s.ns0=s._nullsig(runner) if _knob('nullsig',False) else None
         if kv is not None:
             addrs=s.KO.begin(runner,kv,X.rb,nslots) if s.KO is not None else []
             if s.KO is not None and s.KO.on:s.KO.step(kv)
@@ -359,48 +287,15 @@ class PB:
             log.info('NestQuant prefill-borrow rank %d: %d KV storages carvable (pages %s)%s',rt.rank,len(s.stor),
                      sorted({p for _,p in s.stor}),f', {why}' if why else '')
         if kv is None:addrs=carve(s.stor,runs,X.rb,nslots) if s.stor else []
-        X.x_borrow(ep,addrs);s.ep=ep;s.extra=len(addrs);s.addrs=list(addrs);s.runner=runner;s.p2=kv is not None
+        X.x_borrow(ep,addrs);s.ep=ep;s.extra=len(addrs)
         if s.lead:
             S=rt.S;s.D0=np.isin(S.state,(1,2))&~S.fixed
-            if PROTECT>0 and s.extra and getattr(S,'pin',None) is None:   # D0-protect: lookahead never downs, tap never evicts these
-                sc=np.where(np.isin(S.state,(2,))&~S.fixed,S.score,-np.inf);o=np.argsort(-sc,1,kind='stable')
-                m=np.zeros(S.state.shape,bool);np.put_along_axis(m,o[:,:PROTECT],True,1);m&=np.isfinite(sc)
-                S.pin=m;s.pin=m;s.n['protected']+=int(m.sum())
             if S.slots is not None:S.slots+=s.extra
             if s.extra:S.nf=PF_NF
             S.pb_lazy=bool(s.extra);X.xtag=phase=='borrow' and bool(s.extra)
         s.n['borrows']+=1;s.n['slots']+=len(addrs)
         log.info('NestQuant prefill-borrow rank %d: epoch %d borrowed %d slots (%.1f GiB, asked %d) in %d runs, %.1f ms',rt.rank,ep,
                  len(addrs),len(addrs)*X.rb/2**30,nslots,len(runs),(time.time()-t0)*1e3)
-    def _flat_of(s):
-        """[(base, nbytes, flat uint8 tensor)] of every KV storage"""
-        out={};ts=[]
-        def walk(x):
-            if isinstance(x,torch.Tensor):ts.append(x)
-            elif isinstance(x,(list,tuple)):
-                for y in x:walk(y)
-        walk(getattr(s.runner,'kv_caches',[]))
-        for t in ts:
-            st=t.untyped_storage();p0=st.data_ptr()
-            if p0 not in out:out[p0]=(p0,st.nbytes(),torch.empty(0,dtype=torch.uint8,device=t.device).set_(st,0,(st.nbytes(),),(1,)))
-        return sorted(out.values())
-    def _nullsig(s,runner):
-        """diagnostic (/dev/shm/nq_kvoff_nullsig=1): copy of block 0 (vLLM's null block) of every KV storage, all groups"""
-        s.runner=runner;nb=runner.kv_cache_config.num_blocks
-        return [f[:n//nb].clone() for p0,n,f in s._flat_of()]
-    def _sentinel_check(s,ep):
-        """diagnostic (/dev/shm/nq_kvoff_check1=1), phase 1 reclaim: the lent slots (free blocks, nobody's KV yet) are filled
-        with 0xA5 right after x_reclaim, then after 1.5 s every byte must still be 0xA5 (else: a write landed after the reclaim)"""
-        rt=s.rt;rb=rt.X.rb;fl=s._flat_of();views=[]
-        for a in s.addrs:
-            for p0,n,f in fl:
-                if p0<=a<p0+n:views.append(f[a-p0:a-p0+rb]);break
-        torch.cuda.synchronize(rt.dev)
-        for v in views:v.fill_(0xA5)
-        torch.cuda.synchronize(rt.dev);time.sleep(1.5);torch.cuda.synchronize(rt.dev)
-        bad=[i for i,v in enumerate(views) if not bool((v==0xA5).all())]
-        log.warning('NestQuant prefill-borrow rank %d: epoch %d SENTINEL-CHECK (phase 1 reclaim): %d/%d lent slots written after the reclaim%s',
-                    rt.rank,ep,len(bad),len(views),f', e.g. slots {bad[:5]}' if bad else '')
     def _reclaim(s):
         rt=s.rt;X=rt.X;ep=s.ep;t0=time.time()
         if s.lead:
@@ -410,9 +305,6 @@ class PB:
                 if S.state[i,E] in (1,2):S.state[i,E]=3
             if S.slots is not None:S.slots-=s.extra
             S.nf=s.nf0;S.pb_lazy=False
-            if s.pin is not None:
-                if getattr(S,'pin',None) is s.pin:S.pin=None   # ours only (a session restore may have replaced it)
-                s.pin=None
             if s.D0 is not None and getattr(S,'pin',None) is None:S.want=s.D0.copy()      # RESTORE
             if rt.log is not None:rt.log.put_reclaim(ep)
         else:
@@ -427,12 +319,7 @@ class PB:
             forced=X.x_reclaim(F,log);F.busy.update(forced)
             if hasattr(F,'nl'):F.nl.update(forced)              # forced to level 2 here by the reclaim: the leader's down of it is a no-op here
             if F.chk is not None:F.chk.difference_update(xk)
-        if not getattr(s,'p2',False) and _knob('check1',False):s._sentinel_check(ep)
         if s.KO is not None and s.KO.on:s.KO.end()               # after x_reclaim: no expert in those storages
-        if getattr(s,'ns0',None) is not None:
-            torch.cuda.synchronize(rt.dev);ns1=s._nullsig(s.runner);bad=[i for i,(a,b) in enumerate(zip(s.ns0,ns1)) if not torch.equal(a,b)]
-            log.warning('NestQuant prefill-borrow rank %d: epoch %d NULL-CHECK (%s): null block changed in %d/%d KV storages%s',rt.rank,ep,
-                        'phase 2' if getattr(s,'p2',False) else 'phase 1',len(bad),len(ns1),f', e.g. {bad[:8]}' if bad else '');s.ns0=None
         s.n['reclaims']+=1;s.n['forced']+=len(forced)
         log.info('NestQuant prefill-borrow rank %d: epoch %d reclaimed, %d experts back to level 2, %.1f ms (executor %s)',rt.rank,ep,
                  len(forced),(time.time()-t0)*1e3,dict(X.xst))

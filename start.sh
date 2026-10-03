@@ -16,10 +16,10 @@
 #   NQ_MODEL_DIR      base checkpoint path (container)     (default .../GLM-5.3-Vision-...-ARVQ-hybrid-...)
 #   NQ_REPACK_DIR     NestQuant repack (rankN.json + planes) (default /home/jarrelscy/nq-p4rec/hf)
 #   NQ_REPACK_REPO    HF repo to fetch the repack from if absent (default jarrelscy/GLM-5.3-NestQuant-2-4bit)
-#   NQ_PREDICTOR_DIR  predictor dir (jF.pt, gbdt, delta)   (default /data/Jarrel/nq-serve/predictor)
+#   NQ_PREDICTOR_DIR  predictor dir (joint/jF.pt, delta)   (default /data/Jarrel/nq-serve/predictor)
 #   NQ_LIBURING_DIR   liburing install                     (default /data/Jarrel/liburing)
 #   NQ_REPO           this repo                            (default /data/Jarrel/nestquant)
-#   NQ_PREDICTOR      ema | gbdt | joint/jF                (default image default)
+#   NQ_REPACK_ALT_DIR copy of the repack on a second NVMe (dual-drive reads) (default NQ_REPACK_DIR)
 #   NQ_SERVED_NAME NQ_MAXLEN NQ_UTIL NQ_MAX_NUM_SEQS NUM_SPEC ...  (serving sizing)
 #   VLLM_API_KEY      API key; if unset, read from $NQ_ENV_FILE (default ./.env, gitignored), else no auth
 set -euo pipefail

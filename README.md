@@ -69,11 +69,46 @@ NQ_REPACK_DIR=/mnt/nq-repack NQ_PREDICTOR_DIR=/mnt/nq-predictor \
 NQ_LIBURING_DIR=/opt/liburing ./start.sh
 ```
 
-Select the predictor with `NQ_PREDICTOR` (`ema` | `gbdt` | `joint`/`jf`). Streaming budget is
-`NQ_SLOTS_PER_LAYER` (slot pool) and `NQ_CAP_GBPS` (upgrade budget, `0` = uncapped against the ~11 GB/s
-SSD ceiling). API key via `VLLM_API_KEY` in the environment or a gitignored `.env` at the repo root
+The serve path is a single configuration, **D** (below); the streaming budget is `NQ_SLOTS_PER_LAYER`. API key via `VLLM_API_KEY` in the environment or a gitignored `.env` at the repo root
 (`NQ_ENV_FILE` to point elsewhere); no key = no auth. `start.sh` and
 `sm120/serve/docker-compose.standalone.yaml` carry the full env-var surface.
+
+### Serving (D)
+
+The serve path has one configuration, D. Every flag below defaults to D in the code, and in both compose files.
+`sm120/serve/tools/gate_d.sh` re-gates it against prod. The predictor is the jF joint predictor (on rank 0).
+The scheduler is the tap scheduler, running in a Python host loop. Rank 0 leads; ranks 1-3 replay its ops from the oplog
+using the coalescing follower. Expert planes stream from two queues per rank: `NQ_REPACK` at QD 8 and
+`NQ_REPACK_ALT` at QD 4.
+
+| flag | default | what |
+|---|---|---|
+| `NQ_SLOTS_PER_LAYER` | `80` | hot-expert slots per layer (77 floating + swap headroom; k0 layout, no fixed set) |
+| `NQ_JOINT_NET` / `NQ_JOINT_V2` | `/nqpred/joint/jF.pt` / `…/v2_sal_tweedie1.5.txt` | jF net + LightGBM trees (`NQ_LGB_PATH=/nqlgb`) |
+| `NQ_JOINT_HM` | `0.7` | jF resident hysteresis |
+| `NQ_JOINT_GRAPH` | `0` | CUDA-graph the jF scoring core |
+| `NQ_TAP_H` | `64` | tap horizon, tokens |
+| `NQ_TAP_C` `NQ_TAP_HA` `NQ_TAP_MLA` `NQ_TAP_SVC_MS` `NQ_TAP_FAR` `NQ_TAP_TP` `NQ_TAP_RATE_GBPS` | `1.0` `0` `1.0` `2` `tail:0.1` `4` `6` | tap scheduler model (`streaming/scheduler_tap.py`) |
+| `NQ_REPACK` / `NQ_REPACK_ALT` | `/nqrepack` / `/nqrepack1` | dual IO: both required, they must hold the same repack (checked at boot; mismatch = error). Standalone: `NQ_REPACK_ALT_DIR` (defaults to `NQ_REPACK_DIR`, one drive, two queues) |
+| `NQ_IO_QD` / `NQ_IO_QD_ALT` | `8` / `4` | io_uring queue depth per drive |
+| `NQ_PREFILL_BORROW` | `1` | phase 1: free KV blocks lent as extra expert slots during long prefills |
+| `NQ_PREFILL_SLOTS` | `155` | floating experts per layer planned while borrowing |
+| `NQ_PB_MIN_NEW` / `NQ_PB_MARGIN` | `8192` / `16` | borrow only for ≥ this many new tokens / KV blocks always left free |
+| `NQ_PREFILL_KV_OFFLOAD` | `1` | phase 2: used KV of some MLA layers to pinned host, streamed back per layer (null block never carved; reclaim fenced on in-flight reads into lent memory) |
+| `NQ_PREFILL_KV_BELOW` | `1500` | phase 2 only while phase 1 got fewer slots than this |
+| `NQ_PB_KV_HOST_GB` / `NQ_PB_RAM_FLOOR_GB` | `8` / `38` | phase 2 pinned-host cap per rank / MemAvailable floor |
+| `NQ_PREFILL_ADAPT` | `lookahead` | prefill router lookahead (`NQ_LA_D=1`, `NQ_LA_BUDGET=45`, `NQ_PF_RANK=gate`) |
+| `NQ_SESSION_RESTORE` | `1` | per-session floating-set restore (`NQ_SR_*`) |
+| `NQ_PF` / `NQ_PF_MIN` | `1` / `384` | prefill MoE path for chunks ≥ this many tokens |
+| `NQ_LMCACHE` (→ `ENABLE_LMCACHE`) | `1` | LMCache KV offload/restore |
+| `NUM_SPEC` | `3` | MTP speculative tokens |
+| `NQ_IOSTATS` / `NQ_RANK_SHARE` | `0` / `0` | measurement only: io stats / served level-4 share |
+
+Runtime switches (files, in-boot): `/dev/shm/nq_pb_off` (no borrow), `/dev/shm/nq_pb_kv_off` (no phase 2),
+`/dev/shm/nq_pf_off`, `/dev/shm/nq_sr_ctl`, `/dev/shm/nq_la_ctl`. Debug (default off): `NQ_CHECK`, `NQ_DUMP`,
+`NQ_FOLLOW_CHECK`, `NQ_SHADOW`, `NQ_FAULT_*`, `NQ_TFCAP`, `NQ_RAMTIER_GB`.
+The GBDT/EMA predictors, the base `Scheduler`, and the tf predictor are offline tools (`streaming/scheduler.py`,
+`threads/36-tfpred/`), and the serve never imports them.
 
 ### Trading KV cache for hot experts
 

@@ -52,16 +52,6 @@ class OpLog:
             s.off+=4*i
             if not nxt:return out
             os.close(s.fd);s.fd=None;s.gen+=1;s.off=0
-    def get_into(s,feed):
-        """reader, nq-io: like get() but hands each new int32 chunk to feed(a) -> (words consumed, rotation marker hit)
-        (CppFollower: the record scan runs in C++)"""
-        while True:
-            if s.fd is None:
-                if not os.path.exists(s._p(s.gen)):return
-                s.fd=os.open(s._p(s.gen),os.O_RDONLY)
-            b=os.pread(s.fd,1<<22,s.off);used,rot=feed(np.frombuffer(b[:len(b)//4*4],np.int32));s.off+=4*used
-            if not rot:return
-            os.close(s.fd);s.fd=None;s.gen+=1;s.off=0
     def close(s):
         if s.fd is not None:os.close(s.fd);s.fd=None
 
@@ -138,7 +128,7 @@ class Follower:
     def mark_busy(s,keys):s.busy.update(keys)
 
 class CoalescingFollower(Follower):
-    """nq-io (NQ_FOLLOW_COALESCE=1): replay the log by net effect instead of op by op.
+    """nq-io follower coalesce (the serve follower; Follower = in-order base, tests): replay the log by net effect.
     The log is folded per expert into the level the leader last asked for (an up+down pair, or a down+up pair,
     that is still queued collapses to nothing; up, down, up = one up). When an expert is free here, its pending level
     is compared with its level here: equal -> moot (no op), else one op. A stale upgrade (the log has since downed the
@@ -186,35 +176,3 @@ class CoalescingFollower(Follower):
         if k in s.pend:s.stats['merged']+=1;del s.pend[k]
         s.pend[k]=lv
     def level_count(s):return len(s.up)
-
-class CppFollower:
-    """nq-io upgrade 5 (NQ_HOSTLOOP=cpp): Follower (coalesce=False) or CoalescingFollower (coalesce=True) with the record
-    scan, the replay queue and the expert sets in C++ (nqhost.FollowerCore). Same executor calls in the same order and
-    the same tables as the Python classes (tests/test_hostloop_parity.py). Stale-up cancels are requested after the
-    scan of the pending set instead of during it (they only touch the cancelled expert, visited once per step)."""
-    def __init__(s,X,log,layers,coalesce=False,NE=256):
-        import hostcore
-        s.X=X;s.log=log;s.coal=coalesce;s.K=hostcore.mod().FollowerCore([int(L) for L in layers],NE,coalesce)
-        s.li={L:i for i,L in enumerate(layers)};s.mask=s.K.up_view();s.chk=None   # mask: live [nL, NE] view of the landed set
-    def landed(s,L,E):s.K.landed(L,E)
-    def released(s,L,E):s.K.released(L,E)
-    def failed(s,L,E,read_error=False):s.K.failed(L,E,read_error)
-    def cancelled(s,L,E):s.K.cancelled(L,E)
-    def mark_busy(s,keys):s.K.mark_busy([(int(L),int(E)) for L,E in keys])
-    def step(s,issue=True):
-        s.log.get_into(s.K.feed)
-        if not issue:return
-        U,D,C=s.K.step()
-        for L,E in C:
-            if s.X.cancel_up(L,E,s):s.K.add_cancel_req()
-        if U or D:s.X.apply(U,D,s)
-    @property
-    def stats(s):return s.K.stats()
-    @property
-    def up(s):return set(map(tuple,s.K.up_list()))
-    def level_count(s):return s.K.level_count()
-    def backlog(s):return s.K.backlog()
-    def enable_check(s,init):s.K.enable_check([(int(L),int(E)) for L,E in init]);s.chk=True
-    def check(s):return s.K.check()
-    @property
-    def check_msg(s):return s.K.check_msg or None

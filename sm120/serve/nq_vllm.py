@@ -5,20 +5,24 @@ the NestQuant kernel instead of ARVQ; other layers keep ARVQ, so a partly fitted
 Per worker process (one TP rank):
   - NestQuantMoEMethod registers the checkpoint's ARVQ expert parameter names as empty tensors with a no-op loader
     (the ARVQ expert tensors are read and dropped), then loads the rank's resident planes (level 2 rows).
-  - after the last NQ layer is loaded, Runtime.start(): fixed set (26/layer, update 02) read from the record file
-    into a resident pool at level 4; slot pool of NQ_SLOTS_PER_LAYER x layers records; scheduler (EMA 512, refresh 64,
-    51 floating/layer, 6 GB/s cap, start = floating_default) + executor (io_uring engine) + a host thread that turns
-    the kernel's routing hits into level ops. Table rows change only through the Mailbox, whose apply() runs at the
-    start of every layer call (inside CUDA graphs too).
+  - after the last NQ layer is loaded, Runtime.start() (serve config "D"; README "Serving (D)"):
+    k0 layout = no fixed set, 77 floating experts/layer, slot pool NQ_SLOTS_PER_LAYER (80) x layers records;
+    rank 0: jF joint predictor (gpu_predictor.GPUJointPredictor from /nqpred/joint, needs the decode salience export
+    nqsal.cu) + tap scheduler (streaming/scheduler_tap.py, H=64) in the python host loop; ranks 1..TP-1 replay rank 0's
+    ops (oplog.CoalescingFollower); executor = io_uring engine reading each record from the less busy of the two drive
+    copies (NQ_REPACK / NQ_REPACK_ALT, QD 8 / 4); prefill-borrow (nq_pb.py: NQ_PREFILL_BORROW=1, slots 155/layer, KV
+    offload below 1500 free blocks); prefill router lookahead (nq_lookahead.py); session restore (nq_session.py).
+    Table rows change only through the Mailbox, whose apply() runs at the start of every layer call (inside CUDA
+    graphs too).
   - forward = torch custom op nq::moe (opaque to torch.compile): <= 8 tokens one kernel call; >= NQ_PF_MIN (384) tokens the
     prefill path (moe.MoELayer.prefill: routed experts decoded once + grouped GEMMs); in between chunks of 8.
-Env: NQ_HOME (repo, default /nq), NQ_REPACK (record + resident dir), NQ_SLOTS_PER_LAYER (56), NQ_CAP_GBPS (0 = uncapped: drive and slot pool limit; else aggregate GB/s over the TP ranks),
-NQ_TOK_PER_S (111), NQ_STREAM (1; 0 = fixed set only, no streaming), NQ_POLL_MS (4), NQ_LAYERS (e.g. 3-18, default all
-present), NQ_PREDICTOR (floating-set predictor: ema | gbdt, default scheduler.DEFAULT_PREDICTOR; only the scheduling rank
-runs it; NQ_GBDT_MODE / NQ_GBDT_SCALE / NQ_GBDT_BAND see streaming/scheduler.py; NQ_GBDT_SCALE=mps makes rank 0 export per-expert decode
-salience w^2*|x|^2 via nqsal.cu, rsf = hf routed_scaling_factor or NQ_SAL_RSF), NQ_SESSION_RESTORE / NQ_SR_* (per-session floating-set restore for interleaved sessions, rank 0 decides, see nq_session.py; hooks Worker.execute_model for request arrival), NQ_LGB_PATH (dir with lightgbm + narwhals + scipy, appended to sys.path; serve_nq.sh mounts it at /nqlgb). Ranks schedule independently from their own hit counters (the counts agree, the timing of a refresh can
-differ by a step between ranks, so for a short while an expert can be at level 4 on some ranks and level 2 on others;
-each rank's shard is a valid level-2 or level-4 weight either way)."""
+Env (serve): NQ_HOME (repo, default /nq), NQ_REPACK + NQ_REPACK_ALT (record copies, must match), NQ_SLOTS_PER_LAYER (80),
+NQ_JOINT_NET / NQ_JOINT_V2 / NQ_JOINT_HM (0.7) / NQ_JOINT_GRAPH (0), NQ_TAP_* (scheduler_tap.py), NQ_IO_QD (8) / NQ_IO_QD_ALT (4) /
+NQ_IO_NHOST, NQ_PREFILL_* (nq_pb_engine.py), NQ_PREFILL_ADAPT (nq_lookahead.py), NQ_SESSION_RESTORE / NQ_SR_* (nq_session.py),
+NQ_POLL_MS (4), NQ_LAYERS (e.g. 3-18, default all present), NQ_SAL_RSF (salience rsf, default hf routed_scaling_factor),
+NQ_LGB_PATH (lightgbm + narwhals + scipy for the jF trees, appended to sys.path; serve_nq.sh mounts it at /nqlgb).
+Measurement / debug (default off): NQ_IOSTATS, NQ_RANK_SHARE, NQ_TFCAP, NQ_CHECK, NQ_DUMP, NQ_FOLLOW_CHECK, NQ_ISSUE=0,
+NQ_SHADOW=1, NQ_HITS=0, NQ_RAMTIER_*."""
 import os,sys,json,time,threading,logging,functools
 import numpy as np,torch
 NQ_HOME=os.environ.get('NQ_HOME','/nq')
@@ -31,7 +35,7 @@ except Exception:log=logging.getLogger('nestquant')
 # kernel tiling per token count (sm120/bench_real.py on real layers: best cfg per B, 2-11% over one fixed cfg)
 CFG_GU=[None,[1,8,4],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,12],[1,8,12]]
 CFG_DN=[None,[1,8,4],[1,8,2],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4]]
-NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
+NE=256;TOPK=8;BMAX=8;NF=77;CHECK=os.environ.get('NQ_CHECK','0')=='1'
 # prefill (T >= NQ_PF_MIN tokens, not capturing): moe.MoELayer.prefill; below it (and inside graph capture) the decode
 # kernel in 8-token slices. NQ_PF=0 disables; while the file NQ_PF_OFF (default /dev/shm/nq_pf_off) exists the slice
 # loop runs (in-boot A/B). Scratch (moe.pf_scratch, NQ_PF_ROWS x NQ_PF_G) is allocated on the first prefill call, i.e.
@@ -81,7 +85,7 @@ class Runtime:
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
         s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None
-        s.PB=None;s.pb_pause=0      # nq-prefill prefill-borrow (nq_pb.py), NQ_PREFILL_BORROW=1 only
+        s.PB=None;s.pb_pause=0      # nq-prefill prefill-borrow (nq_pb.py)
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -96,47 +100,18 @@ class Runtime:
         log.info('NestQuant L%d rank %d: resident planes loaded in %.1fs',L,rank,time.time()-t)
         if set(s.lay)>=s.expect and not s.started:s.start()
     def start(s):
-        import stream_engine as SE,scheduler as SC,executor as EX,fixed_set as FS,p4rec as PR
-        from moe import entry
+        import stream_engine as SE,scheduler_tap as TS,executor as EX
         s.started=True;rp=os.environ['NQ_REPACK'];L_=sorted(s.lay);dev=s.dev
         s.rf=rf=SE.RankFile(rp,s.rank);rb=rf.rb
-        fx,src,_=FS.load(layers=L_)
-        _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf')   # tf = nq-tfpred transformer (same k0 layout); jF joint predictor: k0 layout (no fixed set, all floating)
-        nf=77 if _JOINT else NF
-        if _JOINT:fx={L:[] for L in L_};src='joint-k0'
-        # fixed set: records -> resident pool, level 4 rows
-        nfix=sum(len(fx[L]) for L in L_);s.fixpool=torch.empty(nfix,rb,dtype=torch.uint8,device=dev)
-        buf=torch.empty(rb,dtype=torch.uint8).pin_memory();fd=os.open(rf.path,os.O_RDONLY);i=0;t=time.time();bad=set()
-        try:
-            for L in L_:
-                d=s.lay[L]
-                for E in fx[L]:
-                    try:n=os.preadv(fd,[memoryview(buf.numpy())],rf.rec(L,E)*rb)
-                    except OSError:n=-1
-                    if n!=rb:bad.add((L,E));i+=1;continue      # SSD unreadable / short: the expert stays at level 2
-                    s.fixpool[i].copy_(buf);d['M'].table[E].copy_(PR.row(d['ex'][E],rf.lay,s.fixpool[i].data_ptr(),entry));i+=1
-        finally:os.close(fd)
-        torch.cuda.synchronize(dev)
-        if bad:
-            log.warning('NestQuant rank %d: %d fixed-set records unreadable, those experts stay at level 2',s.rank,len(bad))
-            fx={L:[E for E in fx[L] if (L,E) not in bad] for L in fx};nfix-=len(bad)
+        # jF k0 layout: no fixed set (every expert floats), NF=77 floating experts per layer
+        fx={L:[] for L in L_};nf=NF
         for L in L_:s.lay[L]['table0']=s.lay[L]['M'].table.clone()
-        log.info('NestQuant rank %d: %d layers, fixed set (%s) %d experts at level 4 (%.1f GiB) in %.1fs',
-                 s.rank,len(L_),src,nfix,nfix*rb/2**30,time.time()-t)
-        if os.environ.get('NQ_STREAM','1')=='0':
-            s.L_=L_;fm=np.zeros((len(L_),NE),bool)
-            for i,L in enumerate(L_):fm[i,list(fx[L])]=True
-            s.thread=threading.Thread(target=s.share_loop,args=(fm,),name='nq-share',daemon=True);s.thread.start();return
-        nslot=int(os.environ.get('NQ_SLOTS_PER_LAYER','56'))*len(L_)
+        log.info('NestQuant rank %d: %d layers, k0 layout (no fixed set, %d floating/layer)',s.rank,len(L_),nf)
+        nslot=int(os.environ.get('NQ_SLOTS_PER_LAYER','80'))*len(L_)
         T22=NQ_HOME+'/threads/22-boundary-experts/fixed_set.json';fj=json.load(open(T22))
-        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf]] for L in L_}
-        lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
-        _steps=(s.rank==0 or not lead)   # this rank runs the real predictor; the others use 'ema'
-        if _JOINT and _steps and os.environ.get('NQ_PREDICTOR')=='tf':   # nq-tfpred multi-window transformer (threads/36-tfpred)
-            import nq_tfpred_gpu as TFP
-            pred=TFP.TFGPUPredictor(L_,fx,os.environ.get('NQ_TF_CKPT',NQ_HOME+'/threads/36-tfpred/tf_ids.pt'),n_float=nf,
-                                    hm=float(os.environ.get('NQ_JOINT_HM','0.7')),device=dev,graph=os.environ.get('NQ_TF_GRAPH','1')=='1')
-        elif _JOINT and _steps:
+        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf]] for L in L_}   # = pre-cleanup expression (same tie order)
+        lead=s.tp>1                      # rank 0 schedules, the other ranks replay its ops
+        if s.rank==0 or not lead:        # only the scheduling rank runs the predictor (followers never step S)
             _jd='/nqpred/joint'
             if _jd not in sys.path:sys.path.insert(0,_jd)
             import gpu_predictor as GJ
@@ -144,11 +119,8 @@ class Runtime:
                                       hm=float(os.environ.get('NQ_JOINT_HM','0.7')),device=dev,
                                       v2_model=os.environ.get('NQ_JOINT_V2','/nqpred/joint/v2_sal_tweedie1.5.txt'),
                                       graph=os.environ.get('NQ_JOINT_GRAPH','0')=='1')
-        else:
-            pred=(os.environ.get('NQ_PREDICTOR') or SC.DEFAULT_PREDICTOR) if _steps else 'ema'   # followers never step S
-        _SCH=SC.Scheduler if not os.environ.get('NQ_SCHED') else __import__('scheduler_tap').make_scheduler   # NQ_SCHED=tap: streaming/scheduler_tap.py (nq-tfpred 93beb7f)
-        s.S=_SCH(L_,fx,dflt,rb*s.tp,NE=NE,n_float=nf,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
-                         tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')),predictor=pred)
+        else:pred=None
+        s.S=TS.TapScheduler(L_,fx,dflt,rb*s.tp,NE=NE,n_float=nf,slots=nslot,predictor=pred)
         log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
         s.S.io_all=lambda:io_all(s)    # nq-io: live per-rank I/O stats for scheduler policies ({} unless NQ_IOSTATS>0 and TP>1)
         IO=_io_cfg(s.rank,rp,rb)
@@ -160,22 +132,20 @@ class Runtime:
         for L,E in init:s.S.state[s.S.li[L],E]=1
         s.X.apply(init,[],s.S)
         s.F=s.log=None
-        if os.environ.get('NQ_LEADER','1')!='0' and s.tp>1:     # rank 0 schedules, the other ranks replay its ops
+        if lead:                         # rank 0 schedules, the other ranks replay its ops
             import oplog as OL
             # /dev/shm is the host's and container pids repeat across boots: key the log by the parent's start time too,
             # so a follower can never open (and replay) a previous boot's log before the leader has created this one
             pp=os.getppid();st=open(f'/proc/{pp}/stat').read().rsplit(')',1)[1].split()[19]
             s.log=OL.OpLog(f'/dev/shm/nq_oplog_{pp}_{st}.bin',writer=s.rank==0)
             if s.rank:
-                coal=os.environ.get('NQ_FOLLOW_COALESCE','0')=='1'
-                if HOSTLOOP=='cpp':s.F=OL.CppFollower(s.X,s.log,L_,coalesce=coal)        # nq-io upgrade 5
-                else:s.F=(OL.CoalescingFollower if coal else OL.Follower)(s.X,s.log)
+                s.F=OL.CoalescingFollower(s.X,s.log)         # nq-io follower coalesce: replay by net effect
                 s.F.mark_busy(init)
                 if RANK_SHARE and s.F.mask is None:s.F.mask=np.zeros((len(L_),NE),bool);s.F.li={L:i for i,L in enumerate(L_)}
                 if CHECK or os.environ.get('NQ_FOLLOW_CHECK','0')=='1':s.F.enable_check(init)
             s.iokey=f'/dev/shm/nq_io_{pp}_{st}'
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
-        if s.F is None and s.S.wants_sal:        # GBDT x mps128: rank 0 exports per-expert decode salience next to the hits
+        if s.F is None and s.S.wants_sal:        # jF: rank 0 exports per-expert decode salience w^2*|x|^2 (nqsal.cu) next to the hits
             import build as BLD
             s.SAL=BLD.get_sal();rsf=float(os.environ.get('NQ_SAL_RSF') or RSF or 1.0)
             for L in L_:
@@ -185,10 +155,8 @@ class Runtime:
         _gate_captures(s)
         if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
         if s.F is None and s.rank==0:s.SR=SRM.SessionRestore(s);_hook_sched(s)   # per-session floating-set restore (nq_session.py)
-        if os.environ.get('NQ_PREFILL_BORROW','0')=='1':     # nq-prefill: KV blocks lent to the slot pool during long prefills
-            if HOSTLOOP=='cpp':log.warning('NestQuant prefill-borrow: NQ_HOSTLOOP=cpp not supported, off')
-            else:
-                import nq_pb;s.PB=nq_pb.install(s)
+        if os.environ.get('NQ_PREFILL_BORROW','1')=='1':     # nq-prefill: KV blocks lent to the slot pool during long prefills
+            import nq_pb;s.PB=nq_pb.install(s)
         if os.environ.get('NQ_TFCAP') and s.F is None and s.rank==0:   # nq-tfpred decode-trace capture (off unless set)
             import nq_tfcap;s.CAP=nq_tfcap.install(s,L_,s.lay[L_[0]]['H'],dev)
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
@@ -197,13 +165,6 @@ class Runtime:
         try:return f(*a)
         except Exception:
             log.exception('NestQuant session restore failed, turned off');s.SR=None;s.S.pin=None;return dflt
-    def share_loop(s,lv4):
-        """NQ_STREAM=0: log the level-4 share of routed slots of the fixed set (same format as the streaming loop)."""
-        H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.stack(H).astype(np.int64);s4=st=0;n=0
-        while not s.stop:
-            time.sleep(1.);n+=1;cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;s4+=int(c[lv4].sum());st+=int(c.sum())
-            if st and n%60==0:
-                log.info('NestQuant rank %d: level-4 hit share %.4f (%d/%d routed slots)',s.rank,s4/st,s4,st);s4=st=0
     def loop(s):
         try:
             torch.cuda.set_device(s.dev);ms=float(os.environ.get('NQ_POLL_MS','4'))/1e3
@@ -273,40 +234,32 @@ class Runtime:
         except Exception as e:           # streaming stops; every expert keeps its current (valid) row
             s.err=e;log.exception('NestQuant streaming thread stopped')
 
-# ---- nq-io (I/O upgrades; every flag off = the original serve) ----
-# NQ_IO_MODE      '' (one drive, NQ_REPACK) | dual (each read to the less-busy of NQ_REPACK / NQ_REPACK_ALT) |
-#                 split (ranks in NQ_IO_SPLIT_RANKS, default 2,3, read only NQ_REPACK_ALT)
-# NQ_REPACK_ALT   identical copy of the record files on the second drive (rank*.json + artifact_stamp.json must match)
-# NQ_IO_QD        reads in flight per rank per drive (default 8 = original); NQ_IO_QD_ALT for the alt drive (default NQ_IO_QD)
+# ---- nq-io ----
+# NQ_REPACK_ALT   identical copy of the record files on the second drive (rank*.json + artifact_stamp.json + rank*.bin size
+#                 must match NQ_REPACK; a mismatch fails the boot): each read goes to the less busy drive
+# NQ_IO_QD        reads in flight per rank on NQ_REPACK (8); NQ_IO_QD_ALT on NQ_REPACK_ALT (4)
 # NQ_IO_NHOST     pinned bounce/LRU entries (default max(64, 4 x total QD))
 # NQ_RAMTIER_GB   pinned host-RAM tier per rank (GB, 0 = off); NQ_RAMTIER_LIST json [[L, E], ...] hottest first;
 #                 NQ_RAMTIER_MINAVAIL_GB (30; host memguard kills at 22): never load past, and drop the tier when MemAvailable falls below it
 #                 (also dropped while /dev/shm/nq_tier_drop exists)
-# NQ_FOLLOW_COALESCE=1  followers replay by net effect (oplog.CoalescingFollower)
-# NQ_HOSTLOOP=cpp  leader Scheduler.step array work + follower replay in C++ (streaming/nqhost.cpp, bit-exact)
 # NQ_FOLLOW_CHECK=1 (or NQ_CHECK=1) followers check, whenever quiescent, landed set == leader log's set (stats check_ok/bad)
 # NQ_RANK_SHARE=1 followers log their own served level-4 share; NQ_IOSTATS=<s> every rank writes its io_stats() JSON
 #                 to /dev/shm/nq_io_<boot>_r<rank>.json every <s> seconds (Runtime.io_all() reads them all)
-RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';PF_NTOK=int(os.environ.get('NQ_SHARE_PF_NTOK','32'));HOSTLOOP=os.environ.get('NQ_HOSTLOOP','py');IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
+RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';PF_NTOK=int(os.environ.get('NQ_SHARE_PF_NTOK','32'));IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
 def _pfk(c):return int(int(c.sum(1).max())//TOPK>PF_NTOK)   # nq-io share: 1 = prefill interval (busiest layer saw > PF_NTOK tokens)
 def _memavail_gb():
     for ln in open('/proc/meminfo'):
         if ln.startswith('MemAvailable:'):return int(ln.split()[1])/2**20
     return 0.
 def _io_cfg(rank,rp,rb):
-    mode=os.environ.get('NQ_IO_MODE','');qd=int(os.environ.get('NQ_IO_QD','8'));kw={};msg=[]
+    qd=int(os.environ.get('NQ_IO_QD','8'));qa=int(os.environ.get('NQ_IO_QD_ALT','4'));kw={};msg=[]
     alt=os.environ.get('NQ_REPACK_ALT','')
-    if mode in ('dual','split'):
-        ok=bool(alt) and all(open(f'{rp}/{f}','rb').read()==open(f'{alt}/{f}','rb').read() for f in (f'rank{rank}.json','artifact_stamp.json'))
-        if not ok:log.warning('NestQuant rank %d: NQ_IO_MODE=%s but %s does not match %s, one drive',rank,mode,alt,rp);mode=''
-        elif os.path.getsize(f'{alt}/rank{rank}.bin')!=os.path.getsize(f'{rp}/rank{rank}.bin'):
-            log.warning('NestQuant rank %d: %s/rank%d.bin size differs, one drive',rank,alt,rank);mode=''
-    qa=int(os.environ.get('NQ_IO_QD_ALT') or qd) if mode=='dual' else 0
-    if mode=='dual':kw.update(alt_path=f'{alt}/rank{rank}.bin',qd_alt=qa);msg.append(f'dual drive qd {qd}+{qa}')
-    elif mode=='split' and str(rank) in os.environ.get('NQ_IO_SPLIT_RANKS','2,3').split(','):
-        RT.rf.path=f'{alt}/rank{rank}.bin';msg.append(f'split: reads {RT.rf.path}')
-    elif mode=='split':msg.append('split: reads primary')
-    if qd!=8 and mode!='dual':msg.append(f'qd {qd}')
+    if not alt:raise RuntimeError('NestQuant: NQ_REPACK_ALT (second drive copy of the records) is not set')
+    for f in (f'rank{rank}.json','artifact_stamp.json'):
+        if open(f'{rp}/{f}','rb').read()!=open(f'{alt}/{f}','rb').read():raise RuntimeError(f'NestQuant: {alt}/{f} does not match {rp}/{f}')
+    if os.path.getsize(f'{alt}/rank{rank}.bin')!=os.path.getsize(f'{rp}/rank{rank}.bin'):
+        raise RuntimeError(f'NestQuant: {alt}/rank{rank}.bin size differs from {rp}')
+    kw.update(alt_path=f'{alt}/rank{rank}.bin',qd_alt=qa);msg.append(f'dual drive qd {qd}+{qa}')
     nh=int(os.environ.get('NQ_IO_NHOST') or max(64,4*(qd+qa)))
     gb=float(os.environ.get('NQ_RAMTIER_GB','0') or 0)
     if gb>0:
@@ -332,7 +285,7 @@ def _io_publish(rt,key):
         d=rt.X.io_stats('publish');d.update(rank=rt.rank,t_wall=time.time(),backlog=rt.F.backlog() if rt.F is not None else 0,
                                    follower=dict(rt.F.stats) if rt.F is not None else None,memavail_gb=_memavail_gb())
         st=rt.F.stats if rt.F is not None else rt.S.stats   # cumulative: host loop seconds / iterations, level ops issued
-        d.update(share4=getattr(rt,'shc',None),hostloop=HOSTLOOP,hl_s=getattr(rt,'hl_t',0.),hl_iters=getattr(rt,'hl_n',0),ops_issued=int(st['ups'])+int(st['downs']))
+        d.update(share4=getattr(rt,'shc',None),hostloop='py',hl_s=getattr(rt,'hl_t',0.),hl_iters=getattr(rt,'hl_n',0),ops_issued=int(st['ups'])+int(st['downs']))
         tmp=f'{key}_r{rt.rank}.json.tmp';open(tmp,'w').write(json.dumps(d));os.replace(tmp,f'{key}_r{rt.rank}.json')
     except Exception:log.exception('NestQuant io stats publish failed')
 def io_all(rt=None):

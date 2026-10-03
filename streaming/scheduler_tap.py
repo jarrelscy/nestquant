@@ -1,7 +1,15 @@
-"""NQ_SCHED=tap: throughput-aware value scheduling of the floating set (nq-tfpred, thread 36), same predictor (jF).
-Only the candidate ordering / budgeting changes; the predictor, executor, level ops and feedback calls are those of
-scheduler.Scheduler (unset NQ_SCHED = the base class, untouched).  Leader-only decisions (wall-clock inputs): use with
-NQ_LEADER=1 (TP>1) or TP=1.
+"""Serve scheduler of the floating set (tap: throughput-aware value scheduling, nq-tfpred thread 36), driven by the jF
+joint predictor (predictor object with .S = predicted hits per expert over the next 64 tokens, refreshed every 16).
+Self-contained: the serve path does not import scheduler.py (EMA / GBDT, offline sims only). Rank 0 decides
+(wall-clock inputs); the other TP ranks replay its ops (oplog.py).
+  TapScheduler(layers, fixed, floating_default, rec_bytes, NE=256, n_float=77, slots=N, predictor=P)
+  step(counts[len(layers), NE], ntok) -> (ups [(L, E)], downs [(L, E)])   call once per model step
+  landed(L, E) / released(L, E) / failed(L, E, read_error)   executor feedback (upgrade applied / downgrade applied,
+                                   slot free / upgrade refused or read failed: the expert stays at level 2, after a read
+                                   error not retried before retry_tokens)
+  kv_pressure(n), level(), pin ([len(layers), NE] bool or None: experts never evicted while set: session restore)
+  score = routing counts decayed with half-life 512 tokens (EMA512): far-window value with NQ_TAP_FAR=ema, eviction order
+  when the slot pool shrinks (prefill-borrow reclaim) and kv_pressure.
 
 Every predictor refresh (16 tokens, P.step() -> True):
   lat  = estimated landing time of a read issued now, in tokens, on the slowest rank:
@@ -19,7 +27,7 @@ Every predictor refresh (16 tokens, P.step() -> True):
   v is downed now only if V(e) - V(v) - V0(v) > c, and e is issued when a slot frees.
   Issue budget: only as many reads as land within mla x H tokens at the measured rate (no backlog); the sorted pair
   list is truncated (highest gain first).
-Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = clip(k x lat, 64, 1024))
+Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (64 tok) NQ_TAP_HA (0 = fixed H; k -> H = clip(k x lat, 64, 1024))
      NQ_TAP_MLA (1.0; 0 = no budget) NQ_TAP_RATE_GBPS (6, per rank, before the first measurement) NQ_TAP_SVC_MS (2)
      NQ_TAP_FAR (tail:0.1 default | ema) NQ_TAP_TP (ranks, for the per-rank record size when io_all is empty; default 4)
      NQ_TAP_LAT (model default | meas): landing latency per rank. model = queued reads / peak rate + NQ_TAP_SVC_MS.
@@ -31,24 +39,32 @@ Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = cli
        NQ_TAP_LAT_HL refreshes, default 4; floor NQ_TAP_H instead of 64 so a short lat never shrinks the window).
        The issue budget keeps using the queue-model latency (only queueing consumes the window; a measured fixed
        latency is pipelined), so a large measured latency never stalls issuing.
-Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalised two-horizon value)."""
+Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalised two-horizon value).
+Bit-exact vs the pre-cleanup TapScheduler (scheduler.Scheduler subclass, python host loop): tests/test_tap_parity.py."""
 import os, time, collections
 import numpy as np
-from scheduler import Scheduler
 
 
-class TapScheduler(Scheduler):
-    def __init__(s, *a, clock=None, **k):
-        super().__init__(*a, **k)
-        # NQ_HOSTLOOP=cpp (or hostloop='cpp'): the array work runs in nqhost.TapCore (nq-tapc, bit-exact vs this Python
-        # step: tests/test_tap_parity.py); s.core (SchedCore) is kept for the score decay only
-        s.tcore = None
-        if s.core is not None:
-            import hostcore; s.tcore = hostcore.mod().TapCore(s.layers, s.NE)
-        else:
-            s.core = None
+class TapScheduler:
+    def __init__(s, layers, fixed, floating_default, rec_bytes, NE=256, n_float=77, half_life=512, refresh=64,
+                 big_frac=0.5, slots=None, retry_tokens=None, predictor=None, clock=None):
+        s.layers = list(layers); s.li = {L: i for i, L in enumerate(s.layers)}; s.NE = NE; s.nf = n_float; s.R = refresh
+        s.a = 0.5 ** (1 / half_life); s.big = big_frac; s.rb = rec_bytes
+        s.fixed = np.zeros((len(s.layers), NE), bool)
+        for L in s.layers: s.fixed[s.li[L], list(fixed[L])] = True
+        s.score = np.zeros((len(s.layers), NE))
+        s.want = np.zeros_like(s.fixed)
+        for L in s.layers:
+            d = [x for x in floating_default[L] if not s.fixed[s.li[L], x]][:n_float]; s.want[s.li[L], d] = True
+        s.state = np.zeros((len(s.layers), NE), np.int8)    # floating: 0 level 2, 1 upgrade in flight, 2 level 4, 3 downgrade in flight
+        s.slots = slots                                     # slot pool size (streamed experts per rank); None = unbounded
+        s.retry = refresh if retry_tokens is None else retry_tokens; s.hold = np.zeros((len(s.layers), NE))   # failed read -> no retry before hold
+        s.tok = 0; s.stats = dict(ups=0, downs=0, big_steps=0, bytes=0)
+        s.P = predictor; s.predictor_name = 'none' if predictor is None else type(predictor).__name__
+        s.wants_sal = s.P is not None and hasattr(s.P, 'bs')   # jF takes the per-step decode salience
+        s.pin = None
         e = os.environ.get
-        s.tc = float(e('NQ_TAP_C', '1.0')); s.tH = float(e('NQ_TAP_H', '256')); s.tHa = float(e('NQ_TAP_HA', '0'))
+        s.tc = float(e('NQ_TAP_C', '1.0')); s.tH = float(e('NQ_TAP_H', '64')); s.tHa = float(e('NQ_TAP_HA', '0'))
         s.tmla = float(e('NQ_TAP_MLA', '1.0')); s.tsvc = float(e('NQ_TAP_SVC_MS', '2')) / 1e3
         fr = e('NQ_TAP_FAR', 'tail:0.1'); s.tfar = float(fr.split(':')[1]) if fr.startswith('tail:') else None   # far window: EMA512 | tail:<x> = x * jF rate
         s.tp_n = int(e('NQ_TAP_TP', '4')); s.rb_rank = s.rb / max(1, s.tp_n)
@@ -73,7 +89,27 @@ class TapScheduler(Scheduler):
             s.n_land += 1
             if s.lat0 is not None and s.t_iss[i, e] == s.t_iss[i, e]:      # not for ups set in flight outside step()
                 s.lat0.append(s.clock() - s.t_iss[i, e]); s.t_iss[i, e] = np.nan; s.stats['lat0_n'] += 1
-        super().landed(L, e)
+            s.state[i, e] = 2
+    def released(s, L, e):
+        i = s.li[L]
+        if s.state[i, e] == 3: s.state[i, e] = 0
+    def failed(s, L, e, read_error=False):
+        i = s.li[L]
+        if s.state[i, e] == 1:
+            s.state[i, e] = 0
+            if read_error: s.hold[i, e] = s.tok + s.retry; s.stats['read_errors'] = s.stats.get('read_errors', 0) + 1
+    def kv_pressure(s, n):
+        """drop the n lowest-score level-4 floating experts now (returns downs)"""
+        i, e = np.nonzero(s.state == 2)
+        if not len(i): return []
+        o = np.argsort(s.score[i, e], kind='stable')[:n]; d = [(s.layers[i[k]], int(e[k])) for k in o]
+        for L, x in d: s.state[s.li[L], x] = 3; s.want[s.li[L], x] = False
+        s.stats['downs'] += len(d); return d
+    def level(s):
+        """[len(layers), NE] level each expert is served at (as far as the scheduler knows)"""
+        return np.where(s.fixed | (s.state == 2), 4, 2)
+    def close(s):
+        if s.P is not None and hasattr(s.P, 'close'): s.P.close()
 
     # ---- live I/O state
     def _plan(s, now, q0, nt=0):
@@ -170,45 +206,7 @@ class TapScheduler(Scheduler):
                 out.append((float(g), l, int(e), int(v))); k += 1
         out.sort(key=lambda z: -z[0]); return out
 
-    def _step_cpp(s, counts, ntok, token_ids, new_request, sal):
-        """step() with the array work in nqhost.TapCore (same ops, same order, same float32 value bits)"""
-        now = s.clock(); K = s.core; T = s.tcore
-        c = np.ascontiguousarray(counts, np.float64)
-        for n, dt in (('score', np.float64), ('state', np.int8), ('hold', np.float64), ('want', bool), ('doomed', bool)):
-            a = getattr(s, n)
-            if a.dtype != dt or not a.flags.c_contiguous or not a.flags.writeable: setattr(s, n, np.ascontiguousarray(a, dt).copy())
-        K.decay(s.score, c, s.a ** ntok); s.tok += ntok
-        if s.t_last is not None and ntok <= 16:
-            dt = now - s.t_last
-            if dt > 0: x = ntok / dt; s.tps = x if s.tps is None else 0.9 * s.tps + 0.1 * x
-        s.t_last = now
-        ref = False
-        if s.P is not None:
-            ref = s.P.step(c, ntok, token_ids, new_request, sal=sal) if s.wants_sal else s.P.step(c, ntok, token_ids, new_request)
-        st = s.state
-        big = T.pre(st, s.doomed, c, -1 if s.slots is None else int(s.slots), float(s.big * s.NE))
-        if big: s.stats['big_steps'] += 1
-        if ref and not big and s.P is not None and getattr(s.P, 'S', None) is not None:
-            lat, H, budget = s._plan(now, T.queued(st), T.todo_len())
-            pin = s.pin if s.pin is not None else None
-            if pin is not None and (pin.dtype != bool or not pin.flags.c_contiguous): pin = np.ascontiguousarray(pin, bool)
-            # the window lengths exactly as _value's v() computes them; numpy scalars (strong) make _value float64 math
-            def win(lo, h):
-                hi = lo + h; near = max(0.0, min(hi, s.span) - lo); far = max(0.0, hi - max(lo, s.span))
-                return float(near), type(near) is not float, float(far), type(far) is not float
-            w = win(lat, H) + win(0.0, lat) + (bool(lat >= 1),)
-            k, cut, ee, sk = T.refresh(np.ascontiguousarray(s.P.S, np.float32), s.score, s.fixed, st, s.doomed, s.hold, pin,
-                                       float(s.tok), int(s.nf), 1 - s.a, -1.0 if s.tfar is None else float(s.tfar), s.span,
-                                       w, s.tc, int(min(budget, 2 ** 62)))
-            s.stats['budget_cut'] += cut; s.stats['eager_evict'] += ee; s.stats['no_slot_skip'] += sk; s.stats['promotions'] += k
-        if not (s.want.dtype == bool and s.want.flags.c_contiguous and s.want.flags.writeable): s.want = np.zeros(st.shape, bool)
-        ups, downs = T.finish(st, s.fixed, s.want)
-        if s.t_iss is not None and ups: s._mark_issue(now, ups)
-        s.stats['ups'] += len(ups); s.stats['downs'] += len(downs); s.stats['bytes'] += len(ups) * s.rb
-        return ups, downs
-
     def step(s, counts, ntok=1, token_ids=None, new_request=False, sal=None):
-        if s.tcore is not None: return s._step_cpp(counts, ntok, token_ids, new_request, sal)
         now = s.clock()
         c = np.asarray(counts, np.float64)
         s.score = s.score * s.a ** ntok + c; s.tok += ntok
@@ -270,10 +268,3 @@ class TapScheduler(Scheduler):
         """NQ_TAP_LAT=meas: issue time of each emitted up (landed() turns it into an issue->land latency sample)"""
         li = s.li; s.t_iss[[li[L] for L, _ in ups], [e for _, e in ups]] = now
 
-
-def make_scheduler(*a, **k):
-    """NQ_SCHED unset/'' -> scheduler.Scheduler (the default path, unchanged); 'tap' -> TapScheduler"""
-    m = os.environ.get('NQ_SCHED', '')
-    if m in ('', 'default'): return Scheduler(*a, **k)
-    if m == 'tap': return TapScheduler(*a, **k)
-    raise ValueError(f'unknown NQ_SCHED {m!r}')

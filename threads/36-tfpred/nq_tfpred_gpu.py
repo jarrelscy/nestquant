@@ -1,5 +1,5 @@
 """nq-tfpred serve path: the multi-window transformer expert-use predictor (threads/36-tfpred/model.py) as a drop-in for
-GPUJointPredictor (NQ_PREDICTOR=tf, NQ_TF_CKPT=<ckpt.pt>).  Off unless selected; nq_vllm.py never imports it otherwise.
+GPUJointPredictor. OFFLINE ONLY since the serve cleanup (clean-d): the serve path no longer has a tf option (it was NQ_PREDICTOR=tf).
 
   p = TFGPUPredictor(layers, fixed, ckpt, n_float=77, hm=0.7, device='cuda', graph=True)
   p.step(counts[NL,NE], ntok, token_ids=None, new_request=False, sal=None) -> bool   (True at a 16-token refresh)

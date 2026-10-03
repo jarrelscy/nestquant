@@ -1,8 +1,8 @@
 # nq-prefill: imported at startup by every Python process of the NQ serve container (PYTHONPATH=/nq/sm120/serve).
-# Does nothing unless NQ_PREFILL_BORROW=1; then installs the EngineCore-side prefill-borrow patches (nq_pb_engine.py)
+# Unless NQ_PREFILL_BORROW=0 (default 1) installs the EngineCore-side prefill-borrow patches (nq_pb_engine.py)
 # as post-import hooks. Any failure leaves the process untouched.
 import os
-if os.environ.get('NQ_PREFILL_BORROW','0')=='1':
+if os.environ.get('NQ_PREFILL_BORROW','1')=='1':
     try:
         import nq_pb_engine as _nq_pb_engine;_nq_pb_engine.install()
     except Exception as _e:

@@ -1,6 +1,6 @@
 """Prefill expert-level adaptation for the NQ serve (rank 0 decides, ranks 1-3 replay its ops from the oplog).
 
-NQ_PREFILL_ADAPT = 0 (off) | lookahead | chunk
+NQ_PREFILL_ADAPT = lookahead (default, D) | chunk | 0 (off)
   lookahead: at MoE layer L of a prefill chunk (T >= NQ_PF_MIN tokens) apply layer L+d's own router (its GateLinear +
              router.select_experts, i.e. exactly vLLM's sigmoid + e_score_correction_bias grouped top-8) to x_L, score the
              experts of L+d, and upgrade its top non-resident ones right away (reads land before L+d runs, or the
@@ -19,10 +19,10 @@ NQ_LA_CTL (/dev/shm/nq_la_ctl)  in-boot A/B: key=value tokens (mode=off|lookahea
 NQ_LA_MEASURE (0)    1: router lookahead accuracy (d = 0, 1, 2 vs previous chunk / static set / oracle, k = 26/45/77, shares
                      of routes / gate weight / sum w^2||x||^2 / delta-benefit captured), json to NQ_LA_OUT; adds a host sync
                      per layer (measurement only).
-Consistency: only the scheduling rank (rank 0 with NQ_LEADER) scores and plans; its ups/downs go through the oplog, so
+Consistency: only the scheduling rank (rank 0, the oplog leader) scores and plans; its ups/downs go through the oplog, so
 all ranks carry out the same level ops (ranks 1-3 never run the router). Host transfer: the [8, 256] per-layer stats are
 copied non-blocking into pinned memory + a CUDA event; the streaming thread picks them up (no extra sync in forward).
-The byte budget (NQ_CAP_GBPS) and the scheduler's big-step guard do not apply to these ops (slot pool only).
+The decode scheduler's issue budget and big-step guard do not apply to these ops (slot pool only).
 Per chunk the streaming thread logs: issued / landed in time (served at level 4 by the layer the plan was for) /
 deferred (wanted but no slot or still draining), the route / gate / salience share of the chosen set and of the served
 level-4 set, and the router cost (CUDA events)."""
@@ -32,7 +32,7 @@ try:
     from vllm.logger import init_logger;log=init_logger('vllm.nestquant')
 except Exception:log=logging.getLogger('nestquant')
 NE=256
-MODE=os.environ.get('NQ_PREFILL_ADAPT','0')
+MODE=os.environ.get('NQ_PREFILL_ADAPT','lookahead')   # D default (gated ON 2026-09-29)
 if MODE in ('','0','off'):MODE=None
 assert MODE in (None,'lookahead','chunk'),MODE
 D=int(os.environ.get('NQ_LA_D','1'));BUDGET=int(os.environ.get('NQ_LA_BUDGET','45'))

@@ -1,5 +1,5 @@
-"""nq-prefill: prefill-borrow, EngineCore side (vLLM scheduler process). Loaded by sitecustomize.py only when
-NQ_PREFILL_BORROW=1; patches vllm.v1.core.sched.scheduler.Scheduler.schedule and KVCacheManager.allocate_slots.
+"""nq-prefill: prefill-borrow, EngineCore side (vLLM scheduler process). Loaded by sitecustomize.py when
+NQ_PREFILL_BORROW=1 (the default); patches vllm.v1.core.sched.scheduler.Scheduler.schedule and KVCacheManager.allocate_slots.
 
 While exactly one request runs and it is prefilling with >= NQ_PB_MIN_NEW (8192) prompt tokens still to compute (an
 LMCache / prefix hit counts as computed, so a restore never borrows), FREE KV blocks are taken out of the free queue
@@ -14,9 +14,10 @@ or allocate_slots runs short (released inside that schedule() call, then retried
 NQ_PREFILL_SLOTS (155) floating experts per layer wanted during prefill -> extra slots (NQ_PREFILL_SLOTS - nf) x layers;
 the block count is sized from the KV tensors' page sizes with the workers' rank-independent carve rule (carve_count).
 In-boot off switch: while /dev/shm/nq_pb_off exists no new borrow starts (NQ_PB_OFF); /dev/shm/nq_pb_kv_off: no new phase 2
-borrow (phase 1 still runs); test knob /dev/shm/nq_pb_free_cap = N caps the free blocks phase 1 may take.
+borrow (phase 1 still runs).
 
-Phase 2, NQ_PREFILL_KV_OFFLOAD=1 (also needs NQ_PREFILL_BORROW=1): when the free blocks can't give the target (long
+Phase 2, NQ_PREFILL_KV_OFFLOAD=1 (default; also needs NQ_PREFILL_BORROW=1), only while phase 1 would get fewer than
+NQ_PREFILL_KV_BELOW (1500) slots (near-full KV; 0 = no limit): when the free blocks can't give the target (long
 context), from the request's 2nd scheduled step on (its LMCache load, if any, is done) and with >= NQ_PB_MIN_NEW prompt
 tokens still to go, the USED KV of n_off MLA layers is moved to pinned host memory and streamed back per layer
 (nq_pb.KVOff): those layers' whole KV storages, minus two that rotate as staging, become expert slots. The engine
@@ -27,16 +28,12 @@ world x n_off x rows x page; NQ_PB_RAM_FLOOR_GB (38) must stay available) and NQ
 like phase 1, plus: a step of <= max cudagraph capture size tokens (piecewise graphs bake KV pointers), the block list
 outgrowing rows, MemAvailable < floor mid-borrow (then phase 1 may run for the rest of that request)."""
 import os,sys,json,logging,functools
-ON=os.environ.get('NQ_PREFILL_BORROW','0')=='1'
+ON=os.environ.get('NQ_PREFILL_BORROW','1')=='1'
 MIN_NEW=int(os.environ.get('NQ_PB_MIN_NEW','8192'));PF_NF=int(os.environ.get('NQ_PREFILL_SLOTS','155'))
 MARGIN=int(os.environ.get('NQ_PB_MARGIN','16'));OFF=os.environ.get('NQ_PB_OFF','/dev/shm/nq_pb_off')
-KV_OFF=os.environ.get('NQ_PREFILL_KV_OFFLOAD','0')=='1'
-KV_BELOW=int(os.environ.get('NQ_PREFILL_KV_BELOW','0'))   # phase 2 only while phase 1 has < this many slots (0 = no limit); its hot-% gain is near-full KV only
-KVOFF_FILE=os.environ.get('NQ_PB_KV_OFF','/dev/shm/nq_pb_kv_off');CAP_FILE=os.environ.get('NQ_PB_FREE_CAP','/dev/shm/nq_pb_free_cap')
-def free_cap():
-    """test knob: an int in /dev/shm/nq_pb_free_cap caps the free blocks phase 1 may borrow (to make phase 2 fire)"""
-    try:return int(open(CAP_FILE).read().strip())
-    except (OSError,ValueError):return None
+KV_OFF=os.environ.get('NQ_PREFILL_KV_OFFLOAD','1')=='1'
+KV_BELOW=int(os.environ.get('NQ_PREFILL_KV_BELOW','1500'))   # phase 2 only while phase 1 has < this many slots (0 = no limit); its hot-% gain is near-full KV only
+KVOFF_FILE=os.environ.get('NQ_PB_KV_OFF','/dev/shm/nq_pb_kv_off')
 HOST_GB=min(float(os.environ.get('NQ_PB_KV_HOST_GB','8')),64.);FLOOR_GB=float(os.environ.get('NQ_PB_RAM_FLOOR_GB','38'))
 ALIGN=4096
 log=logging.getLogger('vllm.nestquant.pb')   # child of vllm's logger (its handler / level); no vllm import at site time
@@ -64,7 +61,7 @@ def mla_candidate(name,n_layers):
     i=layer_idx(name);return i is not None and i<n_layers
 
 def nf0():
-    return 77 if os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf') else 51
+    return 77      # decode floating experts per layer (jF k0 layout, nq_vllm.NF)
 
 def target_extra():
     """(extra slots wanted, rec bytes) from the rank-0 record index"""
@@ -87,7 +84,6 @@ class State:
             if t.size%nb:log.warning('NestQuant prefill-borrow: KV tensor size %d not a multiple of %d blocks, off',t.size,nb);s.dead=True;break
             pg.append(t.size//nb)
         s.pages=pg;s.kvm=sched.kv_cache_manager;s.pool=s.kvm.block_pool
-        if os.environ.get('NQ_HOSTLOOP','py')=='cpp':log.warning('NestQuant prefill-borrow: NQ_HOSTLOOP=cpp not supported, off');s.dead=True
         if not s.want or not s.rb:s.dead=True
         s.minrun=next((n for n in range(1,nb+1) if carve_count(n,pg,s.rb)>0),nb+1) if pg and s.rb else nb+1
         # phase 2 (KV offload) geometry
@@ -121,8 +117,6 @@ class State:
         return n
     def borrow(s,req):
         pool=s.pool;avail=pool.get_num_free_blocks()-s.need(req)-MARGIN
-        c=free_cap()
-        if c is not None:avail=min(avail,c)
         if avail<s.minrun:return False
         free=[b for b in pool.blocks if b.ref_cnt==0 and not b.is_null and b.prev_free_block is not None]
         # contiguous id runs, hashless (never-hit) first, then cached ones; longest first (least carve waste)

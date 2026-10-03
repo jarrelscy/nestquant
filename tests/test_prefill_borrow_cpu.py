@@ -1,5 +1,5 @@
 """nq-prefill (prefill-borrow) CPU tests, no GPU touched.
-Part A (any python with torch + numpy): the real RankExecutor / OpLog / Follower / CoalescingFollower / Scheduler /
+Part A (any python with torch + numpy): the real RankExecutor / OpLog / Follower / CoalescingFollower / TapScheduler /
   lookahead _plan / nq_pb.PB on a fake engine + fake mailboxes (CPU tensors, addresses only), one leader + two followers,
   random interleaving of the streaming loops, the worker hooks and the kernel's per-layer mailbox apply, several
   borrow epochs. Checked at every forward of every rank:
@@ -14,7 +14,7 @@ Part B (needs vllm: run in the serve container): nq_pb_engine.State on vLLM's re
 run: CUDA_VISIBLE_DEVICES= /data/Jarrel/nqenv/bin/python tests/test_prefill_borrow_cpu.py
      docker exec -e CUDA_VISIBLE_DEVICES= glm53-nestquant /opt/vllm/.venv/bin/python /nq/tests/test_prefill_borrow_cpu.py B"""
 import os,sys,types,random,tempfile,threading,collections
-os.environ.update(NQ_PREFILL_BORROW='1',NQ_PREFILL_SLOTS='14',NQ_PB_MIN_NEW='1024',NQ_PB_MARGIN='4',NQ_HOSTLOOP='py',NQ_PREDICTOR='ema')
+os.environ.update(NQ_PREFILL_BORROW='1',NQ_PREFILL_SLOTS='14',NQ_PB_MIN_NEW='1024',NQ_PB_MARGIN='4')
 HERE=os.path.dirname(os.path.abspath(__file__));R=os.path.dirname(HERE)
 sys.path[:0]=[R+'/streaming',R+'/sm120/serve',R+'/sm120']
 import numpy as np,torch
@@ -75,8 +75,17 @@ class RF:
     def rec(s,L,E):return L*NE+E
     def engine(s,*a,**k):return s.eng
 
+class EmaP:
+    """leader predictor stand-in (the serve runs jF): EMA of the routed counts, refreshed every 16 tokens"""
+    def __init__(s,nl):s.S=np.zeros((nl,NE));s.n=0
+    def step(s,c,ntok,tid=None,nr=False):
+        s.S=s.S*0.9+np.asarray(c,np.float64);s.n+=ntok
+        if s.n<16:return False
+        s.n=0;return True
+    def close(s):pass
+
 def part_a(seed=0,epochs=4):
-    import executor as EX,oplog as OL,scheduler as SC,nq_lookahead as LAH,nq_pb as PBM
+    import executor as EX,oplog as OL,scheduler_tap as TS,nq_lookahead as LAH,nq_pb as PBM
     EX.torch=_T();PBM.torch=_T();LAH.NE=NE
     def mkrows(s,L,E):return torch.tensor([2,0],dtype=torch.int64),np.array([4,0],np.int64),np.array([0,1],np.int64)
     EX.RankExecutor._mkrows=mkrows
@@ -86,7 +95,7 @@ def part_a(seed=0,epochs=4):
     for r in range(3):
         lay={L:MB() for L in LAY};eng=FE(lay,random.Random(seed*7+r))
         X=EX.RankExecutor(RF(eng),{L:(None,lay[L],{E:None for E in range(NE)}) for L in LAY},SPL*len(LAY))
-        S=(__import__('scheduler_tap').make_scheduler if os.environ.get('NQ_SCHED') else SC.Scheduler)(LAY,fixed,dflt,RB,NE=NE,n_float=NF,slots=SPL*len(LAY),cap_GBps=1e6,predictor='ema')
+        S=TS.TapScheduler(LAY,fixed,dflt,RB,NE=NE,n_float=NF,slots=SPL*len(LAY),predictor=EmaP(len(LAY)) if r==0 else None)
         init=[(L,E) for L in LAY for E in dflt[L]];[S.state.__setitem__((S.li[L],E),1) for L,E in init];X.apply(init,[],S)
         rt=types.SimpleNamespace(rank=r,dev=None,X=X,S=S,F=None,log=log0 if r==0 else None,cv=threading.Condition(),in_iter=False,pb_pause=0,lay=lay,eng=eng)
         if r:
@@ -110,17 +119,13 @@ def part_a(seed=0,epochs=4):
                 ups,downs,_,_=LAH.LA._plan(la,S,L,b,budget=4)
                 if ups or downs:
                     if ups and X.xtag:ups=X.pool_tag(ups)
-                    pin_check(S,downs);X.apply(ups,downs,S);log0.put(ups,downs)
+                    X.apply(ups,downs,S);log0.put(ups,downs)
         else:
             c=np.zeros((len(LAY),NE))
             for i in range(len(LAY)):
                 for e in rng.sample(range(NE),8):c[i,e]+=rng.randint(1,4)
-            ups,downs=S.step(c,16);pin_check(S,downs);ups=X.pool_tag(ups);X.apply(ups,downs,S);log0.put(ups,downs)
+            ups,downs=S.step(c,16);ups=X.pool_tag(ups);X.apply(ups,downs,S);log0.put(ups,downs)
     def follower_iter(rt):rt.X.poll(rt.F);rt.F.step()
-    def pin_check(S,downs):                            # NQ_PB_PROTECT: no pinned pre-borrow decode resident is downed during its borrow
-        pin=ranks[0].PB.pin
-        if pin is None:return
-        stats['pinned_steps']+=1;bad=[(L,E) for L,E in downs if pin[S.li[L],E]];assert not bad,('protected expert downed',bad[:4])
     def forward_check(rt,cur_r,old):
         X=rt.X;seen={}
         for L,m in rt.lay.items():
@@ -186,10 +191,8 @@ def part_a(seed=0,epochs=4):
         assert tab==lead,(rt.rank,sorted(tab^lead)[:8])
         assert len(rt.X.free)==rt.X.nslot-len(lead),(rt.rank,len(rt.X.free),len(lead))
         assert not rt.X.xaddr and not rt.X.xep,rt.X.xaddr
-    assert ranks[0].PB.pin is None and getattr(ranks[0].S,'pin',None) is None,'protect pin left after reclaim'
-    assert (PBM.PROTECT>0)==(ranks[0].PB.n['protected']>0),(PBM.PROTECT,dict(ranks[0].PB.n))
     print(f'A seed {seed}: {epochs} epochs, {stats["ticks"]} steps, max borrowed slots used {stats["x_slots_used"]}, '
-          f'leader xst {dict(ranks[0].X.xst)}, F1 {dict(ranks[1].X.xst)}, F2 {dict(ranks[2].X.xst)}, final level-4 floating {len(lead)}, protected {ranks[0].PB.n['protected']} over {stats['pinned_steps']} steps, follower cancel_drop {stats['cancel_drop']} (slot_wait_cancel {stats['swc']}): OK')
+          f'leader xst {dict(ranks[0].X.xst)}, F1 {dict(ranks[1].X.xst)}, F2 {dict(ranks[2].X.xst)}, final level-4 floating {len(lead)}, follower cancel_drop {stats['cancel_drop']} (slot_wait_cancel {stats['swc']}): OK')
 
 # ------------------------------------------------------------------------------------------------ part B
 def part_b():

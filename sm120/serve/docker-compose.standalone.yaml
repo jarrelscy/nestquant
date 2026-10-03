@@ -58,34 +58,27 @@ services:
       PYTHONPATH: /nq/sm120/serve
       NQ_HOME: /nq
       NQ_REPACK: /nqrepack
+      NQ_REPACK_ALT: /nqrepack1                              # second copy of the records (dual-drive reads; defaults to the same dir)
       NQ_BUILD: /nqbuild
       NQ_LGB_PATH: /nqlgb
       LIBURING: /data/Jarrel/liburing                        # container path (mount target below)
       CUDA_HOME: /opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13
       NQ_LAYERS: ${NQ_LAYERS:-}                              # empty = every layer in the repack
-      NQ_STREAM: ${NQ_STREAM:-1}
-      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-56}
-      NQ_CAP_GBPS: ${NQ_CAP_GBPS:-0}                         # 0 = uncapped
+      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-80}
       NQ_CHECK: ${NQ_CHECK:-0}
       CUDA_LAUNCH_BLOCKING: ${NQ_CLB:-0}
       NQ_DUMP: ${NQ_DUMP:-}
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
       NQ_ISSUE: ${NQ_ISSUE:-1}
-      NQ_LEADER: ${NQ_LEADER:-1}
       NQ_SHADOW: ${NQ_SHADOW:-0}
       NQ_FAULT_READ_MS: ${NQ_FAULT_READ_MS:-}
       NQ_FAULT_FAIL_PPM: ${NQ_FAULT_FAIL_PPM:-}
-      # --- expert predictor (ema | gbdt | joint/jF) ---
-      NQ_PREDICTOR: ${NQ_PREDICTOR:-}                        # empty = image default
+      # --- expert predictor: jF joint predictor + tap scheduler (serve config D; README "Serving (D)") ---
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}
       NQ_JOINT_NET: ${NQ_JOINT_NET:-/nqpred/joint/jF.pt}
       NQ_JOINT_V2: ${NQ_JOINT_V2:-/nqpred/joint/v2_sal_tweedie1.5.txt}
-      NQ_GBDT_MODE: ${NQ_GBDT_MODE:-sync}
-      NQ_GBDT_THREADS: ${NQ_GBDT_THREADS:-4}
-      NQ_GBDT_SCALE: ${NQ_GBDT_SCALE:-mps}
-      NQ_GBDT_BAND: ${NQ_GBDT_BAND:-ema256}
       NQ_SESSION_RESTORE: ${NQ_SESSION_RESTORE:-1}
       NQ_DELTA_TABLE: /nqpred/delta_table.json
       # --- prefill path ---
@@ -177,6 +170,7 @@ services:
       - ${NQ_REPO:-/data/Jarrel/nestquant}:/nq:ro
       - ${NQ_REPO:-/data/Jarrel/nestquant}/sm120/serve/overlay/nvfp4_arvq_hybrid.py:/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro
       - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}:/nqrepack:ro
+      - ${NQ_REPACK_ALT_DIR:-${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}}:/nqrepack1:ro   # copy on a 2nd NVMe (default: same dir = one drive, two queues)
       - ${NQ_PREDICTOR_DIR:-/data/Jarrel/nq-serve/predictor}:/nqpred:ro
       - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
       - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro

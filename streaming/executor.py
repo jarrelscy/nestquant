@@ -27,12 +27,9 @@ nq-prefill (prefill-borrow, sm120/serve/nq_pb.py; nothing changes unless x_borro
                       write their level-2 rows into the mailbox on the current stream (seq bumped, so the next apply of
                       every layer switches them), sync; returns the experts it downgraded (they release normally
                       when applied; their dead slots are never reused)"""
-import os,time,collections,torch,numpy as np
+import time,collections,torch,numpy as np
 XB=65536;XS=1<<20         # nq-prefill: borrowed-pool key L + XB*epoch; borrowed slot id = nslot + XS*epoch + j
 import p4rec as PR
-def _knob1(p):
-    try:return open(p).read().strip()=='1'
-    except OSError:return False
 from moe import entry
 
 class RankExecutor:
@@ -177,13 +174,12 @@ class RankExecutor:
                 except Exception:pass
         X0=xs();ex=sum(1 for t in s.odst if t in s.ops and (s.ops[t][0],s.ops[t][1]) not in X0)
         if ex:s.xst['fence_extra']+=ex                            # in-flight writes into lent memory the mapping no longer shows
-        nw=0;tw=t0;nofence=_knob1('/dev/shm/nq_kvoff_nofence')   # diagnostic (file content 1): the pre-fence (mapping-only) wait
-        if nofence:s.xst['nofence']+=1
+        nw=0;tw=t0
         while True:                                       # every op on a borrowed-slot expert must have written
             X=xs()
             # by mapping (ops of experts in borrowed slots) AND by destination (any op still writing into lent memory,
             # whatever the expert -> slot mapping says now)
-            if not any((o[0],o[1]) in X for o in s.ops.values()) and (nofence or not any(t in s.ops for t in s.odst)):break
+            if not any((o[0],o[1]) in X for o in s.ops.values()) and not any(t in s.ops for t in s.odst):break
             s.poll(sched,issue=False);time.sleep(2e-4);nw+=1
             if time.time()-tw>warn_s:
                 tw=time.time()

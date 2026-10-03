@@ -2,7 +2,7 @@
 on the same decode stream.  Prefill counts are fed as one big step before each request's first decode step.
   test_pred_parity.py <ckpt> [task] [nblocks] [dev]"""
 import sys, os, numpy as np, torch
-sys.path.insert(0, '/data/Jarrel/nq-tfpred/src'); sys.path.insert(0, '/data/Jarrel/nq-tfpred/nq-src/sm120/serve')
+sys.path.insert(0, '/data/Jarrel/nq-tfpred/src'); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # nq_tfpred_gpu.py lives here (moved out of sm120/serve)
 os.environ['NQ_HOME'] = '/data/Jarrel/nq-tfpred/nq-src'
 import data as D, model as M
 sys.modules['model'] = M

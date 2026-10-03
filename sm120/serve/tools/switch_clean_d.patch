@@ -1,0 +1,51 @@
+--- a/switch.sh
++++ b/switch.sh
+@@ -27,10 +27,7 @@
+   dsv4.1flash|dsv41-flash|v41flash|dsv4.1) echo "Alias: $1 → dsv41"; set -- "dsv41" ;;
+   mimo-v2.6|mimov2.6|mimo-flash|mimo2.6-flash) echo "Alias: $1 → mimo2.6"; set -- "mimo2.6" ;;
+   nestquant|nq|glm-5.3-nq|glm5.3-nestquant) echo "Alias: $1 → glm5.3-nq"; set -- "glm5.3-nq" ;;
+-  nq-jf|glm5.3-nq-jf|glm-5.3-nq-jf|jf|joint) echo "Alias: $1 → glm5.3-nq (jF joint predictor, k0 layout)"; \
+-    export NQ_PREDICTOR="joint" NQ_SLOTS_PER_LAYER="${NQ_SLOTS_PER_LAYER:-80}";
+-    [ "${NQ_JF_LEGACY:-0}" = 1 ] || export NQ_SCHED="${NQ_SCHED-tap}" NQ_TAP_H="${NQ_TAP_H-64}" NQ_PREFILL_BORROW="${NQ_PREFILL_BORROW-1}" NQ_PREFILL_SLOTS="${NQ_PREFILL_SLOTS-155}" NQ_IO_MODE="${NQ_IO_MODE-dual}" NQ_IO_QD="${NQ_IO_QD-8}" NQ_IO_QD_ALT="${NQ_IO_QD_ALT-4}" NQ_FOLLOW_COALESCE="${NQ_FOLLOW_COALESCE-1}" NQ_PREFILL_KV_OFFLOAD="${NQ_PREFILL_KV_OFFLOAD-1}" NQ_PREFILL_KV_BELOW="${NQ_PREFILL_KV_BELOW-1500}"   # nq-io promoted defaults (final window); NQ_JF_LEGACY=1 = old behaviour
+-    set -- "glm5.3-nq" ;;
++  nq-jf|glm5.3-nq-jf|glm-5.3-nq-jf|jf|joint) echo "Alias: $1 → glm5.3-nq (serve config D: jF + tap, prefill borrow + KV offload, dual IO)"; set -- "glm5.3-nq" ;;
+ esac
+ 
+ ALL_PROFILES="27b 122b minimax minimax-m2.7 minimax-m2.7-vllm minimax-m3 mimo gemma4-31b gemma4-31b-qat gemma4-26b qwen3.6-27b qwen3.8-27b hy3 dsv4flash-0731 dsv4flash-0731-tp4 dsv4flash-0731-tp4-rewriter dsv4flash-0731-vision dsv4flash-b12x-dspark dsv4flash-b12x dsv4flash-b12x-gpu23 dsv4flash-fp8 dsv4flash dsv4flash-dspark dsv4flash-dspark-main dsv4flash-180b glm5.2 glm5.2-gguf glm5.2-hybrid glm5.2-hybrid-mtp glm5.2-hybrid-1m-tp4 glm5.2-hybrid-1m-mtp glm5.2-vision-1m-mtp glm5.2-hybrid-500k glm5.2-hybrid-250k glm5.2-vision-500k glm5.2-vision-250k glm5.2-hybrid-tp2pp2-mtp glm5.2-hybrid-tp4 glm5.2-hybrid-tp2pp2 glm5.2-hybrid-longctx-dspark minimax-m3-vllm minimax-m3-b12x inkling-512k-mtp inkling-640k dsv4pro ornith1.5 orca orca-8002 gemma-e2b glm5.3-flash glm5.3-flash-nvfp4 glm5.3-flash-uncensored glm5.3-hybrid glm5.3-hybrid-1m qwen3.8-flash-next"
+@@ -228,7 +225,7 @@
+   qwen3.8-flash-next) echo "Switching to Qwen3.8-Flash-Next 125B-A6B (arch qwen4_exp / Qwen4 preview, dedicated vllm/vllm-openai:qwen38-flash-next image, TP4+EP/4-GPU, BF16 335GB with 51B n-gram table CPU-offloaded (needs 51GB+ free host RAM), 262K ctx, multimodal, qwen3_xml tools + qwen3 reasoning; weights on ROOT volume /home/jarrelscy/models; served as qwen3.8-flash-next; aliases: qwen3.8fn, qwen4-preview, flash-next)..." ;;
+   glm5.3-hybrid) echo "Switching to GLM-5.3 NVFP4+AQLM hybrid + 5.2V vision graft (jarrelscy checkpoint, same two-tier hot-NVFP4/cold-AQLM scheme + glm5v arch as the 5.2 hybrid; glm52-vision-sm120 image, TP4+DCP4+MTP ns3+PIECEWISE graphs, ~1M ctx, IMAGE input, util 0.96, LMCache off until gated; MTP input_scale synthesized — validate acceptance; served as glm-5.3; aliases: glm-5.3, glm5.3-vision)..." ;;
+   glm5.3-hybrid-1m) echo "Switching to GLM-5.3 Vision NVFP4+ARVQ PV-tuned 8+8 hybrid, served as glm-5.3, with dense P4, TP4+DCP4+MTP ns3, 1,048,576-token window, eight request slots, LMCache, sparse top-k/ABI fixes and repaired MTP index-buffer sharing, CUDA graphs through 32 (aliases: glm5.3-arvq, glm5.3-1m, glm-5.3)..." ;;
+-  glm5.3-nq) echo "Switching to GLM-5.3 NestQuant 2/4-bit SSD streaming (jarrelscy/GLM-5.3-NestQuant-2-4bit, layers 3-77 from /home/jarrelscy/nq-p4rec/hf; ARVQ image + nestquant compose override via /data/Jarrel/nestquant/sm120/serve/serve_nq.sh, TP4+DCP4+MTP ns3, 1,048,576-token window, ONE request slot, GBDT predictor uncapped, session restore, LMCache; served as glm-5.3-nq + local; aliases: nestquant, nq, glm-5.3-nq)..." ;;
++  glm5.3-nq) echo "Switching to GLM-5.3 NestQuant 2/4-bit SSD streaming (jarrelscy/GLM-5.3-NestQuant-2-4bit, layers 3-77 from /home/jarrelscy/nq-p4rec/hf; ARVQ image + nestquant compose override via /data/Jarrel/nestquant/sm120/serve/serve_nq.sh, TP4+DCP4+MTP ns3, 1,048,576-token window, ONE request slot, serve config D (jF predictor + tap scheduler, prefill borrow + KV offload, dual IO), session restore, LMCache; served as glm-5.3-nq + local; aliases: nestquant, nq, glm-5.3-nq)..." ;;
+   # --- DeepSeek V4.1 Flash ---
+   dsv41) echo "Switching to DeepSeek-V4.1-Flash-UNCENSORED-FP8 552B-A25B (dealignai abliterated checkpoint — pure weight edit, base config; b12x stack: b12x-dsv41:r9-liburing image + fresh dev/jovian-judgement vllm + b12x checkouts, TP4/4-GPU, 1M ctx (auto 1048576), engram disk table via io_uring (seccomp=unconfined + memlock=-1), jit-monitor warn; 13.5-19.5 ms/step — beats our vLLM port; served as deepseek/v41flash-b12x + local; aliases: dsv4.1flash, dsv41-flash, v41flash, dsv4.1; our own vLLM-port harness stays reachable as dsv41-ours)..." ;;
+   mimo2.6) echo "Switching to MiMo-V2.6-Flash-RL (Xiaomi omnimodal MoE, 256-expert top-8, FP8/MXFP4 ckpt; b12x stack: voipmonitor karmic-kraken image + upstream MiMo PR series in mimo-work/stack, TP4/4-GPU, 1M ctx, fp8 KV, image+audio (+video), DFlash K=7; served as mimo/v2.6-flash + local; aliases: mimo-v2.6, mimov2.6, mimo-flash; the OLD MiMo-V2.5 179B sglang profile stays reachable as plain 'mimo')..." ;;
+@@ -298,7 +295,7 @@
+     echo "  GLM-5.3-Flash 320B-A18B MoE, native block-FP8 (glm53-flash prebuilt image, arch glm5_next, multimodal; served as 'glm/glm5.3'):"
+     echo "    glm5.3-arvq             GLM-5.3 Vision ARVQ hybrid + dense P4, TP4+DCP4+MTP3, 1,048,576-token ctx, eight request slots, LMCache; see model card for measured decode throughput"
+     echo "    glm5.3-nq               GLM-5.3 NestQuant 2/4-bit SSD streaming, TP4+DCP4+MTP3, 1M ctx, one request slot, LMCache + session restore (served as glm-5.3-nq + local; aliases: nestquant, nq)"
+-    echo "    glm5.3-nq-jf            same as glm5.3-nq but with the jF joint expert predictor (k0 layout, 77 floating/layer, 80 slots/layer; aliases: nq-jf, jf)"
++    echo "    glm5.3-nq-jf            alias of glm5.3-nq (the serve is config D only: jF predictor, k0 layout, 80 slots/layer; aliases: nq-jf, jf)"
+     echo "    glm5.3-flash            TP4 / 4-GPU  — 1M ctx (needle-gated), fp8_ds_mla KV, glm45 reasoning + glm47 tools (alias: glm5.3; ~306GB FP8 weights on /data; MTP spec off pending gate)"
+     echo "    glm5.3-flash-nvfp4      TP4 / 4-GPU  — 1M ctx + MTP spec decode, NVFP4 weights (~198GB local-inference-lab w4a4, frees ~28GB/GPU vs FP8 → multi-seq 1M packing; served as glm-5.3f; aliases: glm-5.3f, glm5.3-nvfp4)"
+     echo "    glm5.3-flash-uncensored TP4 / 4-GPU  — 1M ctx, NO MTP, NVFP4 (~177GB orcarouter abliterated; served as glm-5.3f; aliases: glm-5.3f-unc, glm5.3-unc; LMCache ON, lossless-gated; recovery repo github.com/jarrelscy/glm53f-lmcache-sm120)"
+@@ -453,15 +450,15 @@
+ 
+ #   glm5.3-nq — NestQuant SSD streaming serve (repo /data/Jarrel/nestquant). serve_nq.sh
+ #               builds the kernels, starts the nestquant compose project and waits for
+-#               /v1/models. Defaults = the tb4 serve config of 2026-09-30; any NQ_* /
++#               /v1/models. Serve config = D (nestquant README 'Serving (D)' = the code defaults); any NQ_* /
+ #               NUM_SPEC / ARVQ_CAPTURE_SIZES in the caller's env overrides them.
+ if [ "$1" = "glm5.3-nq" ]; then
+   export NQ_REPACK_DIR="${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}" NQ_LAYERS="${NQ_LAYERS:-3-77}" \
+     NUM_SPEC="${NUM_SPEC:-3}" ARVQ_CAPTURE_SIZES="${ARVQ_CAPTURE_SIZES:-[1,2,3,4,5,6,8,16,32]}" \
+     NQ_MAXLEN="${NQ_MAXLEN:-1048576}" NQ_UTIL="${NQ_UTIL:-0.92}" NQ_MAX_NUM_SEQS="${NQ_MAX_NUM_SEQS:-1}" \
+-    NQ_CAP_GBPS="${NQ_CAP_GBPS:-0}" NQ_PREDICTOR="${NQ_PREDICTOR:-gbdt}" NQ_LMCACHE="${NQ_LMCACHE:-1}"
++    NQ_LMCACHE="${NQ_LMCACHE:-1}"
+   # Leftover A/B control files would silently change the serve's behaviour.
+-  rm -f /dev/shm/nq_la_ctl /dev/shm/nq_pf_off /dev/shm/nq_sr_ctl /dev/shm/nq_pb_off /dev/shm/nq_pb_kv_off /dev/shm/nq_pb_free_cap /dev/shm/nq_tier_drop
++  rm -f /dev/shm/nq_la_ctl /dev/shm/nq_pf_off /dev/shm/nq_sr_ctl /dev/shm/nq_pb_off /dev/shm/nq_pb_kv_off /dev/shm/nq_tier_drop
+   bash /data/Jarrel/nestquant/sm120/serve/serve_nq.sh up
+   echo "Ready: glm5.3-nq serving on :8001 (models: glm-5.3-nq, local)."
+   exit 0

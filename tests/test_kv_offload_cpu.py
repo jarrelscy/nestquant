@@ -16,7 +16,7 @@ run: CUDA_VISIBLE_DEVICES= /data/Jarrel/nqenv/bin/python tests/test_kv_offload_c
      docker exec -e CUDA_VISIBLE_DEVICES= -e PYTHONPATH= glm53-nestquant /opt/vllm/.venv/bin/python <copy>/tests/test_kv_offload_cpu.py D"""
 import os,sys,types,random,ctypes,contextlib,tempfile,json
 os.environ.update(NQ_PREFILL_BORROW='1',NQ_PREFILL_KV_OFFLOAD='1',NQ_PREFILL_SLOTS='14',NQ_PB_MIN_NEW='1024',NQ_PB_MARGIN='4',
-                  NQ_HOSTLOOP='py',NQ_PREDICTOR='ema',NQ_PB_KV_HOST_GB='8',NQ_PB_RAM_FLOOR_GB='38')
+                  NQ_PB_KV_HOST_GB='8',NQ_PB_RAM_FLOOR_GB='38')
 HERE=os.path.dirname(os.path.abspath(__file__));R=os.path.dirname(HERE)
 sys.path[:0]=[R+'/streaming',R+'/sm120/serve',R+'/sm120']
 import torch
@@ -128,6 +128,12 @@ def part_d():
     os.environ['NQ_LAYERS']=''
     import nq_pb_engine as PE
     PE.nf0=lambda:NF;PE.PF_NF=2000                  # want > what phase 1 can reach
+    # cap on the free blocks phase 1 may take (CAP[0]=N; was the /dev/shm/nq_pb_free_cap knob): avail=min(avail,N)
+    CAP=[None];need0=PE.State.need
+    def need(st_,req):
+        n=need0(st_,req)
+        return n if CAP[0] is None else max(n,st_.pool.get_num_free_blocks()-PE.MARGIN-CAP[0])
+    PE.State.need=need
     NB=2000;BS=256;NL=12;PG=41984;IPG=9216
     pool=BlockPool(NB,True,BS)
     class Mgr:
@@ -165,7 +171,7 @@ def part_d():
         k=make_block_hash_with_group_id(BlockHash(i.to_bytes(8,'little')),0);b.set_block_hash(k);pool.cached_block_hash_to_block.insert(k,b)
     pool.free_blocks(ob[:300][::-1]);pool.free_blocks(ob[300:-50][::-1])   # other keeps 50 live blocks
     assert sum(1 for b in pool.blocks if b.ref_cnt==0 and b.block_hash is not None)==300
-    td0=tempfile.mkdtemp();PE.CAP_FILE=td0+'/cap';open(PE.CAP_FILE,'w').write('300')   # phase 1 can't reach the target
+    CAP[0]=300                                     # phase 1 can't reach the target
     r=Req('a',60000);pb=step(r,4096)
     assert pb is not None and pb[4] is None,'phase 1 first';ns1=pb[3]
     assert ns1<st.want,(ns1,st.want)
@@ -176,7 +182,7 @@ def part_d():
     bl=[b.block_id for b in mla.req_to_blocks['a']];assert list(kv['blocks'])==bl and list(kv['wb'])==bl[16:32],(kv['wb'],bl[16:32])
     assert all(b.block_hash is None for b in pool.blocks if b.ref_cnt==0),'cached free block not evicted'
     assert all(pool.cached_block_hash_to_block.get_one_block(make_block_hash_with_group_id(BlockHash(i.to_bytes(8,'little')),0)) is None for i in range(300))
-    rows0=kv['rows'];assert rows0>=-(-60000//BS);os.remove(PE.CAP_FILE)
+    rows0=kv['rows'];assert rows0>=-(-60000//BS);CAP[0]=None
     while r.num_computed_tokens<60000-20:
         n=min(4096,60000-20-r.num_computed_tokens);pb=step(r,n)
         assert pb is not None and pb[4] is not None and pb[0]==2 and pb[4]['rows']==rows0
@@ -184,16 +190,16 @@ def part_d():
     pb=step(r,1);assert pb is None
     # first step of a request never does phase 2; MemAvailable sizing for 4 ranks; floor release -> phase 1 again
     r2rows=-(-(90000+64)//BS)+8;MA[0]=int((38+4*NL*0.5*r2rows*PG/2**30)*2**30)+(1<<20)   # room for half the layers on 4 ranks
-    done(r);open(PE.CAP_FILE,'w').write('300');r2=Req('b',90000);pb=step(r2,4096);assert pb is None or pb[4] is None
+    done(r);CAP[0]=300;r2=Req('b',90000);pb=step(r2,4096);assert pb is None or pb[4] is None
     pb=step(r2,4096);assert pb is not None and pb[4] is not None,('phase 2 (r2)',pb and pb[:4],st.want)
     n_off=pb[4]['n_off'];assert abs(n_off-NL//2)<=1 and 4*n_off*pb[4]['rows']*PG<=MA[0]-38*2**30,(n_off,NL)
     MA[0]=30<<30;pb=step(r2,4096);assert pb is None or pb[4] is None,'floor release'
     assert 'b' in st.tried2
     MA[0]=200<<30;pb=step(r2,4096);assert pb is None or pb[4] is None,'phase 2 not retried for that request'
-    done(r2);r3=Req('c',90000);step(r3,4096);pb=step(r3,4096);assert pb[4] is not None;os.remove(PE.CAP_FILE)
+    done(r2);r3=Req('c',90000);step(r3,4096);pb=step(r3,4096);assert pb[4] is not None;CAP[0]=None
     done(r3);pb=step(Req('d',90000),4096);assert pb is None or pb[4] is None,'request change releases'
-    # runtime knobs: free cap (phase 1 takes <= N blocks), kv_off file (no phase 2)
-    td=tempfile.mkdtemp();PE.CAP_FILE=td+'/cap';PE.KVOFF_FILE=td+'/kvoff';open(PE.CAP_FILE,'w').write('10');open(PE.KVOFF_FILE,'w').write('')
+    # free cap (phase 1 takes <= N blocks) + the kv_off runtime file (no phase 2)
+    td=tempfile.mkdtemp();CAP[0]=10;PE.KVOFF_FILE=td+'/kvoff';open(PE.KVOFF_FILE,'w').write('')
     sched.running=[];st.after(sched,types.SimpleNamespace(num_scheduled_tokens={}))
     for m_ in (mla,idx):
         for k_ in list(m_.req_to_blocks):pool.free_blocks(m_.req_to_blocks.pop(k_)[::-1])
