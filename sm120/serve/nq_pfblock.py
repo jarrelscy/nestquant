@@ -93,7 +93,19 @@ class PFBlock:
         ms=s._dknob()
         if ms_over is not None and ms!=0:ms=ms_over
         if ms==0:return
-        rt=s.rt;s.dseq+=1;n=s.dseq;torch.cuda.synchronize();t0=time.perf_counter()
+        if _async_on():
+            if getattr(s,'DA',None) is None:s.DA=DecAsync(s)
+            s.DA.submit(ms);return
+        s.dseq+=1;n=s.dseq;torch.cuda.synchronize()
+        ok,dt=s._dec_cond(n,ms)
+        d=s.dst;d['n']+=1;d['tot']+=dt;d['to']+=0 if ok else 1;d['max']=max(d['max'],dt)
+        if d['n']>=256:
+            log.info('NestQuant dec-block rank %d: budget %s ms/layer, %d steps, timed out %d, mean %.2f ms, max %.1f ms',
+                     s.rt.rank,ms,d['n'],d['to'],d['tot']/d['n'],d['max'])
+            s.dst=dict(n=0,to=0,tot=0.,max=0.)
+    def _dec_cond(s,n,ms):
+        """after step n-1 finished on the GPU: wait (budget ms x layers) for its hits to be seen + the upgrade reads to land"""
+        rt=s.rt;t0=time.perf_counter()
         dl=t0+(ms*len(s.L_)/1e3 if ms>0 else CAP_S);ok=False
         if s.dm is None and s.dpath and os.path.exists(s.dpath):
             try:s.dm=np.memmap(s.dpath,dtype=np.int64,mode='r',shape=(3,))
@@ -111,14 +123,53 @@ class PFBlock:
             else:
                 dm=s.dm;lg=rt.log
                 ok=wt(lambda:dm is not None and dm[0]>=n and (lg.gen,lg.off)>=(int(dm[1]),int(dm[2])))
-            if ok:ok=wt(lambda:not any(v[2]==4 for v in rt.X.ops.values()))
-        dt=(time.perf_counter()-t0)*1e3;d=s.dst;d['n']+=1;d['tot']+=dt;d['to']+=0 if ok else 1;d['max']=max(d['max'],dt)
-        if d['n']>=256:
-            log.info('NestQuant dec-block rank %d: budget %s ms/layer, %d steps, timed out %d, mean %.2f ms, max %.1f ms',
-                     rt.rank,ms,d['n'],d['to'],d['tot']/d['n'],d['max'])
-            s.dst=dict(n=0,to=0,tot=0.,max=0.)
+            if ok:ok=wt(lambda:not any(v[2]==4 for v in list(rt.X.ops.values())))
+        return ok,(time.perf_counter()-t0)*1e3
 
 DKNOB=os.environ.get('NQ_DEC_BLOCK_KNOB','/dev/shm/nq_dec_block')
+
+# ---- NQ_DEC_ASYNC (eval knob, file /dev/shm/nq_dec_async "1" overrides env; default off): the decode-step wait without the
+# host sync. execute_model records an event (= end of the work enqueued so far, i.e. the previous step), enqueues the
+# csrc/nq_decwait.cu spin kernel (GPU waits for pinned flag >= n, or the step budget of GPU time) and goes on with its
+# async prep; a waiter thread per rank does what dec_wait does after its synchronize (event.synchronize instead) and then
+# sets flag = n. Same conditions, same budget (ms x MoE layers, <0 -> CAP_S), only the host no longer blocks.
+AKNOB=os.environ.get('NQ_DEC_ASYNC_KNOB','/dev/shm/nq_dec_async');_AK=dict(m=None,v=os.environ.get('NQ_DEC_ASYNC','0')=='1')
+def _async_on():
+    try:m=os.stat(AKNOB).st_mtime_ns
+    except OSError:m=-1
+    if m!=_AK['m']:
+        _AK['m']=m
+        try:_AK['v']=(open(AKNOB).read().split()[0]=='1') if m!=-1 else os.environ.get('NQ_DEC_ASYNC','0')=='1'
+        except Exception:_AK['v']=False
+    return _AK['v']
+class DecAsync:
+    def __init__(s,P):
+        import threading,queue
+        from torch.utils.cpp_extension import load
+        load(name='nq_decwait',sources=[os.path.join(os.path.dirname(os.path.abspath(__file__)),'csrc','nq_decwait.cu')],
+             extra_cuda_cflags=['-O3'],is_python_module=False,verbose=False)
+        s.P=P;s.q=queue.Queue();s.flag=torch.zeros(1,dtype=torch.int64,pin_memory=True);s.fv=s.flag.numpy()
+        s.stat=torch.zeros(3,dtype=torch.int64,pin_memory=True);s.sv=s.stat.numpy();s.s0=s.sv.copy();s.hst=dict(n=0,to=0,tot=0.)
+        s.th=threading.Thread(target=s._run,daemon=True,name='nq-decwait');s.th.start()
+    def submit(s,ms):
+        P=s.P;P.dseq+=1;n=P.dseq;ev=torch.cuda.Event();ev.record()
+        tns=int(ms*len(P.L_)*1e6) if ms>0 else int(CAP_S*1e9)
+        s.q.put((n,ev,ms));torch.ops.nq_decwait.spin(s.flag.data_ptr(),n,tns,s.stat.data_ptr())
+        d=s.sv-s.s0
+        if d[0]>=256:
+            log.info('NestQuant dec-block async rank %d: budget %s ms/layer, %d steps, gpu timed out %d, gpu mean wait %.2f ms | host waiter mean %.2f ms, timed out %d',
+                     P.rt.rank,ms,d[0],d[1],d[2]/d[0]/1e6,s.hst['tot']/max(1,s.hst['n']),s.hst['to'])
+            s.s0=s.sv.copy();s.hst=dict(n=0,to=0,tot=0.)
+    def _run(s):
+        while True:
+            n,ev,ms=s.q.get()
+            try:
+                ev.synchronize();ok,dt=s.P._dec_cond(n,ms)
+                h=s.hst;h['n']+=1;h['tot']+=dt;h['to']+=0 if ok else 1
+            except Exception:
+                log.exception('NestQuant dec-block async waiter failed')
+            finally:
+                s.fv[0]=max(int(s.fv[0]),n)
 
 # NQ_DEC_BLOCK_FIRSTN (eval knob, file /dev/shm/nq_dec_block_firstn "N [after_ms]" overrides env; 0/absent = off): the
 # nq_dec_block budget applies only while a scheduled request is within its first N generated tokens
@@ -159,6 +210,12 @@ def install_dec():
             if P is not None:P.dec_wait(_FN['after'] if late else None)
         return orig(self,scheduler_output,*a,**k)
     R.execute_model=execute_model;R._nq_dec_block=True
+    if os.environ.get('NQ_DEC_ASYNC_BUILD','1')=='1':     # JIT-build the spin kernel at boot (not on the first async step)
+        try:
+            from torch.utils.cpp_extension import load
+            load(name='nq_decwait',sources=[os.path.join(os.path.dirname(os.path.abspath(__file__)),'csrc','nq_decwait.cu')],
+                 extra_cuda_cflags=['-O3'],is_python_module=False,verbose=False)
+        except Exception:log.exception('NestQuant dec-block: nq_decwait build failed (async wait unavailable)')
     log.info('NestQuant dec-block: execute_model wrapped (knob %s)',DKNOB)
 
 # ---- NQ_PRED_INPUTS (eval knob, nq_vllm reads it): committed token ids + new_request for the predictor (think/answer
