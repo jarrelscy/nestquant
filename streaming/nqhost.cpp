@@ -184,14 +184,17 @@ struct TapCore
     std::vector<int32_t> U, D;                        // this step's ups / downs (flat), in TapScheduler order
     std::vector<double> V, V0; bool V64 = false, V064 = false;   // value arrays (float32 values stored exactly unless V64)
     long nfree = 0; bool big = false;
+    bool fix = false;                                 // NQ_TAP_TODO_FIX (TapScheduler.tfix): nf shrink + todo room
     TapCore(std::vector<int> L, int ne) : NL((int)L.size()), NE(ne), N((size_t)L.size() * ne), layers(L), V(N), V0(N) {}
     py::tuple key(size_t k) const { return py::make_tuple(layers[k / NE], (int)(k % NE)); }
     // start of step(), after the score decay and P.step: doom resolution, todo issue, big-step guard. -> big
-    bool pre(py::array state, py::array doomed, py::array c, long slots, double big_thr)
+    // -> (big, shrink_evict, nf_shrink_evict). score / fixed / nf: the pool-shrink evictions (TapScheduler.step, same order)
+    py::tuple pre(py::array state, py::array doomed, py::array c, long slots, double big_thr, py::array score_, py::array fixed, long nf)
     {
         int8_t* st = buf<int8_t>(state, N, "state", true); bool* dm = buf<bool>(doomed, N, "doomed", true);
-        const double* x = buf<double>(c, N, "counts", false);
-        U.clear(); D.clear();
+        const double* x = buf<double>(c, N, "counts", false); const double* score = buf<double>(score_, N, "score", false);
+        const bool* fx = buf<bool>(fixed, N, "fixed", false);
+        U.clear(); D.clear(); long nsh = 0, nnf = 0;
         size_t w = 0;
         for (size_t r = 0; r < doom.size(); ++r)
         {
@@ -201,8 +204,37 @@ struct TapCore
             else doom[w++] = doom[r];
         }
         doom.resize(w);
+        std::vector<int32_t> r;
+        auto lowest = [&](long n) {      // np.argsort(score[r], kind='stable')[:n] -> downs
+            std::stable_sort(r.begin(), r.end(), [&](int32_t a, int32_t b) { return score[a] < score[b]; });
+            long m = std::min(n, (long)r.size());
+            for (long k = 0; k < m; ++k) { D.push_back(r[k]); st[r[k]] = 3; }
+            return m;
+        };
+        if (slots >= 0)                  // the pool shrank under the set (nq-prefill reclaim): drop the lowest-score residents
+        {
+            long occ = 0; for (size_t i = 0; i < N; ++i) occ += st[i] == 1 || st[i] == 2;
+            long over = occ - slots;
+            if (over > 0)
+            {
+                r.clear(); for (size_t i = 0; i < N; ++i) if (st[i] == 2 && !fx[i] && !dm[i]) r.push_back((int32_t)i);
+                nsh = lowest(over);
+            }
+        }
         if (slots >= 0) { long b = 0; for (size_t i = 0; i < N; ++i) b += st[i] > 0; nfree = slots - b; }
         else nfree = 1000000000L;
+        if (fix && slots >= 0 && nfree <= 0)  // pool full: layers over the lookahead width nf give their excess back
+            for (int l = 0; l < NL; ++l)
+            {
+                size_t o = (size_t)l * NE; long oc = 0; r.clear();
+                for (int e = 0; e < NE; ++e)
+                {
+                    size_t i = o + e; if (fx[i] || dm[i]) continue;
+                    oc += st[i] == 1 || st[i] == 2;
+                    if (st[i] == 2) r.push_back((int32_t)i);
+                }
+                if (oc > nf) nnf += lowest(oc - nf);
+            }
         while (!todo.empty() && nfree > 0)
         {
             int32_t k = todo.front(); todo.pop_front();
@@ -215,7 +247,7 @@ struct TapCore
             for (int e = 0; e < NE; ++e) n += r[e] > 0;
             big = (double)n > big_thr;
         }
-        return big;
+        return py::make_tuple(big, nsh, nnf);
     }
     long queued(py::array state)                      // int((state == 1).sum()) + len(todo)
     {
@@ -343,7 +375,8 @@ struct TapCore
         }
         // out.sort(key=lambda z: -z[0]) (python stable sort; z[0] = float(g))
         std::stable_sort(out.begin(), out.end(), [](const P& a, const P& b) { return -a.g < -b.g; });
-        long k = 0, cut = 0, eager = 0, skip = 0;
+        long k = 0, cut = 0, eager = 0, skip = 0, full = 0, room = 0;
+        if (fix) { for (size_t i = 0; i < N; ++i) room += st[i] == 3; room -= (long)todo.size(); }
         for (const P& p : out)
         {
             if (k >= budget) { ++cut; continue; }
@@ -351,7 +384,9 @@ struct TapCore
             if (p.v < 0)
             {
                 if (nfree > 0) { U.push_back(ie); st[ie] = 1; --nfree; }
-                else todo.push_back(ie);
+                else if (!fix) todo.push_back(ie);
+                else if (room > 0) { todo.push_back(ie); --room; }
+                else { ++full; continue; }
             }
             else
             {
@@ -362,7 +397,7 @@ struct TapCore
             }
             ++k;
         }
-        return py::make_tuple(k, cut, eager, skip);
+        return py::make_tuple(k, cut, eager, skip, full);
     }
     // end of step(): want = ((state == 1) | (state == 2)) & ~fixed; -> (ups, downs) of the step
     py::tuple finish(py::array state, py::array fixed, py::array want)
@@ -560,7 +595,8 @@ PYBIND11_MODULE(nqhost, m)
              py::arg("hold"), py::arg("pin"), py::arg("tok"), py::arg("nf"), py::arg("one_minus_a"), py::arg("tail"), py::arg("span"),
              py::arg("w"), py::arg("tc"), py::arg("budget"), py::arg("lw") = py::none()).def("finish", &TapCore::finish)
         .def("V", [](TapCore& t) { return t.vcopy(t.V, t.V64); }).def("V0", [](TapCore& t) { return t.vcopy(t.V0, t.V064); })
-        .def("todo_list", &TapCore::todo_list).def("doom_list", &TapCore::doom_list).def("todo_len", &TapCore::todo_len);
+        .def("todo_list", &TapCore::todo_list).def("doom_list", &TapCore::doom_list).def("todo_len", &TapCore::todo_len)
+        .def_readwrite("fix", &TapCore::fix);
     py::class_<FollowerCore>(m, "FollowerCore")
         .def(py::init<std::vector<int>, int, bool>())
         .def("feed", &FollowerCore::feed).def("step", &FollowerCore::step)
