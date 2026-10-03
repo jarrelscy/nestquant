@@ -40,10 +40,9 @@ class Capture:
         s.keys = ('ids', 'w', 'xn', 'hp', 'tok', 'pos') + (('lg',) if LOGITS else ())
         if LOGITS:
             import nq_lookahead as LAH
-            s.r_lg = z((RING, NL, 256), torch.float16); s.gate = {L: LAH._run[L].gate for L in s.layers if L in LAH._run}
+            s.r_lg = z((RING, NL, 256), torch.float16); s.gate = {L: LAH._run[L].gate.weight for L in s.layers if L in LAH._run and getattr(LAH._run[L], 'gate', None) is not None}
             miss = [L for L in s.layers if L not in s.gate]
             if miss: log.warning('tfcap: no router for layers %s (logits stay 0)', miss[:8])
-            s.save_bias()
         s.idx = z((CAP_MAXT,), torch.long); s.ar = torch.arange(CAP_MAXT, device=dev)
         s.pf = z((NL, 256), torch.int32)
         s.Tp = 0; s.head = 0                       # host: rows enqueued so far (monotone)
@@ -86,7 +85,9 @@ class Capture:
         if k is not None:
             s.r_hp[:, k].index_copy_(0, idx, (x.to(torch.bfloat16) @ s.R[k]).to(torch.float16))
         if LOGITS and L in s.gate:
-            lg, _ = s.gate[L](x)
+            # plain cuBLAS on the gate weight (not GateLinear.forward: avoids the SM120 opt-in DSV3 router kernel on a second call;
+            # the 11:22Z Xid-13 crash happened with GateLinear here)
+            lg = torch.nn.functional.linear(x.to(s.gate[L].dtype), s.gate[L])
             s.r_lg[:, i].index_copy_(0, idx, lg.to(torch.float16))
 
     # ---------------------------------------------------------------- runner hook (eager, every model step)
