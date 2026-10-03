@@ -89,7 +89,7 @@ services:
       NQ_DBG_FP8_OPROJ_ONLY: ${NQ_DBG_FP8_OPROJ_ONLY:-}  # 1 = e4m3 W8A16 o_proj, fused multi-slot gemv csrc/nq_fp8o.cu (needs the two VLLM_ knobs below)
       VLLM_ENABLE_NVFP4_P4_O_PROJ: ${VLLM_ENABLE_NVFP4_P4_O_PROJ:-1}   # prod D: P4 o_proj
       VLLM_DISABLE_FP8_W8A16: ${VLLM_DISABLE_FP8_W8A16:-1}             # prod D: image default
-      VLLM_DISABLE_COMPILE_CACHE: ${VLLM_DISABLE_COMPILE_CACHE:-0}     # step 2 sets 1 (o_proj swap is invisible to the compile-cache key)
+      VLLM_DISABLE_COMPILE_CACHE: ${VLLM_DISABLE_COMPILE_CACHE:-0}     # 1 = no AOT compile cache (eval boots)
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
@@ -133,7 +133,7 @@ services:
     - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
     - ${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}:/nqrepack1:ro   # nq-io: copy of the record files on nvme1 (/data)
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
-    - /data/Jarrel/nq-serve/vllm-cache:/root/.cache/vllm
+    - ${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache}:/root/.cache/vllm   # step 2 uses its own dir (the o_proj swap is invisible to the compile-cache key)
     - /data/Jarrel/nq-serve/dbg:/dbg
     - /rawdata/Jarrel/nq-tfpred/traces:/tfcap
     - /data/Jarrel/nq-serve/predictor:/nqpred:ro
