@@ -18,7 +18,8 @@ import scheduler_tap as TS
 from test_hostloop_parity import routing_steps, LeaderX, cfgs, LAYERS, NE
 
 TAPENV = ('NQ_TAP_C', 'NQ_TAP_H', 'NQ_TAP_HA', 'NQ_TAP_MLA', 'NQ_TAP_SVC_MS', 'NQ_TAP_FAR', 'NQ_TAP_TP', 'NQ_TAP_RATE_GBPS',
-          'NQ_TAP_LAT', 'NQ_TAP_LAT_HL', 'NQ_TAP_LAT_Q', 'NQ_TAP_LAT_N')
+          'NQ_TAP_LAT', 'NQ_TAP_LAT_HL', 'NQ_TAP_LAT_Q', 'NQ_TAP_LAT_N', 'NQ_S3_ADM_CEMA', 'NQ_S3_ADM_HL', 'NQ_S3_LW_POW',
+          'NQ_S3_MUL_POW', 'NQ_S3_MUL_HL', 'NQ_S3_LW_HL', 'NQ_S3_MASS', 'NQ_S3_TRACK', 'NQ_TAP_CTL')
 
 
 class StubS:
@@ -97,6 +98,7 @@ def mk(cfg, P, hl, env, clock):
     old = {k: os.environ.get(k) for k in TAPENV}
     try:
         for k in TAPENV: os.environ.pop(k, None)
+        os.environ['NQ_TAP_CTL'] = '/nonexistent/nq_tap_ctl'     # never a live server's /dev/shm ctl file
         os.environ.update(env)
         S = TS.TapScheduler(LAYERS, cfg['fixed'], cfg['dflt'], 2560000, NE=NE, n_float=cfg['nf'], slots=cfg['slots'],
                             cap_GBps=cfg['cap'], predictor=P, hostloop=hl, clock=clock)
@@ -107,7 +109,7 @@ def mk(cfg, P, hl, env, clock):
     return S
 
 
-def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True):
+def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True, sal=False):
     pa, pb = mkp()
     CA, CB = Clock(seed), Clock(seed)
     A = mk(cfg, pa, 'py', env, CA); B = mk(cfg, pb, 'cpp', env, CB)
@@ -123,10 +125,13 @@ def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True)
     for S, X in ((A, XA), (B, XB)):
         for L, E in init: S.state[S.li[L], E] = 1
         X.apply(init, [])
-    rng = random.Random(seed + 5); nops = 0; tA = tB = 0.0; nref = 0
+    rng = random.Random(seed + 5); nops = 0; tA = tB = 0.0; nref = 0; srng = np.random.default_rng(seed + 9)
+    lf = srng.gamma(2.0, 1.0, (75, 1))                    # sal=True: per-step salience = counts x layer factor x noise
     for n, (c, ntok, tid, nr) in enumerate(steps):
         c = c.astype(np.float64); CA.adv(ntok); CB.adv(ntok); vcap.clear(); r0 = A.stats['refreshes']
-        t = time.perf_counter(); ua, da = A.step(c, ntok, tid, nr); t2 = time.perf_counter(); ub, db = B.step(c, ntok, tid, nr); t3 = time.perf_counter()
+        kw = {}
+        if sal and n >= 40: kw['sal'] = c * lf * srng.gamma(1.0, 1.0, c.shape)
+        t = time.perf_counter(); ua, da = A.step(c, ntok, tid, nr, **kw); t2 = time.perf_counter(); ub, db = B.step(c, ntok, tid, nr, **kw); t3 = time.perf_counter()
         tA += t2 - t; tB += t3 - t2
         if (ua, da) != (ub, db):
             print(f'  {name}: OPS DIFF at step {n}: ups {len(ua)}/{len(ub)} downs {len(da)}/{len(db)} first ups {ua[:3]} {ub[:3]}'); return False
@@ -145,7 +150,8 @@ def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True)
         if dl != B.tcore.doom_list() or list(A.todo) != B.tcore.todo_list():
             print(f'  {name}: doom/todo DIFF at step {n}: {len(dl)}/{len(B.tcore.doom_list())} {len(A.todo)}/{B.tcore.todo_len()}'); return False
         pk = (A.peak is None and B.peak is None) or (A.peak is not None and B.peak is not None and eq(A.peak, B.peak))
-        if A.stats != B.stats or A.lat_ema != B.lat_ema or A.tok != B.tok or A.tps != B.tps or A.n_land != B.n_land or not pk:
+        sa = {k: v for k, v in A.stats.items() if not k.startswith('q_')}   # q_*: nq-kld queue-model diagnostics, py path only
+        if sa != B.stats or A.lat_ema != B.lat_ema or A.tok != B.tok or A.tps != B.tps or A.n_land != B.n_land or not pk:
             print(f'  {name}: scalar DIFF at step {n}: stats {A.stats} {B.stats}'); return False
         XA.apply(ua, da); XB.apply(ub, db); XA.tick(A); XB.tick(B); nops += len(ua) + len(da)
         if kv and rng.random() < 0.01:
@@ -173,7 +179,13 @@ def main():
          ('stub k0s mla0 (no budget) H512', k0s, dict(NQ_TAP_MLA='0', NQ_TAP_H='512'), dict(seed=5, pin=True)),
          ('stub k0s lat=meas', k0s, dict(NQ_TAP_LAT='meas'), dict(seed=6, kv=True)),
          ('stub k0 lat=meas Ha2 q0.9 hl2 c0.5', k0, dict(NQ_TAP_LAT='meas', NQ_TAP_HA='2', NQ_TAP_LAT_Q='0.9', NQ_TAP_LAT_HL='2',
-                                                    NQ_TAP_C='0.5'), dict(seed=8, pin=True))]
+                                                    NQ_TAP_C='0.5'), dict(seed=8, pin=True)),
+         ('stub k0s s3 arm c0 cema.2 lw.25', k0s, dict(NQ_TAP_C='0', NQ_S3_ADM_CEMA='0.2', NQ_S3_ADM_HL='64', NQ_S3_LW_POW='0.25'),
+          dict(seed=9, sal=True, kv=True)),
+         ('stub k0 s3 arm budget lw1 hl16', k0, dict(NQ_TAP_C='0', NQ_S3_ADM_CEMA='0.5', NQ_S3_ADM_HL='16', NQ_S3_LW_POW='1',
+                                                 NQ_TAP_MLA='0.3'), dict(seed=10, sal=True, pin=True)),
+         ('stub b s3 mul.5 + add.2 lw.5 hl256 jfmass', b, dict(NQ_TAP_C='0', NQ_S3_MUL_POW='0.5', NQ_S3_ADM_CEMA='0.2', NQ_S3_LW_POW='0.5',
+                                                 NQ_S3_LW_HL='256', NQ_S3_MASS='jf', NQ_S3_TRACK='1'), dict(seed=11, sal=True, kv=True))]
     sel = os.environ.get('CASES')
     for i, (nm, cfg, env, kw) in enumerate(C):
         if sel and str(i) not in sel.split(','): continue

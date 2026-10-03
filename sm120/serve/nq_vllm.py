@@ -183,7 +183,7 @@ class Runtime:
                 if CHECK or os.environ.get('NQ_FOLLOW_CHECK','0')=='1':s.F.enable_check(init)
             s.iokey=f'/dev/shm/nq_io_{pp}_{st}'
         log.info('NestQuant rank %d: %d slots (%.1f GiB), floating_default %d upgrades issued',s.rank,nslot,nslot*rb/2**30,len(init))
-        if s.F is None and s.S.wants_sal:        # GBDT x mps128: rank 0 exports per-expert decode salience next to the hits
+        if s.F is None and (s.S.wants_sal or getattr(s.S,'s3_sal',False)):   # GBDT x mps128 / tap NQ_S3_LW_POW: rank 0 exports per-expert decode salience next to the hits
             import build as BLD
             s.SAL=BLD.get_sal();rsf=float(os.environ.get('NQ_SAL_RSF') or RSF or 1.0)
             for L in L_:

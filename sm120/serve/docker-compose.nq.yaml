@@ -72,6 +72,14 @@ services:
       NQ_TAP_RATE_GBPS: ${NQ_TAP_RATE_GBPS:-6}
       NQ_TAP_RATE_FLOOR_GBPS: ${NQ_TAP_RATE_FLOOR_GBPS:-0}   # nq-kld: per-rank floor of the tap peak-held read rate (0 off); /dev/shm/nq_tap_ctl floor= mla= overrides
       NQ_TAP_LAT: ${NQ_TAP_LAT:-model}           # model | meas (nq-tapc measured issue->land latency); /dev/shm/nq_tap_ctl lat= overrides
+      NQ_S3_ADM_CEMA: ${NQ_S3_ADM_CEMA:-0}       # step 3 tap arm (scheduler_tap.py, default off): admission = (1-w) jF + w count-EMA
+      NQ_S3_ADM_HL: ${NQ_S3_ADM_HL:-64}          #   count-EMA half-life (tokens)
+      NQ_S3_LW_POW: ${NQ_S3_LW_POW:-0}           #   pair-gain layer weight (salience per hit)^q, 0 off (on: rank 0 exports decode salience)
+      NQ_S3_LW_HL: ${NQ_S3_LW_HL:-0}             #   its salience-per-hit EMA half-life (0 = cumulative)
+      NQ_S3_MUL_POW: ${NQ_S3_MUL_POW:-0}         #   multiplicative count tilt jF x countEMA^p (0 off)
+      NQ_S3_MUL_HL: ${NQ_S3_MUL_HL:-256}         #   its count-EMA half-life
+      NQ_S3_MASS: ${NQ_S3_MASS:-512}             #   512 | jf (pair gains x jF layer mass / 512)
+      NQ_S3_TRACK: ${NQ_S3_TRACK:-0}             #   1 = keep the s3 EMAs + salience export running from boot (same-boot ctl A/B: s3a s3hl s3p s3phl s3q s3lhl s3mass c)
       NQ_TAP_IO: ${NQ_TAP_IO:-1}                 # nq-kld: 0 = tap ignores follower io stats (= prod NQ_IOSTATS=0) while NQ_IOSTATS still publishes
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
       NQ_IOSTATS: ${NQ_IOSTATS:-0}

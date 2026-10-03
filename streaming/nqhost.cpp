@@ -269,7 +269,7 @@ struct TapCore
     // refresh part of step(): value, pin, pairs, issue loop. -> (promotions, budget_cut, eager_evict, no_slot_skip)
     py::tuple refresh(py::array Sa, py::array score_, py::array fixed, py::array state, py::array doomed, py::array hold,
                       py::object pin_, double tok, long nf, double one_minus_a, double tail, double span, py::tuple w,
-                      double tc, long budget)
+                      double tc, long budget, py::object lw_)
     {
         const float* S0 = buf<float>(Sa, N, "S", false); const double* score = buf<double>(score_, N, "score", false);
         const bool* fx = buf<bool>(fixed, N, "fixed", false); int8_t* st = buf<int8_t>(state, N, "state", true);
@@ -334,6 +334,12 @@ struct TapCore
                 if (d ? g <= tc : (float)g <= (float)tc) break;
                 out.push_back({g, l, e, v}); ++k;
             }
+        }
+        // step 3 NQ_S3_LW_POW: per-layer gain weight (float(g * lw[l]) in _pairs; None = off)
+        if (!lw_.is_none())
+        {
+            py::array la = lw_.cast<py::array>(); const double* lw = buf<double>(la, (size_t)NL, "lw", false);
+            for (P& p : out) p.g = p.g * lw[p.l];
         }
         // out.sort(key=lambda z: -z[0]) (python stable sort; z[0] = float(g))
         std::stable_sort(out.begin(), out.end(), [](const P& a, const P& b) { return -a.g < -b.g; });
@@ -548,9 +554,11 @@ PYBIND11_MODULE(nqhost, m)
         .def("decay", &SchedCore::decay).def("ema_refresh", &SchedCore::ema_refresh).def("resident", &SchedCore::resident)
         .def("count_busy", &SchedCore::count_busy).def("downs", &SchedCore::downs).def("select", &SchedCore::select)
         .def("take", &SchedCore::take);
-    py::class_<TapCore>(m, "TapCore")
+    py::class_<TapCore>(m, "TapCore")   // refresh(..., lw=None): lw optional, so 15-argument callers still bind
         .def(py::init<std::vector<int>, int>())
-        .def("pre", &TapCore::pre).def("queued", &TapCore::queued).def("refresh", &TapCore::refresh).def("finish", &TapCore::finish)
+        .def("pre", &TapCore::pre).def("queued", &TapCore::queued).def("refresh", &TapCore::refresh, py::arg("S"), py::arg("score"), py::arg("fixed"), py::arg("state"), py::arg("doomed"),
+             py::arg("hold"), py::arg("pin"), py::arg("tok"), py::arg("nf"), py::arg("one_minus_a"), py::arg("tail"), py::arg("span"),
+             py::arg("w"), py::arg("tc"), py::arg("budget"), py::arg("lw") = py::none()).def("finish", &TapCore::finish)
         .def("V", [](TapCore& t) { return t.vcopy(t.V, t.V64); }).def("V0", [](TapCore& t) { return t.vcopy(t.V0, t.V064); })
         .def("todo_list", &TapCore::todo_list).def("doom_list", &TapCore::doom_list).def("todo_len", &TapCore::todo_len);
     py::class_<FollowerCore>(m, "FollowerCore")

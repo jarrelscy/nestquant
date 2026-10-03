@@ -31,6 +31,21 @@ Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = cli
        NQ_TAP_LAT_HL refreshes, default 4; floor NQ_TAP_H instead of 64 so a short lat never shrinks the window).
        The issue budget keeps using the queue-model latency (only queueing consumes the window; a measured fixed
        latency is pipelined), so a large measured latency never stalls issuing.
+Step 3 policy arms (default OFF -> bit-identical to step 2 rc; env at boot and/or NQ_TAP_CTL keys at runtime, same boot A/B):
+  admission source S (shares x 512 per layer, over all NE experts; _value then normalises per layer as before):
+     s  = norm512(max(jF S, 0))
+     s3p  p (NQ_S3_MUL_POW, 0 off)   multiplicative count tilt: s = norm512(s * (countEMA_phl + 1e-3)^p)   (p-online tn.<p>)
+     s3phl (NQ_S3_MUL_HL, 256)       its count-EMA half-life (tokens)
+     s3a  a (NQ_S3_ADM_CEMA, 0 off)  additive count mix: s = (1-a) s + a norm512(countEMA_hl)            (p-policy mix)
+     s3hl (NQ_S3_ADM_HL, 64)         its count-EMA half-life (tokens)
+  cross-layer weight w_l on the pair gains (after the per-layer c test; global sort / budget cut / eager test use w_l g):
+     s3q  q (NQ_S3_LW_POW, 0 off)    w_l = (lm_l / mean_l lm)^q, lm = layer salience per routed hit, from step(..., sal=)
+     s3lhl (NQ_S3_LW_HL, 0)          0 = cumulative since boot, else EMA half-life (tokens)
+     s3mass (NQ_S3_MASS, 512)        jf: w_l *= jF layer mass / 512 (p-online mass=jf; the tap value itself stays per-layer normalised)
+  c (NQ_TAP_C) is also a ctl key. Count EMAs = routed counts of decode steps (ntok <= 16) already passed to step();
+  an EMA starts (zero) when its arm is enabled or its half-life changes, unless NQ_S3_TRACK=1 keeps both running
+  from boot. Salience (for q) needs the rank-0 export: on at boot iff NQ_S3_TRACK=1 or NQ_S3_LW_POW > 0 (w = 1 without it).
+  p-policy arm = c=0 s3a=0.2 s3hl=64 s3q=0.25 (tests/test_s3_adm.py: bitwise = psim src='mix:0.8:cema64' lw=1 lwp=0.25).
 Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalised two-horizon value)."""
 import os, time, collections
 import numpy as np
@@ -75,6 +90,13 @@ class TapScheduler(Scheduler):
         s.stats.update(refreshes=0, promotions=0, budget_cut=0, eager_evict=0, no_slot_skip=0, lat_tok_sum=0.0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
         s.sched_name = 'tap'
+        # step 3 policy arms (default off; see module doc)
+        s.s3 = dict(a=float(e('NQ_S3_ADM_CEMA', '0') or 0), hl=float(e('NQ_S3_ADM_HL', '64') or 64), p=float(e('NQ_S3_MUL_POW', '0') or 0),
+                    phl=float(e('NQ_S3_MUL_HL', '256') or 256), q=float(e('NQ_S3_LW_POW', '0') or 0), lhl=float(e('NQ_S3_LW_HL', '0') or 0),
+                    mass=e('NQ_S3_MASS', '512') or '512')
+        s.s3track = e('NQ_S3_TRACK', '0') == '1'
+        s.s3_sal = s.s3track or s.s3['q'] > 0                # nq_vllm: rank 0 exports decode salience (step(..., sal=))
+        s.s3Ea = s.s3Ep = None; s.s3sal = s.s3cnt = None; s.s3lhl0 = None; s._s3cfg()
 
     def _setcap(s, g):
         if not hasattr(s, 'rate00'): s.rate00 = s.rate0
@@ -124,13 +146,19 @@ class TapScheduler(Scheduler):
         if 'mla' in kv: s.tmla = float(kv['mla'])
         if 'cap' in kv: s._setcap(float(kv['cap']))
         if 'qreal' in kv: s.tqreal = kv['qreal'] == '1'
+        if 'c' in kv: s.tc = float(kv['c'])
+        k3 = {'s3a': 'a', 's3hl': 'hl', 's3p': 'p', 's3phl': 'phl', 's3q': 'q', 's3lhl': 'lhl', 's3mass': 'mass'}
+        if any(k in kv for k in k3):
+            for k, n in k3.items():
+                if k in kv: s.s3[n] = kv[k] if n == 'mass' else float(kv[k])
+            s._s3cfg()
         if kv.get('lat') in ('model', 'meas') and kv['lat'] != s.tlat:
             s.tlat = kv['lat']
             if s.tlat == 'meas' and s.t_iss is None:
                 s.t_iss = np.full((len(s.layers), s.NE), np.nan); s.lat0 = collections.deque(maxlen=int(os.environ.get('NQ_TAP_LAT_N', '256')))
                 s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
             elif s.tlat == 'model': s.t_iss = None; s.lat0 = None
-        import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap ctl: floor %.2f GB/s/rank, mla %s, lat %s, cap %.2f GB/s total, qreal %s', s.tfloor * s.rb_rank / 1e9, s.tmla, s.tlat, s.tcap * s.rb_rank * max(1, s.tp_n) / 1e9, s.tqreal)
+        import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap ctl: floor %.2f GB/s/rank, mla %s, lat %s, cap %.2f GB/s total, qreal %s, c %s, s3 %s (sal %s)', s.tfloor * s.rb_rank / 1e9, s.tmla, s.tlat, s.tcap * s.rb_rank * max(1, s.tp_n) / 1e9, s.tqreal, s.tc, s.s3, s.s3_sal)
 
     def _rates(s, now, q0, nt=None):
         """-> (lat_s per rank list). Rank 0 live; followers from io_all() if available.
@@ -174,8 +202,57 @@ class TapScheduler(Scheduler):
         if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
         return (out, me) if meas else out
 
+    # ---- step 3 policy arms (default off)
+    def _s3cfg(s):
+        """(re)derive the arm state after an env / ctl change; EMAs start (zero) when enabled or their half-life changes"""
+        P = s.s3; assert P['mass'] in ('512', 'jf'), P['mass']
+        s.s3on = P['a'] > 0 or P['p'] > 0 or P['q'] > 0 or P['mass'] == 'jf'
+        def ema(cur, on, hl):
+            if not (on or s.s3track): return None         # off and untracked: dropped (restarts from zero when re-enabled)
+            return cur if cur is not None and cur[0] == hl else [hl, 0.5 ** (1.0 / hl), np.zeros((s.NL, s.NE))]
+        s.s3Ea = ema(s.s3Ea, P['a'] > 0, P['hl']); s.s3Ep = ema(s.s3Ep, P['p'] > 0, P['phl'])
+        if s.s3_sal and (s.s3sal is None or s.s3lhl0 != P['lhl']):
+            s.s3sal = np.zeros(s.NL); s.s3cnt = np.zeros(s.NL); s.s3lhl0 = P['lhl']
+        s.s3any = s.s3on or s.s3track
+
+    def _s3_add(s, c, ntok, sal):
+        """count EMAs / layer salience-per-hit accumulators from this step's routed counts (decode steps only)"""
+        if ntok > 16: return
+        P = s.s3
+        for E, on in ((s.s3Ea, P['a'] > 0), (s.s3Ep, P['p'] > 0)):
+            if E is not None and (on or s.s3track): E[2] = E[2] * E[1] ** ntok + c
+        if s.s3sal is not None and sal is not None:
+            sl = np.asarray(sal, np.float64).sum(1); cl = c.sum(1)
+            if P['lhl'] > 0:
+                d = 0.5 ** (ntok / P['lhl']); s.s3sal = s.s3sal * d + sl; s.s3cnt = s.s3cnt * d + cl
+            else: s.s3sal += sl; s.s3cnt += cl
+
+    def _srcS(s):
+        """admission source for _value: jF S (arms off), else the tilted / mixed shares x 512"""
+        S = s.P.S; P = s.s3
+        if not s.s3on or (P['a'] <= 0 and P['p'] <= 0): return S
+        def n512(V):
+            m = V.sum(1, keepdims=True); return np.where(m > 0, V * 512.0 / np.where(m > 0, m, 1), 0)
+        x = n512(np.maximum(np.asarray(S, np.float32).astype(np.float64), 0))
+        if P['p'] > 0: x = n512(x * (s.s3Ep[2] + 1e-3) ** P['p'])
+        if P['a'] > 0:
+            a = 1.0 - P['a']; x = a * x + (1 - a) * n512(s.s3Ea[2])
+        return x.astype(np.float32)
+
+    def _lw(s):
+        """per-layer pair-gain weight, or None (off / no salience yet for q-only)"""
+        if not s.s3on: return None
+        P = s.s3; w = None
+        if P['q'] > 0 and s.s3sal is not None and s.s3cnt.sum() > 0:
+            lm = s.s3sal / np.maximum(s.s3cnt, 1)
+            if (lm > 0).all(): w = (lm / lm.mean()) ** P['q']
+        if P['mass'] == 'jf':
+            jm = np.nan_to_num(np.maximum(np.asarray(s.P.S, np.float32).astype(np.float64), 0), nan=0.0, posinf=0.0).sum(1) / 512.0
+            w = jm if w is None else w * jm
+        return w
+
     def _value(s, lat, H):
-        S = np.asarray(s.P.S, np.float32); S = np.where(s.fixed, 0, np.maximum(S, 0))
+        S = np.asarray(s._srcS(), np.float32); S = np.where(s.fixed, 0, np.maximum(S, 0))
         mass = S.sum(1).astype(np.float32); ok = mass > 0; m = np.where(ok, mass, 1.0)
         rn = S / s.span
         if s.tfar is not None:
@@ -191,7 +268,7 @@ class TapScheduler(Scheduler):
         V[~ok] = 0; V0[~ok] = 0
         return V, V0
 
-    def _pairs(s, V, cand, res, occ):
+    def _pairs(s, V, cand, res, occ, lw=None):
         out = []; c = s.tc
         ce = np.argsort(-np.where(cand, V, -np.inf), 1, kind='stable'); rv = np.argsort(np.where(res, V, np.inf), 1, kind='stable')
         ncand = cand.sum(1); nres = res.sum(1); oc = occ.sum(1)
@@ -207,6 +284,7 @@ class TapScheduler(Scheduler):
                 v = rv[l, j]; g = ve - V[l, v]
                 if g <= c: break
                 out.append((float(g), l, int(e), int(v))); k += 1
+        if lw is not None: out = [(float(g * lw[l]), l, e, v) for g, l, e, v in out]
         out.sort(key=lambda z: -z[0]); return out
 
     def _step_cpp(s, counts, ntok, token_ids, new_request, sal):
@@ -217,6 +295,7 @@ class TapScheduler(Scheduler):
             a = getattr(s, n)
             if a.dtype != dt or not a.flags.c_contiguous or not a.flags.writeable: setattr(s, n, np.ascontiguousarray(a, dt).copy())
         K.decay(s.score, c, s.a ** ntok); s.tok += ntok
+        if s.s3any: s._s3_add(c, ntok, sal)
         if s.t_last is not None and ntok <= 16:
             dt = now - s.t_last
             if dt > 0: x = ntok / dt; s.tps = x if s.tps is None else 0.9 * s.tps + 0.1 * x
@@ -236,9 +315,10 @@ class TapScheduler(Scheduler):
                 hi = lo + h; near = max(0.0, min(hi, s.span) - lo); far = max(0.0, hi - max(lo, s.span))
                 return float(near), type(near) is not float, float(far), type(far) is not float
             w = win(lat, H) + win(0.0, lat) + (bool(lat >= 1),)
-            k, cut, ee, sk = T.refresh(np.ascontiguousarray(s.P.S, np.float32), s.score, s.fixed, st, s.doomed, s.hold, pin,
+            lw = s._lw() if s.s3on else None
+            k, cut, ee, sk = T.refresh(np.ascontiguousarray(s._srcS(), np.float32), s.score, s.fixed, st, s.doomed, s.hold, pin,
                                        float(s.tok), int(s.nf), 1 - s.a, -1.0 if s.tfar is None else float(s.tfar), s.span,
-                                       w, s.tc, int(min(budget, 2 ** 62)))
+                                       w, s.tc, int(min(budget, 2 ** 62)), lw)
             s.stats['budget_cut'] += cut; s.stats['eager_evict'] += ee; s.stats['no_slot_skip'] += sk; s.stats['promotions'] += k
         if not (s.want.dtype == bool and s.want.flags.c_contiguous and s.want.flags.writeable): s.want = np.zeros(st.shape, bool)
         ups, downs = T.finish(st, s.fixed, s.want)
@@ -251,6 +331,7 @@ class TapScheduler(Scheduler):
         now = s.clock()
         c = np.asarray(counts, np.float64)
         s.score = s.score * s.a ** ntok + c; s.tok += ntok
+        if s.s3any: s._s3_add(c, ntok, sal)
         if s.t_last is not None and ntok <= 16:
             dt = now - s.t_last
             if dt > 0: x = ntok / dt; s.tps = x if s.tps is None else 0.9 * s.tps + 0.1 * x
@@ -289,7 +370,7 @@ class TapScheduler(Scheduler):
             if pin is not None: V = np.where(pin, np.float32(1e9), V)
             res = (st == 2) & ~s.doomed; occ = ((st == 1) | (st == 2)) & ~s.doomed
             cand = (st == 0) & ~s.doomed & ~s.fixed & (s.hold <= s.tok)
-            pairs = s._pairs(V, cand, res & ~s.fixed, occ & ~s.fixed)
+            pairs = s._pairs(V, cand, res & ~s.fixed, occ & ~s.fixed, s._lw() if s.s3on else None)
             k = 0
             for g, l, e, v in pairs:
                 if k >= budget: s.stats['budget_cut'] += 1; continue
