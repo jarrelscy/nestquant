@@ -41,6 +41,8 @@ PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384')
 import nq_lookahead as LAH,nq_session as SRM
 RSF=None          # routed_scaling_factor the MoE runner applies after the experts (topk_weights here exclude it); set in create_weights
 if LAH.MODE or LAH.MEAS:LAH.install()
+if os.environ.get('NQ_KLD_HOOK','0')=='1':   # nq-kld full-vocab prompt-logprob dump (eval only, nq_kld.py)
+    import nq_kld;nq_kld.install();nq_kld.install_force()
 ARVQ_NAMES=('hyb_kind',)+tuple(f'arvq_{p}_{k}' for p in ('w13','w2') for k in ('packed','scales','codebooks','global'))+\
     tuple(f'nvfp4_{p}_{k}' for p in ('w13','w2') for k in ('packed','bscale','scale2'))
 
@@ -104,6 +106,9 @@ class Runtime:
         _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf')   # tf = nq-tfpred transformer (same k0 layout); jF joint predictor: k0 layout (no fixed set, all floating)
         nf=77 if _JOINT else NF
         if _JOINT:fx={L:[] for L in L_};src='joint-k0'
+        if os.environ.get('NQ_STREAM','1')=='0' and os.environ.get('NQ_STATIC_FLOAT','0')=='1' and not _JOINT:   # nq-kld static arm: fixed set U floating_default (nqfloat0), no streaming
+            fj=json.load(open(NQ_HOME+'/threads/22-boundary-experts/fixed_set.json'))
+            fx={L:list(fx[L])+[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in L_};src+='+floating_default%d'%NF
         # fixed set: records -> resident pool, level 4 rows
         nfix=sum(len(fx[L]) for L in L_);s.fixpool=torch.empty(nfix,rb,dtype=torch.uint8,device=dev)
         buf=torch.empty(rb,dtype=torch.uint8).pin_memory();fd=os.open(rf.path,os.O_RDONLY);i=0;t=time.time();bad=set()

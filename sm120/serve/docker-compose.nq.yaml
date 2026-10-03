@@ -30,6 +30,7 @@ services:
       NQ_BUILD: /nqbuild
       NQ_LAYERS: ${NQ_LAYERS:-}
       NQ_STREAM: ${NQ_STREAM:-1}
+      NQ_STATIC_FLOAT: ${NQ_STATIC_FLOAT:-0}         # nq-kld: with NQ_STREAM=0, fixed set U floating_default 51 (static 77)
       NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-56}
       NQ_CAP_GBPS: ${NQ_CAP_GBPS:-0}          # 0 = uncapped (drive ~11 GB/s + slot pool limit); else aggregate GB/s over the TP ranks
       NQ_CHECK: ${NQ_CHECK:-0}
@@ -68,6 +69,7 @@ services:
       NQ_TAP_RATE_GBPS: ${NQ_TAP_RATE_GBPS:-6}
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
       NQ_IOSTATS: ${NQ_IOSTATS:-0}
+      NQ_KLD_HOOK: ${NQ_KLD_HOOK:-0}                 # nq-kld prompt-logprob dump hook (nq_kld.py), eval only
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
