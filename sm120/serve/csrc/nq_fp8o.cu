@@ -98,6 +98,87 @@ __global__ void Fp8W8A16Gemv(const int4* __restrict__ packed,   // e4m3 [M,K]
   }
 }
 
+// Multi-slot variant: one weight read serves NS activation rows (MTP verify N=4: the per-slot grid above re-reads the
+// weight per row -> ~670 GB/s at N=4). Per slot the arithmetic (hfma2 chain over the 8 half2 of a chunk, res += x + y,
+// shuffle tree, epilogue) is exactly the per-slot kernel's -> bit-identical output.
+template <int NS>
+__global__ void Fp8W8A16GemvMS(const int4* __restrict__ packed, const float* __restrict__ scale,
+                               const int4* __restrict__ B_all, __nv_bfloat16* __restrict__ C,
+                               const int prob_m, const int prob_k, const int prob_n) {
+  const int slot0 = blockIdx.y * NS;
+  const int nv = min(NS, prob_n - slot0);
+  const int row = (blockDim.x / 32) * blockIdx.x + (threadIdx.x / 32);
+  const bool pred = row < prob_m;
+  const int lane = threadIdx.x % 32;
+  const int a_gl_stride = prob_k / 16;
+  const uint4* a_row = reinterpret_cast<const uint4*>(packed) + (int64_t)row * a_gl_stride;
+  const int kb = prob_k / 8;  // int4 (8 bf16) per activation row
+  const int4* B = B_all + (int64_t)slot0 * kb;
+
+  __shared__ int4 sh_b[NS][32 * 2];
+  float res[NS];
+#pragma unroll
+  for (int s = 0; s < NS; s++) res[s] = 0;
+
+  int iters = (kb + 2 * 32 - 1) / (2 * 32);
+  int b_gl_rd = 0;
+  int a_rd = lane;
+  bool have = pred && a_rd < a_gl_stride;
+  uint4 w_cur = have ? a_row[a_rd] : uint4{};
+
+  while (iters--) {
+    __syncthreads();
+    for (int i = threadIdx.x; i < NS * 32 * 2; i += blockDim.x) {
+      const int s = i / 64, c = i % 64;
+      if (s < nv && b_gl_rd + c < kb) {
+        int4 raw = B[(int64_t)s * kb + b_gl_rd + c];
+        const __nv_bfloat16* rb = reinterpret_cast<const __nv_bfloat16*>(&raw);
+        int4 o;
+        half* oh = reinterpret_cast<half*>(&o);
+#pragma unroll
+        for (int j = 0; j < 8; j++) oh[j] = __float2half_rn(__bfloat162float(rb[j]) * (1.0f / (float)(1 << ACT_SHIFT)));
+        sh_b[s][c] = o;
+      }
+    }
+    __syncthreads();
+    b_gl_rd += 32 * 2;
+
+    if (have) {
+      const int a_nx = a_rd + 32;
+      const bool have_nx = a_nx < a_gl_stride;
+      uint4 w_nx = have_nx ? a_row[a_nx] : uint4{};
+      const uint16_t* wp = reinterpret_cast<const uint16_t*>(&w_cur);
+      half2 wh[8];
+#pragma unroll
+      for (int i = 0; i < 8; i++) wh[i] = e4m3x2_to_half2(wp[i]);
+#pragma unroll
+      for (int s = 0; s < NS; s++) {
+        if (s < nv) {
+          const half2* bb = reinterpret_cast<const half2*>(&sh_b[s][lane * 2]);
+          half2 acc = {};
+#pragma unroll
+          for (int i = 0; i < 8; i++) acc = __hfma2(wh[i], bb[i], acc);
+          res[s] += __half2float(acc.x) + __half2float(acc.y);
+        }
+      }
+      a_rd = a_nx;
+      w_cur = w_nx;
+      have = have_nx;
+    }
+  }
+
+  if (pred) {
+    const float sc = scale[row] * (float)(1 << ACT_SHIFT);
+#pragma unroll
+    for (int s = 0; s < NS; s++) {
+      float r = res[s];
+#pragma unroll
+      for (int i = 16; i > 0; i /= 2) r += __shfl_down_sync(0xffffffff, r, i);
+      if (lane == 0 && s < nv) C[(int64_t)(slot0 + s) * prob_m + row] = __float2bfloat16_rn(__half2float(__float2half(r * sc)));
+    }
+  }
+}
+
 static void pick_grid(int prob_m, int n, dim3& blocks, int& threads) {
   int dev, sms;
   cudaGetDevice(&dev);
@@ -138,9 +219,17 @@ torch::Tensor gemv_bf16(const torch::Tensor& x,
   dim3 blocks;
   int threads;
   nq_fp8o::pick_grid((int)m, (int)n, blocks, threads);
-  nq_fp8o::Fp8W8A16Gemv<<<blocks, threads, 0, stream>>>(
-      (const int4*)packed.data_ptr(), scale.data_ptr<float>(),
-      (const int4*)x.data_ptr(), (__nv_bfloat16*)out.data_ptr(), (int)m, (int)k);
+  static const int ms = [] { const char* e = getenv("NQ_FP8O_MS"); return e ? atoi(e) : 8; }();  // max slots per weight read (<=1: per-slot kernel)
+  const int4* P = (const int4*)packed.data_ptr(); const float* S = scale.data_ptr<float>();
+  const int4* X = (const int4*)x.data_ptr(); __nv_bfloat16* O = (__nv_bfloat16*)out.data_ptr();
+  if (ms <= 1 || n == 1) {
+    nq_fp8o::Fp8W8A16Gemv<<<blocks, threads, 0, stream>>>(P, S, X, O, (int)m, (int)k);
+  } else {
+    const int ns = n <= 2 ? 2 : n <= 4 ? 4 : 8;
+#define NQ_MS(NSV) nq_fp8o::Fp8W8A16GemvMS<NSV><<<dim3(blocks.x, nq_fp8o::ceildiv((int)n, NSV)), threads, 0, stream>>>(P, S, X, O, (int)m, (int)k, (int)n)
+    if (ns == 2) NQ_MS(2); else if (ns == 4) NQ_MS(4); else NQ_MS(8);
+#undef NQ_MS
+  }
   return out;
 }
 

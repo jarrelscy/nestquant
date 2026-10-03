@@ -93,16 +93,27 @@ class PFBlock:
         ms=s._dknob()
         if ms_over is not None and ms!=0:ms=ms_over
         if ms==0:return
-        if _async_on():
+        am=_async_on()
+        if am in (2,3):
+            g=_G.get('ev') if am==3 and _G.get('fresh') else None
+            if g is None:g=torch.cuda.Event();g.record()
+            s.late=(ms,g);return
+        if am==1:
             if getattr(s,'DA',None) is None:s.DA=DecAsync(s)
             s.DA.submit(ms);return
         s.dseq+=1;n=s.dseq;torch.cuda.synchronize()
-        ok,dt=s._dec_cond(n,ms)
+        ok,dt=s._dec_cond(n,ms);s._dstat(ok,dt,ms)
+    def late_wait(s):
+        lt=getattr(s,'late',None)
+        if lt is None:return
+        s.late=None;ms,ev=lt;t0=time.perf_counter();ev.synchronize();te=(time.perf_counter()-t0)*1e3
+        s.dseq+=1;ok,dt=s._dec_cond(s.dseq,ms);s.lev=getattr(s,'lev',0.)+te;s._dstat(ok,dt,ms,'late')
+    def _dstat(s,ok,dt,ms,tag='sync'):
         d=s.dst;d['n']+=1;d['tot']+=dt;d['to']+=0 if ok else 1;d['max']=max(d['max'],dt)
         if d['n']>=256:
-            log.info('NestQuant dec-block rank %d: budget %s ms/layer, %d steps, timed out %d, mean %.2f ms, max %.1f ms',
-                     s.rt.rank,ms,d['n'],d['to'],d['tot']/d['n'],d['max'])
-            s.dst=dict(n=0,to=0,tot=0.,max=0.)
+            log.info('NestQuant dec-block rank %d (%s): budget %s ms/layer, %d steps, timed out %d, mean %.2f ms, max %.1f ms, event wait mean %.2f ms',
+                     s.rt.rank,tag,ms,d['n'],d['to'],d['tot']/d['n'],d['max'],getattr(s,'lev',0.)/d['n'])
+            s.dst=dict(n=0,to=0,tot=0.,max=0.);s.lev=0.
     def _dec_cond(s,n,ms):
         """after step n-1 finished on the GPU: wait (budget ms x layers) for its hits to be seen + the upgrade reads to land"""
         rt=s.rt;t0=time.perf_counter()
@@ -117,13 +128,14 @@ class PFBlock:
                 if r<=0:return False
                 rt.wake.set();rt.cv.wait(min(r,0.001))
         with rt.cv:
+            s._dstage=1
             if rt.F is None:
                 it0=rt.hl_n;ok=wt(lambda:rt.hl_n>=it0+2)
                 if s.dm is not None and rt.log is not None:s.dm[1]=rt.log.gen;s.dm[2]=rt.log.off;s.dm[0]=n
             else:
                 dm=s.dm;lg=rt.log
                 ok=wt(lambda:dm is not None and dm[0]>=n and (lg.gen,lg.off)>=(int(dm[1]),int(dm[2])))
-            if ok:ok=wt(lambda:not any(v[2]==4 for v in list(rt.X.ops.values())))
+            if ok:s._dstage=2;ok=wt(lambda:not any(v[2]==4 for v in list(rt.X.ops.values())))
         return ok,(time.perf_counter()-t0)*1e3
 
 DKNOB=os.environ.get('NQ_DEC_BLOCK_KNOB','/dev/shm/nq_dec_block')
@@ -133,15 +145,20 @@ DKNOB=os.environ.get('NQ_DEC_BLOCK_KNOB','/dev/shm/nq_dec_block')
 # csrc/nq_decwait.cu spin kernel (GPU waits for pinned flag >= n, or the step budget of GPU time) and goes on with its
 # async prep; a waiter thread per rank does what dec_wait does after its synchronize (event.synchronize instead) and then
 # sets flag = n. Same conditions, same budget (ms x MoE layers, <0 -> CAP_S), only the host no longer blocks.
-AKNOB=os.environ.get('NQ_DEC_ASYNC_KNOB','/dev/shm/nq_dec_async');_AK=dict(m=None,v=os.environ.get('NQ_DEC_ASYNC','0')=='1')
+# Mode 2 (late host wait): no spin kernel. execute_model records the event (end of the previous step) and arms the wait;
+# the runner then does its host prep + input copies as usual and the wait runs on the host right before the FULL decode
+# graph is launched (ModelCudaGraphManager.run_fullgraph wrapped): event.synchronize (GIL released) + the same _dec_cond.
+# The GPU idles only for the cond itself, not for the prep that the synchronize-first version serialized behind it.
+AKNOB=os.environ.get('NQ_DEC_ASYNC_KNOB','/dev/shm/nq_dec_async');_AK=dict(m=None,v=int(os.environ.get('NQ_DEC_ASYNC','0')))
 def _async_on():
     try:m=os.stat(AKNOB).st_mtime_ns
     except OSError:m=-1
     if m!=_AK['m']:
         _AK['m']=m
-        try:_AK['v']=(open(AKNOB).read().split()[0]=='1') if m!=-1 else os.environ.get('NQ_DEC_ASYNC','0')=='1'
-        except Exception:_AK['v']=False
+        try:_AK['v']=int(open(AKNOB).read().split()[0]) if m!=-1 else int(os.environ.get('NQ_DEC_ASYNC','0'))
+        except Exception:_AK['v']=0
     return _AK['v']
+SWKNOB=os.environ.get('NQ_DEC_ASYNC_SWITCH_KNOB','/dev/shm/nq_dec_async_switch')   # file: GIL switch interval s (<=0: python default)
 class DecAsync:
     def __init__(s,P):
         import threading,queue
@@ -151,14 +168,27 @@ class DecAsync:
         s.P=P;s.q=queue.Queue();s.flag=torch.zeros(1,dtype=torch.int64,pin_memory=True);s.fv=s.flag.numpy()
         s.stat=torch.zeros(3,dtype=torch.int64,pin_memory=True);s.sv=s.stat.numpy();s.s0=s.sv.copy();s.hst=dict(n=0,to=0,tot=0.)
         s.th=threading.Thread(target=s._run,daemon=True,name='nq-decwait');s.th.start()
+        # without the host sync the worker main thread keeps running Python (next-step prep, shm queue spin) and the
+        # streaming loop the wait depends on only gets the GIL every switch interval (5 ms default) -> every wait timed out.
+        import sys;s.swi0=sys.getswitchinterval();s.swi=float(os.environ.get('NQ_DEC_ASYNC_SWITCH_S','0.0002'))
+        s._swk=None;s._sw()
+    def _sw(s):
+        import sys
+        try:m=os.stat(SWKNOB).st_mtime_ns
+        except OSError:m=-1
+        if m!=s._swk:
+            s._swk=m
+            try:v=float(open(SWKNOB).read().split()[0]) if m!=-1 else s.swi
+            except Exception:v=s.swi
+            sys.setswitchinterval(v if v>0 else s.swi0);log.info('NestQuant dec-block async rank %d: GIL switch interval %.6f s',s.P.rt.rank,sys.getswitchinterval())
     def submit(s,ms):
-        P=s.P;P.dseq+=1;n=P.dseq;ev=torch.cuda.Event();ev.record()
+        s._sw();P=s.P;P.dseq+=1;n=P.dseq;ev=torch.cuda.Event();ev.record()
         tns=int(ms*len(P.L_)*1e6) if ms>0 else int(CAP_S*1e9)
         s.q.put((n,ev,ms));torch.ops.nq_decwait.spin(s.flag.data_ptr(),n,tns,s.stat.data_ptr())
         d=s.sv-s.s0
         if d[0]>=256:
-            log.info('NestQuant dec-block async rank %d: budget %s ms/layer, %d steps, gpu timed out %d, gpu mean wait %.2f ms | host waiter mean %.2f ms, timed out %d',
-                     P.rt.rank,ms,d[0],d[1],d[2]/d[0]/1e6,s.hst['tot']/max(1,s.hst['n']),s.hst['to'])
+            log.info('NestQuant dec-block async rank %d: budget %s ms/layer, %d steps, gpu timed out %d, gpu mean wait %.2f ms | host waiter mean %.2f ms, timed out %d (stage1 %d stage2 %d)',
+                     P.rt.rank,ms,d[0],d[1],d[2]/d[0]/1e6,s.hst['tot']/max(1,s.hst['n']),s.hst['to'],s.hst.get('to1',0),s.hst.get('to2',0))
             s.s0=s.sv.copy();s.hst=dict(n=0,to=0,tot=0.)
     def _run(s):
         while True:
@@ -166,6 +196,13 @@ class DecAsync:
             try:
                 ev.synchronize();ok,dt=s.P._dec_cond(n,ms)
                 h=s.hst;h['n']+=1;h['tot']+=dt;h['to']+=0 if ok else 1
+                if not ok:
+                    k='to%d'%getattr(s.P,'_dstage',0);h[k]=h.get(k,0)+1
+                    if not getattr(s,'dumped',0) and n>300:     # one stack dump of the streaming thread at a timed-out wait
+                        s.dumped=1;import sys,traceback
+                        fr={t.name:sys._current_frames().get(t.ident) for t in __import__('threading').enumerate()}
+                        log.warning('NestQuant dec-block async rank %d: timed out at stage %d; streaming thread stack:\n%s',s.P.rt.rank,
+                                    getattr(s.P,'_dstage',0),''.join(traceback.format_stack(fr.get('nq-stream'))) if fr.get('nq-stream') is not None else '(none)')
             except Exception:
                 log.exception('NestQuant dec-block async waiter failed')
             finally:
@@ -194,6 +231,11 @@ def _firstn_skip(so):
     c=so.scheduled_cached_reqs;g=[nc-pl.get(rid,0) for rid,nc in zip(c.req_ids,c.num_computed_tokens)]
     return bool(g) and min(g)>=N
 
+# Mode 3 (= mode 2, earlier start): the event is the end of the previous step's MAIN-model graph (recorded after
+# run_fullgraph), not the end of everything enqueued before execute_model, so the cond (hits seen, oplog replayed, reads
+# landed) overlaps the previous step's sampling + MTP draft (MTP layer is not an NQ layer). Only used when the previous
+# execute_model ran a FULL decode graph (fresh); otherwise the execute_model-entry event as in mode 2.
+_G=dict(ev=None,fresh=False)
 def install_dec():
     """wraps GPUModelRunner.execute_model (every rank): decode-only steps (1..NQ_DEC_BLOCK_MAXTOK tokens) call dec_wait"""
     import vllm.v1.worker.gpu.model_runner as MR
@@ -201,15 +243,35 @@ def install_dec():
     if getattr(R,'_nq_dec_block',False):return
     orig=R.execute_model;MX=int(os.environ.get('NQ_DEC_BLOCK_MAXTOK','8'))
     def execute_model(self,scheduler_output,*a,**k):
+        fr=_G['fresh'];_G['fresh']=False
+        if fr and not k.get('dummy_run',False):_G['fresh']=True   # consumed by dec_wait below (mode 3), reset after
         if not k.get('dummy_run',False) and getattr(scheduler_output,'scheduled_new_reqs',None):PI.new=True   # NQ_PRED_INPUTS new_request
         if not k.get('dummy_run',False) and 0<scheduler_output.total_num_scheduled_tokens<=MX:
             late=_firstn_skip(scheduler_output)
-            if late and _FN['after']==0:return orig(self,scheduler_output,*a,**k)
+            if late and _FN['after']==0:_G['fresh']=False;return orig(self,scheduler_output,*a,**k)
             import nq_vllm
             P=getattr(nq_vllm.RT,'PFB',None)
-            if P is not None:P.dec_wait(_FN['after'] if late else None)
+            if P is not None:
+                P.dec_wait(_FN['after'] if late else None);_G['fresh']=False
+                try:return orig(self,scheduler_output,*a,**k)
+                finally:
+                    if getattr(P,'late',None) is not None:P.late=None;P.lmiss=getattr(P,'lmiss',0)+1   # no FULL graph this step
+        _G['fresh']=False
         return orig(self,scheduler_output,*a,**k)
     R.execute_model=execute_model;R._nq_dec_block=True
+    import vllm.v1.worker.gpu.cudagraph_utils as CU
+    G=CU.ModelCudaGraphManager;orun=G.run_fullgraph
+    def run_fullgraph(self,*a,**k):
+        import nq_vllm
+        P=getattr(nq_vllm.RT,'PFB',None)
+        if P is not None and getattr(P,'late',None) is not None:P.late_wait()
+        r=orun(self,*a,**k)
+        if _async_on()==3:     # end of this main-model graph (before sampling + MTP drafting): mode-3 wait starts here
+            e=_G.get('ev')
+            if e is None:e=_G['ev']=torch.cuda.Event()
+            e.record();_G['fresh']=True
+        return r
+    G.run_fullgraph=run_fullgraph
     if os.environ.get('NQ_DEC_ASYNC_BUILD','1')=='1':     # JIT-build the spin kernel at boot (not on the first async step)
         try:
             from torch.utils.cpp_extension import load
