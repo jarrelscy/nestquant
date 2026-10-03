@@ -5,12 +5,13 @@
 #   HEAD_IP=<head CX-7 IP> spark/start_spark.sh worker [up|fetch|down|logs]           # node 1: headless
 #
 # Start the worker and the head within a few minutes of each other (either order); the head serves once both are up.
-# First run per node downloads ~255 GB (backbone 58 GB + this node's two TP4 rank files, 196 GB) and merges the two TP4
-# ranks into one TP2 rank (streaming/tp4to2.py, ~10 min); peak disk ~450 GB in NQ_DATA, ~255 GB with NQ_DROP_TP4=1.
+# First run per node downloads ~255 GB (backbone 58 GB + this node's two TP4 rank files, 196 GB), converts the MTP
+# layer's experts to fp8 (spark/mtp_fp8.py, +12 GB) and merges the two TP4 ranks into one TP2 rank (streaming/tp4to2.py,
+# ~10 min); peak disk ~460 GB in NQ_DATA, ~270 GB with NQ_DROP_TP4=1.
 #
 # Env (all optional except HEAD_IP):
-#   NQ_PRESET       quality (default): 128K context, no MTP, 26 floating 4-bit experts/layer (jF), 29 slots/layer
-#                   speed:              64K context, MTP ns=1, 12 floating experts/layer, 15 slots/layer
+#   NQ_PRESET       speed (default): 128K context, MTP ns=1, 24 floating 4-bit experts/layer (jF), 27 slots/layer
+#                   quality:         128K context, no MTP, 36 floating experts/layer, 39 slots/layer
 #                   (see spark/README.md "Memory budget"; NUM_SPEC / NQ_MAXLEN / NQ_JF_NFLOAT / NQ_SLOTS_PER_LAYER override)
 #   NQ_IMAGE        image built from spark/Dockerfile (default nestquant-spark:b175)
 #   NQ_DATA         per-node data dir on the internal NVMe (default $HOME/nq-spark)
@@ -31,15 +32,19 @@ PRED_REPO=${PRED_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}
 SERVED=${NQ_SERVED_NAME:-glm-5.3-nq}
 # b1.75/4 kernel build: residual codes 0 and 9 (down 2.5625) + 3 (gate/up 2.25), base codes 0 (K2) and 1 (K1.75)
 NQ_DEFS=${NQ_DEFS:-NQ_RK_CODES=0x209,NQ_RK_GU=0x9,NQ_RK_DN=0x201,NQ_BK_CODES=0x3}
-case "${NQ_PRESET:-quality}" in
-  quality) D_SPEC=0; D_LEN=131072; D_NF=26; D_SLOTS=29 ;;
-  speed)   D_SPEC=1; D_LEN=65536;  D_NF=12; D_SLOTS=15 ;;
+case "${NQ_PRESET:-speed}" in
+  speed)   D_SPEC=1; D_LEN=131072; D_NF=24; D_SLOTS=27 ;;
+  quality) D_SPEC=0; D_LEN=131072; D_NF=36; D_SLOTS=39 ;;
   *) echo "NQ_PRESET must be quality or speed"; exit 2 ;;
 esac
 NUM_SPEC=${NUM_SPEC:-$D_SPEC};MAXLEN=${NQ_MAXLEN:-$D_LEN}
 NF=${NQ_JF_NFLOAT:-$D_NF};SLOTS=${NQ_SLOTS_PER_LAYER:-$D_SLOTS}
 [ "$SLOTS" -ge $((NF+3)) ] || { echo "NQ_SLOTS_PER_LAYER ($SLOTS) must be >= NQ_JF_NFLOAT+3 ($((NF+3)))"; exit 2; }
 T0=$((2*R));T1=$((2*R+1))
+# BF16 linears converted to e4m3 (per output channel, W8A16) at load: MLA q_a/kv_a and q_b, shared experts, dense MLP
+# (layers 0-2). o_proj stays NVFP4 (P4 path) on layers 0-77; only the MTP layer's o_proj takes fp8. kv_b (absorbed into
+# MLA), indexer, router, embed and lm_head stay BF16. NQ_FP8_TARGETS overrides the list; NQ_FP8_TARGETS=none keeps all BF16.
+FP8_TARGETS=self_attn.fused_qkv_a_proj,self_attn.q_b_proj,self_attn.o_proj,shared_experts.gate_up_proj,shared_experts.down_proj,mlp.gate_up_proj,mlp.down_proj
 
 drun(){ docker run --rm --gpus all --ipc host --network host --entrypoint "$@"; }
 hfdl(){   # hf download inside the image; one --include / --exclude flag per pattern (hf 1.x applies only the first of a list)
@@ -58,6 +63,11 @@ fetch(){
       --exclude 'cold_manifests/*' --exclude 'pv_layers/*'
     touch "$NQ_DATA/backbone/.done"
   fi
+  # MTP layer 78 experts BF16 -> e4m3 128x128 blocks (9 -> 4.5 GiB/node). Runs on every fetch: the index patch must be
+  # redone whenever hf download has restored the original index; the conversion itself is skipped once done.
+  echo "== MTP experts to fp8 (spark/mtp_fp8.py)"
+  docker run --rm -v "$REPO":/nq:ro -v "$NQ_DATA":/nqdata --entrypoint /opt/vllm/.venv/bin/python "$NQ_IMAGE" \
+    /nq/spark/mtp_fp8.py /nqdata/backbone /nqdata/backbone
   if [ ! -f "$NQ_DATA/pred/.done" ]; then
     echo "== jF predictor: $PRED_REPO serving/predictor"
     hfdl "$PRED_REPO" pred --include 'serving/predictor/joint/*' --include 'serving/predictor/delta_table.json'
@@ -96,7 +106,7 @@ up(){
   docker run -d --name "$NAME" --gpus all --ipc host --network host --shm-size 16g "${IB[@]}" \
     --ulimit memlock=-1 --ulimit stack=67108864 --security-opt seccomp=unconfined \
     -v "$REPO":/nq:ro \
-    -v "$REPO/sm120/serve/overlay/nvfp4_arvq_hybrid.py":/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro \
+    -v "$REPO/spark/overlay/nvfp4_arvq_hybrid.py":/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro \
     -v "$NQ_DATA/backbone":/model:ro -v "$NQ_DATA/tp2":/nqrepack:ro -v "$NQ_DATA/pred/serving/predictor":/nqpred:ro \
     -v "$NQ_DATA/build":/nqbuild -v "$NQ_DATA/dbg":/dbg \
     -v "$NQ_DATA/cache/vllm":/root/.cache/vllm -v "$NQ_DATA/cache/triton":/root/.triton \
@@ -120,6 +130,7 @@ up(){
     -e VLLM_SM120_COMPACT_WORKSPACE=1 -e VLLM_MTP_INDEX_SHARE=1 -e VLLM_DSA_CANONICAL_TOPK=inkernel \
     -e GLM_MOE_LANE_ROWS=1 -e GLM_NVFP4_LUT256=1 \
     -e VLLM_ENABLE_NVFP4_P4_O_PROJ=1 -e VLLM_NVFP4_P4_MAX_TOKENS=16 -e VLLM_NVFP4_P4_PAIRED=1 \
+    -e VLLM_DISABLE_FP8_W8A16=0 -e NQ_DBG_FP8_TARGETS="${NQ_FP8_TARGETS:-$FP8_TARGETS}" -e NQ_MTP_FP8=1 \
     -e VLLM_ARVQ_FUSED_GATE_PACK=1 -e VLLM_ARVQ_FUSED_COLD_SCATTER=1 -e VLLM_ARVQ_DIRECT_COLD_OUTPUT=1 \
     -e VLLM_ARVQ_FUSED_ACTIVATION_PACK=1 -e VLLM_ARVQ_FUSED_COLD_ACTIVATION=1 -e VLLM_ARVQ_FUSED_COLD_GATHER=1 \
     -e VLLM_ARVQ_FUSED_ROUTE_SUM=1 -e VLLM_ARVQ_PAIRED_HOT_PREFILL=1 -e VLLM_ARVQ_SHARED_HOT_ACTIVATION=1 \

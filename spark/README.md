@@ -18,20 +18,31 @@ HEAD_IP=192.168.100.10 spark/start_spark.sh head        # node 0, OpenAI API on 
 HEAD_IP=192.168.100.10 spark/start_spark.sh head smoke
 ```
 
-Each node's first `up` downloads ~255 GB into `NQ_DATA` (default `~/nq-spark`): the backbone's non-expert files (58 GB), the jF predictor, and the node's two TP4 rank files (196 GB). It then merges the two TP4 ranks into one TP2 rank with `streaming/tp4to2.py` (~10 min) and builds the NestQuant kernels. Peak disk use is ~450 GB, or ~255 GB with `NQ_DROP_TP4=1`. `start_spark.sh <role> fetch` does the download, merge and kernel build without serving.
+Each node's first `up` downloads ~255 GB into `NQ_DATA` (default `~/nq-spark`): the backbone's non-expert files (58 GB), the jF predictor, and the node's two TP4 rank files (196 GB). It then converts the MTP layer's experts to fp8 (`spark/mtp_fp8.py`, +12 GB), merges the two TP4 ranks into one TP2 rank with `streaming/tp4to2.py` (~10 min) and builds the NestQuant kernels. Peak disk use is ~460 GB, or ~270 GB with `NQ_DROP_TP4=1`. `start_spark.sh <role> fetch` does the download, merge and kernel build without serving.
 
 Check the CX-7 names with `ibdev2netdev` and set `NCCL_SOCKET_IFNAME` / `NCCL_IB_HCA` if they differ from the defaults (`enp1s0f1np1`, `rocep1s0f1,roceP2p1s0f1`).
 
 ## Presets
 
-| `NQ_PRESET` | context | MTP | 4-bit hot experts/layer (`NQ_JF_NFLOAT`) | slots/layer |
-|---|---|---|---|---|
-| `quality` (default) | 128K | off | 26 | 29 |
-| `speed` | 64K | ns=1 | 12 | 15 |
+| `NQ_PRESET` | context | MTP | 4-bit hot experts/layer (`NQ_JF_NFLOAT`) | slots/layer | est. KLD |
+|---|---|---|---|---|---|
+| `speed` (default) | 128K | ns=1 | 24 | 27 | ~0.046-0.047 |
+| `quality` | 128K | off | 36 | 39 | ~0.045 |
 
-`NUM_SPEC`, `NQ_MAXLEN`, `NQ_JF_NFLOAT` and `NQ_SLOTS_PER_LAYER` override the preset. Slots must be at least the floating count + 3.
+`NUM_SPEC`, `NQ_MAXLEN`, `NQ_JF_NFLOAT` and `NQ_SLOTS_PER_LAYER` override the preset. Slots must be at least the floating count + 3. At 64K context each node has 3.35 GiB more, about 8 more slots per layer.
 
-The KLD target sheet (`threads/35-nq15`) sized the Spark at H=45 hot experts per layer, which measured 0.0432 against the BF16 teacher. That sizing assumed 12 GiB/node of non-expert weights. The served backbone is larger (next section), so H45 does not fit. In the same harness H32 gave 0.0446-0.0449. Expect ~0.045-0.046 for `quality`, and higher for `speed`. Neither preset has been KLD-measured yet.
+The KLD estimates are interpolated from the BF16-teacher harness on confirmation windows 0000-0003 (fp8 KV): H45 measured 0.0432 and H32 0.0446-0.0449. Below H32 nothing was measured. The harness runs every non-expert weight as block fp8 from `zai-org/GLM-5.3-FP8`, so the fp8 backbone here is already counted in those numbers; o_proj in NVFP4 is not. Neither preset has been KLD-measured on a live server yet.
+
+## Speed (estimates, not measured on GB10)
+
+Decode is bound by LPDDR5x bandwidth (273 GB/s per node). Per decode token each node reads ~11.6 GiB: ~8.7 GiB of non-expert weights and ~2.9 GiB of NestQuant experts (8 active × 75 layers). Converting the BF16 linears to fp8 cut this from ~15.6 GiB.
+
+| | decode, 1 request | prefill |
+|---|---|---|
+| `speed` (MTP ns=1) | ~27-33 tok/s | ~800-1,400 tok/s up to ~16K, ~500-900 tok/s at 128K |
+| `quality` (no MTP) | ~16-18 tok/s | same |
+
+Prefill is compute bound (~75 GFLOP per token across the two nodes); the fp8 linears run on the fp8 tensor cores. The NestQuant expert kernel's prefill launch configs for 48 SMs are untuned guesses, so prefill is the least certain number. Several concurrent requests share each weight read, so total throughput rises well above the single-request rate.
 
 ## Memory budget (per node, GiB)
 
@@ -39,21 +50,27 @@ The KLD target sheet (`threads/35-nq15`) sized the Spark at H=45 hot experts per
 |---|---|---|
 | usable LPDDR5x | 114 | measured by howtospark (GB10 128 GB) |
 | expert base + resident planes (`res/rank{r}`) | 78 | every routed expert at 1.75 bits, TP2 half |
-| non-expert weights, layers 0-77 + embed/head + vision | 14.7 | BF16 checkpoint; attention o_proj goes to NVFP4 at load (`VLLM_ENABLE_NVFP4_P4_O_PROJ=1`, as on SM120). MLA q_a/kv_a, indexer and router are replicated on both ranks |
-| MTP layer 78 routed experts | 9.0 | BF16 in the checkpoint (256 experts, not in the NestQuant repack); only loaded when MTP is on |
+| non-expert weights, layers 0-77 + embed/head + vision | 10.7 | see below; 14.8 in BF16 before the load-time conversion. MLA q_a/kv_a, indexer and router are replicated on both ranks |
+| MTP layer 78 | 4.5 | routed experts e4m3 with 128x128 block scales (`spark/mtp_fp8.py`, 9.0 in BF16); only loaded when MTP is on |
 | KV cache, fp8_ds_mla | 6.7 @128K / 3.35 @64K | ~55 KB/token; the MLA latent is replicated on both ranks |
 | runtime (CUDA context, graphs, activations, NCCL) | ~3 | estimate |
-| 4-bit upgrade slots | rest | 5.40 MiB per slot (TP2 record, 5,660,672 B) x 75 layers |
+| 4-bit upgrade slots | rest | 5.40 MiB per slot (TP2 record, 5,660,672 B) x 75 layers = 0.395 GiB per slot/layer |
 
-`quality`: 114 - 78 - 14.7 - 6.7 - 3 = 11.6 GiB → 29 slots/layer.
-`speed`: 114 - 78 - 14.7 - 9.0 - 3.35 - 3 = 6.0 GiB → 15 slots/layer.
-MTP at 128K leaves ~2.6 GiB (6 slots/layer), so it isn't offered as a preset.
+`speed`: 114 - 78 - 10.7 - 4.5 - 6.7 - 3 = 11.1 GiB → 27 slots/layer.
+`quality`: 114 - 78 - 10.7 - 6.7 - 3 = 15.6 GiB → 39 slots/layer.
+
+Non-expert weight formats:
+- o_proj, layers 0-77: NVFP4, converted at load (`VLLM_ENABLE_NVFP4_P4_O_PROJ=1`, as on SM120).
+- MLA q_a/kv_a (fused), q_b, shared experts, dense MLP (layers 0-2) and the MTP layer's o_proj: e4m3 per output channel (W8A16), converted at load by the fork's `fp8_w8a16` method. Decode uses SM120's fused gemv (`sm120/serve/csrc/nq_fp8o.cu`, one weight read for up to 8 rows, which covers MTP verify); prefill uses fp8 `_scaled_mm`. The list is `NQ_DBG_FP8_TARGETS` (`NQ_FP8_TARGETS` in `start_spark.sh`; `none` keeps them BF16).
+- kv_b (absorbed into MLA at load), indexer, router, embed and lm_head stay BF16.
+
+Each layer's linears are converted just before that layer's NestQuant planes load, and the slot pool is allocated after the last layer, so the BF16 copies are gone before the slots exist. Peak memory during load is below the steady state.
 
 The slot pool is allocated while weights load, so vLLM's memory profile already counts it when sizing the KV cache from `NQ_UTIL` (0.95). On the first boot, check the log's KV-cache token count. It must cover `NQ_MAXLEN`; if it doesn't, lower `NQ_SLOTS_PER_LAYER` (and `NQ_JF_NFLOAT`).
 
-Ways to free more memory, not done here:
-- Store the MTP experts in fp8 or NVFP4 (9 → 4.5 / 2.5 GiB).
-- Quantize the rest of the BF16 attention (q_b, kv_b, shared experts). Both need a KLD gate.
+More memory and speed, not done here (both need a KLD gate):
+- NVFP4 for the shared experts and q_b (~2.2 GiB less per token per node, ~1.2x decode).
+- kv_b in fp8 after MLA absorption (1.07 GiB per token per node).
 
 ## What changed vs the SM120 (4x RTX PRO 6000) serve
 
@@ -63,6 +80,7 @@ Ways to free more memory, not done here:
 - **Cross-node op log** (`NQ_OPLOG=dist`, `streaming/oplog_net.py`): rank 0 schedules and sends its upgrade/downgrade ops and I/O stats to rank 1 over TCP (`NQ_OPLOG_ADDR`, port 29611), in place of the `/dev/shm` log.
 - **Unified memory** (`NQ_UNIFIED`, auto-on for an integrated GPU): io_uring O_DIRECT reads land straight in host-mapped slot memory, with no bounce buffer and no H2D copy. The RAM tier and prefill-borrow are off (`NQ_PREFILL_BORROW=0`).
 - **One drive per node** (`NQ_REPACK_ALT=none`). `NQ_JF_NFLOAT` sets the jF floating count (77 on SM120).
+- **fp8 backbone linears and fp8 MTP experts** (above). The quant-config overlay is `spark/overlay/nvfp4_arvq_hybrid.py`, based on the fork's `serving/arvq-v4-v5` file (the ARVQ-v2 backbone's format `rvq256_256x8_expert_fp16block` needs it; `sm120/serve/overlay` predates it) plus the NestQuant hook and the `NQ_MTP_FP8` path.
 - **Dropped flags**: PCIe/b12x all-reduce, DCP, LMCache, the AQLM path, `NCCL_P2P_LEVEL`.
 
 ## What was verified (no GB10 available)
@@ -80,6 +98,7 @@ Ways to free more memory, not done here:
 - sm_121 runtime for the fork: FlashInfer sparse MLA, the DSA indexer, CUTLASS DSL kernels. Several fast paths check `capability == (12, 0)` and fall back to the generic path on sm_121: `vllm/v1/attention/ops/dcp_bytepack.py:57`, `raw_kv_gather.py:92`, `vllm/model_executor/warmup/fa4_cutedsl_config.py:202`.
 - NCCL over CX-7 (RoCE) with vLLM `--nnodes 2`. `VLLM_GLM_COMM_OVERLAP=1` is untested across nodes; set it to 0 if the all-reduce hangs.
 - Unified-memory streaming speed and the SSD rate (`NQ_TAP_RATE_GBPS`, default 6.6 GB/s).
+- fp8 W8A16 on the MLA q_a/kv_a and q_b projections: SM120 runs fp8 on o_proj only. The model calls these through the linear method (no raw weight reads outside `apply`, checked in the fork), but they have not run end to end.
 - Kernel launch configs at I=1024 on 48 SMs (`NQ_CFG_GU` / `NQ_CFG_DN` JSON overrides).
 - KV-cache size vs `NQ_UTIL` (see memory budget).
 - KLD of each preset (live server logprobs on the BF16-teacher windows), and decode tok/s.
