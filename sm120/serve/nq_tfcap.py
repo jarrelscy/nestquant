@@ -21,6 +21,7 @@ CAP_MAXT = 16
 RING = int(os.environ.get('NQ_TFCAP_RING', '16384'))
 PLAYERS = [int(v) for v in os.environ.get('NQ_TFCAP_PLAYERS', '3,13,23,33,43,53,63,77').split(',')]
 PD = 256
+LOGITS = os.environ.get('NQ_TFCAP_LOGITS', '0') == '1'   # step3: full router logits [NL, 256] fp16 per row (raw gate output, pre-sigmoid/bias)
 CHUNK = int(os.environ.get('NQ_TFCAP_CHUNK', '65536'))
 
 
@@ -36,6 +37,13 @@ class Capture:
         s.r_ids = z((RING, NL, 8), torch.uint8); s.r_w = z((RING, NL, 8), torch.float16)
         s.r_xn = z((RING, NL), torch.float32); s.r_hp = z((RING, len(s.pl), PD), torch.float16)
         s.r_tok = z((RING,), torch.int32); s.r_pos = z((RING,), torch.int32)
+        s.keys = ('ids', 'w', 'xn', 'hp', 'tok', 'pos') + (('lg',) if LOGITS else ())
+        if LOGITS:
+            import nq_lookahead as LAH
+            s.r_lg = z((RING, NL, 256), torch.float16); s.gate = {L: LAH._run[L].gate for L in s.layers if L in LAH._run}
+            miss = [L for L in s.layers if L not in s.gate]
+            if miss: log.warning('tfcap: no router for layers %s (logits stay 0)', miss[:8])
+            s.save_bias()
         s.idx = z((CAP_MAXT,), torch.long); s.ar = torch.arange(CAP_MAXT, device=dev)
         s.pf = z((NL, 256), torch.int32)
         s.Tp = 0; s.head = 0                       # host: rows enqueued so far (monotone)
@@ -43,9 +51,25 @@ class Capture:
         s.steps = []; s.rows = []; s.nchunk = 0; s.boot = time.strftime('%Y%m%dT%H%M%S'); s.done = 0; s.lost = 0
         s.reqmap = {}; s.pfrec = []
         s.stream = torch.cuda.Stream(dev)
-        s.mb = (s.r_ids[0].numel() + 2 * s.r_w[0].numel() + 4 * s.r_xn[0].numel() + 2 * s.r_hp[0].numel() + 8) * RING / 2 ** 20
+        s.mb = (s.r_ids[0].numel() + 2 * s.r_w[0].numel() + 4 * s.r_xn[0].numel() + 2 * s.r_hp[0].numel() + 8 + (2 * s.r_lg[0].numel() if LOGITS else 0)) * RING / 2 ** 20
         log.info('tfcap: ring %d rows (%.0f MiB), proj layers %s, out %s', RING, s.mb, list(s.pl), s.out)
         s.thread = threading.Thread(target=s.drain_loop, name='nq-tfcap', daemon=True); s.thread.start()
+
+    def save_bias(s):
+        """step3: per-layer e_score_correction_bias (if the router exposes it) -> <out>/router_bias.npz, once per boot"""
+        try:
+            import nq_lookahead as LAH
+            B = {}
+            for L in s.layers:
+                r = LAH._run.get(L)
+                for o in (r, getattr(r, 'router', None), getattr(r, 'gate', None)):
+                    b = getattr(o, 'e_score_correction_bias', None) if o is not None else None
+                    if b is not None:
+                        B[f'L{L}'] = b.detach().float().cpu().numpy(); break
+            np.savez(f'{s.out}/router_bias-{s.boot}.npz', **B)
+            log.info('tfcap: router bias for %d layers saved', len(B))
+        except Exception:
+            log.exception('tfcap: router bias save failed')
 
     # ---------------------------------------------------------------- in the MoE forward (inside graphs for decode)
     def layer(s, L, x, w, ids):
@@ -61,6 +85,9 @@ class Capture:
         k = s.pl.get(L)
         if k is not None:
             s.r_hp[:, k].index_copy_(0, idx, (x.to(torch.bfloat16) @ s.R[k]).to(torch.float16))
+        if LOGITS and L in s.gate:
+            lg, _ = s.gate[L](x)
+            s.r_lg[:, i].index_copy_(0, idx, lg.to(torch.float16))
 
     # ---------------------------------------------------------------- runner hook (eager, every model step)
     def pre(s, runner, input_ids, positions):
@@ -124,7 +151,7 @@ class Capture:
                     ixn = np.concatenate([np.r_[a:min(a + n, RING)], np.r_[0:max(0, a + n - RING)]])
                     with torch.cuda.stream(s.stream):
                         ix = torch.from_numpy(ixn).to(s.dev)
-                        blk = {k: getattr(s, 'r_' + k).index_select(0, ix).cpu().numpy() for k in ('ids', 'w', 'xn', 'hp', 'tok', 'pos')}
+                        blk = {k: getattr(s, 'r_' + k).index_select(0, ix).cpu().numpy() for k in s.keys}
                     blk['abs'] = np.arange(t0, end, dtype=np.int64)
                     s.rows.append(blk)
                     for e2, (q, Tp, wl) in done:
@@ -140,7 +167,7 @@ class Capture:
         nrow = sum(len(b['tok']) for b in s.rows)
         if nrow < CHUNK and not force and time.time() - getattr(s, 't_first', time.time()) < 900:
             return
-        K = ('ids', 'w', 'xn', 'hp', 'tok', 'pos', 'abs')
+        K = s.keys + ('abs',)
         cat = {k: (np.concatenate([b[k] for b in s.rows]) if s.rows else np.zeros((0,) + getattr(s, 'r_' + k, s.r_tok).shape[1:])) for k in K}
         st = np.array([(q, t, e) for q, t, _, e in s.steps], dtype=np.int64).reshape(-1, 3)
         sw = np.array([w for _, _, w, _ in s.steps], dtype=np.float64)

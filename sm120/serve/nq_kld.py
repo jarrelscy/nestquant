@@ -65,6 +65,7 @@ def install():
 # not a rejected draft tail). Removing the knob (next sample call, e.g. a tiny follow-up request) flushes
 # NQ_KLD_DIR/<tag>/decode.pt = dict(pos, lp [n,V] fp32 of valid rows sorted by pos, steps, rows, first_mismatch).
 FKNOB=os.environ.get('NQ_KLD_FKNOB','/dev/shm/nq_kld_force');RING=int(os.environ.get('NQ_KLD_RING','4096'))
+NOLP=os.environ.get('NQ_KLD_NOLP','0')=='1'   # step3 capture runs: force the teacher tokens but keep no logprob rows
 class _F:cur=None;T=None;c=0;steps=0;lp=pos=val=first=mt=None
 
 def _fknob():
@@ -99,7 +100,7 @@ def _force(lg,ib):
     pos=ib.positions[li].long();inp=ib.input_ids[li].long()
     inr=(pos+1)<Lt;cur=T[pos.clamp(0,Lt-1)];tgt=T[(pos+1).clamp(0,Lt-1)]
     match=(inp==cur)&(pos<Lt);val=torch.cumprod(match.int(),0).bool()&inr
-    if _rank()==0:
+    if _rank()==0 and not NOLP:
         if _F.lp is None:
             V=lg.shape[1];_F.lp=torch.empty(RING,V,dtype=torch.float32,pin_memory=True)
             _F.pos=torch.empty(RING,dtype=torch.int64,pin_memory=True);_F.val=torch.empty(RING,dtype=torch.bool,pin_memory=True)

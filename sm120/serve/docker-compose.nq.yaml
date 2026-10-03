@@ -38,6 +38,9 @@ services:
       NQ_DUMP: ${NQ_DUMP:-}
       NQ_TFCAP: ${NQ_TFCAP:-}                 # nq-tfpred decode-trace capture dir (in container); empty = off
       NQ_TFCAP_CHUNK: ${NQ_TFCAP_CHUNK:-65536}   # rows per trace file (small = short runs still flush; nothing flushes at shutdown)
+      NQ_TFCAP_LOGITS: ${NQ_TFCAP_LOGITS:-0}     # step3: 1 = also record the full 256 router logits per MoE layer (fp16 [75,256]/row)
+      NQ_TFCAP_RING: ${NQ_TFCAP_RING:-16384}     # device ring rows (shrink with NQ_TFCAP_LOGITS=1)
+      NQ_KLD_NOLP: ${NQ_KLD_NOLP:-0}             # step3: 1 = forced decode without the full-vocab logprob dump (capture-only runs)
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
       NQ_ISSUE: ${NQ_ISSUE:-1}

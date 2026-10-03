@@ -40,7 +40,7 @@ PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384')
 # prefill expert-level adaptation (NQ_PREFILL_ADAPT=lookahead|chunk, NQ_LA_MEASURE=1): see nq_lookahead.py
 import nq_lookahead as LAH,nq_session as SRM
 RSF=None          # routed_scaling_factor the MoE runner applies after the experts (topk_weights here exclude it); set in create_weights
-if LAH.MODE or LAH.MEAS:LAH.install()
+if LAH.MODE or LAH.MEAS or os.environ.get('NQ_TFCAP_LOGITS','0')=='1':LAH.install()   # step3: tfcap router logits need the per-layer MoERunner registry
 if os.environ.get('NQ_KLD_HOOK','0')=='1':   # nq-kld full-vocab prompt-logprob dump (eval only, nq_kld.py)
     import nq_kld;nq_kld.install();nq_kld.install_force()
 if os.environ.get('NQ_PF_BLOCK','0')=='1':
