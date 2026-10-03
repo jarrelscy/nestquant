@@ -81,6 +81,8 @@ More memory and speed, not done here (both need a KLD gate):
 - **Unified memory** (`NQ_UNIFIED`, auto-on for an integrated GPU): io_uring O_DIRECT reads land straight in host-mapped slot memory, with no bounce buffer and no H2D copy. The RAM tier and prefill-borrow are off (`NQ_PREFILL_BORROW=0`).
 - **One drive per node** (`NQ_REPACK_ALT=none`). `NQ_JF_NFLOAT` sets the jF floating count (77 on SM120).
 - **fp8 backbone linears and fp8 MTP experts** (above). The quant-config overlay is `spark/overlay/nvfp4_arvq_hybrid.py`, based on the fork's `serving/arvq-v4-v5` file (the ARVQ-v2 backbone's format `rvq256_256x8_expert_fp16block` needs it; `sm120/serve/overlay` predates it) plus the NestQuant hook and the `NQ_MTP_FP8` path.
+- **SM120 step 2** (origin/main 67a0d5d), on by default in `start_spark.sh`: decode-wait mode 3 (`NQ_DEC_ASYNC=3`, `csrc/nq_decwait.cu`, `nq_pfblock.py`; the first 64 tokens wait for landed planes, then 0.04 ms), prefill block (`NQ_PF_BLOCK=1`), hit carry (`NQ_HIT_CARRY=1`), predictor inputs 3, tap `NQ_TAP_QREAL=1` / `NQ_TAP_TODO_FIX=2`, `NQ_DBG_NO_BF16_RED=1`. Each is overridable by env. `start_spark.sh` deletes the `/dev/shm` knob files left by an earlier boot (the container runs with `--ipc host`).
+- **pfblock markers over the dist channel**: on SM120 the follower reads rank 0's `{iokey}_pfblk.bin` / `_decblk.bin` from `/dev/shm`. With `NQ_OPLOG=dist` rank 0 sends each marker in-band on the op-log TCP stream (`put_mark`), and rank 1 stores it with its byte position in the stream. A follower is ready once it has replayed past that position, the same test as the file path.
 - **Dropped flags**: PCIe/b12x all-reduce, DCP, LMCache, the AQLM path, `NCCL_P2P_LEVEL`.
 
 ## What was verified (no GB10 available)
@@ -88,6 +90,10 @@ More memory and speed, not done here (both need a KLD gate):
 - Kernel decode for b1.75 is bit-exact vs the reference (`moe.dense_W`) and the T35 test vectors at levels 2 and 4, for decode and prefill paths, at I=512 and I=1024: 160/160 projections on sm_80. The extension compiles with `-arch=sm_121a`.
 - `tp4to2.py` output (records, index and `res` files) is byte-identical to `repack.py ... 2` from the encode shards on layers 10, 40 and 77, both ranks. The full 75-layer merge ran end to end (108.68 GB bin + 78 GiB res per rank, ~8 min per rank at 8 threads).
 - `tests/test_oplog_net.py`: the TCP op log gives the same records as the file log, across processes, including io-stats exchange.
+- `tests/test_oplog_net.py` also sends random markers between records: every marker arrives after the records sent before it, with the right stream position (2,887 records, 146 markers).
+- `tests/test_pfblock_dist.py`: leader and follower `PFBlock` over localhost TCP. Prefill readiness before and after the marker, a later chunk not ready, an in-flight level-4 read blocking, and the follower's decode wait gated on the leader's step marker (9/9).
+- `tests/test_leader_hits.py` with synthetic routing (the SM120 routing logs are not on this box): hit carry gets 99.97% of hits to the scheduler vs 64% without, identical to SM120's origin/main.
+- `csrc/nq_decwait.cu` compiles with `-arch=sm_121a`.
 - `streaming/smoke_unified.py`: the direct-to-slot path is byte-exact against the bounce path (A100, mapped memory over PCIe).
 - The fork's ARVQ CUDA kernels compile for sm_121a with CUDA 13.
 - Backbone: all 49 non-expert files of ARVQ-v2-hybrid match the sha256s recorded at build time, and v2 was seeded from a full v1 copy. v1 is what SM120 serves.
@@ -99,6 +105,7 @@ More memory and speed, not done here (both need a KLD gate):
 - NCCL over CX-7 (RoCE) with vLLM `--nnodes 2`. `VLLM_GLM_COMM_OVERLAP=1` is untested across nodes; set it to 0 if the all-reduce hangs.
 - Unified-memory streaming speed and the SSD rate (`NQ_TAP_RATE_GBPS`, default 6.6 GB/s).
 - fp8 W8A16 on the MLA q_a/kv_a and q_b projections: SM120 runs fp8 on o_proj only. The model calls these through the linear method (no raw weight reads outside `apply`, checked in the fork), but they have not run end to end.
+- Decode-wait cost across nodes: rank 1 waits on rank 0's step marker over CX-7, so its wait includes one TCP hop. Compare `NQ_DEC_ASYNC=3` against 0 on tok/s and KLD.
 - Kernel launch configs at I=1024 on 48 SMs (`NQ_CFG_GU` / `NQ_CFG_DN` JSON overrides).
 - KV-cache size vs `NQ_UTIL` (see memory budget).
 - KLD of each preset (live server logprobs on the BF16-teacher windows), and decode tok/s.

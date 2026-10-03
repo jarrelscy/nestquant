@@ -183,6 +183,7 @@ class LA:
             k=(L,cid)
             if k in s.plan:
                 ups,chosen=s.plan.pop(k);c['landed']+=int(l4[ups].sum()) if len(ups) else 0
+                if len(ups):c[f'lL{L}']+=int(l4[ups].sum());c[f'pL{L}']+=len(ups)
                 for j,nm in enumerate(MEAS_N):c['chosen_'+nm]+=A[j][chosen].sum()/tot[j]
                 c['np']+=1
             jobs=[]
@@ -195,6 +196,7 @@ class LA:
                     X.apply(ups,downs,S)
                     if oplog is not None:oplog.put(ups,downs)
                 s.plan[(Lp,tc)]=(np.array([e for _,e in ups],np.int64),chosen)
+                if getattr(s.rt,'PFB',None) is not None:s.rt.PFB.publish(Lp,tc,oplog)
                 s.cs[tc]['issued']+=len(ups);s.cs[tc]['deferred']+=dfr;s.cs[tc]['downs']+=len(downs)
             if L==s.layers[-1]:s._chunk_log(cid)
         return n
@@ -238,6 +240,11 @@ class LA:
             try:ms=sum(a.elapsed_time(b) for a,b in ev)
             except Exception:ms=-1
         nl=max(c['nl'],1);np_=max(c['np'],1)
+        if os.environ.get('NQ_LA_PERLAYER','0')=='1':   # nq-kld eval: per-layer planned / landed-in-time of the last chunks
+            try:
+                import json;pl={int(k[2:]):[int(v),int(c.get('lL'+k[2:],0))] for k,v in c.items() if k.startswith('pL')}
+                with open('/dev/shm/nq_la_perlayer.jsonl','a') as f:f.write(json.dumps(dict(cid=cid,t=time.time(),L=pl))+'\n')
+            except Exception as e:log.warning('NestQuant lookahead per-layer dump: %s',e)
         log.info('NestQuant prefill adapt chunk %d (%s d %d, rank %s): issued %d landed-in-time %d deferred %d downs %d; '
                  'chosen set share route %.3f gate %.3f sal %.3f dsal %.3f; served level-4 share route %.3f gate %.3f sal %.3f '
                  'dsal %.3f; router %.1f ms',cid,MODE,D,RANK,c['issued'],c['landed'],c['deferred'],c['downs'],

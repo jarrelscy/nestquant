@@ -18,6 +18,8 @@
 #   NQ_UTIL         --gpu-memory-utilization (default 0.95)
 #   NCCL_SOCKET_IFNAME / NCCL_IB_HCA   CX-7 netdev and RoCE devices (defaults below; check with `ibdev2netdev`)
 #   NQ_TAP_RATE_GBPS                   sustained SSD read rate per node for the tap scheduler (default 6.6)
+#   NQ_DEC_BLOCK_MS / NQ_DEC_BLOCK_FIRSTN / NQ_DEC_BLOCK_AFTER_MS / NQ_DEC_ASYNC   decode-step wait for landed planes
+#                   (SM120 step 2 defaults -1 / 64 / 0.04 / 3; NQ_DEC_BLOCK_MS=0 turns it off, see spark/README.md)
 #   VLLM_API_KEY    API key (default none)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd);REPO=$(dirname "$HERE")
@@ -97,12 +99,16 @@ up(){
   : "${HEAD_IP:?set HEAD_IP to the head node CX-7 address}"
   fetch
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+  # in-boot knob files (--ipc host: /dev/shm is the host's, a previous boot's knobs would still apply)
+  rm -f /dev/shm/nq_la_ctl /dev/shm/nq_pf_off /dev/shm/nq_sr_ctl /dev/shm/nq_tier_drop /dev/shm/nq_dec_block \
+        /dev/shm/nq_dec_block_firstn /dev/shm/nq_dec_async /dev/shm/nq_dec_async_switch /dev/shm/nq_hit_carry \
+        /dev/shm/nq_pred_inputs /dev/shm/nq_tap_ctl /dev/shm/nq_pf_block /dev/shm/nq_force_sets 2>/dev/null || true
   IB=();[ -d /dev/infiniband ] && IB=(--device /dev/infiniband)
   SC=();[ "$NUM_SPEC" -gt 0 ] && SC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$NUM_SPEC,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}")
   CAP=${ARVQ_CAPTURE_SIZES:-[1,2,4,8]}
   ROLEARGS=(--port 8001 --served-model-name "$SERVED" local)
   [ "$R" = 1 ] && ROLEARGS=(--headless)
-  echo "== $ROLE (node $R): preset ${NQ_PRESET:-quality}, MTP ns $NUM_SPEC, ${MAXLEN} ctx, $NF floating / $SLOTS slots per layer"
+  echo "== $ROLE (node $R): preset ${NQ_PRESET:-speed}, MTP ns $NUM_SPEC, ${MAXLEN} ctx, $NF floating / $SLOTS slots per layer"
   docker run -d --name "$NAME" --gpus all --ipc host --network host --shm-size 16g "${IB[@]}" \
     --ulimit memlock=-1 --ulimit stack=67108864 --security-opt seccomp=unconfined \
     -v "$REPO":/nq:ro \
@@ -121,7 +127,11 @@ up(){
     -e NQ_JF_NFLOAT="$NF" -e NQ_SLOTS_PER_LAYER="$SLOTS" -e NQ_RAMTIER_GB=0 \
     -e NQ_PREFILL_BORROW=0 -e NQ_PREFILL_KV_OFFLOAD=0 -e NQ_TAP_RATE_GBPS="${NQ_TAP_RATE_GBPS:-6.6}" \
     -e NQ_CFG_GU="${NQ_CFG_GU:-}" -e NQ_CFG_DN="${NQ_CFG_DN:-}" \
-    -e NQ_HITS=1 -e NQ_POLL_MS="${NQ_POLL_MS:-4}" -e NQ_ISSUE=1 -e NQ_SESSION_RESTORE=1 \
+    -e NQ_HITS=1 -e NQ_POLL_MS="${NQ_POLL_MS:-4}" -e NQ_ISSUE=1 -e NQ_SESSION_RESTORE="${NQ_SESSION_RESTORE:-0}" \
+    -e NQ_PRED_INPUTS="${NQ_PRED_INPUTS:-3}" -e NQ_HIT_CARRY="${NQ_HIT_CARRY:-1}" -e NQ_TAP_QREAL=1 -e NQ_TAP_TODO_FIX=2 \
+    -e NQ_PF_BLOCK=1 -e NQ_PF_BLOCK_MS="${NQ_PF_BLOCK_MS:-0}" -e NQ_DEC_BLOCK_MS="${NQ_DEC_BLOCK_MS:--1}" \
+    -e NQ_DEC_BLOCK_FIRSTN="${NQ_DEC_BLOCK_FIRSTN:-64}" -e NQ_DEC_BLOCK_AFTER_MS="${NQ_DEC_BLOCK_AFTER_MS:-0.04}" \
+    -e NQ_DEC_ASYNC="${NQ_DEC_ASYNC:-3}" -e NQ_DBG_NO_BF16_RED="${NQ_DBG_NO_BF16_RED:-1}" \
     -e NQ_JOINT_HM="${NQ_JOINT_HM:-0.7}" -e NQ_JOINT_NET=/nqpred/joint/jF.pt \
     -e NQ_JOINT_V2=/nqpred/joint/v2_sal_tweedie1.5.txt -e NQ_DELTA_TABLE=/nqpred/delta_table.json \
     -e NQ_PF=1 -e NQ_PF_MIN=384 -e NQ_PF_ROWS=8192 -e NQ_PF_G=16 -e NQ_PF_GEMM=triton \

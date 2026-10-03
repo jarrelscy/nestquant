@@ -7,11 +7,16 @@ follower connects and sends its rank; the leader's constructor waits until all T
                                           reader: get(gate) -> [(ups, downs)] complete records received since last get
   publish(d)    io stats of this rank (dict): follower -> leader as one JSON line; leader keeps its own copy
   peer_stats()  leader: {rank: last published dict} (the Runtime.io_all() API, no /dev/shm files)
+  put_mark(kind, i, v)   leader: in-band marker (nq_pfblock: kind 0 = prefill plan of layer index i for chunk v, kind 1 =
+                decode step v, i = 0). The follower's get() stores it in marks[kind][i] = (v, gen, off after the marker), so
+                (log.gen, log.off) >= (marks[..][1], marks[..][2]) holds once it has replayed every op sent before the marker,
+                the same test nq_pfblock makes against the /dev/shm marker files on one host.
+gen is always 0 and off counts stream bytes (writer: sent, reader: consumed), so positions compare like OpLog's.
 The log never rotates (a stream has no file to grow). A broken connection raises in put / get: the streaming thread
 stops and every expert keeps its current valid row, as for any other host-loop error."""
 import os,json,time,socket,select,threading,numpy as np
 from oplog import MAGIC,XB
-PORT=29611
+PORT=29611;NMARK=256
 
 def addr():
     a=os.environ.get('NQ_OPLOG_ADDR')
@@ -25,6 +30,7 @@ def _nodelay(c):
 class NetOpLog:
     def __init__(s,ad,writer,rank,nfollow,wait_s=None):
         s.writer=writer;s.rank=rank;s.buf=bytearray();s.stats_in={};s.sbuf={};s.lock=threading.Lock();s.mine=None
+        s.gen=0;s.off=0;s.marks={0:np.zeros((NMARK,3),np.int64),1:np.zeros((1,3),np.int64)}
         wait_s=float(os.environ.get('NQ_OPLOG_WAIT_S','600')) if wait_s is None else wait_s
         if writer:
             ls=socket.socket(socket.AF_INET,socket.SOCK_STREAM);ls.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
@@ -46,7 +52,10 @@ class NetOpLog:
     # ---- writer ----
     def _w(s,a):
         b=a.tobytes()
-        for c in s.peers.values():c.sendall(b)
+        with s.lock:                                      # the streaming thread and the decode-step waiter both write
+            for c in s.peers.values():c.sendall(b)
+            s.off+=len(b)
+    def put_mark(s,kind,i,v):s._w(np.array([MAGIC,-3,int(kind),int(i),int(v)],np.int32))
     def put_reclaim(s,ep):s._w(np.array([MAGIC,-2,int(ep)],np.int32))
     def put(s,ups,downs):
         if not ups and not downs:return
@@ -68,11 +77,14 @@ class NetOpLog:
             if nu==-2:                                    # nq-prefill reclaim marker
                 if gate is not None and gate.x_done<nd:break
                 i+=3;continue
+            if nu==-3:                                    # nq_pfblock marker
+                if i+5>len(a):break
+                s.marks[int(a[i+2])][int(a[i+3])]=(int(a[i+4]),s.gen,s.off+4*(i+5));i+=5;continue
             j=i+3+2*(nu+nd)
             if j>len(a):break                             # record not complete yet
             if gate is not None and nu and int(a[i+3:i+3+2*nu:2].max())>=XB and gate.x_have<int(a[i+3:i+3+2*nu:2].max())//XB:break
             p=a[i+3:j].reshape(-1,2).tolist();out.append(([tuple(x) for x in p[:nu]],[tuple(x) for x in p[nu:]]));i=j
-        del s.buf[:4*i]
+        del s.buf[:4*i];s.off+=4*i
         return out
     # ---- io stats ----
     def publish(s,d):

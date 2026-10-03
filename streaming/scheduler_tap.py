@@ -69,6 +69,16 @@ class TapScheduler:
         fr = e('NQ_TAP_FAR', 'tail:0.1'); s.tfar = float(fr.split(':')[1]) if fr.startswith('tail:') else None   # far window: EMA512 | tail:<x> = x * jF rate
         s.tp_n = int(e('NQ_TAP_TP', '4')); s.rb_rank = s.rb / max(1, s.tp_n)
         s.rate0 = float(e('NQ_TAP_RATE_GBPS', '6')) * 1e9 / s.rb_rank      # records/s per rank before measurement
+        # nq-kld (default off): NQ_TAP_RATE_FLOOR_GBPS per rank = lower bound of the peak-held rate (the 0.999 decay can't pull
+        # it under); in-boot override of floor / mla / lat via /dev/shm/nq_tap_ctl ("floor=<GB/s> mla=<x> lat=model|meas"), re-read on change
+        s.tfloor = float(e('NQ_TAP_RATE_FLOOR_GBPS', '0')) * 1e9 / s.rb_rank; s.tctl = e('NQ_TAP_CTL', '/dev/shm/nq_tap_ctl'); s.tctl_m = None
+        # nq-kld (default off): NQ_TAP_PEAK_GBPS = TOTAL (all ranks) cap on the held peak rate (and rate0) the issue budget and
+        # landing-latency model use (nq-io STAGE.md option #1, mirror of stage_sim +cap<GBps>); ctl key cap=<GB/s total>, 0 = off
+        s.tcap = 0.0; s._setcap(float(e('NQ_TAP_PEAK_GBPS', '0')))
+        # nq-kld (default off): NQ_TAP_QREAL=1 / ctl qreal=1: the latency model's rank-0 queue = the executor's real outstanding
+        # upgrades (s.xq(), set by nq_vllm: engine ops + slot waiters) + todo, instead of the count of state-1 experts (which
+        # can include ups whose landing was never reported, e.g. superseded hseq)
+        s.tqreal = e('NQ_TAP_QREAL', '0') == '1'; s.xq = None
         s.clock = clock or time.monotonic
         s.tlat = e('NQ_TAP_LAT', 'model'); assert s.tlat in ('model', 'meas'), s.tlat
         s.tlat_q = float(e('NQ_TAP_LAT_Q', '0.5')); s.tlat_hl = float(e('NQ_TAP_LAT_HL', '4'))
@@ -78,9 +88,24 @@ class TapScheduler:
         s.span = 64.0; s.NL = len(s.layers)
         s.doom = {}; s.doomed = np.zeros((s.NL, s.NE), bool); s.todo = collections.deque()
         s.peak = None; s.t_last = None; s.tps = None; s.n_land = 0; s.t_rate = None; s.n_land0 = 0
-        s.stats.update(refreshes=0, promotions=0, budget_cut=0, eager_evict=0, no_slot_skip=0, lat_tok_sum=0.0)
+        s.stats.update(refreshes=0, promotions=0, budget_cut=0, eager_evict=0, no_slot_skip=0, lat_tok_sum=0.0, shrink_evict=0)
+        # NQ_TAP_TODO_FIX (default 0 = the step 2 rc behaviour; 1 = fix): (a) pool full -> layers over nf give back their lowest-score
+        # excess (a prefill-borrow reclaim leaves the pool full and unbalanced per layer); (b) with no free slot, a free-slot
+        # pair joins todo only while todo is shorter than the downs in flight (else todo filled with reads no slot will take,
+        # len(todo) drove the qreal latency over H -> budget 0 -> no eager evictions, no downs: zero I/O until the next borrow)
+        # 2 = (b) only, no (a): overfull layers drain through normal eviction scoring; q0 / nt count only the issuable todo
+        # (min(len(todo), downs in flight + free slots)) so stale todo cannot pin the budget at 0
+        s.tfixm = int(e('NQ_TAP_TODO_FIX', '0') or 0); s.tfix = s.tfixm in (1, 2); s.tshrink = s.tfixm == 1; s.tiss = s.tfixm == 2
+        if getattr(s, 'tcore', None) is not None: s.tcore.fix = s.tfixm if s.tfix else 0
+        if s.tfix: s.stats.update(nf_shrink_evict=0, todo_full_skip=0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
         s.sched_name = 'tap'
+
+    def _setcap(s, g):
+        if not hasattr(s, 'rate00'): s.rate00 = s.rate0
+        s.tcap = g * 1e9 / max(1, s.tp_n) / s.rb_rank if g > 0 else 0.0
+        s.rate0 = min(s.rate00, s.tcap) if s.tcap > 0 else s.rate00
+        if s.tcap > 0 and getattr(s, 'peak', None) is not None: np.minimum(s.peak, s.tcap, out=s.peak)
 
     # ---- executor feedback (counts landings for the live rank-0 rate)
     def landed(s, L, e):
@@ -115,6 +140,7 @@ class TapScheduler:
     def _plan(s, now, q0, nt=0):
         """refresh scalars: -> (lat tokens, H tokens, issue budget reads); q0 = rank-0 reads queued (in flight + todo), nt = todo only"""
         tps = s.tps or 94.0
+        s._ctl()
         if s.tlat == 'meas':
             mo, me = s._rates(now, q0, nt)
             lm = max(mo) * tps; lat = max(lm, max(me) * tps)
@@ -131,6 +157,25 @@ class TapScheduler:
             rate = float(s.peak.min()) if s.peak is not None else s.rate0
             budget = max(0, int((s.tmla * H - el) / tps * rate))
         return lat, H, budget
+
+    def _ctl(s):
+        try: m = os.stat(s.tctl).st_mtime_ns
+        except OSError: return
+        if m == s.tctl_m: return
+        s.tctl_m = m
+        try: kv = dict(x.split('=', 1) for x in open(s.tctl).read().split() if '=' in x)
+        except (OSError, ValueError): return
+        if 'floor' in kv: s.tfloor = float(kv['floor']) * 1e9 / s.rb_rank
+        if 'mla' in kv: s.tmla = float(kv['mla'])
+        if 'cap' in kv: s._setcap(float(kv['cap']))
+        if 'qreal' in kv: s.tqreal = kv['qreal'] == '1'
+        if kv.get('lat') in ('model', 'meas') and kv['lat'] != s.tlat:
+            s.tlat = kv['lat']
+            if s.tlat == 'meas' and s.t_iss is None:
+                s.t_iss = np.full((len(s.layers), s.NE), np.nan); s.lat0 = collections.deque(maxlen=int(os.environ.get('NQ_TAP_LAT_N', '256')))
+                s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
+            elif s.tlat == 'model': s.t_iss = None; s.lat0 = None
+        import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap ctl: floor %.2f GB/s/rank, mla %s, lat %s, cap %.2f GB/s total, qreal %s', s.tfloor * s.rb_rank / 1e9, s.tmla, s.tlat, s.tcap * s.rb_rank * max(1, s.tp_n) / 1e9, s.tqreal)
 
     def _rates(s, now, q0, nt=None):
         """-> (lat_s per rank list). Rank 0 live; followers from io_all() if available.
@@ -151,6 +196,8 @@ class TapScheduler:
         nr = max(len(io), 1)
         if s.peak is None or len(s.peak) != nr: s.peak = np.full(nr, s.rate0)
         s.peak *= 0.999
+        if s.tfloor > 0: np.maximum(s.peak, s.tfloor, out=s.peak)
+        if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
         if r0 is not None: s.peak[0] = max(s.peak[0], r0)
         out.append(q0 / max(s.peak[0], 1.0) + s.tsvc); me = []
         meas = nt is not None
@@ -169,6 +216,7 @@ class TapScheduler:
                 p = d.get('op_p50_ms')
                 me.append(out[-1] if not isinstance(p, (int, float)) or not p == p else
                           pre / max(s.peak[r], 1.0) + min(max(p / 1e3, 0.0), 30.0))
+        if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
         return (out, me) if meas else out
 
     def _value(s, lat, H):
@@ -230,27 +278,42 @@ class TapScheduler:
                 r = (st == 2) & ~s.fixed & ~s.doomed; i, e = np.nonzero(r)
                 for k in np.argsort(s.score[i, e], kind='stable')[:over]:
                     downs.append((s.layers[i[k]], int(e[k]))); st[i[k], e[k]] = 3
-                s.stats['shrink_evict'] = s.stats.get('shrink_evict', 0) + min(over, len(i))
+                s.stats['shrink_evict'] += min(over, len(i))
         nfree = (s.slots - int((st > 0).sum())) if s.slots is not None else 10 ** 9
+        if s.tshrink and s.slots is not None and nfree <= 0:   # pool full: layers over the lookahead width nf give their excess back
+            ov = (((st == 1) | (st == 2)) & ~s.fixed & ~s.doomed).sum(1) - s.nf
+            for l in np.nonzero(ov > 0)[0]:
+                e = np.nonzero((st[l] == 2) & ~s.fixed[l] & ~s.doomed[l])[0]
+                for k in np.argsort(s.score[l, e], kind='stable')[:ov[l]]:
+                    downs.append((s.layers[l], int(e[k]))); st[l, e[k]] = 3
+                s.stats['nf_shrink_evict'] += min(int(ov[l]), len(e))
         while s.todo and nfree > 0:
             i, e = s.todo.popleft()
             if st[i, e] == 0: ups.append((s.layers[i], e)); st[i, e] = 1; nfree -= 1
         big = ((c > 0).sum(1) > s.big * s.NE).any()
         if big: s.stats['big_steps'] += 1
         if ref and not big and s.P is not None and getattr(s.P, 'S', None) is not None:
-            lat, H, budget = s._plan(now, int((st == 1).sum()) + len(s.todo), len(s.todo))
+            n1 = int((st == 1).sum()); nx = s.xq() if s.xq is not None else -1
+            s.stats['q_st1'] = n1; s.stats['q_todo'] = len(s.todo); s.stats['q_x'] = nx   # nq-kld: queue-model inputs (last refresh)
+            s.stats['q_st1_sum'] = s.stats.get('q_st1_sum', 0) + n1; s.stats['q_x_sum'] = s.stats.get('q_x_sum', 0) + nx
+            nt = len(s.todo)
+            if s.tiss: nt = min(nt, int((st == 3).sum()) + max(nfree, 0))
+            q0 = (nx if (s.tqreal and nx >= 0) else n1) + nt
+            lat, H, budget = s._plan(now, q0, nt)
             V, V0 = s._value(lat, H)
             pin = s.pin & ~s.fixed if s.pin is not None else None
             if pin is not None: V = np.where(pin, np.float32(1e9), V)
             res = (st == 2) & ~s.doomed; occ = ((st == 1) | (st == 2)) & ~s.doomed
             cand = (st == 0) & ~s.doomed & ~s.fixed & (s.hold <= s.tok)
             pairs = s._pairs(V, cand, res & ~s.fixed, occ & ~s.fixed)
-            k = 0
+            k = 0; room = int((st == 3).sum()) - len(s.todo) if s.tfix else 0
             for g, l, e, v in pairs:
                 if k >= budget: s.stats['budget_cut'] += 1; continue
                 if v < 0:
                     if nfree > 0: ups.append((s.layers[l], e)); st[l, e] = 1; nfree -= 1
-                    else: s.todo.append((l, e))
+                    elif not s.tfix: s.todo.append((l, e))
+                    elif room > 0: s.todo.append((l, e)); room -= 1
+                    else: s.stats['todo_full_skip'] += 1; continue
                 elif nfree > 0:
                     ups.append((s.layers[l], e)); st[l, e] = 1; nfree -= 1; s.doom[l, e] = (l, v); s.doomed[l, v] = True
                 elif g - V0[l, v] > s.tc:
