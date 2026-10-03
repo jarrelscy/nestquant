@@ -184,7 +184,7 @@ struct TapCore
     std::vector<int32_t> U, D;                        // this step's ups / downs (flat), in TapScheduler order
     std::vector<double> V, V0; bool V64 = false, V064 = false;   // value arrays (float32 values stored exactly unless V64)
     long nfree = 0; bool big = false;
-    bool fix = false;                                 // NQ_TAP_TODO_FIX (TapScheduler.tfix): nf shrink + todo room
+    int fix = 0;                                      // NQ_TAP_TODO_FIX: 1 = nf shrink + todo room, 2 = todo room only
     TapCore(std::vector<int> L, int ne) : NL((int)L.size()), NE(ne), N((size_t)L.size() * ne), layers(L), V(N), V0(N) {}
     py::tuple key(size_t k) const { return py::make_tuple(layers[k / NE], (int)(k % NE)); }
     // start of step(), after the score decay and P.step: doom resolution, todo issue, big-step guard. -> big
@@ -223,7 +223,7 @@ struct TapCore
         }
         if (slots >= 0) { long b = 0; for (size_t i = 0; i < N; ++i) b += st[i] > 0; nfree = slots - b; }
         else nfree = 1000000000L;
-        if (fix && slots >= 0 && nfree <= 0)  // pool full: layers over the lookahead width nf give their excess back
+        if (fix == 1 && slots >= 0 && nfree <= 0)  // pool full: layers over the lookahead width nf give their excess back
             for (int l = 0; l < NL; ++l)
             {
                 size_t o = (size_t)l * NE; long oc = 0; r.clear();
