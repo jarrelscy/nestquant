@@ -31,7 +31,7 @@ except Exception:log=logging.getLogger('nestquant')
 # kernel tiling per token count (sm120/bench_real.py on real layers: best cfg per B, 2-11% over one fixed cfg)
 CFG_GU=[None,[1,8,4],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,6],[1,8,12],[1,8,12]]
 CFG_DN=[None,[1,8,4],[1,8,2],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4]]
-NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
+ROWHOT=os.environ.get('NQ_ROWHOT','0')=='1';NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.environ.get('NQ_CHECK','0')=='1'
 # prefill (T >= NQ_PF_MIN tokens, not capturing): moe.MoELayer.prefill; below it (and inside graph capture) the decode
 # kernel in 8-token slices. NQ_PF=0 disables; while the file NQ_PF_OFF (default /dev/shm/nq_pf_off) exists the slice
 # loop runs (in-boot A/B). Scratch (moe.pf_scratch, NQ_PF_ROWS x NQ_PF_G) is allocated on the first prefill call, i.e.
@@ -41,6 +41,10 @@ PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384')
 import nq_lookahead as LAH,nq_session as SRM
 RSF=None          # routed_scaling_factor the MoE runner applies after the experts (topk_weights here exclude it); set in create_weights
 if LAH.MODE or LAH.MEAS:LAH.install()
+if os.environ.get('NQ_KLD_HOOK','0')=='1':   # nq-kld full-vocab prompt-logprob dump (eval only, nq_kld.py)
+    import nq_kld;nq_kld.install();nq_kld.install_force()
+if os.environ.get('NQ_PF_BLOCK','0')=='1':
+    import nq_pfblock;nq_pfblock.install_dec();nq_pfblock.install_inputs()
 ARVQ_NAMES=('hyb_kind',)+tuple(f'arvq_{p}_{k}' for p in ('w13','w2') for k in ('packed','scales','codebooks','global'))+\
     tuple(f'nvfp4_{p}_{k}' for p in ('w13','w2') for k in ('packed','bscale','scale2'))
 
@@ -80,7 +84,7 @@ class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
-        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None
+        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None;s.PFB=None
         s.PB=None;s.pb_pause=0      # nq-prefill prefill-borrow (nq_pb.py), NQ_PREFILL_BORROW=1 only
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
@@ -104,6 +108,9 @@ class Runtime:
         _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf')   # tf = nq-tfpred transformer (same k0 layout); jF joint predictor: k0 layout (no fixed set, all floating)
         nf=77 if _JOINT else NF
         if _JOINT:fx={L:[] for L in L_};src='joint-k0'
+        if os.environ.get('NQ_STREAM','1')=='0' and os.environ.get('NQ_STATIC_FLOAT','0')=='1' and not _JOINT:   # nq-kld static arm: fixed set U floating_default (nqfloat0), no streaming
+            fj=json.load(open(NQ_HOME+'/threads/22-boundary-experts/fixed_set.json'))
+            fx={L:list(fx[L])+[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in L_};src+='+floating_default%d'%NF
         # fixed set: records -> resident pool, level 4 rows
         nfix=sum(len(fx[L]) for L in L_);s.fixpool=torch.empty(nfix,rb,dtype=torch.uint8,device=dev)
         buf=torch.empty(rb,dtype=torch.uint8).pin_memory();fd=os.open(rf.path,os.O_RDONLY);i=0;t=time.time();bad=set()
@@ -150,12 +157,13 @@ class Runtime:
         s.S=_SCH(L_,fx,dflt,rb*s.tp,NE=NE,n_float=nf,slots=nslot,cap_GBps=float(os.environ.get('NQ_CAP_GBPS','0')) or 1e6,
                          tok_per_s=float(os.environ.get('NQ_TOK_PER_S','111')),predictor=pred)
         log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
-        s.S.io_all=lambda:io_all(s)    # nq-io: live per-rank I/O stats for scheduler policies ({} unless NQ_IOSTATS>0 and TP>1)
+        s.S.io_all=(lambda:io_all(s)) if os.environ.get('NQ_TAP_IO','1')=='1' else (lambda:{})   # nq-kld NQ_TAP_IO=0: tap sees rank 0 only (= prod NQ_IOSTATS=0) while stats still publish
         IO=_io_cfg(s.rank,rp,rb)
         s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=IO['n_host'],qd=IO['qd'],device=dev.index,
                                shadow=os.environ.get('NQ_SHADOW','0')=='1',**IO['kw'])
         if IO['log']:log.info('NestQuant rank %d: nq-io %s, RAM tier %d records (%.1f GiB)',s.rank,IO['log'],s.X.tier_n,s.X.tier_n*rb/2**30)
         if s.X.tier_n:_tier_watch(s)
+        X_=s.X;s.S.xq=lambda:len(X_.pend)+sum(1 for v in list(X_.ops.values()) if v[2]==4)   # nq-kld tap qreal: real rank-0 outstanding upgrades
         init=[(L,E) for L in L_ for E in dflt[L] if E not in fx[L]][:nslot]
         for L,E in init:s.S.state[s.S.li[L],E]=1
         s.X.apply(init,[],s.S)
@@ -184,6 +192,8 @@ class Runtime:
             log.info('NestQuant rank %d: decode salience export on (%s, rsf %.3f)',s.rank,s.S.predictor_name,rsf)
         _gate_captures(s)
         if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
+        if os.environ.get('NQ_PF_BLOCK','0')=='1' and s.LA is not None:   # nq-kld eval knob: prefill layers wait for their planes
+            import nq_pfblock;s.PFB=nq_pfblock.PFBlock(s,L_)
         if s.F is None and s.rank==0:s.SR=SRM.SessionRestore(s);_hook_sched(s)   # per-session floating-set restore (nq_session.py)
         if os.environ.get('NQ_PREFILL_BORROW','0')=='1':     # nq-prefill: KV blocks lent to the slot pool during long prefills
             if HOSTLOOP=='cpp':log.warning('NestQuant prefill-borrow: NQ_HOSTLOOP=cpp not supported, off')
@@ -191,6 +201,7 @@ class Runtime:
                 import nq_pb;s.PB=nq_pb.install(s)
         if os.environ.get('NQ_TFCAP') and s.F is None and s.rank==0:   # nq-tfpred decode-trace capture (off unless set)
             import nq_tfcap;s.CAP=nq_tfcap.install(s,L_,s.lay[L_[0]]['H'],dev)
+        if ROWHOT and s.rank==0:import nq_pfblock as _PB;_PB.rh_init(L_,dev)   # nq-kld committed-row hot share
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
     def _sr(s,f,*a,dflt=None):
         """session restore is an optimization: any error turns it off (pin dropped), streaming goes on"""
@@ -208,10 +219,10 @@ class Runtime:
         try:
             torch.cuda.set_device(s.dev);ms=float(os.environ.get('NQ_POLL_MS','4'))/1e3
             issue=os.environ.get('NQ_ISSUE','1')!='0'    # 0: schedule but never issue ops (level set stays floating_default; A/B only)
-            H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);last=time.time();tb=0.;nit=0;s4=st=0
+            H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.zeros((len(s.L_),NE),np.int64);pstep=prev.copy();nL_=len(s.L_);s.hseen=np.zeros(nL_,np.int64);s.hstep=np.zeros(nL_,np.int64);s.lhot=np.zeros(nL_,np.int64);s.ltot=np.zeros(nL_,np.int64);s.pi_t=[];s.pi_n=False;s.pi_st=[0,0,0];last=time.time();tb=0.;nit=0;s4=st=0
             SH=[s.lay[L]['sal_host'].numpy() for L in s.L_] if 'sal_host' in s.lay[s.L_[0]] else None;sprev=np.zeros((len(s.L_),NE))
             fsh=RANK_SHARE and s.F is not None and s.F.mask is not None;fs4=fst=0;fprev=np.zeros((len(s.L_),NE),np.int64)   # nq-io follower share
-            sp4=[0,0];spt=[0,0];s.shc=[0,0,0,0]   # nq-io NQ_RANK_SHARE: level-4 share split [decode, prefill] (poll interval > PF_NTOK tokens = prefill)
+            sp4=[0,0];spt=[0,0];s.shc=[0,0,0,0,0,0]   # [4],[5]: rank 0 hits on experts scheduled up but not landed (state 1) [dec, pf]; nq-io NQ_RANK_SHARE: level-4 share split [decode, prefill] (poll interval > PF_NTOK tokens = prefill)
             iot=time.time();iok=getattr(s,'iokey',None) if IOSTATS else None;fct=0.;s.hl_t=0.;s.hl_n=0
             while not s.stop:
                 s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
@@ -237,15 +248,34 @@ class Runtime:
                     if s.SR is not None and not cap and issue:s._sr(s.SR.service,s.S,s.X,s.log)
                     if s.F is None and not cap:        # hits counted during a capture are dropped with it (warmup inputs)
                         cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
+                        hc=_hit_carry()
+                        if ntok==0 and (not hc or _pfk(c)==1):pstep=pstep+c   # NQ_HIT_CARRY: a prefill-tail interval is not carried into decode
+                        if c.sum()>0:                 # nq-kld: routing seen vs routing that reaches S.step (per layer); per-layer decode hot
+                            s.hseen+=c.sum(1)
+                            if _pfk(c)==0:lvh=s.S.fixed|(s.S.state==2);s.lhot+=(c*lvh).sum(1);s.ltot+=c.sum(1)
                         if RANK_SHARE and ntok==0 and c.sum()>0:   # nq-io share: intervals without layer-0 hits (prod path ignores them)
-                            lv=s.S.fixed|(s.S.state==2);k=_pfk(c);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
+                            lv=s.S.fixed|(s.S.state==2);k=_pfk(c);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at;s.shc[4+k]+=int(c[s.S.state==1].sum())
                         if ntok>0:
                             sal=None
                             if SH is not None:scur=np.stack(SH);sal=np.maximum(scur-sprev,0.);sprev=scur   # cumulative fp64, diffed like the hits
                             lv=s.S.fixed|(s.S.state==2);s4+=int(c[lv].sum());st+=int(c.sum())   # share at the levels served this step
-                            if RANK_SHARE:k=_pfk(c);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
-                            if s.SR is not None and issue:ntok=s._sr(s.SR.on_counts,s.S,c,ntok,lv,dflt=ntok)   # handover / prefill residue / window share
-                            ups,downs=s.S.step(c,ntok,sal=sal)
+                            if RANK_SHARE:k=_pfk(c);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at;s.shc[4+k]+=int(c[s.S.state==1].sum())
+                            if hc:cs=cur-pstep;ntok=int(cs[0].sum())//TOPK   # NQ_HIT_CARRY: hits of decode polls without new layer-0 tokens join this step
+                            else:cs=c
+                            pstep=cur;s.hstep+=cs.sum(1)
+                            if s.SR is not None and issue:ntok=s._sr(s.SR.on_counts,s.S,cs,ntok,lv,dflt=ntok)   # handover / prefill residue / window share
+                            tid=None;nrq=False
+                            if _pred_inputs()>0:        # nq-kld NQ_PRED_INPUTS: committed token ids + new_request -> predictor (held over prefill steps it skips)
+                                import nq_pfblock as _PB;t_,n_=_PB.pi_take();s.pi_t+=t_;s.pi_n=s.pi_n or n_
+                                if ntok<=16:
+                                    tid=s.pi_t or None;nrq=s.pi_n;s.pi_t=[];s.pi_n=False;s.pi_st[0]+=len(tid or ());s.pi_st[1]+=int(nrq)
+                                    if nrq and _pred_inputs()>=2:_pred_newreq(s.S.P);s.pi_st[2]+=1
+                            xu=xd=()
+                            if nrq and _pred_inputs()>=4:xu,xd=_set_reset(s.S);s.pi_xu=getattr(s,'pi_xu',0)+len(xu);s.pi_xd=getattr(s,'pi_xd',0)+len(xd)
+                            fsp=_force_sets() if _pred_inputs()>0 else None
+                            if fsp is not None:ups,downs=_force_step(s,fsp,tid,nrq,ntok)    # nq-kld forced-set arm: predictor + tap off
+                            else:ups,downs=s.S.step(cs,ntok,tid,nrq,sal=sal) if (tid or nrq) else s.S.step(cs,ntok,sal=sal)
+                            if xu or xd:ups=list(xu)+list(ups);downs=list(xd)+list(downs)
                             if issue:
                                 if s.PB is not None:ups=s.X.pool_tag(ups)
                                 s.X.apply(ups,downs,s.S)
@@ -288,6 +318,95 @@ class Runtime:
 # NQ_RANK_SHARE=1 followers log their own served level-4 share; NQ_IOSTATS=<s> every rank writes its io_stats() JSON
 #                 to /dev/shm/nq_io_<boot>_r<rank>.json every <s> seconds (Runtime.io_all() reads them all)
 RANK_SHARE=os.environ.get('NQ_RANK_SHARE','0')=='1';PF_NTOK=int(os.environ.get('NQ_SHARE_PF_NTOK','32'));HOSTLOOP=os.environ.get('NQ_HOSTLOOP','py');IOSTATS=float(os.environ.get('NQ_IOSTATS','0') or 0)
+_HC=[None,0.,os.environ.get('NQ_HIT_CARRY','0')=='1']
+def _hit_carry():   # nq-kld (default off): NQ_HIT_CARRY=1 or file /dev/shm/nq_hit_carry ("1"/"0", re-read every 1 s)
+    t=time.time()
+    if t-_HC[1]>1.:
+        _HC[1]=t
+        try:_HC[0]=open('/dev/shm/nq_hit_carry').read().strip()=='1'
+        except OSError:_HC[0]=None
+    return _HC[2] if _HC[0] is None else _HC[0]
+def _int0(v):
+    try:return int(v)
+    except ValueError:return 0
+_PI=[None,0.,_int0(os.environ.get('NQ_PRED_INPUTS','0'))]
+def _pred_inputs():   # nq-kld (default 0 = off): NQ_PRED_INPUTS or file /dev/shm/nq_pred_inputs, re-read every 1 s.
+    t=time.time()     # 1 = committed token ids + new_request; 2 = also the block position as offline (see _pred_newreq)
+    if t-_PI[1]>1.:
+        _PI[1]=t
+        try:_PI[0]=_int0(open('/dev/shm/nq_pred_inputs').read().strip())
+        except OSError:_PI[0]=None
+    return _PI[2] if _PI[0] is None else _PI[0]
+POSMAX=float(os.environ.get('NQ_PRED_POSMAX','6.25'))   # trainer max of _pos=log1p(block pos) (net input _pos/5 <= 1.25)
+def _pred_newreq(P):
+    """NQ_PRED_INPUTS=2 at new_request: block position restarts at 0 like the offline evaluator (fresh predictor per chain,
+    threads/18-e2e-eval quantisers._core_gbdt); 'last' shifts with it so tok_since_hit is unchanged; b_pos is clamped to
+    the training range at every block close (patched once, active only while the knob is 2)"""
+    if not hasattr(P,'nblk'):return
+    if not getattr(P,'_nq_posclamp',False):
+        oc=P._close_block
+        def cb():
+            oc()
+            if _pred_inputs()>=2:P.b_pos.clamp_(max=POSMAX)
+        P._close_block=cb;P._nq_posclamp=True
+    if _pred_inputs()>=3:      # 3: full state reset = a fresh predictor per request, as the offline evaluator (one per chain)
+        for t in P.E:t.zero_()
+        for h in P.Hc:P.Hc[h].zero_();P.Hs[h].zero_()
+        for t in (P.Et,P.Ea,P.bc,P.bca,P.bs,P.h16,P.s16):t.zero_()
+        P.last.fill_(-10**6);P.wt=P.wa=0.0;P.btok=P.bans=P.nblk=0;P.seg=0;P.bst_state=0
+        P.b_wt.fill_(1.);P.b_wa.fill_(1.);P.b_state.fill_(False);P.b_nblk.fill_(0);P.b_pos.fill_(0.);P.S=None
+        return
+    sh=P.nblk;P.nblk=0;P.last.sub_(sh);P.b_nblk.fill_(0);P.b_pos.fill_(0.)
+_FS=[None,0.]
+def _force_sets():
+    """nq-kld forced-set arm: /dev/shm/nq_force_sets = path of a per-window .npy [blocks, layers, NE] bool (offline floating
+    set per 16-token block); re-read every 1 s; None = off"""
+    t=time.time()
+    if t-_FS[1]>1.:
+        _FS[1]=t
+        try:_FS[0]=open('/dev/shm/nq_force_sets').read().strip() or None
+        except OSError:_FS[0]=None
+    return _FS[0]
+def _force_step(s,path,tid,nrq,ntok):
+    """target = fixed U offline floating set of block p//16, p = first row position of the next forward = committed tokens
+    of the request (1-token prompt). The diff to it is re-issued every iteration (failed / draining / late ones retry);
+    with NQ_DEC_BLOCK -1 every decode step waits until it has landed. Rows of a verify step that cross into the next block
+    are served the earlier block's set."""
+    S=s.S;S.tok+=ntok
+    if nrq or getattr(s,'fs_path',None)!=path:
+        s.fs_T=np.load(path).astype(bool);s.fs_path=path;s.fs_n=0;s.fs_nb=0
+        log.info('NestQuant forced sets: %s %s',path,s.fs_T.shape)
+    s.fs_n+=len(tid or ());b=min(s.fs_n//16,s.fs_T.shape[0]-1)
+    if b!=getattr(s,'fs_b',-1):s.fs_b=b;s.fs_nb+=1
+    T=s.fs_T[b]&~S.fixed;fx=S.fixed
+    if hasattr(S,'doom'):S.doom.clear();S.doomed[:]=False;S.todo.clear()
+    um=T&(S.state==0);dm=(S.state==2)&~T&~fx
+    i,e=np.nonzero(um);ups=[(S.layers[a],int(c)) for a,c in zip(i,e)]
+    j,f=np.nonzero(dm);downs=[(S.layers[a],int(c)) for a,c in zip(j,f)]
+    S.state[um]=1;S.state[dm]=3;S.want=T.copy()
+    S.stats['ups']+=len(ups);S.stats['downs']+=len(downs);S.stats['bytes']+=len(ups)*S.rb
+    return ups,downs
+_K0=[None]
+def _set_reset(S):
+    """NQ_PRED_INPUTS=4 at new_request (after the mode-3 predictor reset): floating set := the k0 manifest start set
+    (fixed U floating_default51, threads/22-boundary-experts/fixed_set.json) = offline chain=arange want=fdef at t=0.
+    Downs resident floating not in it, ups the missing ones (same op path as session restore _start); tap's lazy-eviction
+    bookkeeping is cleared. Returns (ups, downs) for the caller to issue with this step's ops."""
+    if _K0[0] is None:
+        fj=json.load(open(NQ_HOME+'/threads/22-boundary-experts/fixed_set.json'));T=np.zeros(S.state.shape,bool)
+        for i,L in enumerate(S.layers):     # k0 = fixed26 + floating_default51 (live D has no fixed set: all 77 float)
+            k0=[int(e) for e in fj['fixed_set'][str(L)]]+[int(e) for e in fj['floating_default'][str(L)]]
+            T[i,[e for e in k0 if not S.fixed[i,e]][:S.nf]]=True
+        _K0[0]=T
+    T=_K0[0];fx=S.fixed
+    if hasattr(S,'doom'):S.doom.clear();S.doomed[:]=False;S.todo.clear()
+    if getattr(S,'P',None) is not None and hasattr(S.P,'S'):S.P.S=None
+    um=T&(S.state==0)&~fx&(S.hold<=S.tok);dm=(S.state==2)&~T&~fx
+    i,e=np.nonzero(um);ups=[(S.layers[a],int(b)) for a,b in zip(i,e)]
+    j,f=np.nonzero(dm);downs=[(S.layers[a],int(b)) for a,b in zip(j,f)]
+    S.state[um]=1;S.state[dm]=3;S.want=T.copy()
+    S.stats['ups']+=len(ups);S.stats['downs']+=len(downs);S.stats['bytes']+=len(ups)*S.rb
+    return ups,downs
 def _pfk(c):return int(int(c.sum(1).max())//TOPK>PF_NTOK)   # nq-io share: 1 = prefill interval (busiest layer saw > PF_NTOK tokens)
 def _memavail_gb():
     for ln in open('/proc/meminfo'):
@@ -333,6 +452,9 @@ def _io_publish(rt,key):
                                    follower=dict(rt.F.stats) if rt.F is not None else None,memavail_gb=_memavail_gb())
         st=rt.F.stats if rt.F is not None else rt.S.stats   # cumulative: host loop seconds / iterations, level ops issued
         d.update(share4=getattr(rt,'shc',None),hostloop=HOSTLOOP,hl_s=getattr(rt,'hl_t',0.),hl_iters=getattr(rt,'hl_n',0),ops_issued=int(st['ups'])+int(st['downs']))
+        if rt.F is None and getattr(rt,'hseen',None) is not None:d.update(hits_seen=rt.hseen.tolist(),hits_step=rt.hstep.tolist(),lay_hot=rt.lhot.tolist(),lay_tot=rt.ltot.tolist(),hit_carry=bool(_hit_carry()),pred_inputs=_pred_inputs(),pi_tok=rt.pi_st[0],pi_new=rt.pi_st[1],pi_posreset=rt.pi_st[2],pred_nblk=int(getattr(rt.S.P,'nblk',-1)),pi_set_ups=getattr(rt,'pi_xu',0),pi_set_downs=getattr(rt,'pi_xd',0),fs_n=getattr(rt,'fs_n',None),fs_blocks=getattr(rt,'fs_nb',None),fs_path=getattr(rt,'fs_path',None))
+        if rt.F is None and ROWHOT:import nq_pfblock as _PB;d.update(_PB.rh_stats())
+        if rt.F is None:d['sched']={k:(float(v) if isinstance(v,(int,float,np.integer,np.floating)) else None) for k,v in rt.S.stats.items()}   # nq-kld: cumulative scheduler counters (tap: promotions, budget_cut, ...)
         tmp=f'{key}_r{rt.rank}.json.tmp';open(tmp,'w').write(json.dumps(d));os.replace(tmp,f'{key}_r{rt.rank}.json')
     except Exception:log.exception('NestQuant io stats publish failed')
 def io_all(rt=None):
@@ -380,6 +502,8 @@ def _gate_captures(rt):
     G.capture_begin,G.capture_end,G._nq_gated=begin,end,True
 
 RT=Runtime()
+DBG_MOE_ROWSPLIT=os.environ.get('NQ_DBG_MOE_ROWSPLIT','0')=='1'
+DBG_MOE_REF=os.environ.get('NQ_DBG_MOE_REF','0')=='1'   # nq-kld debug: decode steps through M.prefill (dense-decoded fp16 W, cuBLAS fp32-acc GEMMs); needs cudagraph_mode NONE
 
 def forward(L,x,topk_weights,topk_ids):
     d=RT.lay[L];M=d['M'];T=x.shape[0]
@@ -403,6 +527,7 @@ def forward(L,x,topk_weights,topk_ids):
         if os.environ.get('NQ_DUMP'):
             torch.save(dict(L=L,x=x.cpu(),w=topk_weights.cpu(),ids=topk_ids.cpu(),table=M.table.cpu(),stride=x.stride(),dev=str(x.device),
                             cur=torch.cuda.current_device(),stream=torch.cuda.current_stream().cuda_stream),f"{os.environ['NQ_DUMP']}/in_r{RT.rank}.pt")
+    if RT.PFB is not None and T>BMAX and PF and T>=PF_MIN and not torch.cuda.is_current_stream_capturing() and not os.path.exists(PF_OFF):RT.PFB.wait(L)
     d['MB'].apply()
     if RT.CAP is not None:RT.CAP.layer(L,x,topk_weights,topk_ids)
     if CHECK and not torch.cuda.is_current_stream_capturing():
@@ -410,7 +535,18 @@ def forward(L,x,topk_weights,topk_ids):
         except Exception as e:raise RuntimeError(f'NestQuant mailbox.apply faulted (L{L})') from e
     sh=d.get('sal_host')
     if T<=BMAX:
+        if ROWHOT and RT.rank==0:    # nq-kld NQ_ROWHOT: per verify row level-4 routed count (row r of the step; graph-safe fixed-shape ops)
+            import nq_pfblock as _PB;RH_=_PB.RH;li_=RH_.li[L];lv4=M.table[:,0]==4;hm_=lv4[ids]
+            RH_.acc[li_,:T].add_(hm_.sum(1,dtype=torch.int32));RH_.cur[li_].copy_(lv4)   # count hot share + this step's level-4 set
+            sv_=topk_weights.float().pow(2)*x.float().pow(2).sum(-1,keepdim=True)          # offline salience w^2|x|^2 per routed slot
+            RH_.sacc[li_,:T,0].add_((sv_*hm_).sum(1));RH_.sacc[li_,:T,1].add_(sv_.sum(1))
+            RH_.cids[li_,:T].copy_(ids);RH_.csal[li_,:T].copy_(sv_)                         # routing of this step's rows (replay dump)
         if sh is not None:RT.SAL.sal(x if x.stride(-1)==1 and x.dtype in (torch.bfloat16,torch.float16) else xh,w,ids,d['sal_rsf'],d['sal_acc'],sh.data_ptr())
+        if DBG_MOE_REF:return M.prefill(xh,ids,w).to(x.dtype)
+        if DBG_MOE_ROWSPLIT and T>1:          # nq-kld debug: verify rows as T separate m=1 kernel calls (decode numerics)
+            out=torch.empty(T,x.shape[1],dtype=torch.float32,device=x.device)
+            for i in range(T):M(xh[i:i+1],ids[i:i+1],w[i:i+1],out=out[i:i+1],cfg_gu=CFG_GU[1],cfg_dn=CFG_DN[1])
+            return out.to(x.dtype)
         return M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T]).to(x.dtype)
     if PF and T>=PF_MIN and not torch.cuda.is_current_stream_capturing() and not os.path.exists(PF_OFF):
         if RT.LA is not None:RT.LA.pre(L,x,ids,w,M.table)   # rank 0: router of L+d on x -> level ops (streaming thread)

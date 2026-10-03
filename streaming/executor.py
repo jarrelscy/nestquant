@@ -42,7 +42,7 @@ class RankExecutor:
         s.slots=torch.empty(nslot,s.rb,dtype=torch.uint8,device=dev);s.free=list(range(nslot))[::-1];s.slot_of={}
         s.eng=rf.engine(n_host,qd,dev.index) if not alt_path else rf.engine(n_host,qd,dev.index,alt_path=alt_path,qd_alt=qd_alt)
         s.tag=0;s.ops={}                                          # tag -> (L, E, kind, seq)
-        s.up_tag={};s.n_cancel=0;s.n_landed=0;s.lat_w=collections.deque(maxlen=4096);s._prev={}   # nq-io bookkeeping
+        s.up_tag={};s.n_cancel=0;s.n_landed=0;s.lat_w=collections.deque(maxlen=4096);s.lat_rc=collections.deque(maxlen=4096);s._prev={}   # nq-io bookkeeping
         s.tier_n=s.eng.tier_load([rf.rec(L,E) for L,E in tier]) if tier else 0
         s.wait_apply={}                                           # (L, E) -> (kind, seq) device writes done, not yet applied
         s.n_refused=0;s.n_failed=0;s.n_waited=0;s.lat=[];s.wait=wait_for_slot;s.pend=[]
@@ -102,7 +102,7 @@ class RankExecutor:
                 if sched is not None:sched.failed(L,E,read_error=True)
                 continue
             s.layers[L][1].hseq[E]=q;s.wait_apply[L,E]=(kind,q)
-            if kind==4:s.lat.append(te2e);s.lat_w.append(te2e);s.n_landed+=1
+            if kind==4:s.lat.append(te2e);s.lat_w.append(te2e);s.lat_rc.append((trd,te2e-trd));s.n_landed+=1
         for (L,E),(kind,q) in list(s.wait_apply.items()):
             if s.ah[L][E]!=q:continue
             del s.wait_apply[L,E]
@@ -146,8 +146,14 @@ class RankExecutor:
             tier_hit_share=(c['th']-p['th'])/dups if dups else None,host_lru_hit_share=(c['hits']-p['hits'])/dups if dups else None,
             eng_waiting=e['waiting'],eng_reading=e['reading'],eng_copying=e['copying'],slot_wait=len(s.pend),ops_outstanding=len(s.ops),
             free_slots=len(s.free),cancelled=s.n_cancel+0,
+            ssd_cum=int(c['ssd']),tier_cum=int(c['tier']),landed_cum=int(c['landed']),
             op_p50_ms=float(np.percentile(lat,50))*1e3 if lat is not None else None,
-            op_p99_ms=float(np.percentile(lat,99))*1e3 if lat is not None else None)
+            op_p99_ms=float(np.percentile(lat,99))*1e3 if lat is not None else None,
+            **s._rc_stats())
+    def _rc_stats(s):      # nq-kld: op latency split: issue -> read done (engine queue + SSD) and read done -> copy done (ring wait + h2d)
+        if not s.lat_rc:return {}
+        a=np.array(s.lat_rc)*1e3;return dict(rd_p50_ms=float(np.percentile(a[:,0],50)),rd_p99_ms=float(np.percentile(a[:,0],99)),
+                                              cp_p50_ms=float(np.percentile(a[:,1],50)),cp_p99_ms=float(np.percentile(a[:,1],99)))
     def busy(s):return bool(s.ops or s.wait_apply or s.pend or s.xpend)
     # ---- nq-prefill borrowed pool
     def _isx(s,sl):return sl>=s.nslot
