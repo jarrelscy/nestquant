@@ -18,7 +18,7 @@ import scheduler_tap as TS
 from test_hostloop_parity import routing_steps, LeaderX, cfgs, LAYERS, NE
 
 TAPENV = ('NQ_TAP_C', 'NQ_TAP_H', 'NQ_TAP_HA', 'NQ_TAP_MLA', 'NQ_TAP_SVC_MS', 'NQ_TAP_FAR', 'NQ_TAP_TP', 'NQ_TAP_RATE_GBPS',
-          'NQ_TAP_LAT', 'NQ_TAP_LAT_HL', 'NQ_TAP_LAT_Q', 'NQ_TAP_LAT_N')
+          'NQ_TAP_LAT', 'NQ_TAP_LAT_HL', 'NQ_TAP_LAT_Q', 'NQ_TAP_LAT_N', 'NQ_TAP_CTL')
 
 
 class StubS:
@@ -97,6 +97,7 @@ def mk(cfg, P, hl, env, clock):
     old = {k: os.environ.get(k) for k in TAPENV}
     try:
         for k in TAPENV: os.environ.pop(k, None)
+        os.environ['NQ_TAP_CTL'] = '/nonexistent/nq_tap_ctl'     # never a live server's /dev/shm ctl file
         os.environ.update(env)
         S = TS.TapScheduler(LAYERS, cfg['fixed'], cfg['dflt'], 2560000, NE=NE, n_float=cfg['nf'], slots=cfg['slots'],
                             cap_GBps=cfg['cap'], predictor=P, hostloop=hl, clock=clock)
@@ -145,7 +146,8 @@ def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True)
         if dl != B.tcore.doom_list() or list(A.todo) != B.tcore.todo_list():
             print(f'  {name}: doom/todo DIFF at step {n}: {len(dl)}/{len(B.tcore.doom_list())} {len(A.todo)}/{B.tcore.todo_len()}'); return False
         pk = (A.peak is None and B.peak is None) or (A.peak is not None and B.peak is not None and eq(A.peak, B.peak))
-        if A.stats != B.stats or A.lat_ema != B.lat_ema or A.tok != B.tok or A.tps != B.tps or A.n_land != B.n_land or not pk:
+        sa = {k: v for k, v in A.stats.items() if not k.startswith('q_')}   # q_*: nq-kld queue-model diagnostics, py path only
+        if sa != B.stats or A.lat_ema != B.lat_ema or A.tok != B.tok or A.tps != B.tps or A.n_land != B.n_land or not pk:
             print(f'  {name}: scalar DIFF at step {n}: stats {A.stats} {B.stats}'); return False
         XA.apply(ua, da); XB.apply(ub, db); XA.tick(A); XB.tick(B); nops += len(ua) + len(da)
         if kv and rng.random() < 0.01:
