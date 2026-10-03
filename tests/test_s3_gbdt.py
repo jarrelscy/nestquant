@@ -5,6 +5,9 @@ The live TapScheduler is driven as in test_s3_adm.py (olib.budget_sim policy, jF
   1. the hook's prediction at every refresh row t >= 256 must equal the p-phase export stack/gbdt/<stream>.npz 'cnt'[t]
      (NQ_S3X_GB_F16=1 rounds to the export's fp16; features + LightGBM are recomputed live from the history ring)
   2. live keys = X.score at every refresh (rel 1e-5), 3. budget_sim = res_ab2_<stream>.json 'pick+gbdt<beta>' when present
+  CTL=1: instead boot NQ_S3_TRACK=1 + NQ_S3_EXT (ring from boot, s3 off) and turn the arm + hook on by ctl
+     's3=1 s3rst=0 s3x=1 s3xpos=1 s3xw=.. s3xrst=0' (read at the first refresh), rewrite the ctl file (+ c=1, no-op) at row
+     1000: the hook state must be kept (same checks, exact)
   ASYNC=1: NQ_S3X_GB_ASYNC=1, the hook's value at t must be the export at t - 16 and X uses cnt[t - 16] (from t >= 272)
   python tests/test_s3_gbdt.py [stream ...]  (kldD-<w>_r0 | tb-<task> | gen-<key>; default kldD-w0_r0; BETA=.35, HEAD=pcnt_x6)"""
 import os, sys, json, time, zipfile
@@ -47,8 +50,19 @@ def main():
     for nm in names:
         st = OL.load_kldD(nm[5:], hp=False) if nm.startswith('kldD-') else A.load(nm)
         cnt = npz_mm(f'{SD}/{st["name"]}.npz', 'cnt_s' if 'pcnt_s' in os.environ['NQ_S3X_GB_HEAD'] else 'cnt'); assert cnt.shape[0] == len(st['ids'])
-        T = A.boot(st['S'], dict(NQ_S3='1', NQ_S3_RESET='0', NQ_S3_X='1', NQ_S3_XPOS='1', NQ_S3_XW=repr(beta / (1 + beta)), NQ_S3_XRESET='0',
-                                 NQ_S3_EXT=HERE + '/../streaming/s3x_gbdt.py:cnt'))
+        ext = HERE + '/../streaming/s3x_gbdt.py:cnt'; ctl = None
+        if os.environ.get('CTL') == '1':
+            import tempfile; ctl = tempfile.NamedTemporaryFile('w', suffix='.nq_tap_ctl', delete=False).name
+            cl = f's3=1 s3rst=0 s3x=1 s3xpos=1 s3xw={beta / (1 + beta)!r} s3xrst=0\n'; open(ctl, 'w').write(cl)
+            T = A.boot(st['S'], dict(NQ_S3_TRACK='1', NQ_S3_RESET='0', NQ_S3_XRESET='0', NQ_S3_EXT=ext, NQ_TAP_CTL=ctl))
+            s0 = T.step
+            def step(*a, **k):
+                if T.tok == 1000: open(ctl, 'w').write(cl + 'c=1\n'); os.utime(ctl, ns=(1, 1))
+                return s0(*a, **k)
+            T.step = step
+        else:
+            T = A.boot(st['S'], dict(NQ_S3='1', NQ_S3_RESET='0', NQ_S3_X='1', NQ_S3_XPOS='1', NQ_S3_XW=repr(beta / (1 + beta)), NQ_S3_XRESET='0',
+                                     NQ_S3_EXT=ext))
         chk = dict(n=0, bad=0, worst=0.0, none=0); orig = T._s3xcall
         def cap():
             y = orig(); t = T.tok
@@ -61,6 +75,7 @@ def main():
         fn = f'{PO}/res_ab2_{st["name"]}.json'; k = f'pick+gbdt{beta}' if 'pcnt_s' not in os.environ['NQ_S3X_GB_HEAD'] else f'pick+gbdt_s{beta}'
         line = (f'{st["name"]} {k}: hook = export on {chk["n"]} refreshes ({chk["bad"]} differ, max |d| {chk["worst"]:.3g}; {chk["none"]} t<256 -> base); '
                 f'keys vs X {L.n} refreshes max rel {L.worst:.1e}; live {r[0]:.2f}/{r[1]:.2f}')
+        if ctl: os.unlink(ctl); good &= T.tc == 1.0 and T.s3on; line = 'ctl ' + line
         if lag: k += ' async'
         if os.path.exists(fn) and k in json.load(open(fn)):
             e = json.load(open(fn))[k]['all']; dd = (r[0] - e[0], r[1] - e[1]); good &= max(abs(dd[0]), abs(dd[1])) <= 0.02

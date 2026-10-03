@@ -3,8 +3,9 @@ feature for feature. Use with the s3 arm as the p-online stack 'pick+gbdt<beta>'
     NQ_S3=1 NQ_S3_X=1 NQ_S3_EXT=<repo>/streaming/s3x_gbdt.py:cnt NQ_S3_XPOS=1 NQ_S3_XW=<beta/(1+beta)> NQ_S3_XRESET=0
 (beta .35 -> xw 0.259259; xpos=1 = v <- (nr(v) + beta nr(max(cnt, 0))) * rowsum(v) up to a common factor; xreset=0 because
 the rolling counts run across request boundaries.)
-Features per (l, e) at a refresh at global decode row t (rows < t), all counted over decode rows since this hook was
-loaded (boot / ctl s3xf change), across requests:
+Features per (l, e) at a refresh at global decode row t (rows < t = rows pushed into the history ring since it was made,
+i.e. since boot when NQ_S3_EXT is set at boot), counted across requests; lastuse / first use / use count only see rows
+the hook was called for (exact when s3x is on from boot; a ctl s3x=1 later or a new s3xf path starts them then):
     layer, jF S (raw), -min(t - lastuse, 8192), c16 / c64 / c256 / c1024 (activations in the last 16/64/256/1024 rows),
     haz = -(rows since last use / mean inter-arrival) if > 1 use else -1e3, prior (static 75x256 table)
 Returns None (= base policy) for t < NQ_S3X_GB_TMIN (256; the heads were trained on t >= 256).
@@ -26,9 +27,9 @@ WS = (16, 64, 256, 1024)
 _M = {}
 
 
-def _model(st):
+def _model(st, h=None):
     d = os.environ.get('NQ_S3X_GB_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 's3x')
-    h = os.environ.get('NQ_S3X_GB_HEAD', 'pcnt_x6'); k = (d, h)
+    h = h or os.environ.get('NQ_S3X_GB_HEAD', 'pcnt_x6'); k = (d, h)
     if k not in _M:
         import lightgbm as lgb
         _M[k] = (lgb.Booster(model_file=f'{d}/gb_{h}.txt'), np.load(f'{d}/gb_prior.npy').astype(np.float32).ravel())
@@ -47,9 +48,10 @@ def feats(cx):
     st = cx.state
     if 't' not in st: _init(st)
     ids = cx.ids; n = len(ids); k = min(cx.nnew, n); ar = st['ar']; last = st['last']; first = st['first']; tot = st['tot']
+    t0 = cx.trows - k                                       # global row index of the first new row (rows the hook missed are skipped)
     for i in range(n - k, n):
-        r = ids[i].astype(np.int64); t = st['t']; last[ar, r] = t; f = first[ar, r]; first[ar, r] = np.where(f < 0, t, f); tot[ar, r] += 1; st['t'] = t + 1
-    t = st['t']; flat = (ids.astype(np.int64) + (np.arange(NL) * NE)[None, :, None]).reshape(n, -1)
+        r = ids[i].astype(np.int64); t = t0 + i - (n - k); last[ar, r] = t; f = first[ar, r]; first[ar, r] = np.where(f < 0, t, f); tot[ar, r] += 1
+    t = st['t'] = cx.trows; flat = (ids.astype(np.int64) + (np.arange(NL) * NE)[None, :, None]).reshape(n, -1)
     C = []; acc = np.zeros(NL * NE, np.float32); lo = n
     for w in WS:                                            # nested windows: c_w = c_prev + counts of rows [n-w, n-w_prev)
         a = max(n - w, 0)
@@ -60,10 +62,17 @@ def feats(cx):
     return t, np.column_stack([st['lay'], j, -recn.ravel()] + C + [haz.ravel(), st['pri']]).astype(np.float32)
 
 
-def cnt(cx):
+def cnt_s(cx):
+    """the 80-tree head pcnt_s_x6 whatever NQ_S3X_GB_HEAD says (switch at runtime: ctl s3xf=<this file>:cnt_s; a hook
+    (re)load starts the all-time state afresh: base policy for the next 256 rows)"""
+    return cnt(cx, 'pcnt_s_x6')
+
+
+def cnt(cx, head=None):
     st = cx.state
     if 't' not in st: _init(st)
-    a = time.perf_counter(); B, st['pri'] = _model(st)
+    if len(cx.ids) == 0: st['fut'] = None; return None           # empty ring (hook path set at runtime by ctl)
+    a = time.perf_counter(); B, st['pri'] = _model(st, head)
     t, X = feats(cx); st['us'][2] += time.perf_counter() - a
     if t < st['tmin'] or len(cx.ids) < min(t, 1024): st['fut'] = None; return None   # ring shorter than the 1024 window (reset / too small)
     if st['asy']:
