@@ -18,8 +18,8 @@ import scheduler_tap as TS
 from test_hostloop_parity import routing_steps, LeaderX, cfgs, LAYERS, NE
 
 TAPENV = ('NQ_TAP_C', 'NQ_TAP_H', 'NQ_TAP_HA', 'NQ_TAP_MLA', 'NQ_TAP_SVC_MS', 'NQ_TAP_FAR', 'NQ_TAP_TP', 'NQ_TAP_RATE_GBPS',
-          'NQ_TAP_LAT', 'NQ_TAP_LAT_HL', 'NQ_TAP_LAT_Q', 'NQ_TAP_LAT_N', 'NQ_S3_ADM_CEMA', 'NQ_S3_ADM_HL', 'NQ_S3_LW_POW',
-          'NQ_S3_MUL_POW', 'NQ_S3_MUL_HL', 'NQ_S3_LW_HL', 'NQ_S3_MASS', 'NQ_S3_TRACK', 'NQ_TAP_CTL')
+          'NQ_TAP_LAT', 'NQ_TAP_LAT_HL', 'NQ_TAP_LAT_Q', 'NQ_TAP_LAT_N', 'NQ_S3', 'NQ_S3_B', 'NQ_S3_BHL', 'NQ_S3_A',
+          'NQ_S3_AHL', 'NQ_S3_P', 'NQ_S3_BAND', 'NQ_S3_BW', 'NQ_S3_BK', 'NQ_S3_RESET', 'NQ_S3_TRACK', 'NQ_TAP_CTL')
 
 
 class StubS:
@@ -180,12 +180,12 @@ def main():
          ('stub k0s lat=meas', k0s, dict(NQ_TAP_LAT='meas'), dict(seed=6, kv=True)),
          ('stub k0 lat=meas Ha2 q0.9 hl2 c0.5', k0, dict(NQ_TAP_LAT='meas', NQ_TAP_HA='2', NQ_TAP_LAT_Q='0.9', NQ_TAP_LAT_HL='2',
                                                     NQ_TAP_C='0.5'), dict(seed=8, pin=True)),
-         ('stub k0s s3 arm c0 cema.2 lw.25', k0s, dict(NQ_TAP_C='0', NQ_S3_ADM_CEMA='0.2', NQ_S3_ADM_HL='64', NQ_S3_LW_POW='0.25'),
-          dict(seed=9, sal=True, kv=True)),
-         ('stub k0 s3 arm budget lw1 hl16', k0, dict(NQ_TAP_C='0', NQ_S3_ADM_CEMA='0.5', NQ_S3_ADM_HL='16', NQ_S3_LW_POW='1',
+         ('stub k0s s3 arm g25.9.25+B5n22 c0', k0s, dict(NQ_TAP_C='0', NQ_S3='1'), dict(seed=9, sal=True, kv=True)),
+         ('stub k0 s3 safer b.35 a1 band0 budget', k0, dict(NQ_TAP_C='0', NQ_S3='1', NQ_S3_B='0.35', NQ_S3_A='1', NQ_S3_BAND='0',
                                                  NQ_TAP_MLA='0.3'), dict(seed=10, sal=True, pin=True)),
-         ('stub b s3 mul.5 + add.2 lw.5 hl256 jfmass', b, dict(NQ_TAP_C='0', NQ_S3_MUL_POW='0.5', NQ_S3_ADM_CEMA='0.2', NQ_S3_LW_POW='0.5',
-                                                 NQ_S3_LW_HL='256', NQ_S3_MASS='jf', NQ_S3_TRACK='1'), dict(seed=11, sal=True, kv=True))]
+         ('stub b s3 norst band10 bk1 hl16/32', b, dict(NQ_TAP_C='0', NQ_S3='1', NQ_S3_RESET='0', NQ_S3_BAND='10', NQ_S3_BK='1',
+                                                 NQ_S3_BHL='16', NQ_S3_AHL='32', NQ_S3_P='1'), dict(seed=11, sal=True, kv=True)),
+         ('stub k0 s3 track only (s3=0)', k0, dict(NQ_S3_TRACK='1'), dict(seed=12, sal=True))]
     sel = os.environ.get('CASES')
     for i, (nm, cfg, env, kw) in enumerate(C):
         if sel and str(i) not in sel.split(','): continue

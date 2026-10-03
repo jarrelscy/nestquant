@@ -31,21 +31,25 @@ Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = cli
        NQ_TAP_LAT_HL refreshes, default 4; floor NQ_TAP_H instead of 64 so a short lat never shrinks the window).
        The issue budget keeps using the queue-model latency (only queueing consumes the window; a measured fixed
        latency is pipelined), so a large measured latency never stalls issuing.
-Step 3 policy arms (default OFF -> bit-identical to step 2 rc; env at boot and/or NQ_TAP_CTL keys at runtime, same boot A/B):
-  admission source S (shares x 512 per layer, over all NE experts; _value then normalises per layer as before):
-     s  = norm512(max(jF S, 0))
-     s3p  p (NQ_S3_MUL_POW, 0 off)   multiplicative count tilt: s = norm512(s * (countEMA_phl + 1e-3)^p)   (p-online tn.<p>)
-     s3phl (NQ_S3_MUL_HL, 256)       its count-EMA half-life (tokens)
-     s3a  a (NQ_S3_ADM_CEMA, 0 off)  additive count mix: s = (1-a) s + a norm512(countEMA_hl)            (p-policy mix)
-     s3hl (NQ_S3_ADM_HL, 64)         its count-EMA half-life (tokens)
-  cross-layer weight w_l on the pair gains (after the per-layer c test; global sort / budget cut / eager test use w_l g):
-     s3q  q (NQ_S3_LW_POW, 0 off)    w_l = (lm_l / mean_l lm)^q, lm = layer salience per routed hit, from step(..., sal=)
-     s3lhl (NQ_S3_LW_HL, 0)          0 = cumulative since boot, else EMA half-life (tokens)
-     s3mass (NQ_S3_MASS, 512)        jf: w_l *= jF layer mass / 512 (p-online mass=jf; the tap value itself stays per-layer normalised)
-  c (NQ_TAP_C) is also a ctl key. Count EMAs = routed counts of decode steps (ntok <= 16) already passed to step();
-  an EMA starts (zero) when its arm is enabled or its half-life changes, unless NQ_S3_TRACK=1 keeps both running
-  from boot. Salience (for q) needs the rank-0 export: on at boot iff NQ_S3_TRACK=1 or NQ_S3_LW_POW > 0 (w = 1 without it).
-  p-policy arm = c=0 s3a=0.2 s3hl=64 s3q=0.25 (tests/test_s3_adm.py: bitwise = psim src='mix:0.8:cema64' lw=1 lwp=0.25).
+Step 3 policy arm (p-online Combo g25.9.25+B5n22; default OFF -> bit-identical to step 2 rc). Env at boot and/or NQ_TAP_CTL
+keys at runtime (same-boot A/B). All state is per request (reset at new_request) and counts only decode steps (ntok <= 16):
+     s3     (NQ_S3, 0)          master switch; 0 = exact step 2 rc
+     s3b    (NQ_S3_B, .25)      count tilt   s = share(share(max(jF,0)) * (Cb + 1e-3)^b), Cb = count EMA hl s3bhl (0 off)
+     s3bhl  (NQ_S3_BHL, 256)
+     s3a    (NQ_S3_A, .9)       count mix    s = a s + (1-a) share(Ca), Ca = count EMA hl s3ahl (1 off)
+     s3ahl  (NQ_S3_AHL, 64)
+     s3p    (NQ_S3_P, .25)      layer weight v = 512 s (lm_l / mean lm)^p, lm = cumulative routed salience / (8 rows) since
+                                request start (skipped until every layer has lm > 0; needs the rank-0 salience export)
+     s3band (NQ_S3_BAND, 22)    band over layer idx < n (L3..L24; 0 off): v[l] = m_l ((1-bw) share(v[l]) + bw share(C64[l] + 1e-6)),
+     s3bw   (NQ_S3_BW, .5)        m_l = sum_e v[l], C64 = count EMA hl 64 (band layers only)
+     s3bk   (NQ_S3_BK, .5)        then v[l] *= bk
+     s3rst  (NQ_S3_RESET, 1)    per-request reset (0 = state runs across requests, = the p-online sim streams)
+  Live mapping: the shape of v goes in as the admission S (float32; _value normalises it per layer over the floating
+  experts as before) and the layer scale as a pair-gain weight lw_l = floating mass of v_l / 512, so the floating
+  values the global sort / budget cut / eager test see are v itself (x the common H window factor). Tap c is a ctl key
+  too (c=0 with the arm). NQ_S3_TRACK=1 keeps the state running while s3=0 (and turns the salience export on at boot,
+  which is decided at boot: s3=1 with s3p>0 at boot does too). Safer arm via ctl only: s3=1 s3b=0.35 s3a=1 (s3band=0
+  for plain g35.1.25). tests/test_s3_adm.py: live keys = p-online pols.Combo, budget_sim numbers reproduced.
 Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalised two-horizon value)."""
 import os, time, collections
 import numpy as np
@@ -90,13 +94,14 @@ class TapScheduler(Scheduler):
         s.stats.update(refreshes=0, promotions=0, budget_cut=0, eager_evict=0, no_slot_skip=0, lat_tok_sum=0.0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
         s.sched_name = 'tap'
-        # step 3 policy arms (default off; see module doc)
-        s.s3 = dict(a=float(e('NQ_S3_ADM_CEMA', '0') or 0), hl=float(e('NQ_S3_ADM_HL', '64') or 64), p=float(e('NQ_S3_MUL_POW', '0') or 0),
-                    phl=float(e('NQ_S3_MUL_HL', '256') or 256), q=float(e('NQ_S3_LW_POW', '0') or 0), lhl=float(e('NQ_S3_LW_HL', '0') or 0),
-                    mass=e('NQ_S3_MASS', '512') or '512')
+        # step 3 policy arm (default off; see module doc)
+        s.s3 = dict(on=int(float(e('NQ_S3', '0') or 0)), b=float(e('NQ_S3_B', '0.25') or 0), bhl=float(e('NQ_S3_BHL', '256') or 256),
+                    a=float(e('NQ_S3_A', '0.9') or 0), ahl=float(e('NQ_S3_AHL', '64') or 64), p=float(e('NQ_S3_P', '0.25') or 0),
+                    band=int(float(e('NQ_S3_BAND', '22') or 0)), bw=float(e('NQ_S3_BW', '0.5') or 0), bk=float(e('NQ_S3_BK', '0.5') or 0),
+                    rst=int(float(e('NQ_S3_RESET', '1') or 0)))
         s.s3track = e('NQ_S3_TRACK', '0') == '1'
-        s.s3_sal = s.s3track or s.s3['q'] > 0                # nq_vllm: rank 0 exports decode salience (step(..., sal=))
-        s.s3Ea = s.s3Ep = None; s.s3sal = s.s3cnt = None; s.s3lhl0 = None; s._s3cfg()
+        s.s3_sal = s.s3track or (s.s3['on'] == 1 and s.s3['p'] > 0)   # nq_vllm: rank 0 exports decode salience (step(..., sal=))
+        s.s3st = None; s.s3gen = 0; s.s3c = None; s._s3cfg()
 
     def _setcap(s, g):
         if not hasattr(s, 'rate00'): s.rate00 = s.rate0
@@ -147,10 +152,10 @@ class TapScheduler(Scheduler):
         if 'cap' in kv: s._setcap(float(kv['cap']))
         if 'qreal' in kv: s.tqreal = kv['qreal'] == '1'
         if 'c' in kv: s.tc = float(kv['c'])
-        k3 = {'s3a': 'a', 's3hl': 'hl', 's3p': 'p', 's3phl': 'phl', 's3q': 'q', 's3lhl': 'lhl', 's3mass': 'mass'}
+        k3 = {'s3': 'on', 's3b': 'b', 's3bhl': 'bhl', 's3a': 'a', 's3ahl': 'ahl', 's3p': 'p', 's3band': 'band', 's3bw': 'bw', 's3bk': 'bk', 's3rst': 'rst'}
         if any(k in kv for k in k3):
             for k, n in k3.items():
-                if k in kv: s.s3[n] = kv[k] if n == 'mass' else float(kv[k])
+                if k in kv: s.s3[n] = int(float(kv[k])) if n in ('on', 'band', 'rst') else float(kv[k])
             s._s3cfg()
         if kv.get('lat') in ('model', 'meas') and kv['lat'] != s.tlat:
             s.tlat = kv['lat']
@@ -204,52 +209,65 @@ class TapScheduler(Scheduler):
 
     # ---- step 3 policy arms (default off)
     def _s3cfg(s):
-        """(re)derive the arm state after an env / ctl change; EMAs start (zero) when enabled or their half-life changes"""
-        P = s.s3; assert P['mass'] in ('512', 'jf'), P['mass']
-        s.s3on = P['a'] > 0 or P['p'] > 0 or P['q'] > 0 or P['mass'] == 'jf'
-        def ema(cur, on, hl):
-            if not (on or s.s3track): return None         # off and untracked: dropped (restarts from zero when re-enabled)
-            return cur if cur is not None and cur[0] == hl else [hl, 0.5 ** (1.0 / hl), np.zeros((s.NL, s.NE))]
-        s.s3Ea = ema(s.s3Ea, P['a'] > 0, P['hl']); s.s3Ep = ema(s.s3Ep, P['p'] > 0, P['phl'])
-        if s.s3_sal and (s.s3sal is None or s.s3lhl0 != P['lhl']):
-            s.s3sal = np.zeros(s.NL); s.s3cnt = np.zeros(s.NL); s.s3lhl0 = P['lhl']
-        s.s3any = s.s3on or s.s3track
+        """(re)derive the arm state after an env / ctl change. State (float32 count EMAs as pols.Combo, float64 salience sums)
+        is kept while the arm is on or NQ_S3_TRACK=1, dropped when off and untracked (restarts from zero); an EMA restarts
+        when its half-life changes."""
+        P = s.s3; s.s3on = P['on'] == 1; s.s3any = s.s3on or s.s3track; s.s3gen += 1
+        if not s.s3any: s.s3st = None; return
+        if s.s3st is None or s.s3st['bhl'] != P['bhl'] or s.s3st['ahl'] != P['ahl']: s._s3reset()
 
-    def _s3_add(s, c, ntok, sal):
-        """count EMAs / layer salience-per-hit accumulators from this step's routed counts (decode steps only)"""
+    def _s3reset(s):
+        P = s.s3; z = lambda: np.zeros((s.NL, s.NE), np.float32)
+        s.s3st = dict(bhl=P['bhl'], ahl=P['ahl'], db=np.float32(0.5 ** (1 / P['bhl'])), da=np.float32(0.5 ** (1 / P['ahl'])),
+                      d64=np.float32(0.5 ** (1 / 64)), Cb=z(), Ca=z(), C64=z(), ls=np.zeros(s.NL), lc=np.zeros(s.NL))
+        s.s3gen += 1
+
+    def _s3_add(s, c, ntok, sal, new_request=False):
+        """per-request state update from this step's routed counts (+ salience); pols.Combo.observe per row"""
+        if new_request and s.s3['rst']: s._s3reset()
         if ntok > 16: return
-        P = s.s3
-        for E, on in ((s.s3Ea, P['a'] > 0), (s.s3Ep, P['p'] > 0)):
-            if E is not None and (on or s.s3track): E[2] = E[2] * E[1] ** ntok + c
-        if s.s3sal is not None and sal is not None:
-            sl = np.asarray(sal, np.float64).sum(1); cl = c.sum(1)
-            if P['lhl'] > 0:
-                d = 0.5 ** (ntok / P['lhl']); s.s3sal = s.s3sal * d + sl; s.s3cnt = s.s3cnt * d + cl
-            else: s.s3sal += sl; s.s3cnt += cl
+        Z = s.s3st; cf = np.asarray(c, np.float32)
+        for k, d in (('Cb', 'db'), ('Ca', 'da'), ('C64', 'd64')):
+            E = Z[k]; E *= Z[d] if ntok == 1 else np.float32(Z[d] ** ntok); E += cf
+        if sal is not None: Z['ls'] += np.asarray(sal, np.float64).sum(1); Z['lc'] += np.asarray(c, np.float64).sum(1)
+
+    @staticmethod
+    def _sh(x):
+        m = x.sum(1, keepdims=True); return x / np.where(m > 0, m, 1)
+
+    def _s3v(s):
+        """the arm's admission values v [NL, NE] (float64), op for op pols.Combo.score (mass='512', lwsrc='cum')"""
+        P = s.s3; Z = s.s3st; sh = s._sh
+        j = np.maximum(np.nan_to_num(np.asarray(s.P.S, np.float32), nan=0.0, posinf=0.0, neginf=0.0), 0); v = sh(j)
+        if P['b']: v = sh(v * (Z['Cb'] + 1e-3) ** P['b'])
+        if P['a'] < 1: v = P['a'] * v + (1 - P['a']) * sh(Z['Ca'])
+        v = v * 512.0
+        if P['p']:
+            lm = Z['ls'] / np.maximum(Z['lc'], 1e-9)
+            if (lm > 0).all(): v = v * ((lm / lm.mean()) ** P['p'])[:, None]
+        n = min(P['band'], s.NL)
+        if n > 0 and P['bw']:
+            v = v.copy(); m = v[:n].sum(1, keepdims=True)
+            v[:n] = m * ((1 - P['bw']) * sh(v[:n]) + P['bw'] * sh(Z['C64'][:n] + 1e-6))
+        if n > 0 and P['bk'] != 1: v = v.copy(); v[:n] *= P['bk']
+        return v
+
+    def _s3val(s):
+        """(admission S float32, pair-gain layer weight float64), cached per refresh"""
+        key = (s.tok, s.s3gen, id(s.P.S))
+        if s.s3c is None or s.s3c[0] != key:
+            S = s._s3v().astype(np.float32)
+            fm = np.where(s.fixed, 0, np.maximum(S, 0)).sum(1).astype(np.float32)   # = _value's mass (floating experts)
+            s.s3c = (key, S, fm.astype(np.float64) / 512.0)
+        return s.s3c[1], s.s3c[2]
 
     def _srcS(s):
-        """admission source for _value: jF S (arms off), else the tilted / mixed shares x 512"""
-        S = s.P.S; P = s.s3
-        if not s.s3on or (P['a'] <= 0 and P['p'] <= 0): return S
-        def n512(V):
-            m = V.sum(1, keepdims=True); return np.where(m > 0, V * 512.0 / np.where(m > 0, m, 1), 0)
-        x = n512(np.maximum(np.asarray(S, np.float32).astype(np.float64), 0))
-        if P['p'] > 0: x = n512(x * (s.s3Ep[2] + 1e-3) ** P['p'])
-        if P['a'] > 0:
-            a = 1.0 - P['a']; x = a * x + (1 - a) * n512(s.s3Ea[2])
-        return x.astype(np.float32)
+        """admission source for _value: jF S (arm off), else the arm's v (float32)"""
+        return s._s3val()[0] if s.s3on else s.P.S
 
     def _lw(s):
-        """per-layer pair-gain weight, or None (off / no salience yet for q-only)"""
-        if not s.s3on: return None
-        P = s.s3; w = None
-        if P['q'] > 0 and s.s3sal is not None and s.s3cnt.sum() > 0:
-            lm = s.s3sal / np.maximum(s.s3cnt, 1)
-            if (lm > 0).all(): w = (lm / lm.mean()) ** P['q']
-        if P['mass'] == 'jf':
-            jm = np.nan_to_num(np.maximum(np.asarray(s.P.S, np.float32).astype(np.float64), 0), nan=0.0, posinf=0.0).sum(1) / 512.0
-            w = jm if w is None else w * jm
-        return w
+        """per-layer pair-gain weight (arm on), else None"""
+        return s._s3val()[1] if s.s3on else None
 
     def _value(s, lat, H):
         S = np.asarray(s._srcS(), np.float32); S = np.where(s.fixed, 0, np.maximum(S, 0))
@@ -295,7 +313,7 @@ class TapScheduler(Scheduler):
             a = getattr(s, n)
             if a.dtype != dt or not a.flags.c_contiguous or not a.flags.writeable: setattr(s, n, np.ascontiguousarray(a, dt).copy())
         K.decay(s.score, c, s.a ** ntok); s.tok += ntok
-        if s.s3any: s._s3_add(c, ntok, sal)
+        if s.s3any: s._s3_add(c, ntok, sal, new_request)
         if s.t_last is not None and ntok <= 16:
             dt = now - s.t_last
             if dt > 0: x = ntok / dt; s.tps = x if s.tps is None else 0.9 * s.tps + 0.1 * x
@@ -331,7 +349,7 @@ class TapScheduler(Scheduler):
         now = s.clock()
         c = np.asarray(counts, np.float64)
         s.score = s.score * s.a ** ntok + c; s.tok += ntok
-        if s.s3any: s._s3_add(c, ntok, sal)
+        if s.s3any: s._s3_add(c, ntok, sal, new_request)
         if s.t_last is not None and ntok <= 16:
             dt = now - s.t_last
             if dt > 0: x = ntok / dt; s.tps = x if s.tps is None else 0.9 * s.tps + 0.1 * x
