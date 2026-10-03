@@ -72,7 +72,14 @@ class TapScheduler(Scheduler):
         s.span = 64.0; s.NL = len(s.layers)
         s.doom = {}; s.doomed = np.zeros((s.NL, s.NE), bool); s.todo = collections.deque()
         s.peak = None; s.t_last = None; s.tps = None; s.n_land = 0; s.t_rate = None; s.n_land0 = 0
-        s.stats.update(refreshes=0, promotions=0, budget_cut=0, eager_evict=0, no_slot_skip=0, lat_tok_sum=0.0)
+        s.stats.update(refreshes=0, promotions=0, budget_cut=0, eager_evict=0, no_slot_skip=0, lat_tok_sum=0.0, shrink_evict=0)
+        # NQ_TAP_TODO_FIX (default 0 = the step 2 rc behaviour; 1 = fix): (a) pool full -> layers over nf give back their lowest-score
+        # excess (a prefill-borrow reclaim leaves the pool full and unbalanced per layer); (b) with no free slot, a free-slot
+        # pair joins todo only while todo is shorter than the downs in flight (else todo filled with reads no slot will take,
+        # len(todo) drove the qreal latency over H -> budget 0 -> no eager evictions, no downs: zero I/O until the next borrow)
+        s.tfix = e('NQ_TAP_TODO_FIX', '0') == '1'
+        if s.tcore is not None: s.tcore.fix = s.tfix
+        if s.tfix: s.stats.update(nf_shrink_evict=0, todo_full_skip=0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
         s.sched_name = 'tap'
 
@@ -225,7 +232,9 @@ class TapScheduler(Scheduler):
         if s.P is not None:
             ref = s.P.step(c, ntok, token_ids, new_request, sal=sal) if s.wants_sal else s.P.step(c, ntok, token_ids, new_request)
         st = s.state
-        big = T.pre(st, s.doomed, c, -1 if s.slots is None else int(s.slots), float(s.big * s.NE))
+        big, nsh, nnf = T.pre(st, s.doomed, c, -1 if s.slots is None else int(s.slots), float(s.big * s.NE), s.score, s.fixed, int(s.nf))
+        s.stats['shrink_evict'] += nsh
+        if s.tfix: s.stats['nf_shrink_evict'] += nnf
         if big: s.stats['big_steps'] += 1
         if ref and not big and s.P is not None and getattr(s.P, 'S', None) is not None:
             lat, H, budget = s._plan(now, T.queued(st), T.todo_len())
@@ -236,10 +245,11 @@ class TapScheduler(Scheduler):
                 hi = lo + h; near = max(0.0, min(hi, s.span) - lo); far = max(0.0, hi - max(lo, s.span))
                 return float(near), type(near) is not float, float(far), type(far) is not float
             w = win(lat, H) + win(0.0, lat) + (bool(lat >= 1),)
-            k, cut, ee, sk = T.refresh(np.ascontiguousarray(s.P.S, np.float32), s.score, s.fixed, st, s.doomed, s.hold, pin,
+            k, cut, ee, sk, full = T.refresh(np.ascontiguousarray(s.P.S, np.float32), s.score, s.fixed, st, s.doomed, s.hold, pin,
                                        float(s.tok), int(s.nf), 1 - s.a, -1.0 if s.tfar is None else float(s.tfar), s.span,
                                        w, s.tc, int(min(budget, 2 ** 62)))
             s.stats['budget_cut'] += cut; s.stats['eager_evict'] += ee; s.stats['no_slot_skip'] += sk; s.stats['promotions'] += k
+            if s.tfix: s.stats['todo_full_skip'] += full
         if not (s.want.dtype == bool and s.want.flags.c_contiguous and s.want.flags.writeable): s.want = np.zeros(st.shape, bool)
         ups, downs = T.finish(st, s.fixed, s.want)
         if s.t_iss is not None and ups: s._mark_issue(now, ups)
@@ -271,8 +281,15 @@ class TapScheduler(Scheduler):
                 r = (st == 2) & ~s.fixed & ~s.doomed; i, e = np.nonzero(r)
                 for k in np.argsort(s.score[i, e], kind='stable')[:over]:
                     downs.append((s.layers[i[k]], int(e[k]))); st[i[k], e[k]] = 3
-                s.stats['shrink_evict'] = s.stats.get('shrink_evict', 0) + min(over, len(i))
+                s.stats['shrink_evict'] += min(over, len(i))
         nfree = (s.slots - int((st > 0).sum())) if s.slots is not None else 10 ** 9
+        if s.tfix and s.slots is not None and nfree <= 0:   # pool full: layers over the lookahead width nf give their excess back
+            ov = (((st == 1) | (st == 2)) & ~s.fixed & ~s.doomed).sum(1) - s.nf
+            for l in np.nonzero(ov > 0)[0]:
+                e = np.nonzero((st[l] == 2) & ~s.fixed[l] & ~s.doomed[l])[0]
+                for k in np.argsort(s.score[l, e], kind='stable')[:ov[l]]:
+                    downs.append((s.layers[l], int(e[k]))); st[l, e[k]] = 3
+                s.stats['nf_shrink_evict'] += min(int(ov[l]), len(e))
         while s.todo and nfree > 0:
             i, e = s.todo.popleft()
             if st[i, e] == 0: ups.append((s.layers[i], e)); st[i, e] = 1; nfree -= 1
@@ -290,12 +307,14 @@ class TapScheduler(Scheduler):
             res = (st == 2) & ~s.doomed; occ = ((st == 1) | (st == 2)) & ~s.doomed
             cand = (st == 0) & ~s.doomed & ~s.fixed & (s.hold <= s.tok)
             pairs = s._pairs(V, cand, res & ~s.fixed, occ & ~s.fixed)
-            k = 0
+            k = 0; room = int((st == 3).sum()) - len(s.todo) if s.tfix else 0
             for g, l, e, v in pairs:
                 if k >= budget: s.stats['budget_cut'] += 1; continue
                 if v < 0:
                     if nfree > 0: ups.append((s.layers[l], e)); st[l, e] = 1; nfree -= 1
-                    else: s.todo.append((l, e))
+                    elif not s.tfix: s.todo.append((l, e))
+                    elif room > 0: s.todo.append((l, e)); room -= 1
+                    else: s.stats['todo_full_skip'] += 1; continue
                 elif nfree > 0:
                     ups.append((s.layers[l], e)); st[l, e] = 1; nfree -= 1; s.doom[l, e] = (l, v); s.doomed[l, v] = True
                 elif g - V0[l, v] > s.tc:
