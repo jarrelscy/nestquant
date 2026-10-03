@@ -59,6 +59,10 @@ class TapScheduler(Scheduler):
         # nq-kld (default off): NQ_TAP_PEAK_GBPS = TOTAL (all ranks) cap on the held peak rate (and rate0) the issue budget and
         # landing-latency model use (nq-io STAGE.md option #1, mirror of stage_sim +cap<GBps>); ctl key cap=<GB/s total>, 0 = off
         s.tcap = 0.0; s._setcap(float(e('NQ_TAP_PEAK_GBPS', '0')))
+        # nq-kld (default off): NQ_TAP_QREAL=1 / ctl qreal=1: the latency model's rank-0 queue = the executor's real outstanding
+        # upgrades (s.xq(), set by nq_vllm: engine ops + slot waiters) + todo, instead of the count of state-1 experts (which
+        # can include ups whose landing was never reported, e.g. superseded hseq)
+        s.tqreal = e('NQ_TAP_QREAL', '0') == '1'; s.xq = None
         s.clock = clock or time.monotonic
         s.tlat = e('NQ_TAP_LAT', 'model'); assert s.tlat in ('model', 'meas'), s.tlat
         s.tlat_q = float(e('NQ_TAP_LAT_Q', '0.5')); s.tlat_hl = float(e('NQ_TAP_LAT_HL', '4'))
@@ -119,13 +123,14 @@ class TapScheduler(Scheduler):
         if 'floor' in kv: s.tfloor = float(kv['floor']) * 1e9 / s.rb_rank
         if 'mla' in kv: s.tmla = float(kv['mla'])
         if 'cap' in kv: s._setcap(float(kv['cap']))
+        if 'qreal' in kv: s.tqreal = kv['qreal'] == '1'
         if kv.get('lat') in ('model', 'meas') and kv['lat'] != s.tlat:
             s.tlat = kv['lat']
             if s.tlat == 'meas' and s.t_iss is None:
                 s.t_iss = np.full((len(s.layers), s.NE), np.nan); s.lat0 = collections.deque(maxlen=int(os.environ.get('NQ_TAP_LAT_N', '256')))
                 s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
             elif s.tlat == 'model': s.t_iss = None; s.lat0 = None
-        import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap ctl: floor %.2f GB/s/rank, mla %s, lat %s, cap %.2f GB/s total', s.tfloor * s.rb_rank / 1e9, s.tmla, s.tlat, s.tcap * s.rb_rank * max(1, s.tp_n) / 1e9)
+        import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap ctl: floor %.2f GB/s/rank, mla %s, lat %s, cap %.2f GB/s total, qreal %s', s.tfloor * s.rb_rank / 1e9, s.tmla, s.tlat, s.tcap * s.rb_rank * max(1, s.tp_n) / 1e9, s.tqreal)
 
     def _rates(s, now, q0, nt=None):
         """-> (lat_s per rank list). Rank 0 live; followers from io_all() if available.
@@ -274,7 +279,11 @@ class TapScheduler(Scheduler):
         big = ((c > 0).sum(1) > s.big * s.NE).any()
         if big: s.stats['big_steps'] += 1
         if ref and not big and s.P is not None and getattr(s.P, 'S', None) is not None:
-            lat, H, budget = s._plan(now, int((st == 1).sum()) + len(s.todo), len(s.todo))
+            n1 = int((st == 1).sum()); nx = s.xq() if s.xq is not None else -1
+            s.stats['q_st1'] = n1; s.stats['q_todo'] = len(s.todo); s.stats['q_x'] = nx   # nq-kld: queue-model inputs (last refresh)
+            s.stats['q_st1_sum'] = s.stats.get('q_st1_sum', 0) + n1; s.stats['q_x_sum'] = s.stats.get('q_x_sum', 0) + nx
+            q0 = (nx if (s.tqreal and nx >= 0) else n1) + len(s.todo)
+            lat, H, budget = s._plan(now, q0, len(s.todo))
             V, V0 = s._value(lat, H)
             pin = s.pin & ~s.fixed if s.pin is not None else None
             if pin is not None: V = np.where(pin, np.float32(1e9), V)

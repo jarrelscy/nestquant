@@ -163,6 +163,7 @@ class Runtime:
                                shadow=os.environ.get('NQ_SHADOW','0')=='1',**IO['kw'])
         if IO['log']:log.info('NestQuant rank %d: nq-io %s, RAM tier %d records (%.1f GiB)',s.rank,IO['log'],s.X.tier_n,s.X.tier_n*rb/2**30)
         if s.X.tier_n:_tier_watch(s)
+        X_=s.X;s.S.xq=lambda:len(X_.pend)+sum(1 for v in list(X_.ops.values()) if v[2]==4)   # nq-kld tap qreal: real rank-0 outstanding upgrades
         init=[(L,E) for L in L_ for E in dflt[L] if E not in fx[L]][:nslot]
         for L,E in init:s.S.state[s.S.li[L],E]=1
         s.X.apply(init,[],s.S)
