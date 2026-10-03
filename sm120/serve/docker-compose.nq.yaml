@@ -83,6 +83,10 @@ services:
       NQ_S3_BK: ${NQ_S3_BK:-0.5}
       NQ_S3_RESET: ${NQ_S3_RESET:-1}             #   per-request state reset
       NQ_S3_TRACK: ${NQ_S3_TRACK:-0}             #   1 = keep s3 state + rank-0 salience export on from boot (needed for same-boot ctl A/B with s3p > 0)
+      NQ_S3_X: ${NQ_S3_X:-0}                     #   1 = blend the NQ_S3_EXT model score into the arm (ctl s3x=, s3xw=, s3xf=)
+      NQ_S3_XW: ${NQ_S3_XW:-0.15}                #   its weight (as p-online Combo e1)
+      NQ_S3_EXT: ${NQ_S3_EXT:-}                  #   /path/module.py:fn (container path), called on rank 0 at each refresh with a TapExtCtx
+      NQ_S3_XRING: ${NQ_S3_XRING:-1024}          #   per-request decode history rows kept for the hook
       NQ_TAP_IO: ${NQ_TAP_IO:-1}                 # nq-kld: 0 = tap ignores follower io stats (= prod NQ_IOSTATS=0) while NQ_IOSTATS still publishes
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
       NQ_IOSTATS: ${NQ_IOSTATS:-0}

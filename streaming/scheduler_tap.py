@@ -44,6 +44,16 @@ keys at runtime (same-boot A/B). All state is per request (reset at new_request)
      s3bw   (NQ_S3_BW, .5)        m_l = sum_e v[l], C64 = count EMA hl 64 (band layers only)
      s3bk   (NQ_S3_BK, .5)        then v[l] *= bk
      s3rst  (NQ_S3_RESET, 1)    per-request reset (0 = state runs across requests, = the p-online sim streams)
+  external score (model hook, default off; applied as pols.Combo e1, after the count mix, before x 512):
+     s3x    (NQ_S3_X, 0)        1 = s = (1-xw) s + xw share(max(X, 0)), X = fn(ctx) [NL, NE] at each refresh (None = skip)
+     s3xw   (NQ_S3_XW, 0.15)
+     s3xf   (NQ_S3_EXT, '')     /path/module.py:fn (loaded on first use; a ctl s3xf= loads another one at runtime)
+     NQ_S3_XRING (1024)         rows of per-request decode history kept for fn (kept whenever an fn path is set)
+     fn(ctx) gets a TapExtCtx: ids [n, NL, 8] int16 / sal [n, NL, 8] float32 = the last n <= ring routed rows of the current
+     request, oldest first (ids ascending within a row; a step with ntok > 1 tokens is split into ntok rows by
+     multiplicity), rows (decode rows since request start), new_request (a request started since the previous call),
+     S (jF, float32), Ca / Cb / C64 (count EMAs), tok, layers, fixed, state (dict kept for fn across calls). An
+     exception disables the hook until the next s3xf / s3x ctl change (logged); cost: s.s3xt = [calls, seconds].
   Live mapping: the shape of v goes in as the admission S (float32; _value normalises it per layer over the floating
   experts as before) and the layer scale as a pair-gain weight lw_l = floating mass of v_l / 512, so the floating
   values the global sort / budget cut / eager test see are v itself (x the common H window factor). Tap c is a ctl key
@@ -54,6 +64,11 @@ Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalis
 import os, time, collections
 import numpy as np
 from scheduler import Scheduler
+
+
+class TapExtCtx:
+    """argument of the NQ_S3_EXT hook (fields: see the module doc)"""
+    __slots__ = ('ids', 'sal', 'rows', 'new_request', 'S', 'Ca', 'Cb', 'C64', 'tok', 'layers', 'fixed', 'state')
 
 
 class TapScheduler(Scheduler):
@@ -98,7 +113,9 @@ class TapScheduler(Scheduler):
         s.s3 = dict(on=int(float(e('NQ_S3', '0') or 0)), b=float(e('NQ_S3_B', '0.25') or 0), bhl=float(e('NQ_S3_BHL', '256') or 256),
                     a=float(e('NQ_S3_A', '0.9') or 0), ahl=float(e('NQ_S3_AHL', '64') or 64), p=float(e('NQ_S3_P', '0.25') or 0),
                     band=int(float(e('NQ_S3_BAND', '22') or 0)), bw=float(e('NQ_S3_BW', '0.5') or 0), bk=float(e('NQ_S3_BK', '0.5') or 0),
-                    rst=int(float(e('NQ_S3_RESET', '1') or 0)))
+                    rst=int(float(e('NQ_S3_RESET', '1') or 0)), x=int(float(e('NQ_S3_X', '0') or 0)), xw=float(e('NQ_S3_XW', '0.15') or 0),
+                    xf=e('NQ_S3_EXT', '') or '')
+        s.s3xring = int(e('NQ_S3_XRING', '1024') or 1024); s.s3xfn = None; s.s3xf0 = None; s.s3xt = [0, 0.0]; s.s3xbad = 0; s.s3xl8 = np.repeat(np.arange(s.NL), 8)
         s.s3track = e('NQ_S3_TRACK', '0') == '1'
         s.s3_sal = s.s3track or (s.s3['on'] == 1 and s.s3['p'] > 0)   # nq_vllm: rank 0 exports decode salience (step(..., sal=))
         s.s3st = None; s.s3gen = 0; s.s3c = None; s._s3cfg()
@@ -152,10 +169,12 @@ class TapScheduler(Scheduler):
         if 'cap' in kv: s._setcap(float(kv['cap']))
         if 'qreal' in kv: s.tqreal = kv['qreal'] == '1'
         if 'c' in kv: s.tc = float(kv['c'])
-        k3 = {'s3': 'on', 's3b': 'b', 's3bhl': 'bhl', 's3a': 'a', 's3ahl': 'ahl', 's3p': 'p', 's3band': 'band', 's3bw': 'bw', 's3bk': 'bk', 's3rst': 'rst'}
+        k3 = {'s3': 'on', 's3b': 'b', 's3bhl': 'bhl', 's3a': 'a', 's3ahl': 'ahl', 's3p': 'p', 's3band': 'band', 's3bw': 'bw', 's3bk': 'bk', 's3rst': 'rst',
+              's3x': 'x', 's3xw': 'xw', 's3xf': 'xf'}
         if any(k in kv for k in k3):
             for k, n in k3.items():
-                if k in kv: s.s3[n] = int(float(kv[k])) if n in ('on', 'band', 'rst') else float(kv[k])
+                if k in kv: s.s3[n] = kv[k] if n == 'xf' else int(float(kv[k])) if n in ('on', 'band', 'rst', 'x') else float(kv[k])
+            s.s3xf0 = None                                    # (re)arm the hook (reloads / re-enables after an error)
             s._s3cfg()
         if kv.get('lat') in ('model', 'meas') and kv['lat'] != s.tlat:
             s.tlat = kv['lat']
@@ -215,18 +234,65 @@ class TapScheduler(Scheduler):
         P = s.s3; s.s3on = P['on'] == 1; s.s3any = s.s3on or s.s3track; s.s3gen += 1
         if not s.s3any: s.s3st = None; return
         if s.s3st is None or s.s3st['bhl'] != P['bhl'] or s.s3st['ahl'] != P['ahl']: s._s3reset()
+        if P['xf'] and s.s3st.get('xi') is None: s._s3xreset()
 
     def _s3reset(s):
         P = s.s3; z = lambda: np.zeros((s.NL, s.NE), np.float32)
         s.s3st = dict(bhl=P['bhl'], ahl=P['ahl'], db=np.float32(0.5 ** (1 / P['bhl'])), da=np.float32(0.5 ** (1 / P['ahl'])),
-                      d64=np.float32(0.5 ** (1 / 64)), Cb=z(), Ca=z(), C64=z(), ls=np.zeros(s.NL), lc=np.zeros(s.NL))
+                      d64=np.float32(0.5 ** (1 / 64)), Cb=z(), Ca=z(), C64=z(), ls=np.zeros(s.NL), lc=np.zeros(s.NL), xi=None)
+        if P['xf']: s._s3xreset()
         s.s3gen += 1
+
+    def _s3xreset(s):
+        R = max(16, s.s3xring); Z = s.s3st
+        Z.update(xi=np.zeros((2 * R, s.NL, 8), np.int16), xs=np.zeros((2 * R, s.NL, 8), np.float32), xp=0, xn=0, xrows=0, xnew=True)
+
+    def _s3xpush(s, c, ntok, sal):
+        """append this step's routed rows to the per-request history (linear buffer of 2 ring, compacted when full)"""
+        Z = s.s3st; c = np.asarray(c); f = np.flatnonzero(c.ravel() != 0); l = f // s.NE; e = f - l * s.NE   # (np.nonzero on float is ~10x slower)
+        if ntok == 1 and len(l) == 8 * s.NL and np.array_equal(l, s.s3xl8) and (c[l, e] == 1).all():   # fast path: one decode row
+            ids = e.reshape(1, s.NL, 8); sv = np.asarray(sal)[l, e].reshape(1, s.NL, 8) if sal is not None else 0.0
+        else:
+            k = c[l, e].astype(np.int64)
+            if len(k) == 0 or (np.bincount(l, weights=k, minlength=s.NL) != 8 * ntok).any(): s.s3xbad += 1; return
+            ids = np.repeat(e, k).reshape(s.NL, 8, ntok).transpose(2, 0, 1)        # duplicates of an expert go to different rows
+            sv = np.repeat(np.asarray(sal, np.float64)[l, e] / k, k).reshape(s.NL, 8, ntok).transpose(2, 0, 1) if sal is not None else 0.0
+        R = Z['xi'].shape[0] // 2
+        if Z['xp'] + ntok > 2 * R:
+            m = min(Z['xn'], R); Z['xi'][:m] = Z['xi'][Z['xp'] - m:Z['xp']]; Z['xs'][:m] = Z['xs'][Z['xp'] - m:Z['xp']]; Z['xp'] = m
+        p = Z['xp']; Z['xi'][p:p + ntok] = ids; Z['xs'][p:p + ntok] = sv; Z['xp'] = p + ntok
+        Z['xn'] = min(Z['xn'] + ntok, R); Z['xrows'] += ntok
+
+    def _s3xcall(s):
+        """the external score X [NL, NE] (float32) or None"""
+        P = s.s3; Z = s.s3st
+        if s.s3xf0 != P['xf']:
+            s.s3xf0 = P['xf']; s.s3xfn = None
+            try:
+                import importlib.util; path, _, fn = P['xf'].rpartition(':')
+                sp = importlib.util.spec_from_file_location('nq_s3ext_%d' % s.s3gen, path); m = importlib.util.module_from_spec(sp)
+                sp.loader.exec_module(m); s.s3xfn = getattr(m, fn); s.s3xstate = {}
+            except Exception as ex:
+                import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap s3 ext: load %r failed: %r', P['xf'], ex)
+        if s.s3xfn is None or Z.get('xi') is None: return None
+        cx = TapExtCtx(); p = Z['xp']; n = Z['xn']
+        cx.ids = Z['xi'][p - n:p]; cx.sal = Z['xs'][p - n:p]; cx.rows = Z['xrows']; cx.new_request = Z['xnew']; Z['xnew'] = False
+        cx.S = s.P.S; cx.Ca = Z['Ca']; cx.Cb = Z['Cb']; cx.C64 = Z['C64']; cx.tok = s.tok; cx.layers = s.layers; cx.fixed = s.fixed
+        cx.state = s.s3xstate
+        t0 = time.perf_counter()
+        try: X = s.s3xfn(cx)
+        except Exception as ex:
+            import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap s3 ext: %r raised %r, hook off until the next ctl s3x/s3xf', P['xf'], ex)
+            s.s3xfn = None; X = None
+        s.s3xt[0] += 1; s.s3xt[1] += time.perf_counter() - t0
+        return None if X is None else np.asarray(X, np.float32).reshape(s.NL, s.NE)
 
     def _s3_add(s, c, ntok, sal, new_request=False):
         """per-request state update from this step's routed counts (+ salience); pols.Combo.observe per row"""
         if new_request and s.s3['rst']: s._s3reset()
         if ntok > 16: return
         Z = s.s3st; cf = np.asarray(c, np.float32)
+        if Z.get('xi') is not None: s._s3xpush(c, ntok, sal)
         for k, d in (('Cb', 'db'), ('Ca', 'da'), ('C64', 'd64')):
             E = Z[k]; E *= Z[d] if ntok == 1 else np.float32(Z[d] ** ntok); E += cf
         if sal is not None: Z['ls'] += np.asarray(sal, np.float64).sum(1); Z['lc'] += np.asarray(c, np.float64).sum(1)
@@ -241,6 +307,9 @@ class TapScheduler(Scheduler):
         j = np.maximum(np.nan_to_num(np.asarray(s.P.S, np.float32), nan=0.0, posinf=0.0, neginf=0.0), 0); v = sh(j)
         if P['b']: v = sh(v * (Z['Cb'] + 1e-3) ** P['b'])
         if P['a'] < 1: v = P['a'] * v + (1 - P['a']) * sh(Z['Ca'])
+        if P['x'] and P['xw'] and P['xf']:
+            X = s._s3xcall()
+            if X is not None: v = (1 - P['xw']) * v + P['xw'] * sh(np.maximum(np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0), 0))
         v = v * 512.0
         if P['p']:
             lm = Z['ls'] / np.maximum(Z['lc'], 1e-9)
