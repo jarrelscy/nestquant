@@ -70,7 +70,7 @@ def mla_candidate(name,n_layers):
     i=layer_idx(name);return i is not None and i<n_layers
 
 def nf0():
-    return 77      # decode floating experts per layer (jF k0 layout, nq_vllm.NF)
+    return int(os.environ.get('NQ_JF_NFLOAT') or max(1,int(os.environ.get('NQ_SLOTS_PER_LAYER') or 80)-3))   # decode floating experts per layer (= nq_vllm.NF)
 
 def target_extra():
     """(extra slots wanted, rec bytes) from the rank-0 record index"""

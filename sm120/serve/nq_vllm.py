@@ -40,7 +40,7 @@ CFG_DN=[None,[1,8,4],[1,8,2],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4],[1,8,4]]
 # They stay valid at TP2 (I = 1024, K % (cpw*nst*128) == 0); for GB10 (48 SMs) rerun sm120/bench_real.py on the box and set these.
 if os.environ.get('NQ_CFG_GU'):CFG_GU=[None]+json.loads(os.environ['NQ_CFG_GU'])
 if os.environ.get('NQ_CFG_DN'):CFG_DN=[None]+json.loads(os.environ['NQ_CFG_DN'])
-ROWHOT=os.environ.get('NQ_ROWHOT','0')=='1';NE=256;TOPK=8;BMAX=8;NF=int(os.environ.get('NQ_JF_NFLOAT','77'));CHECK=os.environ.get('NQ_CHECK','0')=='1'
+ROWHOT=os.environ.get('NQ_ROWHOT','0')=='1';NE=256;TOPK=8;BMAX=8;NF=int(os.environ.get('NQ_JF_NFLOAT') or max(1,int(os.environ.get('NQ_SLOTS_PER_LAYER') or 80)-3));CHECK=os.environ.get('NQ_CHECK','0')=='1'   # NF floating experts per layer: NQ_JF_NFLOAT, else slots - 3
 # prefill (T >= NQ_PF_MIN tokens, not capturing): moe.MoELayer.prefill; below it (and inside graph capture) the decode
 # kernel in 8-token slices. NQ_PF=0 disables; while the file NQ_PF_OFF (default /dev/shm/nq_pf_off) exists the slice
 # loop runs (in-boot A/B). Scratch (moe.pf_scratch, NQ_PF_ROWS x NQ_PF_G) is allocated on the first prefill call, i.e.
@@ -122,7 +122,7 @@ class Runtime:
         import stream_engine as SE,scheduler_tap as TS,executor as EX
         s.started=True;rp=os.environ['NQ_REPACK'];L_=sorted(s.lay);dev=s.dev
         s.rf=rf=SE.RankFile(rp,s.rank);rb=rf.rb
-        # jF k0 layout: no fixed set (every expert floats), NF=77 floating experts per layer
+        # jF k0 layout: no fixed set (every expert floats), NF floating experts per layer
         fx={L:[] for L in L_};nf=NF
         for L in L_:s.lay[L]['table0']=s.lay[L]['M'].table.clone()
         log.info('NestQuant rank %d: %d layers, k0 layout (no fixed set, %d floating/layer)',s.rank,len(L_),nf)

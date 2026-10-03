@@ -3,7 +3,7 @@ a borrow reclaim until the next borrow epoch (ups = downs = 0, budget_cut only, 
 Livelock: the reclaim gives S.slots / S.nf back with the normal pool full and unbalanced per layer -> nfree = 0 while
 layers under nf keep emitting free-slot pairs -> those (and re-appended duplicates) pile into todo -> len(todo) feeds the
 qreal latency model -> lat > H -> budget 0 -> the budget cut also blocks eager evictions, the only source of downs -> no
-slot ever frees. This drives TapScheduler.step (py and cpp hostloop) through warm decode, a borrow epoch (slots += X,
+slot ever frees. This drives TapScheduler.step (python host loop) through warm decode, a borrow epoch (slots += X,
 nf = 155) and its reclaim (borrowed-pool residents forced to state 3, slots -= X, nf back) and asserts reads resume
 (for NQ_TAP_TODO_FIX=1 and =2 (no nf shrink), and that =0, the step 2 rc code, still wedges here); prints the hot share
 of activated experts in the first 500 steps after the reclaim and after.
@@ -12,7 +12,7 @@ import os, sys, collections
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE + '/../streaming'); sys.path.insert(0, HERE)
 import numpy as np
 import test_tap_parity as TP
-from test_hostloop_parity import routing_steps, LeaderX, cfgs, LAYERS, NE
+from test_tap_parity import routing_steps, LeaderX, cfgs, LAYERS, NE
 
 class SlowS:
     """predictor: S = count EMA (half-life 256 tokens) + fixed per-expert prior, refreshed every 16 tokens (slowly moving
@@ -43,13 +43,13 @@ class RateX:
         s.dq = []
 
 
-ENV = dict(NQ_TAP_H='64', NQ_TAP_QREAL='1', NQ_TAP_RATE_GBPS='2', NQ_S3_TRACK='1')
+ENV = dict(NQ_TAP_CTL='/nonexistent/nq_tap_ctl', NQ_TAP_H='64', NQ_TAP_QREAL='1', NQ_TAP_RATE_GBPS='2', NQ_S3_TRACK='1')
 EXTRA, PF_NF = 6000, 155
 
 
 def run(hl, steps, seed=0, pw=0.1, cap=8, env=None):
     k0, _ = cfgs()
-    S = TP.mk(k0, SlowS(seed + 1, pw), hl, dict(ENV, **(env or {})), TP.Clock(seed))
+    S = TP.mk_new(k0, SlowS(seed + 1, pw), dict(ENV, **(env or {})), TP.Clock(seed))
     X = RateX(seed, cap); S.xq = lambda: len(X.upq)
     init = [(L, E) for L in LAYERS for E in k0['dflt'][L] if E not in k0['fixed'][L]][:k0['slots']]
     for L, E in init: S.state[S.li[L], E] = 1
@@ -77,9 +77,9 @@ def run(hl, steps, seed=0, pw=0.1, cap=8, env=None):
         if b0 // 2 <= i < b0: pre['ups'] += len(u); pre['ref'] += S.stats['refreshes'] - r0
         if i >= b1 + 50:
             post['ups'] += len(u); post['downs'] += len(d); post['ref'] += S.stats['refreshes'] - r0
-            tl = S.tcore.todo_len() if S.tcore is not None else len(S.todo)
+            tl = len(S.todo)
             if S.stats['refreshes'] > r0: zrun = zrun + 1 if tl and not u else 0; mz = max(mz, zrun)   # todo waits, nothing issues
-    tl = S.tcore.todo_len() if S.tcore is not None else len(S.todo)
+    tl = len(S.todo)
     return pre, post, mz, tl, dict(S.stats)
 
 
@@ -88,7 +88,7 @@ def main():
     steps = (steps * (1 + 4000 // max(len(steps), 1)))[:4000]
     ok = True
     for fix in ('1', '2', '0'):                # 0 = step 2 rc behaviour: must wedge (the test sees the bug); 2 = no nf shrink
-        for hl in ('py', 'cpp'):
+        for hl in ('py',):                     # clean-d: python host loop only
             pre, post, mz, tl, st = run(hl, steps, env=dict(NQ_TAP_TODO_FIX=fix))
             wedged = mz >= 50 or post['ups'] < post['ref']
             print(f'fix={fix} {hl}: warm ups {pre["ups"]} / {pre["ref"]} refreshes; after reclaim ups {post["ups"]} downs {post["downs"]} '
