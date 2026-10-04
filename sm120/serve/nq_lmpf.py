@@ -115,6 +115,7 @@ class _cop:
         if s.orig:s.orig[0].forward=s.orig[1]
 RESERVE_GB=float(os.environ.get('NQ_LMPF_RESERVE_GB','1.5'))
 CG=os.environ.get('NQ_LMPF_CG','1')=='1'      # exec window through vLLM's compiled piecewise submods (rows); 0 = eager per-layer loop
+CAP_GB=float(os.environ.get('NQ_LMPF_CAP_GB','0'))   # >0: device memory in use (nvidia-smi view) stays <= this after the ring + window
 RATE0=float(os.environ.get('NQ_LMPF_RATE0_GBPS','2.0'))*1e9
 SNAP_MB=float(os.environ.get('NQ_LMPF_SNAP_MAX_MB','512'))
 PAUSE_S=float(os.environ.get('NQ_LMPF_PAUSE_S','30'))
@@ -348,7 +349,8 @@ class LM:
         if bw=='all' and s.cg and 'PTa' not in s.cg:bw='ring'
         per_tok=((s.cg['PTa'] if bw=='all' else s.cg['per_tok']) if s.cg else 2*H*esz)+tb
         s.esz=esz;s.tb=tb;s.per_tok=per_tok
-        free=torch.cuda.mem_get_info(dev)[0];avail=free-RESERVE_GB*2**30
+        free,tot=torch.cuda.mem_get_info(dev);avail=free-RESERVE_GB*2**30
+        if CAP_GB>0:avail=min(avail,CAP_GB*2**30-(tot-free)-RESERVE_GB*2**30)
         if bw!='0':
             B=int(BORROW_MAX*rt.X.nslot)
             if bw=='all':p=size_plan((B-2)*rb,rb,per_tok,EN.WINDOW,s.mnbt,RING_RECS)
