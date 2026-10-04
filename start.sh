@@ -34,6 +34,8 @@ case "$NQ_VARIANT" in
 2-4) ;;
 1.75)   # 1.75-bit base + 4-bit residual (base K code 1, down residual code 9): records ~400 GB, no second-drive copy by default
   export NQ_REPACK_REPO=${NQ_REPACK_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}
+  export NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}       # its own base/ (same bytes as 2-4's base/)
+  export NQ_PREDICTOR_REPO=${NQ_PREDICTOR_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}  # its own serving/predictor/
   export NQ_REPACK_DIR=${NQ_REPACK_DIR:-/home/jarrelscy/nq-175/hf}
   export NQ_REPACK_ALT_DIR=${NQ_REPACK_ALT_DIR:-none}
   # the smaller resident base frees ~3.6 GiB/GPU at 80 slots: 98 slots/layer (95 floating) keeps the 1M KV pool of 2-4
@@ -51,8 +53,8 @@ export NQ_BUILD_DIR=${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}
 export NQ_MODELS_ROOT=${NQ_MODELS_ROOT:-/data/models}
 export NQ_MODEL_DIR=${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-NQ-base}
 NQ_REPACK_REPO=${NQ_REPACK_REPO:-${NQ_HF_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}}   # NestQuant records
-NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/), shared by both builds
-NQ_PREDICTOR_REPO=${NQ_PREDICTOR_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}            # jF predictor (serving/predictor/), shared
+NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/), 2-4 default; the 1.75 preset uses its own repo
+NQ_PREDICTOR_REPO=${NQ_PREDICTOR_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}            # jF predictor (serving/predictor/), 2-4 default; 1.75 uses its own
 
 NQ_ENV_FILE=${NQ_ENV_FILE:-$HERE/.env}
 if [ -z "${VLLM_API_KEY:-}" ] && [ -f "$NQ_ENV_FILE" ]; then VLLM_API_KEY=$(grep -oP 'VLLM_API_KEY=\K\S+' "$NQ_ENV_FILE" || true); fi
