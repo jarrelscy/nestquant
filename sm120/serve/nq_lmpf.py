@@ -122,7 +122,7 @@ PAUSE_S=float(os.environ.get('NQ_LMPF_PAUSE_S','30'))
 READ_TIMEOUT=float(os.environ.get('NQ_LMPF_READ_TIMEOUT_S','60'))
 MIN_C=int(os.environ.get('NQ_LMPF_MIN_RECS','32'))
 # slot borrow (nq_slotborrow.py): ring (ring) or ring + window state (all) in idle decode-expert slots during a prefill
-BORROW=os.environ.get('NQ_LMPF_BORROW','0')
+BORROW=os.environ.get('NQ_LMPF_BORROW','all')
 if BORROW not in ('0','ring','all'):BORROW='0'
 BORROW_MAX=float(os.environ.get('NQ_LMPF_BORROW_MAX','0.5'))    # most of the slot pool one borrow may take
 BW_OFF='/dev/shm/nq_lmpf_borrow_off'                             # exists: no new borrow (every rank runs plain / unhooked)
@@ -464,19 +464,27 @@ class LM:
             last[n]=max(us) if us else rowof[n]
         pe=[n for n in ph if spec.get(n)=='emb']
         for n in pe:last[n]=max(rowof.get(u,len(rows)) for u in n.users)
-        def bpt(n):
+        def mval(n):
             v=n.meta.get('example_value',n.meta.get('val'))
-            vs=v if isinstance(v,(tuple,list)) else (v,)
-            b=0
+            if v is None and n.op=='call_function' and n.target is operator.getitem and isinstance(n.args[0],torch.fx.Node):
+                pv=mval(n.args[0])
+                if isinstance(pv,(tuple,list)) and isinstance(n.args[1],int) and n.args[1]<len(pv):v=pv[n.args[1]]
+            return v
+        def bpt(n):
+            v=mval(n);vs=v if isinstance(v,(tuple,list)) else (v,);b=0
             for t in vs:
                 if isinstance(t,torch.Tensor) and t.dim() and not isinstance(t.shape[0],int):
                     e=1
                     for d in t.shape[1:]:e*=int(d)
                     b+=e*t.element_size()
             return b
-        live=[sum(bpt(n) for n in last if (rowof.get(n,-1)<=r) and last[n]>r and nodes and (n.op!='call_module' or not any(u.target is operator.getitem for u in n.users)))
-              for r in range(len(rows))]
-        per=int(max(live)) if live and max(live)>0 else int(os.environ.get('NQ_LMPF_CG_PER_TOK','65536'))
+        def tup(n):return n.op=='call_module' and any(u.op=='call_function' and u.target is operator.getitem for u in n.users)
+        live=[sum(bpt(n) for n in last if rowof.get(n,-1)<=r and last[n]>r and not tup(n)) for r in range(len(rows))]
+        nometa=sum(1 for n in last if not tup(n) and mval(n) is None and n.op!='placeholder')
+        per=max(int(max(live)) if live else 0,int(os.environ.get('NQ_LMPF_CG_PER_TOK','0')))
+        if nometa or per<=s.H*2:
+            log.warning('NestQuant LMPF rank %d: compiled live set unknown (%d values without meta, est %d B/token), sizing 81920 B/token',s.rt.rank,nometa,per)
+            per=max(per,81920)
         per+=s.H*2                                        # final hidden states of every chunk until sampling
         # compiled node program: (node, fn, args spec, kwargs spec)
         def ref(a):
@@ -516,18 +524,21 @@ class LM:
             # static byte column per token; a value lives in columns [c, c+w) of its chunk's region from the row that
             # makes it until its last row (nq_slotborrow.plan_cols); chunk k's region = arena[o_k*PTa : (o_k+nk)*PTa)
             import nq_slotborrow as SB
-            items=[];bp={}
-            for n in last:
-                if n.op in ('placeholder','output') or (n.op=='call_module' and any(u.target is operator.getitem for u in n.users)):continue
-                if last[n]<=rowof[n]:continue
-                b=bpt(n)
-                if b>0:items.append((rowof[n],last[n],n,b));bp[n]=b
+            cand=[n for n in last if n.op not in ('placeholder','output') and not tup(n) and last[n]>rowof[n]]
+            esz=torch.empty(0,dtype=getattr(s,'dtype',torch.bfloat16)).element_size()
             le=max([last[n] for n in pe] or [1]);le=max(le,1)
-            items.append((-1,le,'__emb',s.H*torch.empty(0,dtype=getattr(s,'dtype',torch.bfloat16)).element_size()))
-            cols,PTa=SB.plan_cols(items)
-            born=[[n for n in cols if n!='__emb' and rowof[n]==r] for r in range(len(rows))]
-            s.cg.update(plan=cols,PTa=PTa,bpt=bp,born=born)
-            log.info('NestQuant LMPF rank %d: slot-borrow arena plan: %d values, %d B/token (live max %d)',s.rt.rank,len(cols),PTa,max(live) if live else -1)
+            if not nometa:                            # FX meta: static plan (values without a per-token size stay out)
+                bp={n:bpt(n) for n in cand};cand=[n for n in cand if bp[n]>0]
+                items=[(rowof[n],last[n],n,bp[n]) for n in cand]+[(-1,le,'__emb',s.H*esz)]
+                cols,PTa=SB.plan_cols(items);P=None
+            else:
+                # no FX meta (AOT-cache path): columns are learned from the first window's values (row order = start
+                # order, so the online first fit is the offline plan), inside the fallback live-set stride
+                PTa=-(-per//16)*16;P=SB.ColPlan(PTa);P.add(-1,le,'__emb',s.H*esz);cols=P.cols;bp={}
+            born=[[n for n in cand if rowof[n]==r] for r in range(len(rows))]
+            s.cg.update(plan=cols,PTa=PTa,bpt=bp,born=born,cplan=P,xr={n:(rowof[n],last[n]) for n in cand},bad=set())
+            log.info('NestQuant LMPF rank %d: slot-borrow arena plan: %s, %d values, %d B/token (live max %d)',s.rt.rank,
+                     'learned at the first window' if P is not None else 'FX meta',len(cand),PTa,max(live) if live else -1)
         oc=f.optimized_call;lm=s
         pidx={spec[n]:pi[n] for n in ph if n in spec}
         def optimized_call(*a,**k):
@@ -535,8 +546,8 @@ class LM:
                                            [(str(n.target),a[i] if not isinstance(a[i],torch.Tensor) else tuple(a[i].shape)) for n,i in pi.items() if n in spec])
             lm.cg_args=a;return oc(*a,**k)
         f.optimized_call=optimized_call
-        log.info('NestQuant LMPF rank %d: compiled exec: %d rows, %d indexer rows, live max %d B/token (row %d), per_tok %d',
-                 s.rt.rank,len(rows),sum(i['idx'] for i in info),max(live) if live else -1,live.index(max(live)) if live else -1,per)
+        log.info('NestQuant LMPF rank %d: compiled exec: %d rows, %d indexer rows, live max %d B/token (row %d; rows 0-3 %s), %d without meta, per_tok %d',
+                 s.rt.rank,len(rows),sum(i['idx'] for i in info),max(live) if live else -1,live.index(max(live)) if live else -1,live[:4],nometa,per)
     def cg_val(s,a,env,G,sp):
         t=a[0]
         if t=='c':return env[a[1]]
@@ -568,6 +579,7 @@ class LM:
         else:s.mode=info['m'];s.op=False
         prof=s.dx.get('prof')=='1';s.pev=dict(moe=[],lay=[]) if prof else None
         if prof:torch.cuda.synchronize();tw=time.perf_counter()
+        m0=torch.cuda.memory_allocated();torch.cuda.reset_peak_memory_stats()
         pre=False;nrow=len(cg['prog']);cv=s.cg_val
         try:
             s.active=True
@@ -599,6 +611,7 @@ class LM:
                         if r==1:env.pop('__emb',None)
         finally:
             s.end()
+            s.last['peak_gib']=round((torch.cuda.max_memory_allocated()-m0)/2**30,3);s.last['n_tok']=sum(nk for _,nk in offs)
         if prof:
             torch.cuda.synchronize();wall=time.perf_counter()-tw;pe=s.pev;s.pev=None
             sm=lambda l:sum(a.elapsed_time(b) for a,b in l)/1e3
@@ -621,7 +634,20 @@ class LM:
         storage with another value of the row (an alias pair must stay an alias). An arena view (a view of an older
         value) is copied (through a clone) into its own columns."""
         cg=s.cg;pl=cg['plan'];bp=cg['bpt'];st=s.bwst;ast=s.arena.untyped_storage().data_ptr();todo=[];grp={}
+        P=cg.get('cplan')
+        if P is not None:                             # learn the columns of this row's values (first chunk they appear in)
+            new=[]
+            for n in cg['born'][r]:
+                if n in pl or n in cg['bad']:continue
+                v=env.get(n)
+                if isinstance(v,torch.Tensor) and v.dim() and v.shape[0]==nk and v.is_contiguous() and (v.numel()*v.element_size())%nk==0:
+                    new.append((-(v.numel()*v.element_size()//nk),str(n),n))
+                else:cg['bad'].add(n)
+            for nb,_,n in sorted(new,key=lambda x:(x[0],x[1])):
+                if P.add(cg['xr'][n][0],cg['xr'][n][1],n,-nb) is None:cg['bad'].add(n);st['fb_plan']=st.get('fb_plan',0)+1
+                else:bp[n]=-nb
         for n in cg['born'][r]:
+            if n not in pl:st['fb_shape']+=1;continue
             v=env.get(n)
             if not isinstance(v,torch.Tensor) or v.dim()==0 or v.shape[0]!=nk or not v.is_contiguous() or v.numel()*v.element_size()!=nk*bp[n]:
                 st['fb_shape']+=1;continue
@@ -1053,6 +1079,10 @@ class LM:
             X=s.rt.X;d['borrow']=dict(mode=s.bw,held=s.bwi is not None,st=dict(s.bwst),last=s.bwlast,refill=dict(s.refill),
                                       free=len(X.free),lent=len(X.lent),xst={k:int(v) for k,v in X.xst.items() if k.startswith('lend')},
                                       sched={k:v for k,v in s.rt.S.stats.items() if k=='lend_evict'})
+            cg=s.cg or {}
+            if 'PTa' in cg:d['borrow']['arena']=dict(PTa=cg['PTa'],learned=cg.get('cplan') is not None,cols=len(cg['plan']),
+                                                     width=(cg['cplan'].tot if cg.get('cplan') is not None else cg['PTa']),
+                                                     bad=len(cg.get('bad',())),bad_bpt=sorted(int(v) for v in cg['bpt'].values())[-3:])
         return d
     def publish(s):
         if s.sp is None:return

@@ -373,6 +373,47 @@ def test_arena_place():
     lm.cg['born']=[[nd]];env3={nd:vg};lm.arena_place(0,env3,0,nk,set());assert env3[nd] is vg and lm.bwst['fb_shape']==1
     env4={nd:g[:4].view(4,1).repeat(1,4)};lm.arena_place(0,env4,0,nk,{env4[nd].untyped_storage().data_ptr()});assert lm.bwst['fb_g']==1
 
+def test_colplan_online():
+    """rows arrive in order, each row's values by size: the online plan is the offline plan; a stride bounds it"""
+    rng=random.Random(1)
+    for _ in range(200):
+        it=[];k=0
+        for st in range(-1,20):
+            for _ in range(rng.randint(0,3)):it.append((st,st+rng.randint(1,8),k,rng.choice([1,16,100,4096,12288])));k+=1
+        if not it:continue
+        cols,tot=SB.plan_cols(it)
+        P=SB.ColPlan(None)
+        for st in range(-1,20):
+            for a in sorted([x for x in it if x[0]==st],key=lambda x:(-x[3],str(x[2]))):P.add(*a)
+        assert P.cols==cols and P.tot==tot
+        Q=SB.ColPlan(tot//2+16);got=0
+        for a in sorted(it,key=lambda x:(x[0],-x[3],str(x[2]))):
+            r=Q.add(*a)
+            if r is not None:got+=1;assert r[0]+r[1]<=tot//2+16
+        assert Q.tot<=tot//2+16
+
+def test_arena_place_lazy():
+    """no FX meta: columns learned from the first chunk's values (row order); later chunks reuse them; a value that
+    does not fit in the stride, or has no per-token size, stays in the allocator"""
+    lm=LP.LM(types.SimpleNamespace(rank=0));nk=4
+    P=SB.ColPlan(64);P.add(-1,2,'__emb',16)
+    xr={'a':(0,2),'b':(0,1),'c':(1,2),'d':(1,2),'s':(0,2)}
+    lm.cg=dict(plan=P.cols,bpt={},born=[['a','b','s'],['c','d']],PTa=64,cplan=P,xr=xr,bad=set())
+    lm.arena=torch.zeros(12*64,dtype=torch.uint8)
+    for o in (0,4,8):
+        env={'a':torch.full((nk,4),1.+o),'b':torch.full((nk,2),2.+o,dtype=torch.float64),'s':torch.tensor(3.)}
+        lm.arena_place(0,env,o,nk,set())
+        env.pop('b')                                                   # last use row 0 -> its column is free for row 1
+        env.update(c=torch.full((nk,4),4.+o),d=torch.full((nk,16),5.+o))
+        lm.arena_place(1,env,o,nk,set())
+        A=lm.arena.untyped_storage().data_ptr()
+        for n,val in (('a',1.),('c',4.)):
+            c=P.cols[n][0];assert env[n].untyped_storage().data_ptr()==A and env[n].data_ptr()==lm.arena.data_ptr()+o*64+c*nk
+            assert torch.all(env[n]==val+o)
+        assert env['d'].untyped_storage().data_ptr()!=A and env['s'].untyped_storage().data_ptr()!=A
+    assert P.cols['__emb']==(0,16) and P.cols['a']==(16,16) and P.cols['b']==(32,16) and P.cols['c']==(32,16)
+    assert 'd' in lm.cg['bad'] and 's' in lm.cg['bad'] and lm.bwst['fb_plan']==1 and lm.cg['bpt']=={'a':16,'b':16,'c':16}
+
 if __name__=='__main__':
     fs=[(n,f) for n,f in list(globals().items()) if n.startswith('test_') and callable(f)];bad=0
     for n,f in fs:

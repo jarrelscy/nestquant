@@ -97,15 +97,25 @@ def give_back(rt,info):
         if D0 is not None and getattr(S,'pin',None) is None and not hasattr(S,'doom'):S.want=D0.copy()
     return n
 
+class ColPlan:
+    """online first-fit byte columns per token: items arrive in non-decreasing start order (start, end, key, bytes/token);
+    an item occupies the boundaries start .. end-1; overlapping items get disjoint columns. stride = the per-token width
+    available (None = unbounded). add() -> (col, width) or None when it does not fit in the stride"""
+    def __init__(s,stride=None,align=16):
+        s.stride=stride;s.align=align;s.act=[];s.cols={};s.tot=0
+    def add(s,st,en,key,b):
+        wd=-(-int(b)//s.align)*s.align;s.act=[x for x in s.act if x[1]>st];c=0
+        for a0,a1 in sorted((x[2],x[2]+x[3]) for x in s.act):
+            if c+wd<=a0:break
+            c=max(c,a1)
+        if s.stride is not None and c+wd>s.stride:return None
+        s.act.append((st,en,c,wd));s.cols[key]=(c,wd);s.tot=max(s.tot,c+wd)
+        return c,wd
+
 def plan_cols(items,align=16):
     """static arena columns for the compiled exec: items [(start, end, key, bytes/token)] = value produced in row start,
     last used in row end (> start): it occupies the boundaries start .. end-1 (after row b). Values whose boundary
     ranges overlap get disjoint byte columns. -> ({key: (col, width)}, per-token bytes); cols / widths % align == 0"""
-    act=[];out={};tot=0
-    for st,en,key,b in sorted(items,key=lambda x:(x[0],-x[3],str(x[2]))):
-        wd=-(-int(b)//align)*align;act=[x for x in act if x[1]>st];c=0
-        for a0,a1 in sorted((x[2],x[2]+x[3]) for x in act):
-            if c+wd<=a0:break
-            c=max(c,a1)
-        act.append((st,en,c,wd));out[key]=(c,wd);tot=max(tot,c+wd)
-    return out,tot
+    P=ColPlan(None,align)
+    for st,en,key,b in sorted(items,key=lambda x:(x[0],-x[3],str(x[2]))):P.add(st,en,key,b)
+    return P.cols,P.tot

@@ -151,7 +151,7 @@ services:
       NQ_LMPF_META: ${NQ_LMPF_META:-rebuild}       # rebuild | snap (snap = wrong output, debug only)
       NQ_LMPF_ORDER: ${NQ_LMPF_ORDER:-layer}       # layer | chunk (reference)
       NQ_LMPF_CG: ${NQ_LMPF_CG:-1}                 # 1 = windows through the compiled piecewise submods; 0 = eager per-layer loop (A/B)
-      NQ_LMPF_BORROW: ${NQ_LMPF_BORROW:-0}         # 0 | ring | all: LMPF ring (+ window state) in idle decode slots during the prefill, refilled after
+      NQ_LMPF_BORROW: ${NQ_LMPF_BORROW:-all}       # 0 | ring | all: LMPF ring (+ window state) in idle decode slots during the prefill, refilled after
       NQ_LMPF_BORROW_MAX: ${NQ_LMPF_BORROW_MAX:-0.5} # max fraction of the slot pool lent
       NQ_LMPF_BORROW_MARGIN: ${NQ_LMPF_BORROW_MARGIN:-8}
       NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-1}             # free KV blocks -> extra expert slots during long prefills
