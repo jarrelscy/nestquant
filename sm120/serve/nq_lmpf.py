@@ -114,6 +114,7 @@ class _cop:
     def __exit__(s,*a):
         if s.orig:s.orig[0].forward=s.orig[1]
 RESERVE_GB=float(os.environ.get('NQ_LMPF_RESERVE_GB','1.5'))
+CAP_GB=float(os.environ.get('NQ_LMPF_CAP_GB','0'))   # >0: device memory in use (nvidia-smi view) stays <= this after the ring + window
 RATE0=float(os.environ.get('NQ_LMPF_RATE0_GBPS','2.0'))*1e9
 SNAP_MB=float(os.environ.get('NQ_LMPF_SNAP_MAX_MB','512'))
 PAUSE_S=float(os.environ.get('NQ_LMPF_PAUSE_S','30'))
@@ -323,7 +324,8 @@ class LM:
         esz=torch.empty(0,dtype=s.dtype).element_size()
         per_tok=2*H*esz+(s.tib.shape[1]*4 if s.tib is not None else 0)
         rb=rt.rf.rb if hasattr(rt,'rf') else 0
-        free=torch.cuda.mem_get_info(dev)[0];avail=free-RESERVE_GB*2**30
+        free,tot=torch.cuda.mem_get_info(dev);avail=free-RESERVE_GB*2**30
+        if CAP_GB>0:avail=min(avail,CAP_GB*2**30-(tot-free)-RESERVE_GB*2**30)
         p=size_plan(avail,rb,per_tok,EN.WINDOW,s.mnbt,RING_RECS) if rb and hasattr(rt,'X') else None
         if p is None and rb and hasattr(rt,'X'):log.warning('NestQuant LMPF rank %d: %.2f GiB free (reserve %.1f): no ring fits',rt.rank,free/2**30,RESERVE_GB)
         W,C=p if p is not None else (0,0)
