@@ -114,8 +114,8 @@ class _cop:
     def __exit__(s,*a):
         if s.orig:s.orig[0].forward=s.orig[1]
 RESERVE_GB=float(os.environ.get('NQ_LMPF_RESERVE_GB','1.5'))
-CG=os.environ.get('NQ_LMPF_CG','1')=='1'      # exec window through vLLM's compiled piecewise submods (rows); 0 = eager per-layer loop
 CAP_GB=float(os.environ.get('NQ_LMPF_CAP_GB','0'))   # >0: device memory in use (nvidia-smi view) stays <= this after the ring + window
+CG=os.environ.get('NQ_LMPF_CG','1')=='1'      # exec window through vLLM's compiled piecewise submods (rows); 0 = eager per-layer loop
 RATE0=float(os.environ.get('NQ_LMPF_RATE0_GBPS','2.0'))*1e9
 SNAP_MB=float(os.environ.get('NQ_LMPF_SNAP_MAX_MB','512'))
 PAUSE_S=float(os.environ.get('NQ_LMPF_PAUSE_S','30'))
