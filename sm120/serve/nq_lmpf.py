@@ -40,6 +40,16 @@ NE=256;TOPK=8;ROW_W=20
 RING_RECS=int(os.environ.get('NQ_LMPF_RING_RECS','256'))
 META=os.environ.get('NQ_LMPF_META','snap')
 ORDER=os.environ.get('NQ_LMPF_ORDER','layer')
+DBG='/dev/shm/nq_lmpf_dbg'      # in-boot override of META / ORDER for the reference A/B, e.g. "meta=rebuild order=chunk"
+def dbg_knobs():
+    m,o=META,ORDER
+    try:
+        for kv in open(DBG).read().split():
+            k,_,v=kv.partition('=')
+            if k=='meta' and v in ('snap','rebuild'):m=v
+            if k=='order' and v in ('layer','chunk'):o=v
+    except OSError:pass
+    return m,o
 RESERVE_GB=float(os.environ.get('NQ_LMPF_RESERVE_GB','1.5'))
 RATE0=float(os.environ.get('NQ_LMPF_RATE0_GBPS','2.0'))*1e9
 SNAP_MB=float(os.environ.get('NQ_LMPF_SNAP_MAX_MB','512'))
@@ -217,7 +227,7 @@ class LM:
     def __init__(s,rt):
         s.rt=rt;s.active=False;s.ring=None;s.hbuf=None;s.W=0;s.R=None;s.paused=False;s.prid=None;s.snapt=None;s.lv=None
         s.cur=None;s.op=False;s.mode=None;s.vnext=0;s.wt_cur=None;s.bud={};s.rate=RATE0;s.key=None;s.dead=False
-        s.acc={};s.tot={};s.n=dict(op=0,exec=0,plain=0,fallback=0,visits=0,hook_err=0,steps_full=0,steps_bud=0);s.last={}
+        s.acc={};s.tot={};s.meta=META;s.order=ORDER;s.n=dict(op=0,exec=0,plain=0,fallback=0,visits=0,hook_err=0,steps_full=0,steps_bud=0);s.last={}
         s.fail_logged=0
     # ---- setup ----
     def setup(s,R):
@@ -362,7 +372,7 @@ class LM:
     def begin(s,info,K,op):
         """ring plan of a step; full: reads of visit 0 issued now"""
         s.mode=info['m'];s.op=op;s.vnext=0;s.wt_cur=None
-        s.vis=s.ring_layers if (op or ORDER!='chunk') else s.ring_layers*K
+        s.vis=s.ring_layers if (op or s.order!='chunk') else s.ring_layers*K
         s.nvis=len(s.vis);s.bst=info
         if s.mode=='bud' and info['rid'] not in s.bud:
             s.bud[info['rid']]=float(info.get('budget_s',0.))
@@ -475,7 +485,7 @@ class LM:
         except Exception:
             log.exception('NestQuant LMPF: TP vote failed');raise
     def run_exec(s,so,info):
-        R=s.R;s.prefix(so)
+        R=s.R;s.prefix(so);s.meta,s.order=dbg_knobs();s.last.update(meta=s.meta,order=s.order)
         rid=info['rid'];idx=R.req_states.req_id_to_index[rid];c0=int(R.req_states.num_computed_tokens_np[idx])
         n=so.total_num_scheduled_tokens;offs=split(n,s.mnbt);K=len(offs)
         if c0!=info['start'] and s.fail_logged<5:s.fail_logged+=1;log.warning('NestQuant LMPF: worker start %d != scheduler start %d (%s)',c0,info['start'],rid)
@@ -486,7 +496,7 @@ class LM:
                 if s.prid!=rid:s.unpause()
                 s.pause();s.prid=rid
             snaps=[]
-            if META!='rebuild':
+            if s.meta!='rebuild':
                 for o,nk in offs:
                     sh=[];snaps.append(snap(s.prep(so,rid,idx,c0+o,nk),shared=sh))
                     if sh and s.fail_logged<5:s.fail_logged+=1;log.warning('NestQuant LMPF: metadata snapshot shares %s',sh[:8])
@@ -498,13 +508,13 @@ class LM:
         return s.layer_run(so,info,rid,idx,c0,offs,snaps)
     def layer_run(s,so,info,rid,idx,c0,offs,snaps):
         R=s.R;inner=s.inner;K=len(offs);tib=s.tib;stash=s.stash;hb=s.hbuf;rbf=s.rbuf
-        getP=(lambda k:s.prep(so,rid,idx,c0+offs[k][0],offs[k][1])) if META=='rebuild' else (lambda k:snaps[k])
+        getP=(lambda k:s.prep(so,rid,idx,c0+offs[k][0],offs[k][1])) if s.meta=='rebuild' else (lambda k:snaps[k])
         for k,(o,nk) in enumerate(offs):        # embeddings (vocab-parallel: collective, after the vote)
             P=s.prep(so,rid,idx,c0+o,nk)
             with s.fctx(P,nk):hb[o:o+nk].copy_(s.embed(P,nk))
         if s.ring is not None:s.begin(info,K,False)
         else:s.mode=info['m'];s.op=False
-        seq=sequence(s.layers,s.ring_layers,K,ORDER);first=s.layers[0];pre=False
+        seq=sequence(s.layers,s.ring_layers,K,s.order);first=s.layers[0];pre=False
         from vllm.forward_context import get_forward_context
         try:
             s.active=True
