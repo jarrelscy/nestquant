@@ -19,7 +19,7 @@ Runtime knobs (re-read when the file's mtime changes): /dev/shm/nq_lmpf_min_new,
 import os,sys,json,time,logging,functools
 ON=os.environ.get('NQ_LMPF','0')=='1'
 OFF=os.environ.get('NQ_LMPF_OFF','/dev/shm/nq_lmpf_off')
-WINDOW=int(os.environ.get('NQ_LMPF_WINDOW','32768'))
+WINDOW=int(os.environ.get('NQ_LMPF_WINDOW','65536'))
 log=logging.getLogger('vllm.nestquant.lmpf')   # child of vllm's logger; no vllm import at site time
 
 class Knob:
