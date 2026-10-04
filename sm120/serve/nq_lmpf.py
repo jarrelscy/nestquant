@@ -464,19 +464,27 @@ class LM:
             last[n]=max(us) if us else rowof[n]
         pe=[n for n in ph if spec.get(n)=='emb']
         for n in pe:last[n]=max(rowof.get(u,len(rows)) for u in n.users)
-        def bpt(n):
+        def mval(n):
             v=n.meta.get('example_value',n.meta.get('val'))
-            vs=v if isinstance(v,(tuple,list)) else (v,)
-            b=0
+            if v is None and n.op=='call_function' and n.target is operator.getitem and isinstance(n.args[0],torch.fx.Node):
+                pv=mval(n.args[0])
+                if isinstance(pv,(tuple,list)) and isinstance(n.args[1],int) and n.args[1]<len(pv):v=pv[n.args[1]]
+            return v
+        def bpt(n):
+            v=mval(n);vs=v if isinstance(v,(tuple,list)) else (v,);b=0
             for t in vs:
                 if isinstance(t,torch.Tensor) and t.dim() and not isinstance(t.shape[0],int):
                     e=1
                     for d in t.shape[1:]:e*=int(d)
                     b+=e*t.element_size()
             return b
-        live=[sum(bpt(n) for n in last if (rowof.get(n,-1)<=r) and last[n]>r and nodes and (n.op!='call_module' or not any(u.target is operator.getitem for u in n.users)))
-              for r in range(len(rows))]
-        per=int(max(live)) if live and max(live)>0 else int(os.environ.get('NQ_LMPF_CG_PER_TOK','65536'))
+        def tup(n):return n.op=='call_module' and any(u.op=='call_function' and u.target is operator.getitem for u in n.users)
+        live=[sum(bpt(n) for n in last if rowof.get(n,-1)<=r and last[n]>r and not tup(n)) for r in range(len(rows))]
+        nometa=sum(1 for n in last if not tup(n) and mval(n) is None and n.op!='placeholder')
+        per=max(int(max(live)) if live else 0,int(os.environ.get('NQ_LMPF_CG_PER_TOK','0')))
+        if nometa or per<=s.H*2:
+            log.warning('NestQuant LMPF rank %d: compiled live set unknown (%d values without meta, est %d B/token), sizing 81920 B/token',s.rt.rank,nometa,per)
+            per=max(per,81920)
         per+=s.H*2                                        # final hidden states of every chunk until sampling
         # compiled node program: (node, fn, args spec, kwargs spec)
         def ref(a):
@@ -535,8 +543,8 @@ class LM:
                                            [(str(n.target),a[i] if not isinstance(a[i],torch.Tensor) else tuple(a[i].shape)) for n,i in pi.items() if n in spec])
             lm.cg_args=a;return oc(*a,**k)
         f.optimized_call=optimized_call
-        log.info('NestQuant LMPF rank %d: compiled exec: %d rows, %d indexer rows, live max %d B/token (row %d), per_tok %d',
-                 s.rt.rank,len(rows),sum(i['idx'] for i in info),max(live) if live else -1,live.index(max(live)) if live else -1,per)
+        log.info('NestQuant LMPF rank %d: compiled exec: %d rows, %d indexer rows, live max %d B/token (row %d; rows 0-3 %s), %d without meta, per_tok %d',
+                 s.rt.rank,len(rows),sum(i['idx'] for i in info),max(live) if live else -1,live.index(max(live)) if live else -1,live[:4],nometa,per)
     def cg_val(s,a,env,G,sp):
         t=a[0]
         if t=='c':return env[a[1]]
@@ -568,6 +576,7 @@ class LM:
         else:s.mode=info['m'];s.op=False
         prof=s.dx.get('prof')=='1';s.pev=dict(moe=[],lay=[]) if prof else None
         if prof:torch.cuda.synchronize();tw=time.perf_counter()
+        m0=torch.cuda.memory_allocated();torch.cuda.reset_peak_memory_stats()
         pre=False;nrow=len(cg['prog']);cv=s.cg_val
         try:
             s.active=True
@@ -599,6 +608,7 @@ class LM:
                         if r==1:env.pop('__emb',None)
         finally:
             s.end()
+            s.last['peak_gib']=round((torch.cuda.max_memory_allocated()-m0)/2**30,3);s.last['n_tok']=sum(nk for _,nk in offs)
         if prof:
             torch.cuda.synchronize();wall=time.perf_counter()-tw;pe=s.pev;s.pev=None
             sm=lambda l:sum(a.elapsed_time(b) for a,b in l)/1e3
