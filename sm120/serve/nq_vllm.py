@@ -117,7 +117,7 @@ class Runtime:
         if os.environ.get('NQ_HITS','1')!='0':M.hits_ptr=hits.data_ptr()
         s.lay[L]=dict(M=M,MB=MB,ex=ex,hits=hits,H=H,I=I);s.rank,s.tp,s.dev=rank,tp,dev
         log.info('NestQuant L%d rank %d: resident planes loaded in %.1fs',L,rank,time.time()-t)
-        if set(s.lay)>=s.expect and not s.started:s.start()
+        if set(s.lay)>=s.expect and not s.started and os.environ.get('NQ_DEFER_START','0')!='1':s.start()   # NQ_DEFER_START=1: sitecustomize starts it after the drafter loads
     def start(s):
         import stream_engine as SE,scheduler_tap as TS,executor as EX
         s.started=True;rp=os.environ['NQ_REPACK'];L_=sorted(s.lay);dev=s.dev
@@ -149,6 +149,7 @@ class Runtime:
             if IO['kw'].pop('tier',None):log.warning('NestQuant rank %d: unified memory: RAM tier off (the slots are already host memory)',s.rank)
             assert os.environ.get('NQ_PREFILL_BORROW','1')!='1','NestQuant: unified memory needs NQ_PREFILL_BORROW=0 (borrowed KV blocks are device memory)'
             log.info('NestQuant rank %d: unified memory, direct-to-slot reads',s.rank)
+        torch.cuda.empty_cache()           # hand the load-time staging back before the slot pool: boot peak = steady state (64 GB spark cap)
         s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=IO['n_host'],qd=IO['qd'],device=dev.index,
                                shadow=os.environ.get('NQ_SHADOW','0')=='1',unified=uni,**IO['kw'])
         if IO['log']:log.info('NestQuant rank %d: nq-io %s, RAM tier %d records (%.1f GiB)',s.rank,IO['log'],s.X.tier_n,s.X.tier_n*rb/2**30)

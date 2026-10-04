@@ -5,8 +5,9 @@
 #
 # Builds: 2-4 = jarrelscy/GLM-5.3-NestQuant-2-4bit (production, 1M context, ~93 GB/GPU).
 # spark = jarrelscy/GLM-5.3-NestQuant-1.75-4bit (1.75-bit base, nq-res-v2) on the same 4x RTX, sized to the memory of
-# 2x DGX Spark: <= 64 GB per GPU (256 GB in all), fp8 KV, 128K context, @SLOTS@ slots per layer (@NF@ floating). It downloads
-# its own records, builds the kernel for them (NQ_DEFS) and shares the base checkpoint and predictor with 2-4.
+# 2x DGX Spark: <= 64 GB per GPU (256 GB in all), fp8 KV, 128K context, 21 slots per layer (18 floating). It downloads
+# its own records, base checkpoint (base/) and predictor (serving/predictor/) from that repo and builds the kernel for
+# them (NQ_DEFS). KLD at 21 slots is 0.064 (fails the .0432 bar the 45-hot design was sized for; see README).
 # NQ_VARIANT=spark does the same.
 #
 # Boots the production config. All serving defaults live in sm120/serve/docker-compose.standalone.yaml;
@@ -36,13 +37,18 @@ case "$NQ_VARIANT" in
 2-4) ;;
 spark|1.75)   # 1.75-4 bit records (~393 GB), 2x DGX Spark memory: every value below can be overridden
   export NQ_REPACK_REPO=${NQ_REPACK_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}
+  export NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}       # its own base/ (same bytes as 2-4's base/)
+  export NQ_PREDICTOR_REPO=${NQ_PREDICTOR_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}  # its own serving/predictor/
   export NQ_REPACK_DIR=${NQ_REPACK_DIR:-/home/jarrelscy/nq-175/hf}
   export NQ_REPACK_ALT_DIR=${NQ_REPACK_ALT_DIR:-$NQ_REPACK_DIR}      # one drive (two read queues on it)
   export NQ_MAXLEN=${NQ_MAXLEN:-131072}
-  export NQ_UTIL=${NQ_UTIL:-@UTIL@}                                  # nvidia-smi peak (prefill incl.) <= 64 GB per GPU
-  export NQ_SLOTS_PER_LAYER=${NQ_SLOTS_PER_LAYER:-@SLOTS@}
-  export NQ_PREFILL_SLOTS=${NQ_PREFILL_SLOTS:-@PFS@}
-  export NQ_VLLM_CACHE=${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache-step2-spark} ;;
+  export NQ_UTIL=${NQ_UTIL:-0.630}                                  # nvidia-smi peak (prefill incl.) <= 64 GB per GPU
+  export NQ_SLOTS_PER_LAYER=${NQ_SLOTS_PER_LAYER:-21}
+  export NQ_PREFILL_SLOTS=${NQ_PREFILL_SLOTS:-80}
+  export NQ_MNBT=${NQ_MNBT:-2048}                                   # smaller prefill chunk: activation peak under the cap
+  export NQ_VLLM_CACHE=${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache-step2-spark}
+  export NQ_LMCACHE=${NQ_LMCACHE:-0}                                 # the LMCache GPU buffer does not fit the 64 GB cap
+  export NQ_DEFER_START=${NQ_DEFER_START:-1} ;;                      # slot pool after the MTP drafter loads (boot peak = steady state)
 *) echo "unknown build '$NQ_VARIANT' (2-4 or spark)"; exit 2 ;;
 esac
 export NQ_IMAGE=${NQ_IMAGE:-jarrelscy/glm53-nestquant-sm120:fixes12-mtp-buffer-rng-20260917}
@@ -55,8 +61,8 @@ export NQ_BUILD_DIR=${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}
 export NQ_MODELS_ROOT=${NQ_MODELS_ROOT:-/data/models}
 export NQ_MODEL_DIR=${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-NQ-base}
 NQ_REPACK_REPO=${NQ_REPACK_REPO:-${NQ_HF_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}}   # NestQuant records
-NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/), shared by both builds
-NQ_PREDICTOR_REPO=${NQ_PREDICTOR_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}            # jF predictor (serving/predictor/), shared
+NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/), 2-4 default; the 1.75 preset uses its own repo
+NQ_PREDICTOR_REPO=${NQ_PREDICTOR_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}            # jF predictor (serving/predictor/), 2-4 default; 1.75 uses its own
 
 NQ_ENV_FILE=${NQ_ENV_FILE:-$HERE/.env}
 if [ -z "${VLLM_API_KEY:-}" ] && [ -f "$NQ_ENV_FILE" ]; then VLLM_API_KEY=$(grep -oP 'VLLM_API_KEY=\K\S+' "$NQ_ENV_FILE" || true); fi
@@ -134,7 +140,7 @@ up)
   docker run --rm --gpus '"device=0"' --entrypoint bash -e NQ_BUILD=/nqbuild -e LIBURING=/data/Jarrel/liburing -e NQ_DEFS="${NQ_DEFS:-}" \
     -e CUDA_HOME=/opt/vllm/.venv/lib/python3.12/site-packages/nvidia/cu13 -v "$NQ_REPO":/nq:ro -v "$NQ_BUILD_DIR":/nqbuild \
     -v "$NQ_LIBURING_DIR":/data/Jarrel/liburing:ro "$NQ_IMAGE" \
-    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import stream_engine as S;S.mod();import hostcore;hostcore.mod()"'
+    -c 'cd /nq/sm120 && /opt/vllm/.venv/bin/python -c "import build;build.get();build.get_sal()" && cd ../streaming && /opt/vllm/.venv/bin/python -c "import importlib.util as U,stream_engine as S;S.mod();U.find_spec(\"hostcore\") and __import__(\"hostcore\").mod()"'
 
   docker compose up -d
   echo "waiting for /v1/models (first boot compiles and takes longer) ..."

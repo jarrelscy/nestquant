@@ -135,6 +135,59 @@ NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 ./start.sh
 log and keep the prefill-peak line a few GiB under 97.9 GB/GPU. If not, trim `NQ_SLOTS_PER_LAYER` or
 `NQ_MAXLEN`. This trade was not measured for speed or KLD.
 
+### 1.75-4 bit at 2x DGX Spark memory (`./start.sh up spark`)
+
+Serves [jarrelscy/GLM-5.3-NestQuant-1.75-4bit](https://huggingface.co/jarrelscy/GLM-5.3-NestQuant-1.75-4bit)
+(1.75-bit base + 4-bit residual, `nq-res-v2`) on the same 4x RTX, capped at the memory of 2x DGX Spark: nvidia-smi
+peak <= 64,000 MiB per GPU, prefill included. That repo is self-contained: records, `base/` (same bytes as 2-4's
+`base/`) and `serving/predictor/`. The serving stack is the same as 2-4 prod: jF + tap (TODO_FIX=2), prefill
+borrow, coalesced I/O, step 2 rc, MTP ns=3. Preset values are fp8 KV (`fp8_ds_mla`), 128K context,
+`NQ_SLOTS_PER_LAYER=21` (18 floating), `NQ_UTIL=0.630`, `NQ_MNBT=2048` and `NQ_PREFILL_SLOTS=80`. Two
+settings differ from 2-4:
+- LMCache is off, because its GPU buffer does not fit.
+- `NQ_DEFER_START=1`: the slot pool is allocated after the MTP drafter loads, so the boot peak is the steady state.
+
+Measured 2026-10-04:
+- Peak per GPU at a 129K-token prefill: 63,934 / 63,814 / 63,812 / 63,816 MiB.
+- KV pool: 157,952 tokens.
+- Needle: found at 86K and 129K.
+- Decode, c1: 76.5 tok/s at 0 context, 71.7 tok/s at 16K.
+- Prefill: 1,345 tok/s.
+
+KLD uses the prod method: live server, teacher-forced, full vocab, BF16 teacher, TR3 windows 0-3.
+
+| Floating experts per layer | KLD per window | Mean | Hot (count) | Hot (salience) |
+|---|---|---|---|---|
+| 18 (this preset), run 1 | .0489/.1418/.0399/.0356 | 0.0665 | .303 | .485 |
+| 18 (this preset), run 2 | .0471/.1303/.0384/.0315 | 0.0618 | .305 | .488 |
+| 45 (no cap, check only) | .0300/.0894/.0261/.0281 | 0.0434 | .471 | .652 |
+| 45, offline real-layer reference | .0335/.0916/.0251/.0224 | 0.0431 | .480 | .674 |
+| 2-4 prod, 77 floating | .0147/.0612/.0136/.0130 | 0.0256 | .618 | .774 |
+
+At 45 floating the live server reproduces the offline number, so the kernel and serve path are correct. At the
+64 GB cap only 18 fit, and KLD misses the 0.0432 bar that the 45-expert design was sized for.
+
+Per-GPU memory at the cap, in GiB:
+- Resident planes: 40.40 (sharded).
+- Non-expert weights: 9.95, plus 1.5 for MTP.
+- Slots: 21 x 0.1994 = 4.19.
+- KV: about 1.8. 128K needs 1.67 with MTP.
+- Profiled activation and non-torch: about 2.5.
+- Cudagraphs: 0.15.
+- Outside vLLM's budget (CUDA context, NCCL, AR buffers): about 1.9.
+
+TP4 vs TP2 (a real 2x Spark): only memory replicated per GPU is paid 4x instead of 2x.
+- Activation, CUDA context/NCCL and cudagraphs (4.6 GiB per GPU): 2 extra copies = 9.2 GiB. This is an upper bound,
+  because TP2 activations are somewhat larger per GPU.
+- Replicated non-expert weights: about 1.4 GiB per GPU, derived from 35.5 GiB of non-expert + vision weights on disk
+  and 9.95 GiB loaded per GPU. 2 extra copies = 2.9 GiB.
+- The rest of the 9.95 GiB is sharded and costs the same at TP2.
+
+Together that is about 12 GiB, or about 15 slots per layer (one slot-layer costs 0.80 GiB across the whole model). A
+real 2x Spark would therefore hold about 36 slots (about 33 floating), not 45. The design's 45 assumed a 1.776-bpw
+resident base, which is 149.8 GiB. The shipped resident planes are 161.6 GiB because of scales, low-rank and padding.
+The MTP drafter (5.6 GiB) was not in that budget either. These are not TP4 effects.
+
 ## Repo layout
 
 - `BRIEF.md` goals/constraints · `DESIGN.md` format spec and adopted decisions · `LITERATURE.md` notes.
