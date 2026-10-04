@@ -138,6 +138,7 @@ class Runtime:
         T22=NQ_HOME+'/threads/22-boundary-experts/fixed_set.json';fj=json.load(open(T22))
         _kv=__import__('scheduler_tap').kvec(L_) if os.environ.get('NQ_KVEC') else None   # step 3b: per-layer width K_l (start set too)
         if _kv is not None:assert os.environ.get('NQ_SCHED')=='tap' and _JOINT,'NQ_KVEC needs NQ_SCHED=tap + joint predictor'
+        if _kv is not None:log.info('NestQuant rank %d: NQ_KVEC %s per-layer K sum %d min %d max %d',s.rank,os.environ['NQ_KVEC'],int(_kv.sum()),int(_kv.min()),int(_kv.max()))
         dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf if _kv is None else int(_kv[i])]] for i,L in enumerate(L_)}
         lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
         _steps=(s.rank==0 or not lead)   # this rank runs the real predictor; the others use 'ema'
