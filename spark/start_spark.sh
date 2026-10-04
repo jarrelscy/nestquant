@@ -12,10 +12,11 @@
 # Env (all optional except HEAD_IP):
 #   NQ_PRESET       speed (default): 128K context, MTP ns=1, 18 floating 4-bit experts/layer (jF), 21 slots/layer
 #                   quality:         128K context, no MTP, 29 floating experts/layer, 32 slots/layer
+#                   (3 fewer floating and slots each with NQ_LMPF=1, the default)
 #                   (see spark/README.md "Memory budget"; NUM_SPEC / NQ_MAXLEN / NQ_JF_NFLOAT / NQ_SLOTS_PER_LAYER override)
 #   NQ_IMAGE        image built from spark/Dockerfile (default nestquant-spark:b175)
 #   NQ_DATA         per-node data dir on the internal NVMe (default $HOME/nq-spark)
-#   NQ_UTIL         --gpu-memory-utilization (default 0.95)
+#   NQ_UTIL         --gpu-memory-utilization (default 0.94, 0.95 with NQ_LMPF=0)
 #   NQ_LMPF         layer-major 4-bit prefill for prompts >= 1K new tokens (default 1, 0 = off; untested on Spark)
 #   NQ_LMPF_CAP_GB  unified memory in use stays <= this after the LMPF ring + window (default 114)
 #   NCCL_SOCKET_IFNAME / NCCL_IB_HCA   CX-7 netdev and RoCE devices (defaults below; check with `ibdev2netdev`)
@@ -41,6 +42,10 @@ case "${NQ_PRESET:-speed}" in
   quality) D_SPEC=0; D_LEN=131072; D_NF=29; D_SLOTS=32 ;;
   *) echo "NQ_PRESET must be quality or speed"; exit 2 ;;
 esac
+# layer-major prefill (NQ_LMPF, default on): its ring (64 TP2 records, 0.68 GiB) + 16K-token window (0.5 GiB) come out of
+# the slot pool: 3 fewer slots and floating experts per layer (1.19 GiB) and util 0.95 -> 0.94
+LMPF=${NQ_LMPF:-1}
+if [ "$LMPF" = 1 ]; then D_NF=$((D_NF-3)); D_SLOTS=$((D_SLOTS-3)); D_UTIL=0.94; else D_UTIL=0.95; fi
 NUM_SPEC=${NUM_SPEC:-$D_SPEC};MAXLEN=${NQ_MAXLEN:-$D_LEN}
 NF=${NQ_JF_NFLOAT:-$D_NF};SLOTS=${NQ_SLOTS_PER_LAYER:-$D_SLOTS}
 [ "$SLOTS" -ge $((NF+3)) ] || { echo "NQ_SLOTS_PER_LAYER ($SLOTS) must be >= NQ_JF_NFLOAT+3 ($((NF+3)))"; exit 2; }
@@ -127,7 +132,8 @@ up(){
     -e NQ_REPACK=/nqrepack -e NQ_REPACK_ALT=none -e NQ_OPLOG=dist -e NQ_OPLOG_ADDR="$HEAD_IP:${NQ_OPLOG_PORT:-29611}" \
     -e NQ_DEFS="$NQ_DEFS" -e TORCH_CUDA_ARCH_LIST=12.1a -e NQ_UNIFIED="${NQ_UNIFIED:-}" \
     -e NQ_JF_NFLOAT="$NF" -e NQ_SLOTS_PER_LAYER="$SLOTS" -e NQ_RAMTIER_GB=0 \
-    -e NQ_LMPF="${NQ_LMPF:-1}" -e NQ_LMPF_WINDOW="${NQ_LMPF_WINDOW:-65536}" -e NQ_LMPF_CAP_GB="${NQ_LMPF_CAP_GB:-114}" \
+    -e NQ_LMPF="$LMPF" -e NQ_LMPF_WINDOW="${NQ_LMPF_WINDOW:-16384}" -e NQ_LMPF_RING_RECS="${NQ_LMPF_RING_RECS:-64}" \
+    -e NQ_LMPF_RESERVE_GB="${NQ_LMPF_RESERVE_GB:-0.5}" -e NQ_LMPF_CAP_GB="${NQ_LMPF_CAP_GB:-114}" \
     -e NQ_PREFILL_BORROW=0 -e NQ_PREFILL_KV_OFFLOAD=0 -e NQ_TAP_RATE_GBPS="${NQ_TAP_RATE_GBPS:-6.6}" \
     -e NQ_CFG_GU="${NQ_CFG_GU:-}" -e NQ_CFG_DN="${NQ_CFG_DN:-}" \
     -e NQ_HITS=1 -e NQ_POLL_MS="${NQ_POLL_MS:-4}" -e NQ_ISSUE=1 -e NQ_SESSION_RESTORE="${NQ_SESSION_RESTORE:-0}" \
@@ -157,7 +163,7 @@ up(){
     --trust-remote-code --reasoning-parser glm47 --enable-auto-tool-choice --tool-call-parser glm47 \
     --enable-prefix-caching --kv-cache-dtype fp8_ds_mla --max-model-len "$MAXLEN" \
     --max-num-seqs "${NQ_MAX_NUM_SEQS:-4}" --max-num-batched-tokens "${NQ_MNBT:-4096}" \
-    --gpu-memory-utilization "${NQ_UTIL:-0.95}" --no-enable-flashinfer-autotune \
+    --gpu-memory-utilization "${NQ_UTIL:-$D_UTIL}" --no-enable-flashinfer-autotune \
     --override-generation-config '{"temperature":1.0,"top_p":0.95}' \
     --compilation-config "{\"mode\":3,\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"compile_sizes\":[1],\"cudagraph_capture_sizes\":$CAP}" \
     "${SC[@]}" "${ROLEARGS[@]}" >/dev/null
