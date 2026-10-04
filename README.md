@@ -102,7 +102,7 @@ using the coalescing follower. Expert planes stream from two queues per rank: `N
 | `NQ_IO_QD` / `NQ_IO_QD_ALT` | `8` / `4` | io_uring queue depth per drive |
 | `NQ_PREFILL_BORROW` | `1` | phase 1: free KV blocks lent as extra expert slots during long prefills |
 | `NQ_PREFILL_SLOTS` | `155` | floating experts per layer planned while borrowing |
-| `NQ_PB_MIN_NEW` / `NQ_PB_MARGIN` | `8192` / `16` | borrow only for ≥ this many new tokens / KV blocks always left free |
+| `NQ_PB_MIN_NEW` / `NQ_PB_MARGIN` | `1024` / `16` | borrow only for ≥ this many new tokens / KV blocks always left free |
 | `NQ_PREFILL_KV_OFFLOAD` | `1` | phase 2: used KV of some MLA layers to pinned host, streamed back per layer (null block never carved; reclaim fenced on in-flight reads into lent memory) |
 | `NQ_PREFILL_KV_BELOW` | `1500` | phase 2 only while phase 1 got fewer slots than this |
 | `NQ_PB_KV_HOST_GB` / `NQ_PB_RAM_FLOOR_GB` | `8` / `38` | phase 2 pinned-host cap per rank / MemAvailable floor |

@@ -119,7 +119,7 @@ services:
       NQ_PREFILL_KV_BELOW: ${NQ_PREFILL_KV_BELOW:-1500}   # phase 2 engages only while phase 1 got < this many slots (near-full KV: 950K 992 -> +22 pts prefill hot; 750K 1905 -> +1.5 pts for -3.7% prefill)
       NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}   # phase 2 pinned host cap per rank (sized from MemAvailable at each borrow, all ranks)
       NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}   # phase 2 never borrows / releases mid-borrow below this MemAvailable
-      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-8192}        # borrow only for prefills with >= this many new (uncached) tokens
+      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-1024}        # borrow only for prefills with >= this many new (uncached) tokens (2026-10-04: 8192 -> 1024)
       NQ_PB_MARGIN: ${NQ_PB_MARGIN:-16}            # KV blocks always left free beyond the request's own prompt
       NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
       NQ_DELTA_TABLE: /nqpred/delta_table.json
