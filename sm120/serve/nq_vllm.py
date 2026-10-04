@@ -202,8 +202,13 @@ class Runtime:
             if HOSTLOOP=='cpp':log.warning('NestQuant prefill-borrow: NQ_HOSTLOOP=cpp not supported, off')
             else:
                 import nq_pb;s.PB=nq_pb.install(s)
-        if os.environ.get('NQ_TFCAP') and s.F is None and s.rank==0:   # nq-tfpred decode-trace capture (off unless set)
+        if os.environ.get('NQ_TFCAP') and not os.environ.get('NQ_C5S') and s.F is None and s.rank==0:   # nq-tfpred decode-trace capture (off unless set)
             import nq_tfcap;s.CAP=nq_tfcap.install(s,L_,s.lay[L_[0]]['H'],dev)
+        if os.environ.get('NQ_C5S') and s.F is None and s.rank==0:   # step 3b c5s admission (sm120/serve/nq_c5s.py; off unless set)
+            assert os.environ.get('NQ_SCHED')=='tap' and _JOINT,'NQ_C5S needs NQ_SCHED=tap + joint predictor'
+            assert lead or s.tp==1,'NQ_C5S needs the rank-0 leader (NQ_LEADER=1) at tp>1'
+            if os.environ.get('NQ_TFCAP'):log.warning('NestQuant: NQ_C5S set, NQ_TFCAP trace capture off (they share the row ring)')
+            import nq_c5s;s.CAP=nq_c5s.install(s,L_,s.lay[L_[0]]['H'],dev)
         if ROWHOT and s.rank==0:import nq_pfblock as _PB;_PB.rh_init(L_,dev)   # nq-kld committed-row hot share
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
     def _sr(s,f,*a,dflt=None):

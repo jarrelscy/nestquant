@@ -137,6 +137,10 @@ class TapScheduler(Scheduler):
         s.s3track = e('NQ_S3_TRACK', '0') == '1'
         s.s3_sal = s.s3track or (s.s3['on'] == 1 and s.s3['p'] > 0)   # nq_vllm: rank 0 exports decode salience (step(..., sal=))
         s.s3st = None; s.s3gen = 0; s.s3c = None; s._s3cfg()
+        # step 3b NQ_C5S (default off): nq_c5s.install sets s.c5 (streaming/c5s.py C5S) on rank 0; then the admission
+        # source is the c5s blend of the latest C3k mC with the current jF S (takes precedence over the s3 arm) and the
+        # pair gains are weighted by its per-layer floating mass; no usable mC -> exactly the path below (jF / s3)
+        s.c5 = None; s.c5c = None
 
     def _setcap(s, g):
         if not hasattr(s, 'rate00'): s.rate00 = s.rate0
@@ -357,12 +361,37 @@ class TapScheduler(Scheduler):
             s.s3c = (key, S, fm.astype(np.float64) / 512.0)
         return s.s3c[1], s.s3c[2]
 
+    def _c5val(s):
+        """step 3b NQ_C5S: (c5s admission float32, layer weight float64) cached per refresh, or None (no usable mC: jF/s3 path).
+        The score is rescaled to a mean floating-layer mass of 512 (lw ~ 1; the pair order and the c gate are scale-free per
+        layer since _value renormalizes each layer to 512)."""
+        key = (s.tok, id(s.P.S))                # one read of the published mC per refresh (_srcS and _lw agree)
+        if s.c5c is None or s.c5c[0] != key:
+            v = None; mC, _ = s.c5.latest()
+            if mC is not None:
+                import c5s as C5
+                v = C5.blend(s.P.S, mC); s.c5.st['used'] += 1
+                fm = np.where(s.fixed, 0, np.maximum(v, 0)).sum(1).astype(np.float64)
+                k = 512.0 * len(fm) / max(float(fm.sum()), 1e-30)
+                v = (v * np.float32(k)).astype(np.float32); fm = np.where(s.fixed, 0, np.maximum(v, 0)).sum(1).astype(np.float32)
+                v = (v, fm.astype(np.float64) / 512.0)
+            else:
+                s.c5.st['fallback'] += 1
+            s.c5c = (key, v)
+        return s.c5c[1]
+
     def _srcS(s):
-        """admission source for _value: jF S (arm off), else the arm's v (float32)"""
+        """admission source for _value: jF S (arm off), else the arm's v (float32); NQ_C5S: the c5s blend when usable"""
+        if s.c5 is not None:
+            r = s._c5val()
+            if r is not None: return r[0]
         return s._s3val()[0] if s.s3on else s.P.S
 
     def _lw(s):
-        """per-layer pair-gain weight (arm on), else None"""
+        """per-layer pair-gain weight (arm on / c5s), else None"""
+        if s.c5 is not None:
+            r = s._c5val()
+            if r is not None: return r[1]
         return s._s3val()[1] if s.s3on else None
 
     def _value(s, lat, H):
@@ -435,7 +464,7 @@ class TapScheduler(Scheduler):
                 hi = lo + h; near = max(0.0, min(hi, s.span) - lo); far = max(0.0, hi - max(lo, s.span))
                 return float(near), type(near) is not float, float(far), type(far) is not float
             w = win(lat, H) + win(0.0, lat) + (bool(lat >= 1),)
-            lw = s._lw() if s.s3on else None
+            lw = s._lw() if (s.s3on or s.c5 is not None) else None
             k, cut, ee, sk, full = T.refresh(np.ascontiguousarray(s._srcS(), np.float32), s.score, s.fixed, st, s.doomed, s.hold, pin,
                                        float(s.tok), int(s.nf), 1 - s.a, -1.0 if s.tfar is None else float(s.tfar), s.span,
                                        w, s.tc, int(min(budget, 2 ** 62)), lw, nfo=s.nfo)
@@ -500,7 +529,7 @@ class TapScheduler(Scheduler):
             if pin is not None: V = np.where(pin, np.float32(1e9), V)
             res = (st == 2) & ~s.doomed; occ = ((st == 1) | (st == 2)) & ~s.doomed
             cand = (st == 0) & ~s.doomed & ~s.fixed & (s.hold <= s.tok)
-            pairs = s._pairs(V, cand, res & ~s.fixed, occ & ~s.fixed, s._lw() if s.s3on else None)
+            pairs = s._pairs(V, cand, res & ~s.fixed, occ & ~s.fixed, s._lw() if (s.s3on or s.c5 is not None) else None)
             k = 0; room = int((st == 3).sum()) - len(s.todo) if s.tfix else 0
             for g, l, e, v in pairs:
                 if k >= budget: s.stats['budget_cut'] += 1; continue

@@ -224,10 +224,11 @@ def install_v2(rt):
     log.info('tfcap: hooked V2 model runner')
 
 
-def install(rt, layers, H, dev):
-    """rank 0: create the capture and hook the model runner (V2 if importable, plus V1 GPUModelRunner._model_forward)."""
+def install(rt, layers, H, dev, cls=None):
+    """rank 0: create the capture and hook the model runner (V2 if importable, plus V1 GPUModelRunner._model_forward).
+    cls: capture factory (default Capture; step 3b nq_c5s.C5Capture reuses the ring + hooks)."""
     from vllm.v1.worker import gpu_model_runner as GMR
-    cap = Capture(rt, layers, H, dev)
+    cap = (cls or Capture)(rt, layers, H, dev)
     try:
         install_v2(rt)
     except Exception:

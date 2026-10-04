@@ -110,10 +110,22 @@ def mk(cfg, P, hl, env, clock):
     return S
 
 
-def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True, sal=False):
+class StubC5:
+    """step 3b NQ_C5S: stand-in for streaming/c5s.C5S on the tap side (latest() -> (mC, version) | (None, None));
+    a new random mC every few reads, sometimes none (jF fallback)"""
+    def __init__(s, seed): s.rng = np.random.default_rng(seed); s.n = 0; s.cur = (None, None); s.st = dict(used=0, fallback=0)
+    def latest(s):
+        s.n += 1
+        if s.n % 3 == 1:
+            s.cur = (None, None) if s.rng.random() < 0.15 else ((s.rng.normal(-3, 2.5, (75, NE))).clip(-30, 11).astype(np.float16).astype(np.float32), s.n)
+        return s.cur
+
+
+def tap_parity(name, steps, mkp, cfg, env, seed=0, kv=False, pin=False, io=True, sal=False, c5=False):
     pa, pb = mkp()
     CA, CB = Clock(seed), Clock(seed)
     A = mk(cfg, pa, 'py', env, CA); B = mk(cfg, pb, 'cpp', env, CB)
+    if c5: A.c5 = StubC5(seed); B.c5 = StubC5(seed)
     assert A.tcore is None and A.core is None and B.tcore is not None
     if io: A.io_all = fake_io(seed); B.io_all = fake_io(seed)
     vcap = {}
@@ -198,7 +210,10 @@ def main():
          ('stub k0 s3 track only (s3=0)', k0, dict(NQ_S3_TRACK='1'), dict(seed=12, sal=True)),
          ('stub k0 kvec default env', k0k, dict(NQ_KVEC=KV), dict(seed=13, kv=True, pin=True)),
          ('stub k0s kvec slot-bound fix2 c1', k0ks, dict(NQ_KVEC=KV, NQ_TAP_C='1', NQ_TAP_TODO_FIX='2'), dict(seed=14, kv=True)),
-         ('stub k0 kvec s3 arm c0 mla0.3', k0k, dict(NQ_KVEC=KV, NQ_TAP_C='0', NQ_S3='1', NQ_TAP_MLA='0.3'), dict(seed=15, sal=True, pin=True))]
+         ('stub k0 kvec s3 arm c0 mla0.3', k0k, dict(NQ_KVEC=KV, NQ_TAP_C='0', NQ_S3='1', NQ_TAP_MLA='0.3'), dict(seed=15, sal=True, pin=True)),
+         ('stub k0 c5s', k0, {}, dict(seed=17, c5=True, pin=True)),
+         ('stub k0s kvec c5s fix2 c1', k0ks, dict(NQ_KVEC=KV, NQ_TAP_C='1', NQ_TAP_TODO_FIX='2'), dict(seed=18, kv=True, c5=True)),
+         ('stub k0 c5s over s3 arm c0', k0, dict(NQ_TAP_C='0', NQ_S3='1'), dict(seed=19, sal=True, c5=True))]
     sel = os.environ.get('CASES')
     for i, (nm, cfg, env, kw) in enumerate(C):
         if sel and str(i) not in sel.split(','): continue
@@ -208,6 +223,8 @@ def main():
         ok &= tap_parity('jF joint (CPU) rec/replay, c1', js, jf_pair, k0, dict(NQ_TAP_C='1'), seed=7, kv=True)
     if os.environ.get('NQ_TEST_JF', '1') == '1' and (not sel or 'jfk' in sel.split(',')):
         ok &= tap_parity('jF joint (CPU) kvec fix2, c1', js, jf_pair, k0k, dict(NQ_TAP_C='1', NQ_KVEC=KV, NQ_TAP_TODO_FIX='2'), seed=16, kv=True)
+    if os.environ.get('NQ_TEST_JF', '1') == '1' and (not sel or 'jfc5' in sel.split(',')):
+        ok &= tap_parity('jF joint (CPU) kvec c5s, c1', js, jf_pair, k0k, dict(NQ_TAP_C='1', NQ_KVEC=KV, NQ_TAP_TODO_FIX='2'), seed=20, kv=True, c5=True)
     return ok
 
 
