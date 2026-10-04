@@ -50,7 +50,7 @@ def dbg_knobs():
             k,_,v=kv.partition('=')
             if k=='meta' and v in ('snap','rebuild','hyb','hyb2'):m=v
             elif k=='order' and v in ('layer','chunk'):o=v
-            elif k in ('prof','tab','syncfree'):x[k]=v
+            elif k in ('prof','tab','syncfree','cop','early','mods'):x[k]=v
     except OSError:pass
     return m,o,x
 SYNCFREE=os.environ.get('NQ_LMPF_SYNCFREE','1')=='1'
@@ -89,6 +89,30 @@ class _swap:
         if s.r:s.r[0].build_prefill_chunk_metadata=s.r[2]
     def __exit__(s,*a):
         if s.r:s.r[0].build_prefill_chunk_metadata=s.r[1]
+COP=os.environ.get('NQ_LMPF_COP','0')
+EARLY=os.environ.get('NQ_LMPF_EARLY','0')=='1'   # exec full: refill in visit_end. MEASURED WORSE (64K 48 s vs 36 s: the eager host is barely ahead of the GPU, so issuing later starves reads); debug only
+COP_OK={'RMSNorm','GemmaRMSNorm','LayerNorm','QuantFP8','SiluAndMul','MulAndSilu','RotaryEmbedding','DeepseekScalingRotaryEmbedding',
+        'YaRNScalingRotaryEmbedding','MRotaryEmbedding','FusedAddRMSNorm'}
+_COP={};COP_SEEN={}
+class _cop:
+    """eager exec loop only: vLLM CustomOps (custom_ops=none under inductor -> forward_native = unfused torch ops in eager)
+    dispatch to their fused forward_cuda kernels instead; allowlisted classes only.  COP_SEEN counts calls per class."""
+    def __init__(s,on):s.on=on;s.orig=None
+    def __enter__(s):
+        if not s.on:return
+        from vllm.model_executor.custom_op import CustomOp
+        orig=CustomOp.forward;s.orig=(CustomOp,orig)
+        def fwd(self,*a,**k):
+            t=type(self);f=_COP.get(t)
+            if f is None:
+                fc=getattr(t,'forward_cuda',None)
+                f=fc if (t.__name__ in COP_OK and fc is not None and fc is not getattr(CustomOp,'forward_cuda',None)) else False
+                _COP[t]=f
+            COP_SEEN[t.__name__]=COP_SEEN.get(t.__name__,0)+1
+            return f(self,*a,**k) if f else orig(self,*a,**k)
+        CustomOp.forward=fwd
+    def __exit__(s,*a):
+        if s.orig:s.orig[0].forward=s.orig[1]
 RESERVE_GB=float(os.environ.get('NQ_LMPF_RESERVE_GB','1.5'))
 RATE0=float(os.environ.get('NQ_LMPF_RATE0_GBPS','2.0'))*1e9
 SNAP_MB=float(os.environ.get('NQ_LMPF_SNAP_MAX_MB','512'))
@@ -268,7 +292,7 @@ class LM:
     def __init__(s,rt):
         s.rt=rt;s.active=False;s.ring=None;s.hbuf=None;s.W=0;s.R=None;s.paused=False;s.prid=None;s.snapt=None;s.lv=None
         s.cur=None;s.op=False;s.mode=None;s.vnext=0;s.wt_cur=None;s.bud={};s.rate=RATE0;s.key=None;s.dead=False
-        s.acc={};s.tot={};s.meta=META;s.order=ORDER;s.dx={};s.pev=None;s.pacc=dict(wall=0.,lay=0.,moe=0.,prep=0.,steps=0);s.n=dict(op=0,exec=0,plain=0,fallback=0,visits=0,hook_err=0,steps_full=0,steps_bud=0);s.last={}
+        s.acc={};s.tot={};s.early=EARLY;s.meta=META;s.order=ORDER;s.dx={};s.pev=None;s.pacc=dict(wall=0.,lay=0.,moe=0.,prep=0.,steps=0);s.n=dict(op=0,exec=0,plain=0,fallback=0,visits=0,hook_err=0,steps_full=0,steps_bud=0);s.last={}
         s.fail_logged=0
     # ---- setup ----
     def setup(s,R):
@@ -387,6 +411,7 @@ class LM:
         if last:
             if s.ring.ev is not None:s.ring.ev[v%2].record()
             s.vnext=v+1;s.n['visits']+=1
+            if s.early and not s.op and s.mode=='full':s.visit_end(v)
         return out
     def skip_to(s,v):
         """op mode: a visit was not seen (should not happen): its prefetched reads are dropped"""
@@ -397,10 +422,12 @@ class LM:
             nv=v+1<s.nvis;Ln=s.vis[v+1] if nv else None
             if s.op:
                 lvn=s.rt.lay[Ln]['M'].table[:,0].cpu().numpy() if nv else None   # host sync = fence of visit v-1 too
-            else:
-                if v>0 and R.ev is not None:R.ev[(v-1)%2].synchronize()
-                lvn=s.lv[s.vidx[Ln]] if nv else None
-            if nv:R.issue((v+1)%2,Ln,full_select(lvn,R.C,s.pop[Ln]))
+                if nv:R.issue((v+1)%2,Ln,full_select(lvn,R.C,s.pop[Ln]))
+            elif not s.early and nv:
+                if v>0 and R.ev is not None:
+                    tq=time.perf_counter();R.ev[(v-1)%2].synchronize();s.pacc['vsync']=s.pacc.get('vsync',0.)+time.perf_counter()-tq
+                R.issue((v+1)%2,Ln,full_select(s.lv[s.vidx[Ln]],R.C,s.pop[Ln]))
+            # EARLY (exec): visit v+1 was issued at the end of visit v-1's launches (visit_end), a full layer ahead of the GPU
             res,nf,dt=R.wait(sl) if R.L[sl]==L else ([],0,0.)
             s.last['stall_s']=s.last.get('stall_s',0.)+dt
         else:
@@ -414,6 +441,15 @@ class LM:
                 if len(res)>=4 and el>0:s.rate=.7*s.rate+.3*max(len(res)*R.rb/el,2e8)
             s.last['bud_recs']=s.last.get('bud_recs',0)+len(res)
         return R.table(sl,base,res)
+    def visit_end(s,v):
+        """exec full mode, host has launched all of visit v: refill the slot of visit v-1 with visit v+1's reads.  The host waits
+        for the GPU to finish visit v-1 here, while the GPU still has all of visit v queued (no bubble); the old place
+        (vstart of v, chunk 0) left the GPU with only chunk 0's attention part queued during the sync + issue + table."""
+        R=s.ring;w=v+1
+        if w>=s.nvis or (w==1 and s.pre1):return
+        if v>0 and R.ev is not None:
+            tq=time.perf_counter();R.ev[(v-1)%2].synchronize();s.pacc['vsync']=s.pacc.get('vsync',0.)+time.perf_counter()-tq
+        Ln=s.vis[w];R.issue(w%2,Ln,full_select(s.lv[s.vidx[Ln]],R.C,s.pop[Ln]))
     def begin(s,info,K,op):
         """ring plan of a step; full: reads of visit 0 issued now"""
         s.mode=info['m'];s.op=op;s.vnext=0;s.wt_cur=None
@@ -429,6 +465,9 @@ class LM:
         if s.mode=='full' and s.nvis:
             L0=s.vis[0];lv0=s.rt.lay[L0]['M'].table[:,0].cpu().numpy() if op else s.lv[s.vidx[L0]]
             s.ring.issue(0,L0,full_select(lv0,s.ring.C,s.pop[L0]))
+            s.pre1=False
+            if s.early and not op and s.nvis>1:          # both slots idle: visit 1 too
+                L1=s.vis[1];s.ring.issue(1,L1,full_select(s.lv[s.vidx[L1]],s.ring.C,s.pop[L1]));s.pre1=True
     def end(s):
         if s.ring is not None:
             try:s.ring.drain()
@@ -451,7 +490,8 @@ class LM:
                 s.n['plain']+=1;return s.run_plain(so,info,prefixed=False)
             s.n['exec']+=1;s.n['steps_'+info['m']]+=1
             s.meta,s.order,s.dx=dbg_knobs()
-            with _swap(s.dx.get('syncfree','1')=='1'):return s.run_exec(so,info)
+            s.early=s.dx.get('early','1' if EARLY else '0')=='1'
+            with _swap(s.dx.get('syncfree','1')=='1'),_cop(s.dx.get('cop',COP)=='1'):return s.run_exec(so,info)
         finally:
             s.last['t_s']=time.perf_counter()-t0
             if info.get('last'):s.unpause()
@@ -569,6 +609,18 @@ class LM:
         seq=sequence(s.layers,s.ring_layers,K,s.order);first=s.layers[0];pre=False
         from vllm.forward_context import get_forward_context
         prof=s.dx.get('prof')=='1';s.pev=dict(moe=[],lay=[]) if prof else None
+        hks=[];mev={}
+        if prof and s.dx.get('mods')=='1':      # per-submodule CUDA-event GPU time (depth <= 3, mlp internals excluded)
+            def _pre(nm):
+                def f(m,a):e=torch.cuda.Event(enable_timing=True);e.record();mev.setdefault(nm,[]).append([e,None])
+                return f
+            def _post(nm):
+                def f(m,a,o):e=torch.cuda.Event(enable_timing=True);e.record();mev[nm][-1][1]=e
+                return f
+            for L in s.layers:
+                for nm,m in inner.layers[L].named_modules():
+                    if not nm or nm.count('.')>2 or nm.startswith('mlp.'):continue
+                    hks+=[m.register_forward_pre_hook(_pre(nm)),m.register_forward_hook(_post(nm))]
         if prof:torch.cuda.synchronize();tw=time.perf_counter()
         try:
             s.active=True
@@ -593,6 +645,8 @@ class LM:
             sm=lambda l:sum(a.elapsed_time(b) for a,b in l)/1e3
             pr=s.pacc
             pr['wall']+=wall;pr['lay']+=sm(pe['lay']);pr['moe']+=sm(pe['moe']);pr['steps']+=1
+            for h in hks:h.remove()
+            for nm,l in mev.items():pr['m:'+nm]=pr.get('m:'+nm,0.)+sm([x for x in l if x[1] is not None])
         for k,(o,nk) in enumerate(offs):
             P=s.prep(so,rid,idx,c0+o,nk)
             with s.fctx(P,nk):
@@ -607,7 +661,7 @@ class LM:
                     W=s.W,paused=s.paused,last=s.last,prof=s.pacc,t_wall=time.time())
     def publish(s):
         if s.sp is None:return
-        try:write_json(s.sp,s.stats())
+        try:d=s.stats();d['cop_seen']=dict(COP_SEEN);write_json(s.sp,d)
         except Exception:
             if s.fail_logged<5:s.fail_logged+=1;log.exception('NestQuant LMPF: stats publish failed')
 

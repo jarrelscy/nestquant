@@ -47,9 +47,13 @@ def boot_key(pid=None):
     return f'{pid}_{st}'
 def ready_path(key,rank):return f'/dev/shm/nq_lmpf_ready_{key}_r{rank}.json'
 
-def windows(left,W):
-    """(nwin, w): left tokens in nwin windows of <= W tokens, as even as possible"""
-    nwin=max(1,-(-left//max(1,W)));return nwin,-(-left//nwin)
+def windows(left,W,q=1):
+    """(nwin, w): left tokens in nwin windows of <= W tokens, as even as possible, w rounded up to a multiple of q
+    (q = mnbt: every window then splits into full mnbt chunks, so only the prompt's last chunk is short, as in prod
+    chunked prefill; short chunks miss VLLM_GLM_RAW_KV_GATHER and take the per-layer NCCL path, ~3 s per deep window)"""
+    nwin=max(1,-(-left//max(1,W)));w=-(-left//nwin)
+    if q>1 and W%q==0:w=min(W,-(-w//q)*q)
+    return nwin,w
 
 def decide(new,min_new,bud_min,budget_s):
     """mode of a prefill with `new` uncached prompt tokens"""
@@ -111,7 +115,7 @@ class State:
         if W is None:
             if s.warned<3:s.warned+=1;log.warning('NestQuant LMPF: worker ready files missing (%s), no window',s.key)
             return
-        _,w=windows(left,max(W,s.mnbt))
+        _,w=windows(left,max(W,s.mnbt),s.mnbt)
         if w<=s.mnbt:return
         s.saved=(sched.max_num_scheduled_tokens,sched.max_num_running_reqs)
         sched.max_num_scheduled_tokens=w;sched.max_num_running_reqs=max(1,len(sched.running));s.n['grants']+=1

@@ -57,6 +57,9 @@ def test_windows_decide():
     assert EN.windows(100000,32768)==(4,25000)
     assert EN.windows(32768,32768)==(1,32768)
     assert EN.windows(1,32768)==(1,1)
+    assert EN.windows(131080,65536,4096)==(3,45056)
+    assert EN.windows(65544,65536,4096)==(2,36864)
+    assert EN.windows(131072,65536,4096)==(2,65536)
     assert EN.decide(40000,32768,1024,2.)=='full' and EN.decide(2000,32768,1024,2.)=='bud'
     assert EN.decide(2000,32768,1024,0.) is None and EN.decide(500,32768,1024,2.) is None
 
@@ -65,18 +68,18 @@ def test_full_windows():
     try:
         sc.add(Req('a',100000));outs=drive(sc)
         ann=[o.nq_lmpf for o in outs]
-        assert [a['n'] for a in ann]==[25000]*4,[a['n'] for a in ann]
+        assert [a['n'] for a in ann]==[28672,24576,24576,22176],[a['n'] for a in ann]
         assert all(a['m']=='full' and a['rid']=='a' and a['end']==100000 for a in ann)
-        assert [a['start'] for a in ann]==[0,25000,50000,75000] and [a['last'] for a in ann]==[False]*3+[True]
+        assert [a['start'] for a in ann]==[0,28672,53248,77824] and [a['last'] for a in ann]==[False]*3+[True]
         assert sc.max_num_scheduled_tokens==4096 and sc.max_num_running_reqs==4    # restored
-        assert all(l==(25000,1) for l in sc.log),sc.log
+        assert sc.log==[(28672,1),(24576,1),(24576,1),(24576,1)],sc.log
     finally:cleanup(st)
 
 def test_ready_min_and_missing():
     sc,st=mkengine(W=[32768,16384])
     try:
         sc.add(Req('a',40000));outs=drive(sc)
-        assert [o.nq_lmpf['n'] for o in outs]==[13334,13333,13333],[o.nq_lmpf['n'] for o in outs]
+        assert [o.nq_lmpf['n'] for o in outs]==[16384,12288,11328],[o.nq_lmpf['n'] for o in outs]
     finally:cleanup(st)
     sc,st=mkengine(W=None)                                       # no ready files: prod path, no annotation
     sc.add(Req('a',40000));outs=drive(sc)
@@ -199,13 +202,14 @@ def mklm(mode,K=1,order='layer'):
     return lm,rt
 def test_lm_full_visits():
     lm,rt=mklm('full',K=2)
-    eng=lm.ring.eng;assert len(eng.q)==253                                  # visit 0 reads issued at begin
+    eng=lm.ring.eng;assert len(eng.q)==(2*253 if LP.EARLY else 253)          # visit 0 (+1 when EARLY) reads issued at begin
     ids=torch.randint(0,256,(16,8))
     for L in (3,4,5):
         M=rt.lay[L]['M'];v=lm.vidx[L]
         wt=lm.vstart(v,L,M,ids)
         assert int((wt[:,0]==4).sum())==256 and wt[3,1]==L*1000+3            # every expert at 4-bit, rows of layer L
         assert torch.equal(wt[:3],lm.snapt[L][:3])                           # resident rows untouched
+        if LP.EARLY:lm.visit_end(v)                                          # exec: refill issued at the end of the visit
         if v+1<3:assert lm.ring.L[(v+1)%2]==lm.ring_layers[v+1]              # next visit's reads already queued
     lm.end()
 def test_lm_bud():
