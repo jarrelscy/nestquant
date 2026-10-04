@@ -22,7 +22,8 @@ PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
   time over 64K-token windows while every expert of the next layer streams in at 4 bit, so the whole
   prompt is prefilled at 4 bit (share 1.0). Prompts with 1K-32K new tokens get a 2 s read budget
   (`NQ_LMPF_BUDGET_S`) spent on the experts the router uses most. Shorter prompts use the borrow path
-  above. `NQ_LMPF=0` turns it off.
+  above. `NQ_LMPF=0` turns it off. The read ring and the window state live in idle decode-expert slots for the
+  length of the prefill and are refilled afterwards (`NQ_LMPF_BORROW=all`; `ring` = ring only, `0` = own memory).
 - **Hot experts trade against KV.** The floating pool and the KV cache share one VRAM budget, so you pick
   more hot experts (quality) or more context. See below.
 

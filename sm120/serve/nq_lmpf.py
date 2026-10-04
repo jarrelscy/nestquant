@@ -122,7 +122,7 @@ PAUSE_S=float(os.environ.get('NQ_LMPF_PAUSE_S','30'))
 READ_TIMEOUT=float(os.environ.get('NQ_LMPF_READ_TIMEOUT_S','60'))
 MIN_C=int(os.environ.get('NQ_LMPF_MIN_RECS','32'))
 # slot borrow (nq_slotborrow.py): ring (ring) or ring + window state (all) in idle decode-expert slots during a prefill
-BORROW=os.environ.get('NQ_LMPF_BORROW','0')
+BORROW=os.environ.get('NQ_LMPF_BORROW','all')
 if BORROW not in ('0','ring','all'):BORROW='0'
 BORROW_MAX=float(os.environ.get('NQ_LMPF_BORROW_MAX','0.5'))    # most of the slot pool one borrow may take
 BW_OFF='/dev/shm/nq_lmpf_borrow_off'                             # exists: no new borrow (every rank runs plain / unhooked)
