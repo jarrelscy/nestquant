@@ -1,7 +1,7 @@
 """nq-prefill: prefill-borrow, EngineCore side (vLLM scheduler process). Loaded by sitecustomize.py only when
 NQ_PREFILL_BORROW=1; patches vllm.v1.core.sched.scheduler.Scheduler.schedule and KVCacheManager.allocate_slots.
 
-While exactly one request runs and it is prefilling with >= NQ_PB_MIN_NEW (8192) prompt tokens still to compute (an
+While exactly one request runs and it is prefilling with >= NQ_PB_MIN_NEW (1024) prompt tokens still to compute (an
 LMCache / prefix hit counts as computed, so a restore never borrows), FREE KV blocks are taken out of the free queue
 (ref_cnt 1, prefix hash evicted, in no request's block table: the KV connector and the model never touch them) and
 lent to the NQ expert slot pool. Reserve kept free: the rest of the prompt + spec lookahead + NQ_PB_MARGIN blocks, so
@@ -28,7 +28,7 @@ like phase 1, plus: a step of <= max cudagraph capture size tokens (piecewise gr
 outgrowing rows, MemAvailable < floor mid-borrow (then phase 1 may run for the rest of that request)."""
 import os,sys,json,logging,functools
 ON=os.environ.get('NQ_PREFILL_BORROW','0')=='1'
-MIN_NEW=int(os.environ.get('NQ_PB_MIN_NEW','8192'));PF_NF=int(os.environ.get('NQ_PREFILL_SLOTS','155'))
+MIN_NEW=int(os.environ.get('NQ_PB_MIN_NEW','1024'));PF_NF=int(os.environ.get('NQ_PREFILL_SLOTS','155'))
 MIN_NEW_FILE=os.environ.get('NQ_PB_MIN_NEW_FILE','/dev/shm/nq_pb_min_new');_mn=[None,MIN_NEW]
 def _min_new():
     # in-boot override of NQ_PB_MIN_NEW: the integer in /dev/shm/nq_pb_min_new while it exists (eval knob)
