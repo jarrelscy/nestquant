@@ -123,6 +123,18 @@ class TapScheduler:
         if s.state[i, e] == 1:
             s.state[i, e] = 0
             if read_error: s.hold[i, e] = s.tok + s.retry; s.stats['read_errors'] = s.stats.get('read_errors', 0) + 1
+    def evict(s, keys):
+        """nq-lmpf slot borrow: keys were forced to level 2 by the executor (rows applied, slots released) -> state 0;
+        lazy evictions / queued promotions touching them are dropped (same as streaming/scheduler.py Scheduler.evict)"""
+        U = set()
+        for L, e in keys:
+            i = s.li[L]; s.state[i, e] = 0; U.add((i, e))
+        for (i, e), (j, v) in list(s.doom.items()):
+            if (i, e) in U or (j, v) in U: del s.doom[i, e]; s.doomed[j, v] = False
+        if s.todo:
+            k = [x for x in s.todo if tuple(x) not in U]
+            if len(k) != len(s.todo): s.todo.clear(); s.todo.extend(k)
+        s.stats['lend_evict'] = s.stats.get('lend_evict', 0) + len(U)
     def kv_pressure(s, n):
         """drop the n lowest-score level-4 floating experts now (returns downs)"""
         i, e = np.nonzero(s.state == 2)

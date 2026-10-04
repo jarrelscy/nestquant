@@ -12,6 +12,7 @@ nqstream engine (CPU tensors), TP ranks simulated by threads with a barrier all-
   7 abort: exception in an LMPF step with a borrow held -> the next non-LMPF step returns it exactly once
   8 size plan: borrow sizing fits the budget (ring and all), BORROW=0 sizing unchanged; arena column plan + placement
 run: docker run --rm -e CUDA_VISIBLE_DEVICES= -v <repo>:/nq <serve image> /opt/vllm/.venv/bin/python /nq/tests/test_slotborrow_cpu.py"""
+import inspect
 import os,sys,types,random,tempfile,threading,collections
 os.environ.update(NQ_HOSTLOOP='py',NQ_PREDICTOR='ema',NQ_LMPF='1')
 HERE=os.path.dirname(os.path.abspath(__file__));R=os.path.dirname(HERE)
@@ -85,7 +86,9 @@ class Cluster:
         for r in range(ranks):
             lay={L:MB() for L in LAY};eng=FE(lay,random.Random(seed*7+r))
             X=EX.RankExecutor(RF(eng),{L:(None,lay[L],{E:None for E in range(NE)}) for L in LAY},NSLOT);eng.X=X
-            S=(STP.TapScheduler if tap else SC.Scheduler)(LAY,fixed,dflt,RB,NE=NE,n_float=NF,slots=NSLOT,cap_GBps=1e6,predictor='ema')
+            C=STP.TapScheduler if tap else SC.Scheduler;kw=dict(NE=NE,n_float=NF,slots=NSLOT,cap_GBps=1e6,predictor='ema')
+            if 'cap_GBps' not in inspect.signature(C.__init__).parameters:kw.pop('cap_GBps');kw['predictor']=None if tap else 'ema'   # spark-b175 scheduler: object predictor, no cap
+            S=C(LAY,fixed,dflt,RB,**kw)
             init=[(L,E) for L in LAY for E in dflt[L]]
             for L,E in init:S.state[S.li[L],E]=1
             X.apply(init,[],S)
