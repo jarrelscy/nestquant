@@ -113,11 +113,11 @@ services:
       NQ_LA_BUDGET: ${NQ_LA_BUDGET:-45}
       NQ_PF_RANK: ${NQ_PF_RANK:-gate}          # gate | salience | count
       NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
-      NQ_LMPF: ${NQ_LMPF:-0}                       # windowed layer-major 4-bit prefill (nq_lmpf*.py); 0 = off
+      NQ_LMPF: ${NQ_LMPF:-1}                       # windowed layer-major 4-bit prefill (nq_lmpf*.py); 0 = off (2026-10-04: default on)
       NQ_LMPF_MIN_NEW: ${NQ_LMPF_MIN_NEW:-32768}    # full ring mode at/above this many new tokens (+ /dev/shm/nq_lmpf_min_new)
       NQ_LMPF_BUD_MIN: ${NQ_LMPF_BUD_MIN:-1024}     # budgeted mode from here up to MIN_NEW (+ /dev/shm/nq_lmpf_bud_min)
       NQ_LMPF_BUDGET_S: ${NQ_LMPF_BUDGET_S:-2.0}    # budgeted mode: extra TTFT per prompt (+ /dev/shm/nq_lmpf_budget_s)
-      NQ_LMPF_WINDOW: ${NQ_LMPF_WINDOW:-32768}      # max window tokens (shrunk per rank to fit free VRAM)
+      NQ_LMPF_WINDOW: ${NQ_LMPF_WINDOW:-65536}      # max window tokens (shrunk per rank to fit free VRAM)
       NQ_LMPF_RING_RECS: ${NQ_LMPF_RING_RECS:-256}  # records per ring slot (2 slots; shrunk to fit)
       NQ_LMPF_RESERVE_GB: ${NQ_LMPF_RESERVE_GB:-1.5}
       NQ_LMPF_META: ${NQ_LMPF_META:-rebuild}       # rebuild | snap (snap = wrong output, debug only)

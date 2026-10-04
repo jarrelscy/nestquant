@@ -18,6 +18,11 @@ PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
   current config.
 - **Prefill.** During prefill the pool borrows free KV pages to hold 155 slots per layer and returns them
   for decode. When the KV pool is nearly full, used KV of some layers is parked in host RAM for the borrow.
+- **Layer-major prefill (default on, `NQ_LMPF=1`).** Prompts with at least 32K new tokens run one layer at a
+  time over 64K-token windows while every expert of the next layer streams in at 4 bit, so the whole
+  prompt is prefilled at 4 bit (share 1.0). Prompts with 1K-32K new tokens get a 2 s read budget
+  (`NQ_LMPF_BUDGET_S`) spent on the experts the router uses most. Shorter prompts use the borrow path
+  above. `NQ_LMPF=0` turns it off.
 - **Hot experts trade against KV.** The floating pool and the KV cache share one VRAM budget, so you pick
   more hot experts (quality) or more context. See below.
 
@@ -30,10 +35,23 @@ PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
 |---|---|
 | Decode, empty context | 83.0 tok/s (32.6 steps/s, 2.60 accepted/step; median of 3) |
 | Decode, 16K context | 78.8 tok/s (31.6 steps/s) |
-| Prefill | ~1900–2000 tok/s |
+| Prefill | ~1900–2000 tok/s (layer-major off; see below) |
 | KLD vs BF16 teacher | 0.0256 mean over 4 windows (0.0147 / 0.0612 / 0.0136 / 0.0130) |
 | Hot share in decode | 0.627 of activated experts served at 4 bit (held-out generations) |
 | Needles | retrieved at 43K and 947K |
+
+Layer-major prefill, 2026-10-04 (commit e7cbde2, clean boot, same boot on/off, 2 reps). Prefill KLD is
+measured on the four 2K windows above (prompt tokens, BF16 teacher); TTFT on the shown prompt lengths:
+
+| Prompt | Mode | Prefill KLD | 4-bit share | TTFT off | TTFT on |
+|---|---|---|---|---|---|
+| 2K | budget 2 s | 0.0570 → 0.0224 | .37 → .74 | | +2.0 s |
+| 4K | budget 2 s | | | 1.93 s | 4.0 s |
+| 16K | budget 2 s | | | 7.97 s | 9.83 s |
+| 64K | full | | 1.00 | 33.0 s | 35.1 s |
+| 128K | full | | 1.00 | 67.5 s | 71.7 s |
+
+All-4-bit prefill on the same 2K windows gives 0.0138. Needles found at 86K, 172K and ~947K with it on.
 
 Decode runs range 77–89 tok/s with MTP acceptance; steps/s stays at ~31–33. KLD is full-vocab,
 teacher-forced on the live server (`NQ_KLD_HOOK=1`) over the same four windows as
