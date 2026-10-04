@@ -524,18 +524,21 @@ class LM:
             # static byte column per token; a value lives in columns [c, c+w) of its chunk's region from the row that
             # makes it until its last row (nq_slotborrow.plan_cols); chunk k's region = arena[o_k*PTa : (o_k+nk)*PTa)
             import nq_slotborrow as SB
-            items=[];bp={}
-            for n in last:
-                if n.op in ('placeholder','output') or (n.op=='call_module' and any(u.target is operator.getitem for u in n.users)):continue
-                if last[n]<=rowof[n]:continue
-                b=bpt(n)
-                if b>0:items.append((rowof[n],last[n],n,b));bp[n]=b
+            cand=[n for n in last if n.op not in ('placeholder','output') and not tup(n) and last[n]>rowof[n]]
+            esz=torch.empty(0,dtype=getattr(s,'dtype',torch.bfloat16)).element_size()
             le=max([last[n] for n in pe] or [1]);le=max(le,1)
-            items.append((-1,le,'__emb',s.H*torch.empty(0,dtype=getattr(s,'dtype',torch.bfloat16)).element_size()))
-            cols,PTa=SB.plan_cols(items)
-            born=[[n for n in cols if n!='__emb' and rowof[n]==r] for r in range(len(rows))]
-            s.cg.update(plan=cols,PTa=PTa,bpt=bp,born=born)
-            log.info('NestQuant LMPF rank %d: slot-borrow arena plan: %d values, %d B/token (live max %d)',s.rt.rank,len(cols),PTa,max(live) if live else -1)
+            if not nometa:                            # FX meta: static plan (values without a per-token size stay out)
+                bp={n:bpt(n) for n in cand};cand=[n for n in cand if bp[n]>0]
+                items=[(rowof[n],last[n],n,bp[n]) for n in cand]+[(-1,le,'__emb',s.H*esz)]
+                cols,PTa=SB.plan_cols(items);P=None
+            else:
+                # no FX meta (AOT-cache path): columns are learned from the first window's values (row order = start
+                # order, so the online first fit is the offline plan), inside the fallback live-set stride
+                PTa=-(-per//16)*16;P=SB.ColPlan(PTa);P.add(-1,le,'__emb',s.H*esz);cols=P.cols;bp={}
+            born=[[n for n in cand if rowof[n]==r] for r in range(len(rows))]
+            s.cg.update(plan=cols,PTa=PTa,bpt=bp,born=born,cplan=P,xr={n:(rowof[n],last[n]) for n in cand},bad=set())
+            log.info('NestQuant LMPF rank %d: slot-borrow arena plan: %s, %d values, %d B/token (live max %d)',s.rt.rank,
+                     'learned at the first window' if P is not None else 'FX meta',len(cand),PTa,max(live) if live else -1)
         oc=f.optimized_call;lm=s
         pidx={spec[n]:pi[n] for n in ph if n in spec}
         def optimized_call(*a,**k):
@@ -631,7 +634,20 @@ class LM:
         storage with another value of the row (an alias pair must stay an alias). An arena view (a view of an older
         value) is copied (through a clone) into its own columns."""
         cg=s.cg;pl=cg['plan'];bp=cg['bpt'];st=s.bwst;ast=s.arena.untyped_storage().data_ptr();todo=[];grp={}
+        P=cg.get('cplan')
+        if P is not None:                             # learn the columns of this row's values (first chunk they appear in)
+            new=[]
+            for n in cg['born'][r]:
+                if n in pl or n in cg['bad']:continue
+                v=env.get(n)
+                if isinstance(v,torch.Tensor) and v.dim() and v.shape[0]==nk and v.is_contiguous() and (v.numel()*v.element_size())%nk==0:
+                    new.append((-(v.numel()*v.element_size()//nk),str(n),n))
+                else:cg['bad'].add(n)
+            for nb,_,n in sorted(new,key=lambda x:(x[0],x[1])):
+                if P.add(cg['xr'][n][0],cg['xr'][n][1],n,-nb) is None:cg['bad'].add(n);st['fb_plan']=st.get('fb_plan',0)+1
+                else:bp[n]=-nb
         for n in cg['born'][r]:
+            if n not in pl:st['fb_shape']+=1;continue
             v=env.get(n)
             if not isinstance(v,torch.Tensor) or v.dim()==0 or v.shape[0]!=nk or not v.is_contiguous() or v.numel()*v.element_size()!=nk*bp[n]:
                 st['fb_shape']+=1;continue
@@ -1063,6 +1079,10 @@ class LM:
             X=s.rt.X;d['borrow']=dict(mode=s.bw,held=s.bwi is not None,st=dict(s.bwst),last=s.bwlast,refill=dict(s.refill),
                                       free=len(X.free),lent=len(X.lent),xst={k:int(v) for k,v in X.xst.items() if k.startswith('lend')},
                                       sched={k:v for k,v in s.rt.S.stats.items() if k=='lend_evict'})
+            cg=s.cg or {}
+            if 'PTa' in cg:d['borrow']['arena']=dict(PTa=cg['PTa'],learned=cg.get('cplan') is not None,cols=len(cg['plan']),
+                                                     width=(cg['cplan'].tot if cg.get('cplan') is not None else cg['PTa']),
+                                                     bad=len(cg.get('bad',())),bad_bpt=sorted(int(v) for v in cg['bpt'].values())[-3:])
         return d
     def publish(s):
         if s.sp is None:return
