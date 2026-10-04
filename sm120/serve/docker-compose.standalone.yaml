@@ -140,6 +140,16 @@ services:
       NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
       NQ_PF_RANK: ${NQ_PF_RANK:-gate}
       NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
+      NQ_LMPF: ${NQ_LMPF:-1}                       # windowed layer-major 4-bit prefill (nq_lmpf*.py); 0 = off (2026-10-04: default on)
+      NQ_LMPF_MIN_NEW: ${NQ_LMPF_MIN_NEW:-32768}    # full ring mode at/above this many new tokens (+ /dev/shm/nq_lmpf_min_new)
+      NQ_LMPF_BUD_MIN: ${NQ_LMPF_BUD_MIN:-1024}     # budgeted mode from here up to MIN_NEW (+ /dev/shm/nq_lmpf_bud_min)
+      NQ_LMPF_BUDGET_S: ${NQ_LMPF_BUDGET_S:-2.0}    # budgeted mode: extra TTFT per prompt (+ /dev/shm/nq_lmpf_budget_s)
+      NQ_LMPF_WINDOW: ${NQ_LMPF_WINDOW:-65536}      # max window tokens (shrunk per rank to fit free VRAM)
+      NQ_LMPF_RING_RECS: ${NQ_LMPF_RING_RECS:-256}  # records per ring slot (2 slots; shrunk to fit)
+      NQ_LMPF_RESERVE_GB: ${NQ_LMPF_RESERVE_GB:-1.5}
+      NQ_LMPF_CAP_GB: ${NQ_LMPF_CAP_GB:-0}           # >0: ring + window sized so device memory in use stays <= this (64 GB cap: 62.5)
+      NQ_LMPF_META: ${NQ_LMPF_META:-rebuild}       # rebuild | snap (snap = wrong output, debug only)
+      NQ_LMPF_ORDER: ${NQ_LMPF_ORDER:-layer}       # layer | chunk (reference)
       NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-1}             # free KV blocks -> extra expert slots during long prefills
       NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}
       NQ_PREFILL_KV_OFFLOAD: ${NQ_PREFILL_KV_OFFLOAD:-1}     # near-full KV: offload used KV of some layers to host during the borrow

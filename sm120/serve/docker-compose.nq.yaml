@@ -20,6 +20,7 @@ services:
       LMCACHE_MAX_LOCAL_DISK_SIZE: '0'                      # 0 = no disk backend (storage_backend: needs size > 0)
       VLLM_SERVER_DEV_MODE: ${NQ_DEV_MODE:-0}               # 1 = /reset_prefix_cache etc. (gates only)
       SERVED_NAME: ${NQ_SERVED_NAME:-glm-5.3-nq}
+      MODEL_DIR: ${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-Vision-NVFP4-ARVQ-hybrid-pv-d4a105dc50dd}   # non-expert weights + config; switch.sh glm5.3-nq-jf sets the stripped GLM-5.3-NQ-base (= HF base/)
       MAXLEN: ${NQ_MAXLEN:-131072}
       UTIL: ${NQ_UTIL:-0.88}
       MAX_NUM_SEQS: ${NQ_MAX_NUM_SEQS:-4}
@@ -112,6 +113,16 @@ services:
       NQ_LA_BUDGET: ${NQ_LA_BUDGET:-45}
       NQ_PF_RANK: ${NQ_PF_RANK:-gate}          # gate | salience | count
       NQ_LA_MEASURE: ${NQ_LA_MEASURE:-0}
+      NQ_LMPF: ${NQ_LMPF:-1}                       # windowed layer-major 4-bit prefill (nq_lmpf*.py); 0 = off (2026-10-04: default on)
+      NQ_LMPF_MIN_NEW: ${NQ_LMPF_MIN_NEW:-32768}    # full ring mode at/above this many new tokens (+ /dev/shm/nq_lmpf_min_new)
+      NQ_LMPF_BUD_MIN: ${NQ_LMPF_BUD_MIN:-1024}     # budgeted mode from here up to MIN_NEW (+ /dev/shm/nq_lmpf_bud_min)
+      NQ_LMPF_BUDGET_S: ${NQ_LMPF_BUDGET_S:-2.0}    # budgeted mode: extra TTFT per prompt (+ /dev/shm/nq_lmpf_budget_s)
+      NQ_LMPF_WINDOW: ${NQ_LMPF_WINDOW:-65536}      # max window tokens (shrunk per rank to fit free VRAM)
+      NQ_LMPF_RING_RECS: ${NQ_LMPF_RING_RECS:-256}  # records per ring slot (2 slots; shrunk to fit)
+      NQ_LMPF_RESERVE_GB: ${NQ_LMPF_RESERVE_GB:-1.5}
+      NQ_LMPF_CAP_GB: ${NQ_LMPF_CAP_GB:-0}           # >0: ring + window sized so device memory in use stays <= this (64 GB cap: 62.5)
+      NQ_LMPF_META: ${NQ_LMPF_META:-rebuild}       # rebuild | snap (snap = wrong output, debug only)
+      NQ_LMPF_ORDER: ${NQ_LMPF_ORDER:-layer}       # layer | chunk (reference)
       NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-0}   # nq-prefill: free KV blocks -> extra expert slots during long prefills (nq_pb*.py)
       NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}   # floating experts per layer planned while borrowed
       NQ_PB_PROTECT: ${NQ_PB_PROTECT:-0}           # D0-protect: top-K pre-borrow decode residents per layer pinned during a borrow (0 = off)
@@ -119,7 +130,7 @@ services:
       NQ_PREFILL_KV_BELOW: ${NQ_PREFILL_KV_BELOW:-1500}   # phase 2 engages only while phase 1 got < this many slots (near-full KV: 950K 992 -> +22 pts prefill hot; 750K 1905 -> +1.5 pts for -3.7% prefill)
       NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}   # phase 2 pinned host cap per rank (sized from MemAvailable at each borrow, all ranks)
       NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}   # phase 2 never borrows / releases mid-borrow below this MemAvailable
-      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-1024}        # borrow only for prefills with >= this many new (uncached) tokens (2026-10-04: 8192 -> 1024)
+      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-1024}        # borrow only for prefills with >= this many new (uncached) tokens (2026-10-04: 8192 -> 1024; a single-chunk prefill never borrows)
       NQ_PB_MARGIN: ${NQ_PB_MARGIN:-16}            # KV blocks always left free beyond the request's own prompt
       NQ_LA_GAMMA: ${NQ_LA_GAMMA:-1}
       NQ_DELTA_TABLE: /nqpred/delta_table.json

@@ -213,6 +213,9 @@ class State:
                  f'{len(s.blocks)} blocks back' if s.mode==1 else 'KV offload ends',s.pool.get_num_free_blocks())
         s.blocks=[];s.runs=();s.phase=None;s.rid=None;s.mode=0;s.kv=None;s.nslots=0
     def after(s,sched,out):
+        if getattr(out,'nq_lmpf',None):            # NQ_LMPF step (nq_lmpf_engine): experts ride the LMPF ring, no borrow
+            if s.mode:s.release('lmpf')
+            out.nq_pb=None;return
         rs=sched.running;r=rs[0] if len(rs)==1 else None
         ns=out.num_scheduled_tokens.get(r.request_id,0) if r is not None else 0
         pf=False;left=0;before=0
@@ -255,6 +258,10 @@ def _state(sched):
     return st
 
 def patch_scheduler(mod):
+    if os.environ.get('NQ_LMPF','0')=='1':     # LMPF wrapper goes inside ours, so after() sees out.nq_lmpf
+        try:
+            import nq_lmpf_engine;nq_lmpf_engine.patch_scheduler(mod)
+        except Exception:log.exception('NestQuant LMPF: scheduler patch failed')
     C=mod.Scheduler
     if getattr(C,'_nq_pb',False):return
     s0=C.schedule

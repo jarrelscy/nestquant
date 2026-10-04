@@ -251,10 +251,11 @@ class MoELayer:
             if not hasattr(s,'rkm'):s.rkm=s.M.rk_codes() if hasattr(s.M,'rk_codes') else [255,255]
             assert s.rkm[0]>>ex.gu.rk&1 and s.rkm[1]>>ex.dn.rk&1,f'residual K code gu {ex.gu.rk} / dn {ex.dn.rk} not compiled (rk_codes {s.rkm})'
         s.table[e].copy_(entry(ex,level).to(s.table.device),non_blocking=False)
-    def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None):
+    def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None,table=None):
+        """table: optional [E,TBL_W] override (default s.table), e.g. NQ_LMPF ring rows"""
         assert x.dtype==torch.float16 and rw.dtype==torch.float16 and sel.dtype==torch.int64,(x.dtype,rw.dtype,sel.dtype)
         out=s.out[:x.shape[0]] if out is None else out
-        s.M.moe_forward(x,sel,rw,s.table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
+        s.M.moe_forward(x,sel,rw,s.table if table is None else table,out,s.acc_gu,s.h,s.acc_d,s.cnt_gu,s.cnt_d,s.wq,s.I,s.nm_gu,s.nm_dn,
                       cfg_gu or s.cfg_gu,cfg_dn or s.cfg_dn,s.G,force_level,which,s.hits_ptr,s.zd,s.cnt_h)
         return out
 
@@ -278,12 +279,13 @@ PG=None
 if os.environ.get('NQ_PF_GEMM','triton')=='triton':
     try:import pf_gemm as PG
     except Exception:PG=None   # no triton: per-expert cuBLAS calls
-def prefill(s,x,sel,rw,out=None,R=None,G=None):
+def prefill(s,x,sel,rw,out=None,R=None,G=None,table=None):
     """T > Bmax tokens: each routed expert decoded once (level from the live device table row, after the mailbox apply),
     then grouped fp16 GEMMs with fp32 outputs; same math as moe_forward (fp32 accumulation order differs). One host sync
     (expert counts). Not graph-capturable. Exports routing hits like the decode kernel (picks with rw != 0)."""
     assert x.dtype==torch.float16 and rw.dtype==torch.float16 and sel.dtype==torch.int64,(x.dtype,rw.dtype,sel.dtype)
     T,k=sel.shape;H,I,E=s.H,s.I,s.E;dev=x.device;M=s.M
+    tb=s.table if table is None else table             # NQ_LMPF: override table with ring rows
     R=R or int(os.environ.get('NQ_PF_ROWS','8192'));G=G or int(os.environ.get('NQ_PF_G','16'))
     S=pf_scratch(dev,H,I,R,G)
     out=torch.zeros(T,H,dtype=torch.float32,device=dev) if out is None else out.zero_()
@@ -300,12 +302,12 @@ def prefill(s,x,sel,rw,out=None,R=None,G=None):
     Wgu=S['Wgu'].view(G,2*I,H);Wdn=S['Wdn'].view(G,H,I);f32=torch.float32
     mmo=torch.ops.aten.mm.dtype_out
     for g0 in range(0,len(ex),G):
-        grp=ex[g0:g0+G];M.pf_decode(s.table,exl[g0:g0+len(grp)],S['Wgu'],S['Wdn'],H,I,s.nm_gu,s.nm_dn)
+        grp=ex[g0:g0+G];M.pf_decode(tb,exl[g0:g0+len(grp)],S['Wgu'],S['Wdn'],H,I,s.nm_gu,s.nm_dn)
         a=start[grp[0]];b=start[grp[-1]]+cnt[grp[-1]]
         for c in range(a,b,R):
             d=min(b,c+R);n=d-c;pts,pes,prws=pt[c:d],pe[c:d],prw[c:d]
             xg,xu,y=S['xg'][:n],S['xu'][:n],S['y'][:n];ag,au=S['acc'][0,:n],S['acc'][1,:n];h=S['h'][:n];zg,zd=S['z'][0,:n],S['z'][1,:n]
-            M.pf_pre(x,pts,pes,s.table,S['xg'],S['xu'],zg,I)
+            M.pf_pre(x,pts,pes,tb,S['xg'],S['xu'],zg,I)
             segs=[]
             for j,e in enumerate(grp):
                 u=max(start[e],c)-c;v=min(start[e]+cnt[e],d)-c
@@ -316,11 +318,11 @@ def prefill(s,x,sel,rw,out=None,R=None,G=None):
             else:
                 for j,u,v in segs:
                     mmo(xg[u:v],Wgu[j,:I].t(),f32,out=ag[u:v]);mmo(xu[u:v],Wgu[j,I:].t(),f32,out=au[u:v])
-            M.pf_mid(ag,au,zg,pes,s.table,h,zd,H,I)
+            M.pf_mid(ag,au,zg,pes,tb,h,zd,H,I)
             if PG:PG.gmm(h,Wdn,y,tt,nt,H,I,BM=PF_BM)
             else:
                 for j,u,v in segs:mmo(h[u:v],Wdn[j].t(),f32,out=y[u:v])
-            M.pf_post(y,zd,pts,pes,prws,s.table,out,I)
+            M.pf_post(y,zd,pts,pes,prws,tb,out,I)
     return out
 MoELayer.prefill=prefill
 

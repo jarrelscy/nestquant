@@ -16,6 +16,8 @@
 #   NQ_IMAGE        image built from spark/Dockerfile (default nestquant-spark:b175)
 #   NQ_DATA         per-node data dir on the internal NVMe (default $HOME/nq-spark)
 #   NQ_UTIL         --gpu-memory-utilization (default 0.95)
+#   NQ_LMPF         layer-major 4-bit prefill for prompts >= 1K new tokens (default 1, 0 = off; untested on Spark)
+#   NQ_LMPF_CAP_GB  unified memory in use stays <= this after the LMPF ring + window (default 114)
 #   NCCL_SOCKET_IFNAME / NCCL_IB_HCA   CX-7 netdev and RoCE devices (defaults below; check with `ibdev2netdev`)
 #   NQ_TAP_RATE_GBPS                   sustained SSD read rate per node for the tap scheduler (default 6.6)
 #   NQ_DEC_BLOCK_MS / NQ_DEC_BLOCK_FIRSTN / NQ_DEC_BLOCK_AFTER_MS / NQ_DEC_ASYNC   decode-step wait for landed planes
@@ -125,6 +127,7 @@ up(){
     -e NQ_REPACK=/nqrepack -e NQ_REPACK_ALT=none -e NQ_OPLOG=dist -e NQ_OPLOG_ADDR="$HEAD_IP:${NQ_OPLOG_PORT:-29611}" \
     -e NQ_DEFS="$NQ_DEFS" -e TORCH_CUDA_ARCH_LIST=12.1a -e NQ_UNIFIED="${NQ_UNIFIED:-}" \
     -e NQ_JF_NFLOAT="$NF" -e NQ_SLOTS_PER_LAYER="$SLOTS" -e NQ_RAMTIER_GB=0 \
+    -e NQ_LMPF="${NQ_LMPF:-1}" -e NQ_LMPF_WINDOW="${NQ_LMPF_WINDOW:-65536}" -e NQ_LMPF_CAP_GB="${NQ_LMPF_CAP_GB:-114}" \
     -e NQ_PREFILL_BORROW=0 -e NQ_PREFILL_KV_OFFLOAD=0 -e NQ_TAP_RATE_GBPS="${NQ_TAP_RATE_GBPS:-6.6}" \
     -e NQ_CFG_GU="${NQ_CFG_GU:-}" -e NQ_CFG_DN="${NQ_CFG_DN:-}" \
     -e NQ_HITS=1 -e NQ_POLL_MS="${NQ_POLL_MS:-4}" -e NQ_ISSUE=1 -e NQ_SESSION_RESTORE="${NQ_SESSION_RESTORE:-0}" \

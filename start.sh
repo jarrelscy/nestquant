@@ -47,6 +47,7 @@ spark|1.75)   # 1.75-4 bit records (~393 GB), 2x DGX Spark memory: every value b
   export NQ_PREFILL_SLOTS=${NQ_PREFILL_SLOTS:-80}
   export NQ_MNBT=${NQ_MNBT:-2048}                                   # smaller prefill chunk: activation peak under the cap
   export NQ_VLLM_CACHE=${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache-step2-spark}
+  export NQ_LMPF_CAP_GB=${NQ_LMPF_CAP_GB:-62.5}                     # layer-major prefill ring stays under the 64 GB cap
   export NQ_LMCACHE=${NQ_LMCACHE:-0}                                 # the LMCache GPU buffer does not fit the 64 GB cap
   export NQ_DEFER_START=${NQ_DEFER_START:-1} ;;                      # slot pool after the MTP drafter loads (boot peak = steady state)
 *) echo "unknown build '$NQ_VARIANT' (2-4 or spark)"; exit 2 ;;
