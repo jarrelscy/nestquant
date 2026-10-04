@@ -7,6 +7,11 @@ if os.environ.get('NQ_PREFILL_BORROW','0')=='1':
         import nq_pb_engine as _nq_pb_engine;_nq_pb_engine.install()
     except Exception as _e:
         import sys;print(f'nq_pb sitecustomize: {_e!r}',file=sys.stderr)
+elif os.environ.get('NQ_LMPF','0')=='1':      # NQ_LMPF without prefill-borrow: own scheduler hook (else chained by nq_pb_engine)
+    try:
+        import nq_lmpf_engine as _nq_lmpf_engine;_nq_lmpf_engine.install()
+    except Exception as _e:
+        import sys;print(f'nq_lmpf sitecustomize: {_e!r}',file=sys.stderr)
 if os.environ.get('NQ_DBG_FUSE_M') or os.environ.get('NQ_DBG_LIN_ROWSPLIT') or os.environ.get('NQ_DBG_MLA_BMM_ROWSPLIT') or os.environ.get('NQ_DBG_NO_BF16_RED') or os.environ.get('NQ_DBG_LMHEAD_FP32') or os.environ.get('NQ_DBG_FP8_OPROJ_ONLY'):     # nq-kld debug numerics switches (nq_dbg_numerics.py)
     try:
         import nq_dbg_numerics as _nq_dbg;_nq_dbg.install()

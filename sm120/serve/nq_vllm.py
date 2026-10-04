@@ -84,7 +84,7 @@ class Runtime:
     """Per-process registry of the NQ layers + the streaming machinery."""
     def __init__(s):
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
-        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None;s.PFB=None
+        s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None;s.PFB=None;s.LM=None
         s.PB=None;s.pb_pause=0      # nq-prefill prefill-borrow (nq_pb.py), NQ_PREFILL_BORROW=1 only
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
@@ -202,6 +202,10 @@ class Runtime:
         if os.environ.get('NQ_TFCAP') and s.F is None and s.rank==0:   # nq-tfpred decode-trace capture (off unless set)
             import nq_tfcap;s.CAP=nq_tfcap.install(s,L_,s.lay[L_[0]]['H'],dev)
         if ROWHOT and s.rank==0:import nq_pfblock as _PB;_PB.rh_init(L_,dev)   # nq-kld committed-row hot share
+        if os.environ.get('NQ_LMPF','0')=='1':        # windowed layer-major 4-bit prefill (worker side, set up after warmup)
+            try:
+                import nq_lmpf;s.LM=nq_lmpf.install(s)
+            except Exception:log.exception('NestQuant LMPF: install failed, off')
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
     def _sr(s,f,*a,dflt=None):
         """session restore is an optimization: any error turns it off (pin dropped), streaming goes on"""
@@ -508,6 +512,9 @@ DBG_MOE_REF=os.environ.get('NQ_DBG_MOE_REF','0')=='1'   # nq-kld debug: decode s
 def forward(L,x,topk_weights,topk_ids):
     d=RT.lay[L];M=d['M'];T=x.shape[0]
     xh=x.half().contiguous();w=topk_weights.half().contiguous();ids=topk_ids.long().contiguous()
+    if RT.LM is not None and RT.LM.active:     # NQ_LMPF window / in-forward ring (nq_lmpf.py); None = prod path
+        r=RT.LM.moe(L,d,M,x,xh,w,ids)
+        if r is not None:return r
     if CHECK and not torch.cuda.is_current_stream_capturing():
         assert x.dim()==2 and ids.shape==(T,TOPK) and w.shape==(T,TOPK),(x.shape,ids.shape,w.shape)
         lo,hi=int(ids.min()),int(ids.max());assert 0<=lo and hi<NE,(L,lo,hi)
