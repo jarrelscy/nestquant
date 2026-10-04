@@ -123,6 +123,7 @@ services:
       NQ_LMPF_CAP_GB: ${NQ_LMPF_CAP_GB:-0}           # >0: ring + window sized so device memory in use stays <= this (64 GB cap: 62.5)
       NQ_LMPF_META: ${NQ_LMPF_META:-rebuild}       # rebuild | snap (snap = wrong output, debug only)
       NQ_LMPF_ORDER: ${NQ_LMPF_ORDER:-layer}       # layer | chunk (reference)
+      NQ_LMPF_CG: ${NQ_LMPF_CG:-1}                 # 1 = windows through the compiled piecewise submods; 0 = eager per-layer loop (A/B)
       NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-0}   # nq-prefill: free KV blocks -> extra expert slots during long prefills (nq_pb*.py)
       NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}   # floating experts per layer planned while borrowed
       NQ_PB_PROTECT: ${NQ_PB_PROTECT:-0}           # D0-protect: top-K pre-borrow decode residents per layer pinned during a borrow (0 = off)
