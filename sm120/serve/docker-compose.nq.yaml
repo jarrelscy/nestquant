@@ -120,7 +120,7 @@ services:
       NQ_LMPF_WINDOW: ${NQ_LMPF_WINDOW:-32768}      # max window tokens (shrunk per rank to fit free VRAM)
       NQ_LMPF_RING_RECS: ${NQ_LMPF_RING_RECS:-256}  # records per ring slot (2 slots; shrunk to fit)
       NQ_LMPF_RESERVE_GB: ${NQ_LMPF_RESERVE_GB:-1.5}
-      NQ_LMPF_META: ${NQ_LMPF_META:-snap}          # snap | rebuild (reference)
+      NQ_LMPF_META: ${NQ_LMPF_META:-rebuild}       # rebuild | snap (snap = wrong output, debug only)
       NQ_LMPF_ORDER: ${NQ_LMPF_ORDER:-layer}       # layer | chunk (reference)
       NQ_PREFILL_BORROW: ${NQ_PREFILL_BORROW:-0}   # nq-prefill: free KV blocks -> extra expert slots during long prefills (nq_pb*.py)
       NQ_PREFILL_SLOTS: ${NQ_PREFILL_SLOTS:-155}   # floating experts per layer planned while borrowed

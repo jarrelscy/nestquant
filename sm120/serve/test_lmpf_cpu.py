@@ -122,7 +122,7 @@ def test_knob_file():
 
 # ---------------- worker side: pure helpers ----------------
 def test_split_sequence():
-    assert LP.split(10000,4096)==[(0,3334),(3334,3334),(6668,3332)]
+    assert LP.split(10000,4096)==[(0,4096),(4096,4096),(8192,1808)]
     assert LP.split(4096,4096)==[(0,4096)] and LP.split(1,4096)==[(0,1)]
     s=LP.sequence([0,1,2,3],[2,3],2,'layer')
     assert s==[(0,0,None,True,False),(0,1,None,False,True),(1,0,None,True,False),(1,1,None,False,True),

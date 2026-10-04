@@ -14,8 +14,8 @@ Per step (execute_model):
                                experts loaded into the ring and runs the experts against that table
   K > 1, m full | bud          'exec': window of n tokens = K sub-chunks of <= mnbt (the input buffers / DSA topk buffer
                                are mnbt-sized). Executor paused (no new level ops; landed rows applied; table snapshots),
-                               every sub-chunk's inputs + attention metadata prepared and snapshotted (META=snap; META=
-                               rebuild re-prepares before every layer call, the bit-exact reference), TP vote (any rank's
+                               attention metadata re-prepared before every layer call (META=rebuild, default; META=snap
+                               = prepare once + deep-copy: WRONG output on GPU, shared planner objects, do not use), TP vote (any rank's
                                setup failure -> every rank runs 'plain'), embeddings into hbuf, then the decoder layers
                                eagerly in layer-outer / sub-chunk-inner order (ORDER=chunk: sub-chunk-outer, debug
                                reference), h / residual in hbuf / rbuf, the shared DSA topk buffer stashed per sub-chunk
@@ -38,18 +38,57 @@ import nq_lmpf_engine as EN
 log=logging.getLogger('vllm.nestquant.lmpf')
 NE=256;TOPK=8;ROW_W=20
 RING_RECS=int(os.environ.get('NQ_LMPF_RING_RECS','256'))
-META=os.environ.get('NQ_LMPF_META','snap')
+META=os.environ.get('NQ_LMPF_META','rebuild')
 ORDER=os.environ.get('NQ_LMPF_ORDER','layer')
-DBG='/dev/shm/nq_lmpf_dbg'      # in-boot override of META / ORDER for the reference A/B, e.g. "meta=rebuild order=chunk"
+DBG='/dev/shm/nq_lmpf_dbg'      # in-boot override for A/B and profiling, e.g. "meta=rebuild order=chunk prof=1 tab=base"
 def dbg_knobs():
-    m,o=META,ORDER
+    """(meta, order, extra): extra prof=1 -> CUDA-event timing of the exec layer loop (stats last.prof);
+    tab=base -> exec MoE uses the snapshot (prod mixed-level) table instead of the ring table (cost isolation only)"""
+    m,o,x=META,ORDER,{}
     try:
         for kv in open(DBG).read().split():
             k,_,v=kv.partition('=')
-            if k=='meta' and v in ('snap','rebuild'):m=v
-            if k=='order' and v in ('layer','chunk'):o=v
+            if k=='meta' and v in ('snap','rebuild','hyb','hyb2'):m=v
+            elif k=='order' and v in ('layer','chunk'):o=v
+            elif k in ('prof','tab','syncfree'):x[k]=v
     except OSError:pass
-    return m,o
+    return m,o,x
+SYNCFREE=os.environ.get('NQ_LMPF_SYNCFREE','1')=='1'
+_SF={}
+def syncfree_indexer():
+    """vllm indexer.build_prefill_chunk_metadata with the two DCP device->host .item() syncs replaced by the same
+    integers from compressed_seq_lens_cpu (get_dcp_local_seq_lens on the host). Returns (module, orig, new) or None.
+    Swapped in only while an LMPF exec step prepares metadata (single prefill request, no decodes)."""
+    if 'r' in _SF:return _SF['r']
+    r=None
+    try:
+        import inspect,textwrap
+        M=importlib.import_module('vllm.v1.attention.backends.mla.indexer');f=M.build_prefill_chunk_metadata
+        src=textwrap.dedent(inspect.getsource(f))
+        a=("        local_total_seq_lens = int(local_cu_seq_lens[-1].item())\n"
+           "        max_local_total_seq_lens = int(local_seq_lens.sum(dim=0).max().item())\n")
+        b=("        _lc = get_dcp_local_seq_lens(compressed_seq_lens_cpu[start_idx:end_idx], dcp_world_size, None, cp_kv_cache_interleave_size)\n"
+           "        local_total_seq_lens = int(_lc[:, dcp_rank].sum())\n"
+           "        max_local_total_seq_lens = int(_lc.sum(dim=0).max())\n"
+           "        if _SF_CHECK[0] > 0:\n"
+           "            _SF_CHECK[0] -= 1\n"
+           "            _t = (int(local_cu_seq_lens[-1].item()), int(local_seq_lens.sum(dim=0).max().item()))\n"
+           "            if _t != (local_total_seq_lens, max_local_total_seq_lens):\n"
+           "                _SF_LOG.error('NestQuant LMPF: sync-free indexer mismatch %s vs %s, using synced values', _t, (local_total_seq_lens, max_local_total_seq_lens))\n"
+           "                _SF_CHECK[0] = 10**9\n"
+           "                local_total_seq_lens, max_local_total_seq_lens = _t\n")
+        if src.count(a)==1 and src.startswith('def ') and 'get_dcp_local_seq_lens' in M.__dict__:
+            g=dict(M.__dict__);g['_SF_CHECK']=[8];g['_SF_LOG']=log;exec(compile(src.replace(a,b),M.__file__,'exec'),g)
+            r=(M,f,g['build_prefill_chunk_metadata'])
+        else:log.warning('NestQuant LMPF: indexer source mismatch, sync-free chunk metadata off')
+    except Exception:log.exception('NestQuant LMPF: sync-free indexer patch failed, off')
+    _SF['r']=r;return r
+class _swap:
+    def __init__(s,on):s.r=syncfree_indexer() if (on and SYNCFREE) else None
+    def __enter__(s):
+        if s.r:s.r[0].build_prefill_chunk_metadata=s.r[2]
+    def __exit__(s,*a):
+        if s.r:s.r[0].build_prefill_chunk_metadata=s.r[1]
 RESERVE_GB=float(os.environ.get('NQ_LMPF_RESERVE_GB','1.5'))
 RATE0=float(os.environ.get('NQ_LMPF_RATE0_GBPS','2.0'))*1e9
 SNAP_MB=float(os.environ.get('NQ_LMPF_SNAP_MAX_MB','512'))
@@ -59,8 +98,10 @@ MIN_C=int(os.environ.get('NQ_LMPF_MIN_RECS','32'))
 
 # ---------------- pure helpers (CPU-tested) ----------------
 def split(n,mnbt):
-    """[(offset, tokens)] of K = ceil(n / mnbt) sub-chunks, as even as possible"""
-    K=max(1,-(-n//max(1,mnbt)));q=-(-n//K);out=[];o=0
+    """[(offset, tokens)] of K = ceil(n / mnbt) sub-chunks: full mnbt chunks then the remainder, i.e. the same
+    boundaries as prod chunked prefill.  Full 4096 chunks are also what VLLM_GLM_RAW_KV_GATHER requires (exact
+    q.shape 4096); even splits (e.g. 4000) fall back to the per-layer NCCL AG+RS path, ~+25% prefill GPU time."""
+    m=max(1,mnbt);q=m;out=[];o=0
     while o<n:m=min(q,n-o);out.append((o,m));o+=m
     return out
 def sequence(layers,ring,K,order):
@@ -227,7 +268,7 @@ class LM:
     def __init__(s,rt):
         s.rt=rt;s.active=False;s.ring=None;s.hbuf=None;s.W=0;s.R=None;s.paused=False;s.prid=None;s.snapt=None;s.lv=None
         s.cur=None;s.op=False;s.mode=None;s.vnext=0;s.wt_cur=None;s.bud={};s.rate=RATE0;s.key=None;s.dead=False
-        s.acc={};s.tot={};s.meta=META;s.order=ORDER;s.n=dict(op=0,exec=0,plain=0,fallback=0,visits=0,hook_err=0,steps_full=0,steps_bud=0);s.last={}
+        s.acc={};s.tot={};s.meta=META;s.order=ORDER;s.dx={};s.pev=None;s.pacc=dict(wall=0.,lay=0.,moe=0.,prep=0.,steps=0);s.n=dict(op=0,exec=0,plain=0,fallback=0,visits=0,hook_err=0,steps_full=0,steps_bud=0);s.last={}
         s.fail_logged=0
     # ---- setup ----
     def setup(s,R):
@@ -337,8 +378,12 @@ class LM:
             s.n['hook_err']+=1
             if s.fail_logged<5:s.fail_logged+=1;log.exception('NestQuant LMPF rank %d: ring hook failed at L%d, ring off',s.rt.rank,L)
             s.ring=None;return None
+        if not s.op and s.dx.get('tab')=='base':wt=s.snapt[L]
         lv4=wt[:,0]==4;s.acc[s.mode].add_(lv4[ids].sum());s.tot[s.mode]+=ids.numel()
+        pe=s.pev
+        if pe is not None:e0=torch.cuda.Event(enable_timing=True);e0.record()
         out=_moe_tab(M,x,xh,w,ids,wt)
+        if pe is not None:e1=torch.cuda.Event(enable_timing=True);e1.record();pe['moe'].append((e0,e1))
         if last:
             if s.ring.ev is not None:s.ring.ev[v%2].record()
             s.vnext=v+1;s.n['visits']+=1
@@ -405,7 +450,8 @@ class LM:
             if info['m']=='plain':
                 s.n['plain']+=1;return s.run_plain(so,info,prefixed=False)
             s.n['exec']+=1;s.n['steps_'+info['m']]+=1
-            return s.run_exec(so,info)
+            s.meta,s.order,s.dx=dbg_knobs()
+            with _swap(s.dx.get('syncfree','1')=='1'):return s.run_exec(so,info)
         finally:
             s.last['t_s']=time.perf_counter()-t0
             if info.get('last'):s.unpause()
@@ -417,7 +463,7 @@ class LM:
         if getattr(so,'scheduled_new_reqs',None):
             pf=sys.modules.get('nq_pfblock')
             if pf is not None and hasattr(pf,'PI'):pf.PI.new=True
-    def prep(s,so,rid,idx,nc,nk):
+    def prep(s,so,rid,idx,nc,nk,attn=True,state_only=False):
         from vllm.config.compilation import CUDAGraphMode
         from vllm.v1.worker.gpu.cudagraph_utils import BatchExecutionDescriptor
         from vllm.v1.worker.gpu.attn_utils import build_slot_mappings_by_layer
@@ -425,6 +471,7 @@ class LM:
         rs.num_computed_tokens_np[idx]=nc
         rs.num_computed_prefill_tokens[idx]=min(nc,int(rs.prefill_len.np[idx]))
         rs.num_computed_tokens.gpu[idx:idx+1].fill_(nc)
+        if state_only:return None
         fso=types.SimpleNamespace(total_num_scheduled_tokens=nk,num_scheduled_tokens={rid:nk},scheduled_spec_decode_tokens={},
                                   has_structured_output_requests=getattr(so,'has_structured_output_requests',False),
                                   scheduled_encoder_inputs={},finished_req_ids=set(),scheduled_new_reqs=[])
@@ -432,7 +479,7 @@ class LM:
         bt,sm=R.prepare_attn(ib)
         R.model_state.preprocess_state(ib,bt,R.kv_cache_config,rs.num_computed_tokens.gpu)
         slots=build_slot_mappings_by_layer(sm,R.kv_cache_config)
-        meta=R.model_state.prepare_attn(ib,CUDAGraphMode.NONE,bt,sm,R.attn_groups,R.kv_cache_config)
+        meta=R.model_state.prepare_attn(ib,CUDAGraphMode.NONE,bt,sm,R.attn_groups,R.kv_cache_config) if attn else None
         extra=dict(R.model_state.prepare_inputs(ib,rs) or {})
         return Prep(ib,meta,slots,extra)
     def fctx(s,P,nk):
@@ -485,7 +532,7 @@ class LM:
         except Exception:
             log.exception('NestQuant LMPF: TP vote failed');raise
     def run_exec(s,so,info):
-        R=s.R;s.prefix(so);s.meta,s.order=dbg_knobs();s.last.update(meta=s.meta,order=s.order)
+        R=s.R;s.prefix(so);s.last.update(meta=s.meta,order=s.order,**s.dx)
         rid=info['rid'];idx=R.req_states.req_id_to_index[rid];c0=int(R.req_states.num_computed_tokens_np[idx])
         n=so.total_num_scheduled_tokens;offs=split(n,s.mnbt);K=len(offs)
         if c0!=info['start'] and s.fail_logged<5:s.fail_logged+=1;log.warning('NestQuant LMPF: worker start %d != scheduler start %d (%s)',c0,info['start'],rid)
@@ -508,7 +555,12 @@ class LM:
         return s.layer_run(so,info,rid,idx,c0,offs,snaps)
     def layer_run(s,so,info,rid,idx,c0,offs,snaps):
         R=s.R;inner=s.inner;K=len(offs);tib=s.tib;stash=s.stash;hb=s.hbuf;rbf=s.rbuf
-        getP=(lambda k:s.prep(so,rid,idx,c0+offs[k][0],offs[k][1])) if s.meta=='rebuild' else (lambda k:snaps[k])
+        def getP(k):
+            c,nk=c0+offs[k][0],offs[k][1]
+            if s.meta=='rebuild':return s.prep(so,rid,idx,c,nk)
+            if s.meta=='hyb':q=s.prep(so,rid,idx,c,nk,attn=False);return Prep(q.ib,snaps[k].meta,q.slots,q.extra)
+            if s.meta=='hyb2':s.prep(so,rid,idx,c,nk,state_only=True)
+            return snaps[k]
         for k,(o,nk) in enumerate(offs):        # embeddings (vocab-parallel: collective, after the vote)
             P=s.prep(so,rid,idx,c0+o,nk)
             with s.fctx(P,nk):hb[o:o+nk].copy_(s.embed(P,nk))
@@ -516,21 +568,31 @@ class LM:
         else:s.mode=info['m'];s.op=False
         seq=sequence(s.layers,s.ring_layers,K,s.order);first=s.layers[0];pre=False
         from vllm.forward_context import get_forward_context
+        prof=s.dx.get('prof')=='1';s.pev=dict(moe=[],lay=[]) if prof else None
+        if prof:torch.cuda.synchronize();tw=time.perf_counter()
         try:
             s.active=True
             for L,k,v,fst,lst in seq:
-                o,nk=offs[k];P=getP(k);layer=inner.layers[L];hi=s.has_idx.get(L)
+                o,nk=offs[k];tp=time.perf_counter() if prof else 0;P=getP(k);layer=inner.layers[L];hi=s.has_idx.get(L)
+                if prof:s.pacc['prep']+=time.perf_counter()-tp
                 with s.fctx(P,nk):
                     get_forward_context().all_moe_layers=None
                     if not pre:R.kv_connector.pre_forward(so);pre=True
                     if tib is not None and hi is not True and L!=first:tib[:nk].copy_(stash[o:o+nk])
                     s.cur=(L,k,v,fst,lst)
+                    if prof:a0=torch.cuda.Event(enable_timing=True);a0.record()
                     h,r=layer(P.pos,hb[o:o+nk],None if L==first else rbf[o:o+nk],None)
+                    if prof:a1=torch.cuda.Event(enable_timing=True);a1.record();s.pev['lay'].append((a0,a1))
                     s.cur=None
                     if tib is not None and hi is not False:stash[o:o+nk].copy_(tib[:nk])
                     hb[o:o+nk].copy_(h);rbf[o:o+nk].copy_(r)
         finally:
             s.end()
+        if prof:
+            torch.cuda.synchronize();wall=time.perf_counter()-tw;pe=s.pev;s.pev=None
+            sm=lambda l:sum(a.elapsed_time(b) for a,b in l)/1e3
+            pr=s.pacc
+            pr['wall']+=wall;pr['lay']+=sm(pe['lay']);pr['moe']+=sm(pe['moe']);pr['steps']+=1
         for k,(o,nk) in enumerate(offs):
             P=s.prep(so,rid,idx,c0+o,nk)
             with s.fctx(P,nk):
@@ -542,7 +604,7 @@ class LM:
     def stats(s):
         sh={m:(int(s.acc[m].item())/s.tot[m] if s.tot.get(m) else None) for m in s.acc}
         return dict(n=dict(s.n),share4=sh,routes=dict(s.tot),rate_gbps=s.rate/1e9,ring=dict(s.ring.st) if s.ring is not None else None,
-                    W=s.W,paused=s.paused,last=s.last,t_wall=time.time())
+                    W=s.W,paused=s.paused,last=s.last,prof=s.pacc,t_wall=time.time())
     def publish(s):
         if s.sp is None:return
         try:write_json(s.sp,s.stats())
