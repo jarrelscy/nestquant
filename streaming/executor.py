@@ -52,6 +52,7 @@ class RankExecutor:
         s.wait_apply={}                                           # (L, E) -> (kind, seq) device writes done, not yet applied
         s.n_refused=0;s.n_failed=0;s.n_waited=0;s.lat=[];s.wait=wait_for_slot;s.pend=[]
         s.odst={}                                                 # tag -> device destination of an in-flight borrowed-pool upgrade
+        s.lent=set()                                              # nq-lmpf slot borrow: normal-pool slots lent to LMPF (never in free)
         s.nslot=nslot;s.xep=0;s.xfree=[];s.xaddr={};s.xpend=[];s.xtag=False;s.x_have=0;s.x_done=0;s.xst=collections.Counter()   # nq-prefill borrowed pool
         # host-loop cost is GIL time taken from the serving thread: rows are precomputed numpy (level-4 row = template +
         # slot address on the P4 fields), mailbox counters are read through numpy views
@@ -68,7 +69,8 @@ class RankExecutor:
         if lv==2 or s.shadow:return r2            # shadow (A/B only): every read / copy / mailbox op happens, the row stays level 2
         return torch.from_numpy(z+m*(s.slot0+slot*s.rb if slot<s.nslot else s.xaddr[slot]))
     def _rel(s,sl):
-        if sl<s.nslot:s.free.append(sl)
+        if sl<s.nslot:
+            if sl not in s.lent:s.free.append(sl)
         elif s.xep and (sl-s.nslot)//XS==s.xep:s.xfree.append(sl)
         else:s.xaddr.pop(sl,None)                          # borrowed slot of a reclaimed epoch: never reused
     def apply(s,ups,downs,sched=None):
@@ -207,16 +209,68 @@ class RankExecutor:
             if w is not None and w[0]==2:continue          # its level-2 row is already staged
             by[L].append(E)
         dev=s.slots.device
-        for L,Es in by.items():
-            MB=s.layers[L][1];q=[MB.hseq[E]+1 for E in Es]
-            rows=torch.stack([s.rc[L,E][0] for E in Es]).to(device=dev,dtype=MB.stage.dtype)
-            ix=torch.tensor(Es,dtype=torch.long,device=dev)
-            MB.stage.index_copy_(0,ix,rows);MB.seq.index_copy_(0,ix,torch.tensor(q,dtype=MB.seq.dtype,device=dev))
-            for E,qq in zip(Es,q):MB.hseq[E]=qq;s.wait_apply[L,E]=(2,qq);forced.append((L,E))
+        for L,E,qq in s._stage({L:[(E,s.rc[L,E][0]) for E in Es] for L,Es in by.items()}):s.wait_apply[L,E]=(2,qq);forced.append((L,E))
         torch.cuda.synchronize(dev)
         if s.odst:s.xst['odst_stale']+=len(s.odst);s.odst={k:v for k,v in s.odst.items() if k in s.ops}
         s.xep=0;s.xfree=[];s.x_done=ep
         for sl in [sl for sl in s.xaddr if sl not in set(s.slot_of.values())]:del s.xaddr[sl]
         s.xst['forced']+=len(forced);s.xst['reclaims']+=1;s.xst['wait_iters']+=nw;s.xst['reclaim_ms']+=int((time.time()-t0)*1e3)
         return forced
+    # ---- staged rows (x_reclaim, nq-lmpf slot borrow)
+    def _stage(s,by):
+        """by = {L: [(E, row)]}: write the rows into the mailbox stage + bump seq on the current stream -> [(L, E, seq)]
+        (the next apply of the layer, captured or direct, switches the table rows)"""
+        dev=s.slots.device;out=[]
+        for L,er in by.items():
+            if not er:continue
+            MB=s.layers[L][1];Es=[E for E,_ in er];q=[MB.hseq[E]+1 for E in Es]
+            rows=torch.stack([torch.as_tensor(r) for _,r in er]).to(device=dev,dtype=MB.stage.dtype)
+            ix=torch.tensor(Es,dtype=torch.long,device=dev)
+            MB.stage.index_copy_(0,ix,rows);MB.seq.index_copy_(0,ix,torch.tensor(q,dtype=MB.seq.dtype,device=dev))
+            for E,qq in zip(Es,q):MB.hseq[E]=qq;out.append((L,E,qq))
+        return out
+    def _stage_apply(s,by):
+        """stage, apply the touched layers' mailboxes now, sync; the table rows have switched when this returns"""
+        st=s._stage(by)
+        for L in {L for L,_,_ in st}:s.layers[L][1].apply()
+        torch.cuda.synchronize(s.slots.device)
+        bad=[(L,E) for L,E,q in st if int(s.ah[L][E])!=q]
+        assert not bad,f'mailbox apply did not land {bad[:4]}'
+        return st
+    def quiet(s):
+        """no op in flight, nothing waiting for a mailbox apply, no borrowed (prefill-borrow) pool"""
+        return not s.ops and not s.wait_apply and not s.xep and not any(sl>=s.nslot for sl in s.slot_of.values())
+    def evict_now(s,keys):
+        """level-4 residents keys -> level 2 now (rows applied, slots released to free unless lent). Executor must be
+        quiet (no ops / applies outstanding). -> the keys evicted (callers update their scheduler / follower)"""
+        ks=[k for k in keys if k in s.slot_of and s.slot_of[k]<s.nslot]
+        by=collections.defaultdict(list)
+        for L,E in ks:by[L].append((E,s.rc[L,E][0]))
+        if ks:s._stage_apply(by)
+        for k in ks:s._rel(s.slot_of.pop(k))
+        s.xst['lend_evict']+=len(ks);return ks
+    def relocate(s,moves):
+        """[(L, E), src, dst]: copy the record bytes src -> dst (device), switch the level-4 row to dst, src freed"""
+        if not moves:return
+        fr=set(s.free)
+        for k,a,b in moves:
+            assert s.slot_of.get(k)==a and b in fr and b not in s.lent,(k,a,b)
+            s.slots[b].copy_(s.slots[a]);fr.discard(b)
+        by=collections.defaultdict(list)
+        for (L,E),a,b in moves:by[L].append((E,s._row(L,E,4,b)))
+        s._stage_apply(by)
+        dst={b for _,_,b in moves};s.free=[x for x in s.free if x not in dst]
+        for k,a,b in moves:s.slot_of[k]=b;s._rel(a)
+        s.xst['lend_move']+=len(moves)
+    def lend(s,a,n):
+        """slots [a, a+n) leave the pool (must hold no expert): removed from free, never released into it until unlend"""
+        sp=set(range(a,a+n));assert a>=0 and a+n<=s.nslot and not (sp&s.lent)
+        occ=[k for k,sl in s.slot_of.items() if sl in sp];assert not occ,f'lend: span holds {occ[:4]}'
+        s.free=[x for x in s.free if x not in sp];s.lent|=sp;s.xst['lends']+=1;s.xst['lent']+=n
+    def unlend(s):
+        n=len(s.lent);s.free.extend(sorted(s.lent,reverse=True));s.lent=set();return n
+    def addr(s,sl):return s.slot0+sl*s.rb
+    def span_view(s,a,n):
+        """uint8 view of slots [a, a+n) (contiguous bytes at addr(a))"""
+        return s.slots[a:a+n].view(-1)
     def close(s):s.eng.close()

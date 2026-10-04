@@ -114,12 +114,20 @@ class _cop:
     def __exit__(s,*a):
         if s.orig:s.orig[0].forward=s.orig[1]
 RESERVE_GB=float(os.environ.get('NQ_LMPF_RESERVE_GB','1.5'))
+CG=os.environ.get('NQ_LMPF_CG','1')=='1'      # exec window through vLLM's compiled piecewise submods (rows); 0 = eager per-layer loop
 CAP_GB=float(os.environ.get('NQ_LMPF_CAP_GB','0'))   # >0: device memory in use (nvidia-smi view) stays <= this after the ring + window
 RATE0=float(os.environ.get('NQ_LMPF_RATE0_GBPS','2.0'))*1e9
 SNAP_MB=float(os.environ.get('NQ_LMPF_SNAP_MAX_MB','512'))
 PAUSE_S=float(os.environ.get('NQ_LMPF_PAUSE_S','30'))
 READ_TIMEOUT=float(os.environ.get('NQ_LMPF_READ_TIMEOUT_S','60'))
 MIN_C=int(os.environ.get('NQ_LMPF_MIN_RECS','32'))
+# slot borrow (nq_slotborrow.py): ring (ring) or ring + window state (all) in idle decode-expert slots during a prefill
+BORROW=os.environ.get('NQ_LMPF_BORROW','0')
+if BORROW not in ('0','ring','all'):BORROW='0'
+BORROW_MAX=float(os.environ.get('NQ_LMPF_BORROW_MAX','0.5'))    # most of the slot pool one borrow may take
+BW_OFF='/dev/shm/nq_lmpf_borrow_off'                             # exists: no new borrow (every rank runs plain / unhooked)
+AL=256
+def _al(x):return -(-int(x)//AL)*AL
 
 # ---------------- pure helpers (CPU-tested) ----------------
 def split(n,mnbt):
@@ -161,7 +169,7 @@ def size_plan(avail,rb,per_tok,window,mnbt,recs,min_c=MIN_C):
     W = 0 (no windows, single-step bud / full only) if even the smallest window does not fit; None if no ring fits"""
     C=min(recs,NE);W=window
     def need(W,C):return 2*C*rb+W*per_tok
-    while need(W,C)>avail and W>2*mnbt:W=max(2*mnbt,W//2)
+    while need(W,C)>avail and W>2*mnbt:W=max(2*mnbt,W-mnbt if W%mnbt==0 else W//2)
     while need(W,C)>avail and C>min_c:C=max(min_c,C//2)
     if need(W,C)<=avail and W>mnbt:return W,C
     C=min(recs,NE)
@@ -207,7 +215,7 @@ def snap(o,limit=None,memo=None,shared=None):
     return o
 
 def write_json(path,d):
-    tmp=path+'.tmp'
+    import threading;tmp=f'{path}.{threading.get_ident()}.tmp'   # the slot-borrow refill watcher publishes too
     with open(tmp,'w') as f:json.dump(d,f)
     os.replace(tmp,path)
 
@@ -215,9 +223,10 @@ def write_json(path,d):
 class Ring:
     """2 slots x C records; eng = nqstream engine (or a mock: upgrade / poll); rows[(L, E)] = (r2, z, m) numpy rows
     (executor rc: level-4 row = z + m * record address); rec(L, E) -> record index"""
-    def __init__(s,eng,rb,C,dev,rows,rec):
+    def __init__(s,eng,rb,C,dev,rows,rec,own=True):
         s.eng=eng;s.rb=rb;s.C=C;s.dev=dev;s.rows=rows;s.rec=rec;cuda=dev.type=='cuda'
-        s.buf=torch.empty(2,C,rb,dtype=torch.uint8,device=dev)
+        s.buf=torch.empty(2,C,rb,dtype=torch.uint8,device=dev) if own else None
+        s.base=None                     # own=False (slot borrow): device address of the 2 x C borrowed records, set_base
         s.sink=torch.zeros(2*C,ROW_W,dtype=torch.int64,device=dev);s.sinkq=torch.zeros(2*C,dtype=torch.int32,device=dev)
         pin=(lambda t:t.pin_memory()) if cuda else (lambda t:t)
         s.rp=[pin(torch.zeros(C,ROW_W,dtype=torch.int64)) for _ in range(2)];s.ip=[pin(torch.zeros(C,dtype=torch.int64)) for _ in range(2)]
@@ -226,10 +235,14 @@ class Ring:
         s.ev=[torch.cuda.Event(),torch.cuda.Event()] if cuda else None
         s.tag=0;s.q=0;s.pend=[{},{}];s.res=[[],[]];s.nfail=[0,0];s.t0=[0.,0.];s.L=[None,None]
         s.st=dict(recs=0,bytes=0,failed=0,wait_s=0.,issued=0)
-    def addr(s,slot,j):return s.buf.data_ptr()+(slot*s.C+j)*s.rb
+    def addr(s,slot,j):return (s.buf.data_ptr() if s.buf is not None else s.base)+(slot*s.C+j)*s.rb
+    def set_base(s,a):
+        assert not s.pend[0] and not s.pend[1],'ring rebased with reads in flight'
+        s.base=a
     def issue(s,slot,L,Es):
         """queue reads of experts Es of layer L into slot (the slot must be idle: waited, and its GPU users done)"""
         assert not s.pend[slot],'ring slot busy'
+        assert s.buf is not None or s.base is not None,'ring has no memory (slot borrow not held)'
         assert len(Es)<=s.C,(len(Es),s.C)
         s.res[slot]=[];s.nfail[slot]=0;s.t0[slot]=time.perf_counter();s.L[slot]=L
         sp=s.sink.data_ptr();qp=s.sinkq.data_ptr()
@@ -294,7 +307,9 @@ class LM:
         s.rt=rt;s.active=False;s.ring=None;s.hbuf=None;s.W=0;s.R=None;s.paused=False;s.prid=None;s.snapt=None;s.lv=None
         s.cur=None;s.op=False;s.mode=None;s.vnext=0;s.wt_cur=None;s.bud={};s.rate=RATE0;s.key=None;s.dead=False
         s.acc={};s.tot={};s.early=EARLY;s.meta=META;s.order=ORDER;s.dx={};s.pev=None;s.pacc=dict(wall=0.,lay=0.,moe=0.,prep=0.,steps=0);s.n=dict(op=0,exec=0,plain=0,fallback=0,visits=0,hook_err=0,steps_full=0,steps_bud=0);s.last={}
-        s.fail_logged=0
+        s.fail_logged=0;s.cgf=None;s.cg_args=None
+        s.bw=None;s.bwi=None;s.bwrid=None;s.arena=None;s.C=0;s.per_tok=0;s.ar=s._ar   # slot borrow (BORROW != 0)
+        s.bwst=dict(borrows=0,returns=0,cant=0,place=0,fb_shape=0,fb_g=0,fb_alias=0,arena_view=0);s.bwlast={};s.refill={}
     # ---- setup ----
     def setup(s,R):
         rt=s.rt;s.R=R;dev=rt.dev
@@ -322,11 +337,30 @@ class LM:
         s.fuse_final=bool(getattr(inner,'pcie_fuse_final_norm',False))
         if s.fuse_final and s.ffn is None:return s._off('pcie_fuse_final_norm without fused_ar_rms_norm')
         esz=torch.empty(0,dtype=s.dtype).element_size()
-        per_tok=2*H*esz+(s.tib.shape[1]*4 if s.tib is not None else 0)
+        s.cg=None
+        if CG:
+            try:s.cg_setup()
+            except Exception:log.exception('NestQuant LMPF rank %d: compiled-graph setup failed, eager windows',rt.rank);s.cg=None
+        tb=(s.tib.shape[1]*s.tib.element_size() if s.tib is not None else 0)
         rb=rt.rf.rb if hasattr(rt,'rf') else 0
+        bw=BORROW if (rb and hasattr(rt,'X')) else '0'
+        if bw!='0' and (type(getattr(rt,'F',None)).__name__=='CppFollower' or getattr(getattr(rt,'S',None),'core',None) is not None):
+            log.warning('NestQuant LMPF rank %d: slot borrow needs the python host loop (NQ_HOSTLOOP=py), borrow off',rt.rank);bw='0'
+        if bw=='all' and s.cg and 'PTa' not in s.cg:bw='ring'
+        per_tok=((s.cg['PTa'] if bw=='all' else s.cg['per_tok']) if s.cg else 2*H*esz)+tb
+        s.esz=esz;s.tb=tb;s.per_tok=per_tok
         free,tot=torch.cuda.mem_get_info(dev);avail=free-RESERVE_GB*2**30
         if CAP_GB>0:avail=min(avail,CAP_GB*2**30-(tot-free)-RESERVE_GB*2**30)
-        p=size_plan(avail,rb,per_tok,EN.WINDOW,s.mnbt,RING_RECS) if rb and hasattr(rt,'X') else None
+        if bw!='0':
+            B=int(BORROW_MAX*rt.X.nslot)
+            if bw=='all':p=size_plan((B-2)*rb,rb,per_tok,EN.WINDOW,s.mnbt,RING_RECS)
+            else:
+                C=min(RING_RECS,NE,B//2);pw=size_plan(avail,0,per_tok,EN.WINDOW,s.mnbt,RING_RECS)
+                p=(pw[0] if pw else 0,C) if C>=MIN_C else None
+            if p is None:log.warning('NestQuant LMPF rank %d: slot borrow %s: no ring fits in %d slots, borrow off',rt.rank,bw,B);bw='0'
+            else:s.bw=bw;s.bwB=B
+        if bw=='0':
+            p=size_plan(avail,rb,per_tok,EN.WINDOW,s.mnbt,RING_RECS) if rb and hasattr(rt,'X') else None
         if p is None and rb and hasattr(rt,'X'):log.warning('NestQuant LMPF rank %d: %.2f GiB free (reserve %.1f): no ring fits',rt.rank,free/2**30,RESERVE_GB)
         W,C=p if p is not None else (0,0)
         try:
@@ -335,14 +369,17 @@ class LM:
                 IO=nq_vllm._io_cfg(rt.rank,os.environ['NQ_REPACK'],rb);kw={k:v for k,v in IO['kw'].items() if k in ('alt_path','qd_alt')}
                 qd=IO['qd'];nh=int(os.environ.get('NQ_LMPF_NHOST') or max(32,2*(qd+kw.get('qd_alt',0))))
                 eng=rt.rf.engine(nh,qd,dev.index,**kw)
-                s.ring=Ring(eng,rb,C,dev,rt.X.rc,rt.rf.rec)
-            if W:
-                s.hbuf=torch.empty(W,H,dtype=s.dtype,device=dev);s.rbuf=torch.empty(W,H,dtype=s.dtype,device=dev)
+                s.ring=Ring(eng,rb,C,dev,rt.X.rc,rt.rf.rec,own=s.bw is None);s.C=C
+            if W and s.bw=='all':pass                     # window state lives in the borrowed span (bw_bind)
+            elif W:
+                if s.cg:s.hbuf=torch.empty(W,0,dtype=s.dtype,device=dev);s.rbuf=None      # rows keep their own live values
+                else:s.hbuf=torch.empty(W,H,dtype=s.dtype,device=dev);s.rbuf=torch.empty(W,H,dtype=s.dtype,device=dev)
                 s.stash=torch.empty(W,s.tib.shape[1],dtype=s.tib.dtype,device=dev) if s.tib is not None else None
             s.W=W
         except Exception:
             log.exception('NestQuant LMPF rank %d: ring / window allocation failed',rt.rank)
-            s.ring=None;s.hbuf=s.rbuf=s.stash=None;s.W=0;torch.cuda.empty_cache()
+            s.ring=None;s.hbuf=s.rbuf=s.stash=None;s.W=0;s.bw=None;torch.cuda.empty_cache()
+        if s.bw is not None and s.ring is None:s.bw=None
         s.pop={L:np.zeros(NE) for L in s.ring_layers}
         try:
             fj=json.load(open(os.environ.get('NQ_HOME','/nq')+'/threads/22-boundary-experts/fixed_set.json'))
@@ -359,10 +396,347 @@ class LM:
         s.rp=EN.ready_path(s.key,rt.rank) if s.key else None
         s.sp=f'/dev/shm/nq_lmpf_stats_{s.key}_r{rt.rank}.json' if s.key else None
         if s.rp and (s.W or s.ring is not None):
-            write_json(s.rp,dict(W=s.W,C=C if s.ring is not None else 0,mnbt=s.mnbt,ring=s.ring is not None,rank=rt.rank,t=time.time()))
+            write_json(s.rp,dict(W=s.W,C=C if s.ring is not None else 0,mnbt=s.mnbt,ring=s.ring is not None,borrow=s.bw or '0',rank=rt.rank,t=time.time()))
             atexit.register(lambda p=s.rp:os.path.exists(p) and os.remove(p))
-        log.info('NestQuant LMPF rank %d: on, window %d tokens (mnbt %d), ring %s, %d ring layers, %.2f GiB free before, meta %s, order %s, ready %s',
-                 rt.rank,s.W,s.mnbt,f'{C} recs x 2 ({2*C*rb/2**30:.2f} GiB)' if s.ring is not None else 'off',len(s.ring_layers),free/2**30,META,ORDER,s.rp)
+        log.info('NestQuant LMPF rank %d: on, window %d tokens (mnbt %d), ring %s, %d ring layers, %.2f GiB free before, meta %s, order %s, exec %s (%d B/token), borrow %s, ready %s',
+                 rt.rank,s.W,s.mnbt,f'{C} recs x 2 ({2*C*rb/2**30:.2f} GiB)' if s.ring is not None else 'off',len(s.ring_layers),free/2**30,META,ORDER,
+                 f"compiled rows ({len(s.cg['rows'])})" if s.cg else 'eager',per_tok,
+                 f"{s.bw} (max {s.bwB} slots, window {s.bw_need(s.W) if s.bw=='all' else 2*C} slots)" if s.bw else 'off',s.rp)
+    def cg_setup(s):
+        """compiled exec plan from the backbone's VllmBackend.split_gm (stitching graph over vLLM's piecewise submods).
+        Rows: row 0 = the piece before layer 0's attention; row r = layer L's splitting submods (kv-cache update / DSA
+        indexer, MLA attention) + the following compiled piece (L's o_proj + MLP/MoE, L+1's norms + projections; the
+        last one ends in the final norm). A window runs row-outer / chunk-inner, so every MoE layer is one ring visit.
+        Live values crossing a row boundary are kept per chunk (per_tok = the largest such set, bytes per token).
+        The VllmSerializableFunction's optimized_call is wrapped to keep the flat argument list of the last call
+        (weights / buffers / layer names: same objects every call; per chunk: sym sizes, inputs_embeds, positions)."""
+        import re,operator
+        f=None
+        af=getattr(s.inner,'aot_compiled_fn',None);cf=getattr(getattr(af,'_artifacts',None),'compiled_fn',None)
+        if cf is not None and type(cf).__name__=='VllmSerializableFunction':f=cf
+        if f is None:
+            import gc
+            fs=[o for o in gc.get_objects() if type(o).__name__=='VllmSerializableFunction' and 'backbone' in str(getattr(o,'prefix',''))]
+            f=fs[0] if fs else None
+        gm=getattr(getattr(f,'vllm_backend',None),'split_gm',None)
+        if gm is None:log.warning('NestQuant LMPF rank %d: no compiled backbone split_gm, eager windows',s.rt.rank);return
+        nodes=list(gm.graph.nodes);ph=[n for n in nodes if n.op=='placeholder'];pi={n:i for i,n in enumerate(ph)}
+        spec={}
+        for n in ph:
+            t=str(n.target)
+            if 'inputs_embeds' in t:spec[n]='emb'
+            elif 'positions' in t:spec[n]='pos'
+            elif n.type is torch.SymInt or re.fullmatch(r's\d+',t):spec[n]='nk'
+            elif not (t.startswith('L_self_modules') or t.startswith('SYNTHETIC_LOCAL')):
+                log.warning('NestQuant LMPF rank %d: unknown backbone input %s, eager windows',s.rt.rank,t);return
+        kind={};rows=[[]];hasp=False;out=None
+        for n in nodes:
+            if n.op=='placeholder':continue
+            if n.op=='output':out=n;break
+            if n.op=='call_module':
+                code=gm._modules[n.target].code if n.target in gm._modules else ''
+                k=('attn' if 'unified_mla_attention' in code else 'idx' if 'sparse_attn_indexer' in code
+                   else 'split' if 'unified_mla_kv_cache_update' in code else 'piece')
+                kind[n]=k
+                if k!='piece' and hasp:rows.append([]);hasp=False
+                if k=='piece':hasp=True
+            elif n.op!='call_function':
+                log.warning('NestQuant LMPF rank %d: stitching node %s %s, eager windows',s.rt.rank,n.op,n.target);return
+            rows[-1].append(n)
+        rowof={n:r for r,ns in enumerate(rows) for n in ns}
+        info=[]
+        for r,ns in enumerate(rows):
+            L=None
+            for n in ns:
+                if kind.get(n)=='piece':
+                    for a in n.args:
+                        m=re.search(r'layers_modules_(\d+)_modules_post_attention_layernorm',str(getattr(a,'target','')))
+                        if m:L=int(m.group(1))
+            info.append(dict(L=L,idx=any(kind.get(n)=='idx' for n in ns),attn=any(kind.get(n)=='attn' for n in ns)))
+        att=[i['L'] for i in info[1:]]
+        if att!=s.layers or info[0]['attn']:
+            log.warning('NestQuant LMPF rank %d: rows %d, row layers %s.. != layers, eager windows',s.rt.rank,len(rows),att[:6]);return
+        # per-chunk live values after each row (bytes / token): values used by a later row or by the output
+        last={}
+        for n in nodes:
+            if n.op in ('placeholder','output'):continue
+            us=[rowof.get(u,len(rows)) for u in n.users]
+            last[n]=max(us) if us else rowof[n]
+        pe=[n for n in ph if spec.get(n)=='emb']
+        for n in pe:last[n]=max(rowof.get(u,len(rows)) for u in n.users)
+        def bpt(n):
+            v=n.meta.get('example_value',n.meta.get('val'))
+            vs=v if isinstance(v,(tuple,list)) else (v,)
+            b=0
+            for t in vs:
+                if isinstance(t,torch.Tensor) and t.dim() and not isinstance(t.shape[0],int):
+                    e=1
+                    for d in t.shape[1:]:e*=int(d)
+                    b+=e*t.element_size()
+            return b
+        live=[sum(bpt(n) for n in last if (rowof.get(n,-1)<=r) and last[n]>r and nodes and (n.op!='call_module' or not any(u.target is operator.getitem for u in n.users)))
+              for r in range(len(rows))]
+        per=int(max(live)) if live and max(live)>0 else int(os.environ.get('NQ_LMPF_CG_PER_TOK','65536'))
+        per+=s.H*2                                        # final hidden states of every chunk until sampling
+        # compiled node program: (node, fn, args spec, kwargs spec)
+        def ref(a):
+            if isinstance(a,torch.fx.Node):
+                if a.op=='placeholder':return ('s',spec[a]) if a in spec else ('g',pi[a])
+                return ('c',a)
+            if isinstance(a,(tuple,list)):return ('t',type(a),[ref(x) for x in a])
+            return ('l',a)
+        # the callables the runtime actually uses: optimized_call = partial(execution_fn, __vllm_submods__=[...]) (maybe
+        # behind copy_and_call); on the AOT-cache path the compiled pieces are ONLY there (split_gm keeps the uncompiled FX)
+        import functools
+        oc0=f.optimized_call;rc=oc0 if isinstance(oc0,functools.partial) else None
+        if rc is None:
+            for c in (getattr(oc0,'__closure__',None) or ()):
+                try:
+                    if isinstance(c.cell_contents,functools.partial):rc=c.cell_contents
+                except ValueError:pass
+        names=getattr(f,'submod_names',None)
+        if rc is None or not names or '__vllm_submods__' not in rc.keywords:
+            log.warning('NestQuant LMPF rank %d: no runtime submodule list (%s), eager windows',s.rt.rank,type(oc0).__name__);return
+        subs={nm:c for nm,c in zip(names,rc.keywords['__vllm_submods__']) if c is not None}
+        def callee(n):
+            if n.op!='call_module':return n.target
+            if kind.get(n)=='piece':
+                if n.target not in subs:raise RuntimeError(f'compiled piece {n.target} not in the runtime submodule list')
+                return subs[n.target]
+            return gm._modules[n.target]
+        npc=sum(1 for n in kind if kind[n]=='piece')
+        log.info('NestQuant LMPF rank %d: runtime submods %d bound (%d pieces, %s)',s.rt.rank,len(subs),npc,type(next(iter(subs.values()))).__name__ if subs else None)
+        prog=[[(n,callee(n),[ref(a) for a in n.args],{k:ref(v) for k,v in n.kwargs.items()},kind.get(n))
+               for n in ns] for ns in rows]
+        drop=[[n for n in last if last[n]==r and n.op!='placeholder'] for r in range(len(rows))]
+        tpi=[pi[n] for n in ph if str(n.target).endswith('topk_indices_buffer')]
+        s.cg=dict(f=f,gm=gm,rows=rows,info=info,prog=prog,drop=drop,out=ref(out.args[0]),per_tok=per,live=live,tpi=tpi)
+        if BORROW=='all':
+            # slot-borrow arena: every value crossing a row boundary (and the embeddings, and the final output) gets a
+            # static byte column per token; a value lives in columns [c, c+w) of its chunk's region from the row that
+            # makes it until its last row (nq_slotborrow.plan_cols); chunk k's region = arena[o_k*PTa : (o_k+nk)*PTa)
+            import nq_slotborrow as SB
+            items=[];bp={}
+            for n in last:
+                if n.op in ('placeholder','output') or (n.op=='call_module' and any(u.target is operator.getitem for u in n.users)):continue
+                if last[n]<=rowof[n]:continue
+                b=bpt(n)
+                if b>0:items.append((rowof[n],last[n],n,b));bp[n]=b
+            le=max([last[n] for n in pe] or [1]);le=max(le,1)
+            items.append((-1,le,'__emb',s.H*torch.empty(0,dtype=getattr(s,'dtype',torch.bfloat16)).element_size()))
+            cols,PTa=SB.plan_cols(items)
+            born=[[n for n in cols if n!='__emb' and rowof[n]==r] for r in range(len(rows))]
+            s.cg.update(plan=cols,PTa=PTa,bpt=bp,born=born)
+            log.info('NestQuant LMPF rank %d: slot-borrow arena plan: %d values, %d B/token (live max %d)',s.rt.rank,len(cols),PTa,max(live) if live else -1)
+        oc=f.optimized_call;lm=s
+        pidx={spec[n]:pi[n] for n in ph if n in spec}
+        def optimized_call(*a,**k):
+            if lm.cg_args is None:log.info('NestQuant LMPF rank %d: compiled exec armed (%d backbone inputs; per call %s)',lm.rt.rank,len(a),
+                                           [(str(n.target),a[i] if not isinstance(a[i],torch.Tensor) else tuple(a[i].shape)) for n,i in pi.items() if n in spec])
+            lm.cg_args=a;return oc(*a,**k)
+        f.optimized_call=optimized_call
+        log.info('NestQuant LMPF rank %d: compiled exec: %d rows, %d indexer rows, live max %d B/token (row %d), per_tok %d',
+                 s.rt.rank,len(rows),sum(i['idx'] for i in info),max(live) if live else -1,live.index(max(live)) if live else -1,per)
+    def cg_val(s,a,env,G,sp):
+        t=a[0]
+        if t=='c':return env[a[1]]
+        if t=='g':return G[a[1]]
+        if t=='s':return sp[a[1]]
+        if t=='l':return a[1]
+        return a[1](s.cg_val(x,env,G,sp) for x in a[2])
+    def cg_layer_run(s,so,info,rid,idx,c0,offs):
+        """window through the compiled rows: row-outer, chunk-inner, metadata re-prepared per (row, chunk)"""
+        R=s.R;cg=s.cg;K=len(offs);tib=s.tib;stash=s.stash;G=s.cg_args
+        if G is None:raise RuntimeError('no captured backbone call yet')
+        if cg['tpi']:
+            tg=G[cg['tpi'][0]]
+            if tib is None or tg.data_ptr()!=tib.data_ptr() or tg.shape!=tib.shape:
+                if s.fail_logged<5:s.fail_logged+=1;log.warning('NestQuant LMPF rank %d: compiled topk buffer %s %s != tib %s %s, using the compiled one',
+                                                               s.rt.rank,tuple(tg.shape),hex(tg.data_ptr()),None if tib is None else tuple(tib.shape),None if tib is None else hex(tib.data_ptr()))
+                tib=tg
+        from vllm.forward_context import get_forward_context
+        envs=[{} for _ in range(K)];hs=[None]*K;A=s.arena
+        if A is not None:gp={a.untyped_storage().data_ptr() for a in G if isinstance(a,torch.Tensor)}
+        for k,(o,nk) in enumerate(offs):        # embeddings (vocab-parallel: collective, after the vote)
+            P=s.prep(so,rid,idx,c0+o,nk)
+            with s.fctx(P,nk):
+                e=s.embed(P,nk)
+                if A is not None and e.numel()*e.element_size()==nk*cg['plan']['__emb'][1]:
+                    envs[k]['__emb']=s.aview(o,nk,cg['plan']['__emb'][0],e).copy_(e);s.bwst['place']+=1
+                else:envs[k]['__emb']=e.clone()     # embed may return a view of the runner's persistent inputs_embeds
+        if s.ring is not None:s.begin(info,K,False)
+        else:s.mode=info['m'];s.op=False
+        prof=s.dx.get('prof')=='1';s.pev=dict(moe=[],lay=[]) if prof else None
+        if prof:torch.cuda.synchronize();tw=time.perf_counter()
+        pre=False;nrow=len(cg['prog']);cv=s.cg_val
+        try:
+            s.active=True
+            nR=len(s.ring_layers);nrow=len(cg['prog'])
+            if s.order=='chunk':seq=[(r,k,True,True) for k in range(K) for r in range(nrow)]
+            else:seq=[(r,k,k==0,k==K-1) for r in range(nrow) for k in range(K)]
+            for r,k,fst,lst in seq:
+                    prog=cg['prog'][r];inf=cg['info'][r];o,nk=offs[k]
+                    L=inf['L'];v=s.vidx.get(L) if L is not None else None;dr=cg['drop'][r]
+                    if v is not None and s.order=='chunk':v=k*nR+v
+                    tp=time.perf_counter() if prof else 0;P=s.prep(so,rid,idx,c0+o,nk);env=envs[k]
+                    if prof:s.pacc['prep']+=time.perf_counter()-tp
+                    with s.fctx(P,nk):
+                        get_forward_context().all_moe_layers=None
+                        if not pre:R.kv_connector.pre_forward(so);pre=True
+                        sp=dict(nk=nk,pos=P.pos,emb=env.get('__emb'))
+                        s.cur=(L,k,v,fst,lst)
+                        if prof:a0=torch.cuda.Event(enable_timing=True);a0.record()
+                        for n,fn,args,kw,kd in prog:
+                            if kd=='attn' and tib is not None and not inf['idx']:tib[:nk].copy_(stash[o:o+nk])
+                            env[n]=fn(*[cv(a,env,G,sp) for a in args],**{x:cv(y,env,G,sp) for x,y in kw.items()})
+                            if kd=='idx' and tib is not None:stash[o:o+nk].copy_(tib[:nk])
+                        if prof:a1=torch.cuda.Event(enable_timing=True);a1.record();s.pev['lay'].append((a0,a1))
+                        s.cur=None
+                        if A is not None:s.arena_place(r,env,o,nk,gp)
+                        if r==nrow-1:
+                            h=cv(cg['out'],env,G,sp);hs[k]=h[0] if isinstance(h,(tuple,list)) else h
+                        for n in dr:env.pop(n,None)
+                        if r==1:env.pop('__emb',None)
+        finally:
+            s.end()
+        if prof:
+            torch.cuda.synchronize();wall=time.perf_counter()-tw;pe=s.pev;s.pev=None
+            sm=lambda l:sum(a.elapsed_time(b) for a,b in l)/1e3
+            pr=s.pacc;pr['wall']+=wall;pr['lay']+=sm(pe['lay']);pr['moe']+=sm(pe['moe']);pr['steps']+=1
+        envs=None
+        for k,(o,nk) in enumerate(offs):
+            P=s.prep(so,rid,idx,c0+o,nk)
+            with s.fctx(P,nk):pass
+            s.sample_sub(P,hs[k],k==K-1,so)
+        return None
+    # ---- slot borrow (nq_slotborrow.py) ----
+    def aview(s,o,nk,c,v):
+        """arena view for value v (chunk at token offset o, nk tokens, column c)"""
+        off=o*s.cg['PTa']+c*nk;nb=v.numel()*v.element_size()
+        return s.arena[off:off+nb].view(v.dtype).view(v.shape)
+    def arena_place(s,r,env,o,nk,gp):
+        """after row r of a chunk: its values that cross the row boundary -> their arena columns (env entries replaced;
+        the allocator copies are freed when the row's other references drop). Left in the allocator: not a tensor /
+        unexpected size or layout, storage of a backbone input (persistent buffers, e.g. the topk buffer), or sharing
+        storage with another value of the row (an alias pair must stay an alias). An arena view (a view of an older
+        value) is copied (through a clone) into its own columns."""
+        cg=s.cg;pl=cg['plan'];bp=cg['bpt'];st=s.bwst;ast=s.arena.untyped_storage().data_ptr();todo=[];grp={}
+        for n in cg['born'][r]:
+            v=env.get(n)
+            if not isinstance(v,torch.Tensor) or v.dim()==0 or v.shape[0]!=nk or not v.is_contiguous() or v.numel()*v.element_size()!=nk*bp[n]:
+                st['fb_shape']+=1;continue
+            p=v.untyped_storage().data_ptr()
+            if p==ast:todo.append((n,v,True));continue
+            if p in gp:st['fb_g']+=1;continue
+            grp[p]=grp.get(p,0)+1;todo.append((n,v,False))
+        for n,v,av in todo:
+            if not av and grp[v.untyped_storage().data_ptr()]>1:st['fb_alias']+=1;continue
+            d=s.aview(o,nk,pl[n][0],v)
+            if av:st['arena_view']+=1;d.copy_(v.clone())
+            else:d.copy_(v)
+            env[n]=d;st['place']+=1
+    def _ar(s,v):
+        """element-wise MAX of an int32 vector over the TP ranks"""
+        v=np.ascontiguousarray(v,dtype=np.int32)
+        from vllm.distributed import get_tp_group
+        g=get_tp_group()
+        if g.world_size<=1:return v
+        t=torch.from_numpy(v).to(s.rt.dev);torch.distributed.all_reduce(t,op=torch.distributed.ReduceOp.MAX,group=g.device_group)
+        return t.cpu().numpy()
+    def bw_need(s,ntok):
+        """slots to borrow: the ring (2 C) + (all) the window state of ntok tokens"""
+        n=2*s.C
+        if s.bw=='all' and ntok:n+=-(-(ntok*s.per_tok+4*AL)//s.rt.X.rb)
+        return n
+    def _hold(s,on):
+        rt=s.rt
+        with rt.cv:
+            if on:
+                rt.lm_hold+=1;rt.cv.wait_for(lambda:not rt.in_iter)
+            else:rt.lm_hold-=1;rt.cv.notify_all()
+    def bw_ensure(s,ntok,rid):
+        """collective (every rank, same step): hold a borrow of >= bw_need(ntok) slots (ring base set). -> False on
+        every rank when any rank cannot (no ring / off file / executor not idle in time / borrow refused)"""
+        import nq_slotborrow as SB
+        rt=s.rt;X=rt.X;n=s.bw_need(ntok)
+        cant=s.ring is None or os.path.exists(BW_OFF) or bool(X.xep)
+        redo=s.bwi is None or s.bwi['n']<n
+        v=s.ar(np.array([int(cant),int(redo),n],np.int32))
+        if v[0]:
+            s.bwst['cant']+=1;s.bw_return();return False
+        if not v[1]:s.bwrid=rid;return True
+        s.bw_return();n=int(v[2]);tmp=not s.paused;to=False
+        if tmp:
+            with rt.cv:
+                rt.ncap+=1;to=not rt.cv.wait_for(lambda:not rt.in_iter and not X.ops,timeout=PAUSE_S)
+        try:
+            r0=sum(1 for sl in X.slot_of.values() if sl<X.nslot);f0=len(X.free)
+            s._hold(True)
+            try:info=SB.borrow(rt,n,s.ar,cant=to)
+            finally:s._hold(False)
+        finally:
+            if tmp:
+                with rt.cv:rt.ncap-=1;rt.cv.notify_all()
+        if info is None:
+            s.bwst['cant']+=1;log.warning('NestQuant LMPF rank %d: slot borrow of %d refused (executor busy %s)',rt.rank,n,to);return False
+        info.update(r0=r0,f0=f0);s.bwi=info;s.bwrid=rid;s.bwst['borrows']+=1
+        s.bwlast={k:v for k,v in info.items() if k!='D0'};s.ring.set_base(X.addr(info['a']))
+        if s.bwst['borrows']<=3 or s.bwst['borrows']%50==0:
+            log.info('NestQuant LMPF rank %d: slot borrow #%d: %d slots at %d (%d evicted, %d moved) in %.1f ms',rt.rank,s.bwst['borrows'],n,info['a'],info['ev'],info['moved'],info['ms'])
+        return True
+    def bw_bind(s,ntok):
+        """(all) window state views for ntok tokens in the borrowed span after the ring"""
+        if s.bw!='all':return
+        X=s.rt.X;sp=X.span_view(s.bwi['a'],s.bwi['n']);off=2*s.C*X.rb;H=s.H
+        def take(nb):
+            nonlocal off
+            v=sp[off:off+nb];off=_al(off+nb);return v
+        if s.cg:s.arena=take(ntok*s.cg['PTa']);s.hbuf=None;s.rbuf=None
+        else:
+            s.hbuf=take(ntok*H*s.esz).view(s.dtype).view(ntok,H);s.rbuf=take(ntok*H*s.esz).view(s.dtype).view(ntok,H)
+        s.stash=take(ntok*s.tb).view(s.tib.dtype).view(ntok,s.tib.shape[1]) if s.tib is not None else None
+        assert off<=sp.numel(),(off,sp.numel())
+    def bw_return(s):
+        """local: drain the ring, sync the stream (every reader of the span done), give the span back"""
+        if s.bwi is None:return
+        import nq_slotborrow as SB
+        rt=s.rt;info=s.bwi
+        try:
+            if s.ring is not None:s.ring.drain()
+        except Exception:log.exception('NestQuant LMPF rank %d: ring drain at borrow return failed',rt.rank)
+        torch.cuda.current_stream().synchronize()
+        s.arena=None
+        if s.bw=='all':s.hbuf=s.rbuf=s.stash=None
+        s._hold(True)
+        try:n=SB.give_back(rt,info)
+        finally:s._hold(False)
+        s.bwi=None;s.bwrid=None;s.bwst['returns']+=1
+        if s.ring is not None:s.ring.set_base(None)
+        s.refill=dict(t=time.time(),n=n,r0=info['r0'],f0=info['f0'],done=None)
+        import threading
+        threading.Thread(target=s._refill_watch,args=(s.refill,),daemon=True).start()
+        s.publish()
+    def _refill_watch(s,rf,limit=300.):
+        """stats: time until the executor holds as many level-4 residents as before the borrow (or goes idle)"""
+        X=s.rt.X;t0=rf['t'];idle=None
+        while time.time()-t0<limit and s.refill is rf:
+            try:r=sum(1 for sl in list(X.slot_of.values()) if sl<X.nslot)
+            except RuntimeError:time.sleep(.01);continue
+            rf['res']=r
+            if r>=rf['r0']:rf['done']='refilled';break
+            if not X.ops and not X.pend:
+                idle=idle or time.time()
+                if time.time()-idle>2.:rf['done']='idle';break
+            else:idle=None
+            time.sleep(.02)
+        rf['s']=round(time.time()-t0-(2. if rf.get('done')=='idle' else 0.),3)
+        if s.bwst['returns']<=3 or s.bwst['returns']%50==0:log.info('NestQuant LMPF rank %d: slot borrow refill %s',s.rt.rank,rf)
+        s.publish()
+    def snap_tables(s):
+        rt=s.rt
+        for L in s.ring_layers:rt.lay[L]['MB'].apply()
+        s.snapt={L:rt.lay[L]['M'].table.clone() for L in s.ring_layers}
+        s.lv=torch.stack([s.snapt[L][:,0] for L in s.ring_layers]).cpu().numpy() if s.ring_layers else None
     def _off(s,why):
         log.warning('NestQuant LMPF rank %d: off (%s)',s.rt.rank,why);s.dead=True;return None
     # ---- executor pause ----
@@ -375,10 +749,11 @@ class LM:
                 ok=rt.cv.wait_for(lambda:not rt.in_iter and not rt.X.ops,timeout=PAUSE_S)
             if not ok:log.warning('NestQuant LMPF rank %d: executor not idle after %.0f s (%d ops in flight), snapshot anyway',rt.rank,PAUSE_S,len(rt.X.ops))
         s.paused=True
-        for L in s.ring_layers:rt.lay[L]['MB'].apply()
-        s.snapt={L:rt.lay[L]['M'].table.clone() for L in s.ring_layers}
-        s.lv=torch.stack([s.snapt[L][:,0] for L in s.ring_layers]).cpu().numpy() if s.ring_layers else None
+        s.snap_tables()
     def unpause(s):
+        if s.bwi is not None:
+            try:s.bw_return()
+            except Exception:log.exception('NestQuant LMPF rank %d: slot borrow return failed',s.rt.rank)
         if not s.paused:return
         rt=s.rt;s.paused=False;s.snapt=None;s.lv=None;s.prid=None
         if hasattr(rt,'X'):
@@ -478,13 +853,16 @@ class LM:
     # ---- step ----
     def step(s,orig,so,a,k):
         info=None if k.get('dummy_run',False) else getattr(so,'nq_lmpf',None)
-        if info is None or (s.prid is not None and info.get('rid')!=s.prid):s.unpause()
+        if info is None or (s.prid is not None and info.get('rid')!=s.prid) or (s.bwi is not None and info.get('rid')!=s.bwrid):s.unpause()
         if info is None:return orig(so,*a,**k)
         t0=time.perf_counter();s.last=dict(m=info['m'],n=so.total_num_scheduled_tokens,start=info['start'])
         n=so.total_num_scheduled_tokens;K=len(split(n,s.mnbt));s.last['K']=K
         try:
             if K==1:
-                if info['m'] not in ('full','bud') or s.ring is None:return orig(so,*a,**k)
+                if info['m'] not in ('full','bud'):return orig(so,*a,**k)
+                if s.bw:                            # every rank (s.bw is static): the ring lives in borrowed slots
+                    if not s.bw_ensure(0,info['rid']):return orig(so,*a,**k)
+                elif s.ring is None:return orig(so,*a,**k)
                 s.n['op']+=1;s.n['steps_'+info['m']]+=1;s.begin(info,1,True);s.active=True
                 try:return orig(so,*a,**k)
                 finally:s.end()
@@ -540,6 +918,7 @@ class LM:
         from vllm.v1.worker.gpu.model_runner import ExecuteModelState
         from vllm.v1.worker.gpu.kv_connector import NO_OP_KV_CONNECTOR
         R=s.R
+        if final and s.bw=='all' and s.bwi is not None:hs=hs.clone()   # outlives the step; the span may be returned first
         R.execute_model_state=ExecuteModelState(input_batch=P.ib,attn_metadata=P.meta,slot_mappings_by_layer=P.slots,hidden_states=hs,
                                                 aux_hidden_states=None,finished_req_ids=so.finished_req_ids if final else set())
         if final:return None
@@ -580,8 +959,11 @@ class LM:
         if c0!=info['start'] and s.fail_logged<5:s.fail_logged+=1;log.warning('NestQuant LMPF: worker start %d != scheduler start %d (%s)',c0,info['start'],rid)
         ok=True;snaps=None
         try:
-            if s.hbuf is None or n>s.hbuf.shape[0]:raise RuntimeError(f'window {n} > buffers {0 if s.hbuf is None else s.hbuf.shape[0]}')
-            if s.ring is not None:
+            if s.bw=='all':
+                if n>s.W:raise RuntimeError(f'window {n} > W {s.W}')
+            elif s.hbuf is None or n>s.hbuf.shape[0]:raise RuntimeError(f'window {n} > buffers {0 if s.hbuf is None else s.hbuf.shape[0]}')
+            if s.cg and s.cg_args is None:raise RuntimeError('compiled exec not armed yet (no backbone call since setup): plain')
+            if s.ring is not None or s.bw:
                 if s.prid!=rid:s.unpause()
                 s.pause();s.prid=rid
             snaps=[]
@@ -594,6 +976,12 @@ class LM:
         if not s.vote(ok):
             s.n['fallback']+=1;s.unpause()
             return s.run_plain(so,info,prefixed=True)
+        if s.bw:                                    # collective: every rank passed the vote
+            if not s.bw_ensure(n,rid):
+                s.n['fallback']+=1;s.unpause()
+                return s.run_plain(so,info,prefixed=True)
+            s.snap_tables();s.bw_bind(n)            # the borrow rewrote table rows (evictions, relocations)
+        if s.cg:return s.cg_layer_run(so,info,rid,idx,c0,offs)
         return s.layer_run(so,info,rid,idx,c0,offs,snaps)
     def layer_run(s,so,info,rid,idx,c0,offs,snaps):
         R=s.R;inner=s.inner;K=len(offs);tib=s.tib;stash=s.stash;hb=s.hbuf;rbf=s.rbuf
@@ -659,8 +1047,13 @@ class LM:
     # ---- stats ----
     def stats(s):
         sh={m:(int(s.acc[m].item())/s.tot[m] if s.tot.get(m) else None) for m in s.acc}
-        return dict(n=dict(s.n),share4=sh,routes=dict(s.tot),rate_gbps=s.rate/1e9,ring=dict(s.ring.st) if s.ring is not None else None,
+        d=dict(n=dict(s.n),share4=sh,routes=dict(s.tot),rate_gbps=s.rate/1e9,ring=dict(s.ring.st) if s.ring is not None else None,
                     W=s.W,paused=s.paused,last=s.last,prof=s.pacc,t_wall=time.time())
+        if s.bw:
+            X=s.rt.X;d['borrow']=dict(mode=s.bw,held=s.bwi is not None,st=dict(s.bwst),last=s.bwlast,refill=dict(s.refill),
+                                      free=len(X.free),lent=len(X.lent),xst={k:int(v) for k,v in X.xst.items() if k.startswith('lend')},
+                                      sched={k:v for k,v in s.rt.S.stats.items() if k=='lend_evict'})
+        return d
     def publish(s):
         if s.sp is None:return
         try:d=s.stats();d['cop_seen']=dict(COP_SEEN);write_json(s.sp,d)
