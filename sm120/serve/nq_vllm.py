@@ -86,6 +86,7 @@ class Runtime:
         s.expect=set();s.lay={};s.started=False;s.thread=None;s.stop=False;s.lock=threading.Lock();s.err=None
         s.cv=threading.Condition();s.ncap=0;s.in_iter=False;s.wake=threading.Event();s.LA=None;s.SAL=None;s.SR=None;s.CAP=None;s.PFB=None;s.LM=None
         s.PB=None;s.pb_pause=0      # nq-prefill prefill-borrow (nq_pb.py), NQ_PREFILL_BORROW=1 only
+        s.lm_hold=0                 # nq-lmpf slot borrow: >0 = the LMPF worker thread is rewriting X / S / F (loop waits)
     def expect_layer(s,L):s.expect.add(L)
     def add_layer(s,L,rank,tp,dev):
         import resident as RS
@@ -232,6 +233,7 @@ class Runtime:
                 s.wake.wait(ms);s.wake.clear()      # prefill adapt wakes the loop as soon as a layer's router stats are queued
                 with s.cv:
                     if s.PB is not None:s.cv.wait_for(lambda:not s.pb_pause)   # prefill-borrow / reclaim in progress
+                    if s.lm_hold:s.cv.wait_for(lambda:not s.lm_hold)           # nq-lmpf slot borrow / return in progress
                     s.in_iter=True;cap=s.ncap>0
                 t0=time.perf_counter()
                 try:

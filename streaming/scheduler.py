@@ -161,6 +161,21 @@ class Scheduler:
         if s.state[i,e]==1:
             s.state[i,e]=0
             if read_error:s.hold[i,e]=s.tok+s.retry;s.stats['read_errors']=s.stats.get('read_errors',0)+1
+    def evict(s,keys):
+        """nq-lmpf slot borrow: keys were forced to level 2 by the executor (rows applied, slots released) -> state 0;
+        tap: lazy evictions / queued promotions touching them are dropped"""
+        U=set()
+        for L,e in keys:
+            i=s.li[L];s.state[i,e]=0;U.add((i,e))
+        dm=getattr(s,'doom',None)
+        if dm:
+            for (i,e),(j,v) in list(dm.items()):
+                if (i,e) in U or (j,v) in U:del dm[i,e];s.doomed[j,v]=False
+        td=getattr(s,'todo',None)
+        if td:
+            k=[x for x in td if tuple(x) not in U]
+            if len(k)!=len(td):td.clear();td.extend(k)
+        s.stats['lend_evict']=s.stats.get('lend_evict',0)+len(U)
     def kv_pressure(s,n):
         """drop the n lowest-score level-4 floating experts now (returns downs); they are not re-upgraded until the
         next refresh re-selects them."""
