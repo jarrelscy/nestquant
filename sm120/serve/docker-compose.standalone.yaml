@@ -147,7 +147,7 @@ services:
       NQ_PB_PROTECT: ${NQ_PB_PROTECT:-0}
       NQ_PB_KV_HOST_GB: ${NQ_PB_KV_HOST_GB:-8}
       NQ_PB_RAM_FLOOR_GB: ${NQ_PB_RAM_FLOOR_GB:-38}
-      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-8192}
+      NQ_PB_MIN_NEW: ${NQ_PB_MIN_NEW:-1024}
       NQ_PB_MARGIN: ${NQ_PB_MARGIN:-16}
       # --- debug / eval hooks (all off in prod) ---
       NQ_CHECK: ${NQ_CHECK:-0}
