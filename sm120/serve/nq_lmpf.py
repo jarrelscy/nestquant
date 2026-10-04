@@ -215,7 +215,7 @@ def snap(o,limit=None,memo=None,shared=None):
     return o
 
 def write_json(path,d):
-    tmp=path+'.tmp'
+    import threading;tmp=f'{path}.{threading.get_ident()}.tmp'   # the slot-borrow refill watcher publishes too
     with open(tmp,'w') as f:json.dump(d,f)
     os.replace(tmp,path)
 
@@ -715,6 +715,7 @@ class LM:
         s.refill=dict(t=time.time(),n=n,r0=info['r0'],f0=info['f0'],done=None)
         import threading
         threading.Thread(target=s._refill_watch,args=(s.refill,),daemon=True).start()
+        s.publish()
     def _refill_watch(s,rf,limit=300.):
         """stats: time until the executor holds as many level-4 residents as before the borrow (or goes idle)"""
         X=s.rt.X;t0=rf['t'];idle=None
@@ -730,6 +731,7 @@ class LM:
             time.sleep(.02)
         rf['s']=round(time.time()-t0-(2. if rf.get('done')=='idle' else 0.),3)
         if s.bwst['returns']<=3 or s.bwst['returns']%50==0:log.info('NestQuant LMPF rank %d: slot borrow refill %s',s.rt.rank,rf)
+        s.publish()
     def snap_tables(s):
         rt=s.rt
         for L in s.ring_layers:rt.lay[L]['MB'].apply()
