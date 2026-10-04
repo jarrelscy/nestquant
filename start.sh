@@ -42,11 +42,10 @@ spark|1.75)   # 1.75-4 bit records (~393 GB), 2x DGX Spark memory: every value b
   export NQ_REPACK_DIR=${NQ_REPACK_DIR:-/home/jarrelscy/nq-175/hf}
   export NQ_REPACK_ALT_DIR=${NQ_REPACK_ALT_DIR:-$NQ_REPACK_DIR}      # one drive (two read queues on it)
   export NQ_MAXLEN=${NQ_MAXLEN:-131072}
-  # layer-major prefill (NQ_LMPF, default on) takes ~0.8 GiB/GPU from the slot pool: util -0.009 and 4 fewer slots/layer,
-  # ring 64 records + window 16K tokens, 1.2 GiB kept free for the prefill activation peak (measured +1.2 GB over steady)
-  if [ "${NQ_LMPF:-1}" = 1 ]; then _U=0.621; _S=17; else _U=0.630; _S=21; fi
-  export NQ_UTIL=${NQ_UTIL:-$_U}                                    # nvidia-smi peak (prefill incl.) <= 64 GB per GPU
-  export NQ_SLOTS_PER_LAYER=${NQ_SLOTS_PER_LAYER:-$_S}
+  # layer-major prefill (NQ_LMPF, default on) borrows its ring + window from idle decode slots (NQ_LMPF_BORROW=all):
+  # no slots or util given up; ring 64 records + window 16K tokens, 1.2 GiB kept free for the prefill activation peak
+  export NQ_UTIL=${NQ_UTIL:-0.630}                                  # nvidia-smi peak (prefill incl.) <= 64 GB per GPU
+  export NQ_SLOTS_PER_LAYER=${NQ_SLOTS_PER_LAYER:-21}
   export NQ_LMPF_WINDOW=${NQ_LMPF_WINDOW:-16384} NQ_LMPF_RING_RECS=${NQ_LMPF_RING_RECS:-64} NQ_LMPF_RESERVE_GB=${NQ_LMPF_RESERVE_GB:-1.2}
   export NQ_PREFILL_SLOTS=${NQ_PREFILL_SLOTS:-80}
   export NQ_MNBT=${NQ_MNBT:-2048}                                   # smaller prefill chunk: activation peak under the cap
