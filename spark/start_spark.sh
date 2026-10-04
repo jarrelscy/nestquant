@@ -10,8 +10,8 @@
 # ~10 min); peak disk ~460 GB in NQ_DATA, ~270 GB with NQ_DROP_TP4=1.
 #
 # Env (all optional except HEAD_IP):
-#   NQ_PRESET       speed (default): 128K context, MTP ns=1, 24 floating 4-bit experts/layer (jF), 27 slots/layer
-#                   quality:         128K context, no MTP, 36 floating experts/layer, 39 slots/layer
+#   NQ_PRESET       speed (default): 128K context, MTP ns=1, 18 floating 4-bit experts/layer (jF), 21 slots/layer
+#                   quality:         128K context, no MTP, 29 floating experts/layer, 32 slots/layer
 #                   (see spark/README.md "Memory budget"; NUM_SPEC / NQ_MAXLEN / NQ_JF_NFLOAT / NQ_SLOTS_PER_LAYER override)
 #   NQ_IMAGE        image built from spark/Dockerfile (default nestquant-spark:b175)
 #   NQ_DATA         per-node data dir on the internal NVMe (default $HOME/nq-spark)
@@ -35,8 +35,8 @@ SERVED=${NQ_SERVED_NAME:-glm-5.3-nq}
 # b1.75/4 kernel build: residual codes 0 and 9 (down 2.5625) + 3 (gate/up 2.25), base codes 0 (K2) and 1 (K1.75)
 NQ_DEFS=${NQ_DEFS:-NQ_RK_CODES=0x209,NQ_RK_GU=0x9,NQ_RK_DN=0x201,NQ_BK_CODES=0x3}
 case "${NQ_PRESET:-speed}" in
-  speed)   D_SPEC=1; D_LEN=131072; D_NF=24; D_SLOTS=27 ;;
-  quality) D_SPEC=0; D_LEN=131072; D_NF=36; D_SLOTS=39 ;;
+  speed)   D_SPEC=1; D_LEN=131072; D_NF=18; D_SLOTS=21 ;;
+  quality) D_SPEC=0; D_LEN=131072; D_NF=29; D_SLOTS=32 ;;
   *) echo "NQ_PRESET must be quality or speed"; exit 2 ;;
 esac
 NUM_SPEC=${NUM_SPEC:-$D_SPEC};MAXLEN=${NQ_MAXLEN:-$D_LEN}

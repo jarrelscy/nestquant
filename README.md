@@ -183,10 +183,11 @@ TP4 vs TP2 (a real 2x Spark): only memory replicated per GPU is paid 4x instead 
   and 9.95 GiB loaded per GPU. 2 extra copies = 2.9 GiB.
 - The rest of the 9.95 GiB is sharded and costs the same at TP2.
 
-Together that is about 12 GiB, or about 15 slots per layer (one slot-layer costs 0.80 GiB across the whole model). A
-real 2x Spark would therefore hold about 36 slots (about 33 floating), not 45. The design's 45 assumed a 1.776-bpw
-resident base, which is 149.8 GiB. The shipped resident planes are 161.6 GiB because of scales, low-rank and padding.
-The MTP drafter (5.6 GiB) was not in that budget either. These are not TP4 effects.
+Together that is about 12 GiB, or about 15 slots per layer (one slot-layer costs 0.80 GiB across the whole model).
+A real Spark node has about 114 GiB usable rather than the 125 GiB emulated here, so the per-node budget in
+`spark/README.md` gives 21 slots (18 floating) with MTP and 32 slots (29 floating) without. The design's 45 assumed a
+1.776-bpw resident base, which is 149.8 GiB. The shipped resident planes are 161.6 GiB because of scales, low-rank and
+padding, and the MTP drafter (5.6 GiB) was not in that budget either.
 
 ## Repo layout
 

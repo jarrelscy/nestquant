@@ -26,12 +26,12 @@ Check the CX-7 names with `ibdev2netdev` and set `NCCL_SOCKET_IFNAME` / `NCCL_IB
 
 | `NQ_PRESET` | context | MTP | 4-bit hot experts/layer (`NQ_JF_NFLOAT`) | slots/layer | est. KLD |
 |---|---|---|---|---|---|
-| `speed` (default) | 128K | ns=1 | 24 | 27 | ~0.046-0.047 |
-| `quality` | 128K | off | 36 | 39 | ~0.045 |
+| `speed` (default) | 128K | ns=1 | 18 | 21 | ~0.064 |
+| `quality` | 128K | off | 29 | 32 | ~0.055 |
 
 `NUM_SPEC`, `NQ_MAXLEN`, `NQ_JF_NFLOAT` and `NQ_SLOTS_PER_LAYER` override the preset. Slots must be at least the floating count + 3. At 64K context each node has 3.35 GiB more, about 8 more slots per layer.
 
-The KLD estimates are interpolated from the BF16-teacher harness on confirmation windows 0000-0003 (fp8 KV): H45 measured 0.0432 and H32 0.0446-0.0449. Below H32 nothing was measured. The harness runs every non-expert weight as block fp8 from `zai-org/GLM-5.3-FP8`, so the fp8 backbone here is already counted in those numbers; o_proj in NVFP4 is not. Neither preset has been KLD-measured on a live server yet.
+The KLD estimates interpolate linearly between two live measurements on 4x RTX PRO 6000 (BF16 teacher, full vocabulary, windows 0000-0003, fp8 KV): 18 floating gave 0.0618-0.0665 and 45 floating gave 0.0434. Neither preset has been measured on GB10.
 
 ## Speed (estimates, not measured on GB10)
 
@@ -49,15 +49,15 @@ Prefill is compute bound (~75 GFLOP per token across the two nodes); the fp8 lin
 | item | GiB | notes |
 |---|---|---|
 | usable LPDDR5x | 114 | measured by howtospark (GB10 128 GB) |
-| expert base + resident planes (`res/rank{r}`) | 78 | every routed expert at 1.75 bits, TP2 half |
+| expert base + resident planes (`res/rank{r}`) | 80.8 | every routed expert at 1.75 bits, TP2 half (161.6 GiB total, measured) |
 | non-expert weights, layers 0-77 + embed/head + vision | 10.7 | see below; 14.8 in BF16 before the load-time conversion. MLA q_a/kv_a, indexer and router are replicated on both ranks |
 | MTP layer 78 | 4.5 | routed experts e4m3 with 128x128 block scales (`spark/mtp_fp8.py`, 9.0 in BF16); only loaded when MTP is on |
 | KV cache, fp8_ds_mla | 6.7 @128K / 3.35 @64K | ~55 KB/token; the MLA latent is replicated on both ranks |
 | runtime (CUDA context, graphs, activations, NCCL) | ~3 | estimate |
 | 4-bit upgrade slots | rest | 5.40 MiB per slot (TP2 record, 5,660,672 B) x 75 layers = 0.395 GiB per slot/layer |
 
-`speed`: 114 - 78 - 10.7 - 4.5 - 6.7 - 3 = 11.1 GiB → 27 slots/layer.
-`quality`: 114 - 78 - 10.7 - 6.7 - 3 = 15.6 GiB → 39 slots/layer.
+`speed`: 114 - 80.8 - 10.7 - 4.5 - 6.7 - 3 = 8.3 GiB → 21 slots/layer.
+`quality`: 114 - 80.8 - 10.7 - 6.7 - 3 = 12.8 GiB → 32 slots/layer.
 
 Non-expert weight formats:
 - o_proj, layers 0-77: NVFP4, converted at load (`VLLM_ENABLE_NVFP4_P4_O_PROJ=1`, as on SM120).
