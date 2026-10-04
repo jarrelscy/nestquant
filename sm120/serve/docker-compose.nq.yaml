@@ -146,7 +146,7 @@ services:
     volumes:
     - ${NQ_REPO:-/data/Jarrel/nestquant}:/nq:ro
     - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}:/nqrepack:ro
-    - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
+    - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-sb175}:/nqbuild
     - ${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}:/nqrepack1:ro   # nq-io: copy of the record files on nvme1 (/data)
     - /data/Jarrel/liburing:/data/Jarrel/liburing:ro
     - ${NQ_VLLM_CACHE:-/data/Jarrel/nq-serve/vllm-cache}:/root/.cache/vllm   # step 2 uses its own dir (the o_proj swap is invisible to the compile-cache key)

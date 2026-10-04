@@ -249,7 +249,7 @@ services:
       - ${NQ_REPACK_DIR:-/home/jarrelscy/nq-p4rec/hf}:/nqrepack:ro
       - ${NQ_REPACK_ALT_DIR:-/data/Jarrel/nq-p4rec-nvme1}:/nqrepack1:ro   # copy of rank*.bin/json + artifact_stamp.json on a 2nd NVMe
       - ${NQ_PREDICTOR_DIR:-/data/Jarrel/nq-serve/predictor}:/nqpred:ro
-      - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}:/nqbuild
+      - ${NQ_BUILD_DIR:-/data/Jarrel/nq-build-sb175}:/nqbuild
       - ${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}:/nqlgb:ro
       - ${NQ_LIBURING_DIR:-/data/Jarrel/liburing}:/data/Jarrel/liburing:ro
       - ${NQ_DBG_DIR:-/data/Jarrel/nq-serve/dbg}:/dbg
