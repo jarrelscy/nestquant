@@ -140,6 +140,20 @@ records vs 80, ~30k tokens less KV).
 Per-token KLD is slightly worse (mostly the legal window); reasoning stays intact deep into long agent
 runs. One task, so treat the tb4 column as a single data point.
 
+Decode KLD per window (4 confirmation windows of brandonmusic/GLM-5.3-BF16-full-logits):
+
+| window | 0 fixed / 77 floating | 26 fixed / 51 floating |
+|---|---|---|
+| w0 | .0154 (repeat .0149) | .0155 (repeat .0162) |
+| w1 (legal) | .0579 | .0650 |
+| w2 | .0128 | .0136 |
+| w3 | .0155 | .0142 |
+| mean | .0254 | .0271 |
+
+`threads/22-boundary-experts/fixed_set_ranked.json` ranks all 256 experts per layer by the same score, best
+first; the first 26 are the fixed set. Score mass of the top K (mean over layers): 8 → .185, 16 → .269,
+26 → .345, 51 → .484, 77 → .594. Fixed sizes other than 26 have not been measured.
+
 ## Repo layout
 
 - `BRIEF.md` goals/constraints · `DESIGN.md` format spec and adopted decisions · `LITERATURE.md` notes.
