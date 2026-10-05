@@ -34,8 +34,8 @@ export NQ_LGB_DIR=${NQ_LGB_DIR:-/data/Jarrel/nq-dev/pylgb}
 export NQ_BUILD_DIR=${NQ_BUILD_DIR:-/data/Jarrel/nq-build-container}
 export NQ_MODELS_ROOT=${NQ_MODELS_ROOT:-/data/models}
 export NQ_MODEL_DIR=${NQ_MODEL_DIR:-/data/models/jarrelscy/GLM-5.3-NQ-base}
-NQ_REPACK_REPO=${NQ_REPACK_REPO:-${NQ_HF_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}}   # NestQuant records + predictor
-NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}                      # base checkpoint (base/)
+NQ_REPACK_REPO=${NQ_REPACK_REPO:-${NQ_HF_REPO:-jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit}}   # NestQuant records + predictor
+NQ_BASE_REPO=${NQ_BASE_REPO:-jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit}                      # base checkpoint (base/)
 
 NQ_ENV_FILE=${NQ_ENV_FILE:-$HERE/.env}
 if [ -z "${VLLM_API_KEY:-}" ] && [ -f "$NQ_ENV_FILE" ]; then VLLM_API_KEY=$(grep -oP 'VLLM_API_KEY=\K\S+' "$NQ_ENV_FILE" || true); fi

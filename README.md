@@ -69,7 +69,7 @@ add+RMSNorm (NCCL alone was 2.5% slower).
 ```
 
 OpenAI-compatible on `:8001`, served as `glm-5.3-nq` (alias `local`). Weights:
-[huggingface.co/jarrelscy/GLM-5.3-NestQuant-2-4bit](https://huggingface.co/jarrelscy/GLM-5.3-NestQuant-2-4bit).
+[huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit](https://huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit).
 
 `start.sh` fetches or builds, once:
 - the serving image `NQ_IMAGE` (public on Docker Hub): SM120 vLLM fork with the GLM-5.3 kernels and
