@@ -94,6 +94,7 @@ services:
       VLLM_DISABLE_COMPILE_CACHE: ${VLLM_DISABLE_COMPILE_CACHE:-0}     # 1 = no AOT compile cache (eval boots)
       NQ_PREDICTOR: ${NQ_PREDICTOR:-}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}         # jF joint predictor (NQ_PREDICTOR=joint): resident hysteresis
+      NQ_JOINT_FIXED: ${NQ_JOINT_FIXED:-0}         # 1 = jF keeps the thread-22 fixed set (26/layer) + 51 floating (use NQ_SLOTS_PER_LAYER=56)
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}     # 1 = CUDA-graph the scoring core (per-instance capture); 0 = eager
       NQ_JOINT_NET: ${NQ_JOINT_NET:-/nqpred/joint/jF.pt}
       NQ_JOINT_V2: ${NQ_JOINT_V2:-/nqpred/joint/v2_sal_tweedie1.5.txt}

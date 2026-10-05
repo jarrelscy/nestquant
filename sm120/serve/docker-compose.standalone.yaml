@@ -87,6 +87,7 @@ services:
       # --- expert predictor: joint (jF, default) | gbdt | ema ---
       NQ_PREDICTOR: ${NQ_PREDICTOR:-joint}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}
+      NQ_JOINT_FIXED: ${NQ_JOINT_FIXED:-0}     # 1 = reasoning layout: keep the 26 boundary-token experts/layer fixed at 4 bit + 51 floating; set NQ_SLOTS_PER_LAYER=56
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}
       NQ_JOINT_NET: ${NQ_JOINT_NET:-/nqpred/joint/jF.pt}
       NQ_JOINT_V2: ${NQ_JOINT_V2:-/nqpred/joint/v2_sal_tweedie1.5.txt}

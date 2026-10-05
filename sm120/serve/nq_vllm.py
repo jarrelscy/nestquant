@@ -110,8 +110,10 @@ class Runtime:
         s.rf=rf=SE.RankFile(rp,s.rank);rb=rf.rb
         fx,src,_=FS.load(layers=L_)
         _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf')   # tf = nq-tfpred transformer (same k0 layout); jF joint predictor: k0 layout (no fixed set, all floating)
-        nf=77 if _JOINT else NF
-        if _JOINT:fx={L:[] for L in L_};src='joint-k0'
+        _JFIX=_JOINT and os.environ.get('NQ_JOINT_FIXED','0')=='1'   # jF/tf with the thread-22 boundary-token fixed set (26/layer) + NF floating instead of k0
+        nf=NF if (_JFIX or not _JOINT) else 77
+        if _JOINT and not _JFIX:fx={L:[] for L in L_};src='joint-k0'
+        elif _JFIX:src+='+joint'
         if os.environ.get('NQ_STREAM','1')=='0' and os.environ.get('NQ_STATIC_FLOAT','0')=='1' and not _JOINT:   # nq-kld static arm: fixed set U floating_default (nqfloat0), no streaming
             fj=json.load(open(NQ_HOME+'/threads/22-boundary-experts/fixed_set.json'))
             fx={L:list(fx[L])+[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:NF]] for L in L_};src+='+floating_default%d'%NF

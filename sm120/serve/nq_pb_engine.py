@@ -73,7 +73,7 @@ def mla_candidate(name,n_layers):
     i=layer_idx(name);return i is not None and i<n_layers
 
 def nf0():
-    return 77 if os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf') else 51
+    return 77 if os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf') and os.environ.get('NQ_JOINT_FIXED','0')!='1' else 51
 
 def target_extra():
     """(extra slots wanted, rec bytes) from the rank-0 record index"""

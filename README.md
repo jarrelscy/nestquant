@@ -15,7 +15,8 @@ PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
   experts per layer out of 80 slots, refreshed on a background thread that overlaps decode. A tap scheduler
   (horizon 64) orders the plane reads. `gbdt` (a GBDT on the same features, 26 fixed + 51 floating) is
   still available with `NQ_PREDICTOR=gbdt NQ_SLOTS_PER_LAYER=56`; it has not been re-measured on the
-  current config.
+  current config. `NQ_JOINT_FIXED=1` keeps jF but restores the 26 fixed experts (recommended for reasoning,
+  see below).
 - **Prefill.** During prefill the pool borrows free KV pages to hold 155 slots per layer and returns them
   for decode. When the KV pool is nearly full, used KV of some layers is parked in host RAM for the borrow.
 - **Layer-major prefill (default on, `NQ_LMPF=1`).** Prompts with at least 32K new tokens run one layer at a
@@ -116,6 +117,28 @@ NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 ./start.sh
 +44 slots ≈ +8.4 GiB/GPU ≈ 640k tokens, leaving ~440k. Approximate; check the KV pool size in the boot
 log and keep the prefill-peak line a few GiB under 97.9 GB/GPU. If not, trim `NQ_SLOTS_PER_LAYER` or
 `NQ_MAXLEN`. This trade was not measured for speed or KLD.
+
+### Reasoning / agentic use: 26 fixed + 51 floating
+
+For long reasoning and agent runs, keep the 26 boundary-token experts per layer pinned at 4 bit and let
+51 float:
+
+```bash
+NQ_JOINT_FIXED=1 NQ_SLOTS_PER_LAYER=56 ./start.sh
+```
+
+The fixed set is the top 26 experts per layer by REAP salience weighted toward the 32 tokens before
+`</think>` and end-of-turn (`threads/22-boundary-experts/fixed_set.json`). The jF predictor and tap
+scheduler fill the 51 floating slots around it. Memory is about the same as the default (26 + 56 = 82
+records vs 80, ~30k tokens less KV).
+
+| layout | decode KLD vs BF16, 4 windows | tb4 layout-config-recreation2 |
+|---|---|---|
+| default (0 fixed, 77 floating) | .0254 | fail (empty reasoning past ~100k) |
+| `NQ_JOINT_FIXED=1` (26 fixed, 51 floating) | .0271 | pass, 98 turns / 189k |
+
+Per-token KLD is slightly worse (mostly the legal window); reasoning stays intact deep into long agent
+runs. One task, so treat the tb4 column as a single data point.
 
 ## Repo layout
 
