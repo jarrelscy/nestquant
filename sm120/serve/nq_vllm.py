@@ -39,6 +39,9 @@ ROWHOT=os.environ.get('NQ_ROWHOT','0')=='1';NE=256;TOPK=8;BMAX=8;NF=51;CHECK=os.
 PF=os.environ.get('NQ_PF','1')!='0';PF_MIN=int(os.environ.get('NQ_PF_MIN','384'));PF_OFF=os.environ.get('NQ_PF_OFF','/dev/shm/nq_pf_off')
 # prefill expert-level adaptation (NQ_PREFILL_ADAPT=lookahead|chunk, NQ_LA_MEASURE=1): see nq_lookahead.py
 import nq_lookahead as LAH,nq_session as SRM
+try:
+    import nq_slotcheck as _SCM;_SLOTCHK=_SCM.SC      # nq-probe slot integrity check (inert until /dev/shm/nq_slotcheck is written)
+except Exception:_SLOTCHK=None
 RSF=None          # routed_scaling_factor the MoE runner applies after the experts (topk_weights here exclude it); set in create_weights
 if LAH.MODE or LAH.MEAS:LAH.install()
 if os.environ.get('NQ_KLD_HOOK','0')=='1':   # nq-kld full-vocab prompt-logprob dump (eval only, nq_kld.py)
@@ -237,6 +240,7 @@ class Runtime:
                     s.in_iter=True;cap=s.ncap>0
                 t0=time.perf_counter()
                 try:
+                    if _SLOTCHK is not None and _SLOTCHK.due() and _SLOTCHK.run(s,cap):continue   # nq-probe: /dev/shm/nq_slotcheck
                     if s.F is not None:
                         s.X.poll(s.F,issue=not cap);s.F.step(issue=issue and not cap)
                         if s.F.chk is not None and time.time()-fct>1.:

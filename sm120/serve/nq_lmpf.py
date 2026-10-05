@@ -601,7 +601,9 @@ class LM:
                         for n,fn,args,kw,kd in prog:
                             if kd=='attn' and tib is not None and not inf['idx']:tib[:nk].copy_(stash[o:o+nk])
                             env[n]=fn(*[cv(a,env,G,sp) for a in args],**{x:cv(y,env,G,sp) for x,y in kw.items()})
-                            if kd=='idx' and tib is not None:stash[o:o+nk].copy_(tib[:nk])
+                            # a 1..1+num_spec token tail runs the decode indexer, whose DCP merge lands inside attention:
+                            # stash the final global top-k after attn, not the rank-local candidates after idx
+                            if kd=='attn' and tib is not None and inf['idx']:stash[o:o+nk].copy_(tib[:nk])
                         if prof:a1=torch.cuda.Event(enable_timing=True);a1.record();s.pev['lay'].append((a0,a1))
                         s.cur=None
                         if A is not None:s.arena_place(r,env,o,nk,gp)
@@ -722,6 +724,14 @@ class LM:
             s.hbuf=take(ntok*H*s.esz).view(s.dtype).view(ntok,H);s.rbuf=take(ntok*H*s.esz).view(s.dtype).view(ntok,H)
         s.stash=take(ntok*s.tb).view(s.tib.dtype).view(ntok,s.tib.shape[1]) if s.tib is not None else None
         assert off<=sp.numel(),(off,sp.numel())
+    def ring_off(s,why):
+        """ring off for the boot; close joins the reader and synchronizes the I/O stream, so no read still lands in a slot
+        that a later borrow return hands back to decode"""
+        R=s.ring;s.ring=None
+        if R is None:return
+        log.warning('NestQuant LMPF rank %d: ring off (%s), closing I/O',s.rt.rank,why)
+        try:R.eng.close()
+        except Exception:log.exception('NestQuant LMPF rank %d: ring I/O close failed',s.rt.rank)
     def bw_return(s):
         """local: drain the ring, sync the stream (every reader of the span done), give the span back"""
         if s.bwi is None:return
@@ -729,7 +739,7 @@ class LM:
         rt=s.rt;info=s.bwi
         try:
             if s.ring is not None:s.ring.drain()
-        except Exception:log.exception('NestQuant LMPF rank %d: ring drain at borrow return failed',rt.rank)
+        except Exception:log.exception('NestQuant LMPF rank %d: ring drain at borrow return failed',rt.rank);s.ring_off('drain at return failed')
         torch.cuda.current_stream().synchronize()
         s.arena=None
         if s.bw=='all':s.hbuf=s.rbuf=s.stash=None
@@ -804,7 +814,7 @@ class LM:
         except Exception:
             s.n['hook_err']+=1
             if s.fail_logged<5:s.fail_logged+=1;log.exception('NestQuant LMPF rank %d: ring hook failed at L%d, ring off',s.rt.rank,L)
-            s.ring=None;return None
+            s.ring_off('hook error');return None
         if not s.op and s.dx.get('tab')=='base':wt=s.snapt[L]
         lv4=wt[:,0]==4;s.acc[s.mode].add_(lv4[ids].sum());s.tot[s.mode]+=ids.numel()
         pe=s.pev
@@ -874,7 +884,7 @@ class LM:
     def end(s):
         if s.ring is not None:
             try:s.ring.drain()
-            except Exception:log.exception('NestQuant LMPF rank %d: ring drain failed, ring off',s.rt.rank);s.ring=None
+            except Exception:log.exception('NestQuant LMPF rank %d: ring drain failed, ring off',s.rt.rank);s.ring_off('drain failed')
         s.active=False;s.cur=None;s.op=False
     # ---- step ----
     def step(s,orig,so,a,k):
