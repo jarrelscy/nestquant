@@ -1,6 +1,6 @@
 # NestQuant GLM-5.3 b1.75/4 on 2x DGX Spark
 
-Serves [jarrelscy/GLM-5.3-NestQuant-1.75-4bit](https://huggingface.co/jarrelscy/GLM-5.3-NestQuant-1.75-4bit) on two DGX Spark (GB10) nodes as one TP2 vLLM instance over the ConnectX-7 link. Each node holds the 1.75-bit base of every routed expert for its half of the tensor-parallel split, and streams 4-bit upgrades for the jF-predicted hot experts from its NVMe.
+Serves [jarrelscy/GLM-5.3-Vision-NestQuant-1.75-4bit](https://huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-1.75-4bit) on two DGX Spark (GB10) nodes as one TP2 vLLM instance over the ConnectX-7 link. Each node holds the 1.75-bit base of every routed expert for its half of the tensor-parallel split, and streams 4-bit upgrades for the jF-predicted hot experts from its NVMe.
 
 **Status: untested on Spark hardware.** Every part that could be tested without a GB10 was tested (see "What was verified"). The list under "Hardware TODO" has to be checked on the first real run.
 

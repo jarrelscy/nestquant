@@ -69,7 +69,7 @@ add+RMSNorm (NCCL alone was 2.5% slower).
 ```
 
 OpenAI-compatible on `:8001`, served as `glm-5.3-nq` (alias `local`). Weights:
-[huggingface.co/jarrelscy/GLM-5.3-NestQuant-2-4bit](https://huggingface.co/jarrelscy/GLM-5.3-NestQuant-2-4bit).
+[huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit](https://huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit).
 
 `start.sh` fetches or builds, once:
 - the serving image `NQ_IMAGE` (public on Docker Hub): SM120 vLLM fork with the GLM-5.3 kernels and
@@ -156,7 +156,7 @@ log and keep the prefill-peak line a few GiB under 97.9 GB/GPU. If not, trim `NQ
 
 ### 1.75-4 bit at 2x DGX Spark memory (`./start.sh up spark`)
 
-Serves [jarrelscy/GLM-5.3-NestQuant-1.75-4bit](https://huggingface.co/jarrelscy/GLM-5.3-NestQuant-1.75-4bit)
+Serves [jarrelscy/GLM-5.3-Vision-NestQuant-1.75-4bit](https://huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-1.75-4bit)
 (1.75-bit base + 4-bit residual, `nq-res-v2`) on the same 4x RTX, capped at the memory of 2x DGX Spark: nvidia-smi
 peak <= 64,000 MiB per GPU, prefill included. That repo is self-contained: records, `base/` (same bytes as 2-4's
 `base/`) and `serving/predictor/`. The serving stack is the same as 2-4 prod: jF + tap (TODO_FIX=2), prefill

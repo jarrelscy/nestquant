@@ -31,8 +31,8 @@ NAME=nq-spark-$ROLE
 NQ_IMAGE=${NQ_IMAGE:-nestquant-spark:b175}
 NQ_DATA=${NQ_DATA:-$HOME/nq-spark}
 BACKBONE_REPO=${BACKBONE_REPO:-jarrelscy/GLM-5.3-Vision-NVFP4-ARVQ-v2-hybrid}
-NQ_REPACK_REPO=${NQ_REPACK_REPO:-jarrelscy/GLM-5.3-NestQuant-1.75-4bit}
-PRED_REPO=${PRED_REPO:-jarrelscy/GLM-5.3-NestQuant-2-4bit}
+NQ_REPACK_REPO=${NQ_REPACK_REPO:-jarrelscy/GLM-5.3-Vision-NestQuant-1.75-4bit}
+PRED_REPO=${PRED_REPO:-jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit}
 SERVED=${NQ_SERVED_NAME:-glm-5.3-nq}
 # b1.75/4 kernel build: residual codes 0 and 9 (down 2.5625) + 3 (gate/up 2.25), base codes 0 (K2) and 1 (K1.75)
 NQ_DEFS=${NQ_DEFS:-NQ_RK_CODES=0x209,NQ_RK_GU=0x9,NQ_RK_DN=0x201,NQ_BK_CODES=0x3}
