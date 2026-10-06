@@ -517,6 +517,17 @@ RT=Runtime()
 DBG_MOE_ROWSPLIT=os.environ.get('NQ_DBG_MOE_ROWSPLIT','0')=='1'
 DBG_MOE_REF=os.environ.get('NQ_DBG_MOE_REF','0')=='1'   # nq-kld debug: decode steps through M.prefill (dense-decoded fp16 W, cuBLAS fp32-acc GEMMs); needs cudagraph_mode NONE
 
+PGPROBE=os.environ.get('NQ_PGPROBE','0')=='1'   # pg53 stage 1 probe (nq_pgprobe.py), experimental, default off
+_PGP=[None,False]
+def _pgp():
+    if not PGPROBE:return None
+    if not _PGP[1] and not torch.cuda.is_current_stream_capturing():
+        _PGP[1]=True
+        try:
+            import nq_pgprobe;_PGP[0]=nq_pgprobe.Probe(RT.rank,min(RT.lay),log)
+        except Exception:log.exception('NestQuant pgprobe init failed')
+    return _PGP[0]
+
 def forward(L,x,topk_weights,topk_ids):
     d=RT.lay[L];M=d['M'];T=x.shape[0]
     xh=x.half().contiguous();w=topk_weights.half().contiguous();ids=topk_ids.long().contiguous()
@@ -543,6 +554,8 @@ def forward(L,x,topk_weights,topk_ids):
             torch.save(dict(L=L,x=x.cpu(),w=topk_weights.cpu(),ids=topk_ids.cpu(),table=M.table.cpu(),stride=x.stride(),dev=str(x.device),
                             cur=torch.cuda.current_device(),stream=torch.cuda.current_stream().cuda_stream),f"{os.environ['NQ_DUMP']}/in_r{RT.rank}.pt")
     if RT.PFB is not None and T>BMAX and PF and T>=PF_MIN and not torch.cuda.is_current_stream_capturing() and not os.path.exists(PF_OFF):RT.PFB.wait(L)
+    PGP=_pgp()
+    if PGP is not None and T<=BMAX:PGP.stamp(L,0,T)
     d['MB'].apply()
     if RT.CAP is not None:RT.CAP.layer(L,x,topk_weights,topk_ids)
     if CHECK and not torch.cuda.is_current_stream_capturing():
@@ -562,7 +575,9 @@ def forward(L,x,topk_weights,topk_ids):
             out=torch.empty(T,x.shape[1],dtype=torch.float32,device=x.device)
             for i in range(T):M(xh[i:i+1],ids[i:i+1],w[i:i+1],out=out[i:i+1],cfg_gu=CFG_GU[1],cfg_dn=CFG_DN[1])
             return out.to(x.dtype)
-        return M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T]).to(x.dtype)
+        o_=M(xh,ids,w,cfg_gu=CFG_GU[T],cfg_dn=CFG_DN[T])
+        if PGP is not None:PGP.stamp(L,1,T)
+        return o_.to(x.dtype)
     if PF and T>=PF_MIN and not torch.cuda.is_current_stream_capturing() and not os.path.exists(PF_OFF):
         if RT.LA is not None:RT.LA.pre(L,x,ids,w,M.table)   # rank 0: router of L+d on x -> level ops (streaming thread)
         return M.prefill(xh,ids,w).to(x.dtype)   # each routed expert decoded once at its live table level + grouped GEMMs
