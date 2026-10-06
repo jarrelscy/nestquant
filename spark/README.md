@@ -11,6 +11,8 @@ On each node, from a checkout of this repo (branch `spark-b175`):
 ```bash
 # 1. build the image natively on the Spark (full vLLM source build for sm_121a, ~1-2 h; arm64 QEMU builds take days)
 docker build -f spark/Dockerfile -t nestquant-spark:b175 spark/
+#    image built before the NCCL 2.29.7 pin (torch's 2.28.9 hangs TP2 decode across two Sparks): swap it in ~1 min
+docker build -f spark/Dockerfile.nccl -t nestquant-spark:b175 spark/
 
 # 2. download + merge + kernel build, then serve. HEAD_IP = the head node's CX-7 address on both nodes.
 HEAD_IP=192.168.100.10 spark/start_spark.sh worker      # node 1

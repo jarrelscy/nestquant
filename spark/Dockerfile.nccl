@@ -1,0 +1,10 @@
+# Swap NCCL in an existing NestQuant Spark image (built from spark/Dockerfile before the NCCL pin) without a full rebuild:
+#
+#   docker build -f spark/Dockerfile.nccl -t nestquant-spark:b175 spark/
+#
+# Overwrites the tag in place (the old image stays as a dangling layer). Pass --build-arg BASE=<tag> if yours differs.
+ARG BASE=nestquant-spark:b175
+FROM ${BASE}
+ARG NCCL_VERSION=2.29.7
+RUN cd /opt/vllm && . .venv/bin/activate && uv pip install --no-deps nvidia-nccl-cu13==${NCCL_VERSION} \
+    && python -c "from vllm.distributed.device_communicators.pynccl_wrapper import NCCLLibrary; v=NCCLLibrary().ncclGetVersion(); print('nccl', v); assert v == '${NCCL_VERSION}'"

@@ -69,6 +69,13 @@ RUN . .venv/bin/activate && cd vllm/model_executor/layers/quantization/arvq \
 # jF predictor trees (LightGBM) + HF CLI for start_spark.sh downloads
 RUN . .venv/bin/activate && uv pip install lightgbm==4.7.0 narwhals scipy "huggingface_hub[cli,hf_xet]"
 
+# NCCL: torch 2.11 cu130 pins nvidia-nccl-cu13 2.28.9, which hangs TP2 decode across two Sparks (vllm#42354, #41725).
+# 2.29.7 is reported to work there (2.30.4 has its own Spark hang). torch and vLLM's pynccl both load this library.
+# Existing images: spark/Dockerfile.nccl swaps it in a minute without a full rebuild.
+ARG NCCL_VERSION=2.29.7
+RUN . .venv/bin/activate && uv pip install --no-deps nvidia-nccl-cu13==${NCCL_VERSION} \
+    && python -c "from vllm.distributed.device_communicators.pynccl_wrapper import NCCLLibrary; v=NCCLLibrary().ncclGetVersion(); print('nccl', v); assert v == '${NCCL_VERSION}'"
+
 ENV FLASHINFER_DISABLE_VERSION_CHECK=1 \
     VLLM_SPARSE_INDEXER_MAX_LOGITS_MB=256 \
     VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0 \
