@@ -575,6 +575,19 @@ def _(x,topk_weights,topk_ids,layer):return torch.empty_like(x)
 
 def _noop_loader(param,loaded,*a,**k):return None
 
+def _require_v2():
+    """NestQuant's decode hooks (dec-block / DEC_ASYNC, pred inputs, run_fullgraph wrap, LMPF) patch the V2 GPU model
+    runner only. On the V1 runner they are silently inert, so refuse to start there. The fork picks V2 only for MTP /
+    DSpark, so NUM_SPEC=0 alone lands on V1: set VLLM_USE_V2_MODEL_RUNNER=1. NQ_ALLOW_V1=1 skips the check (debug)."""
+    if os.environ.get('NQ_ALLOW_V1','0')=='1':return
+    from vllm.config import get_current_vllm_config
+    try:c=get_current_vllm_config()
+    except Exception:return                           # no config in scope (unit tests): nothing to check
+    if c.model_config is None:return
+    if not c.use_v2_model_runner:
+        raise RuntimeError('NestQuant requires the V2 GPU model runner (its decode hooks are inert on V1): '
+                           'set VLLM_USE_V2_MODEL_RUNNER=1 (NQ_ALLOW_V1=1 to override for debugging)')
+
 def make_method(base_cls):
     """NestQuantMoEMethod over the image's ArvqExpertsMoEMethod (keeps its FusedMoE method plumbing)."""
     from vllm.model_executor.utils import set_weight_attrs
@@ -584,6 +597,7 @@ def make_method(base_cls):
         def create_weights(s,layer,num_experts,hidden_size,intermediate_size_per_partition,params_dtype,**extra):
             global RSF
             if RSF is None:
+                _require_v2()
                 try:
                     from vllm.config import get_current_vllm_config
                     RSF=float(getattr(get_current_vllm_config().model_config.hf_config,'routed_scaling_factor',1.0) or 1.0)

@@ -128,6 +128,7 @@ up(){
     -e NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enp1s0f1np1}" -e GLOO_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enp1s0f1np1}" \
     -e NCCL_IB_HCA="${NCCL_IB_HCA:-rocep1s0f1,roceP2p1s0f1}" -e NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-0}" \
     -e VLLM_HOST_IP="${NODE_IP:-}" -e MASTER_ADDR="$HEAD_IP" \
+    -e VLLM_USE_V2_MODEL_RUNNER="${VLLM_USE_V2_MODEL_RUNNER:-1}" -e NQ_ALLOW_V1="${NQ_ALLOW_V1:-0}" \
     -e PYTHONPATH=/nq/sm120/serve -e NQ_HOME=/nq -e NQ_BUILD=/nqbuild -e LIBURING=/opt/liburing \
     -e NQ_REPACK=/nqrepack -e NQ_REPACK_ALT=none -e NQ_OPLOG=dist -e NQ_OPLOG_ADDR="$HEAD_IP:${NQ_OPLOG_PORT:-29611}" \
     -e NQ_DEFS="$NQ_DEFS" -e TORCH_CUDA_ARCH_LIST=12.1a -e NQ_UNIFIED="${NQ_UNIFIED:-}" \
