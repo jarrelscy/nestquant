@@ -235,7 +235,15 @@ class Adapt(Base):
                  predictor="ema", hm=0.5, chunk=None, up=45, ahead=None, rank="count", delta=None, score="count",
                  oracle=None, horizon=64, block=16, gscale=None, gkeep=0, sal_hl=128, gbdt_model=None,
                  gbdt_scale=None, fb=0, gmode="next_refresh", grlo=20, grhi=121, salstat=0, nf_map=None,
-                 joint=None, joint_map=None):
+                 joint=None, joint_map=None, pg=None, sc=8, tb=1.0, pgcap=4, pghl=64):
+        # T38 decode pre-gate top-up (predictor=gbdt only; default off): the jF set (n_float slots) is the resident
+        # set; `sc` extra scratch slots take, per token, up to a credit bucket of `tb` loads/layer/token (cap pgcap)
+        # of the top predicted-salience non-resident experts, LRU eviction; experts the jF set drops fill free
+        # scratch (no load).  pg = lookahead in half-layers: 1 router(L) on h_in(L), 2 on h_mid(L-1), 3 on h_in(L-1),
+        # 0 the token's actual routing (oracle).  Loads land before the token (instant-landing emulation).
+        self.pg = None if pg is None else int(pg)
+        self.sc, self.tb, self.pgcap, self.pga = int(sc), float(tb), float(pgcap), 0.5 ** (1 / float(pghl))
+        assert self.pg in (None, 0, 1, 2, 3) and (self.pg is None or predictor == "gbdt"), (pg, predictor)
         # T32 nf_map=JSON {layer: n_float}: per-layer floating slot count (T33k allocation B; layers absent: n_float);
         # diag then also records nf and the min/max floating-set size actually served per layer.
         self.nf_map = {int(k): int(v) for k, v in json.load(open(nf_map)).items()} if nf_map else None
@@ -532,12 +540,60 @@ class Adapt(Base):
         nn = torch.arange(T, device=dev) // seq
         kk = (torch.arange(T, device=dev) % seq) // G
         hi = hi_e[nn.unsqueeze(1), kk.unsqueeze(1), ids.long()]
+        pgd = {}
+        if self.pg is not None:
+            hi, pgd = self._pg_topup(idn, sv_, serve, fixed, seq, G)
+            hi = torch.from_numpy(hi).to(dev)
         stat = torch.from_numpy(fixed | fdef).to(dev)
         fx = torch.from_numpy(fixed).to(dev)
         d = dict(slots=T * K, l4_slots=int(hi.sum()), fixed_slots=int(fx[ids.long()].sum()),
                  float0_slots=int(stat[ids.long()].sum()), churn_sum=float(sum(churn)), churn_n=len(churn),
-                 churn_first_sum=0.0, churn_first_n=0)
+                 churn_first_sum=0.0, churn_first_n=0, **pgd)
         return hi, serve_t, d
+
+    def _pg_topup(self, idn, sv, serve, fixed, seq, G):
+        """T38 per-token scratch top-up over the jF serve sets (see __init__).  idn [T,8] actual ids, sv [T,8] actual
+        w^2|x|^2, serve [N, nblk, NE] jF floating sets.  Returns (hi [T,8] bool, diag)."""
+        NE, SC = self.NE, self.sc
+        T = idn.shape[0]
+        if self.pg == 0:
+            pi, ps = idn, sv
+        else:
+            li_, lw, lx = self._la
+            pi = li_.long().cpu().numpy()
+            ps = (lw.double().pow(2) * lx.double()[:, None]).cpu().numpy()
+        rows = np.arange(T)[:, None]
+        S = np.zeros((T, NE)); np.add.at(S, (rows, idn), sv)
+        Sp = np.zeros((T, NE)); np.add.at(Sp, (rows, pi), ps)
+        hi = np.zeros(idn.shape, bool)
+        loads = resload = reuse = 0
+        for n in range(T // seq):
+            cur = serve[n, 0].copy()
+            scr = np.zeros(NE, bool); last = np.zeros(NE); state = np.zeros(NE); credit = 0.0
+            for t in range(seq):
+                r = n * seq + t
+                if t and t % G == 0:
+                    new = serve[n, t // G]
+                    resload += int((new & ~cur & ~scr).sum()); reuse += int((new & ~cur & scr).sum())
+                    scr &= ~new
+                    dem = np.where(cur & ~new)[0]; free = SC - int(scr.sum())
+                    if free > 0 and len(dem):
+                        d_ = dem[np.argsort(-state[dem])][:free]; scr[d_] = True; last[d_] = t
+                    cur = new.copy()
+                if self.tb > 0:
+                    credit = min(credit + self.tb, self.pgcap)
+                    sp = Sp[r]; miss = np.where(~(fixed | cur | scr) & (sp > 0))[0]
+                    k = min(int(credit), len(miss))
+                    for e in miss[np.argsort(-sp[miss])[:k]]:
+                        if scr.sum() >= SC:
+                            s_ = np.where(scr)[0]; scr[s_[np.argmin(last[s_])]] = False
+                        scr[e] = True; last[e] = t
+                    credit -= k; loads += k
+                m = fixed | cur | scr
+                hi[r] = m[idn[r]]
+                last[scr & (S[r] > 0)] = t
+                state *= self.pga; state += S[r]
+        return hi, dict(pg_tok=T, pg_loads=loads, pg_resload=resload, pg_reuse=reuse)
 
     def _split_by_map(self, runs, g):
         """chain=map: split each corpus run (one per corpus in rank order, nq_e2e.WIN_IDS) at chain/task changes."""

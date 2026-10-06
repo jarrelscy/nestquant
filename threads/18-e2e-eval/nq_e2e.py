@@ -356,6 +356,9 @@ def moe_multi(layer, li, flats, qs, fp8, dev, stats, local_err, chunk, keep=None
             if getattr(q, "ahead", None) is not None:
                 q.la_full = act if q.ahead == 0 else pr.get(q.ahead)
                 assert q.la_full is not None, f"{q.name}: no {q.ahead}-ahead prediction at layer {li}"
+            if getattr(q, "pg", None) is not None:     # T38 pre-gate top-up: half-layer lookahead 1 | 2 (h_mid) | 3
+                q.la_full = act if q.pg == 0 else pr.get({1: 1, 2: "m", 3: 2}[q.pg])
+                assert q.la_full is not None, f"{q.name}: no pg={q.pg} prediction at layer {li}"
         hm = None
         if hasattr(q, "level_mask") and getattr(q, "active", lambda _l: True)(li):   # per-token levels (adapt:)
             hm = q.level_mask(li, i, seq, groups).reshape(-1)[order]
@@ -529,10 +532,14 @@ def cmd_run(a):
     # router lookahead (chunked-prefill predictor reference): NQ_LOOKAHEAD=1 records accuracy for NQ_LA_STREAMS
     la_names = set(os.environ.get("NQ_LA_STREAMS", "ref,nqdef").split(",")) if os.environ.get("NQ_LOOKAHEAD") else set()
     la_acc = [s for s, q in enumerate(qs) if q.name in la_names]
-    la_need = sorted(set(la_acc) | {s for s, q in enumerate(qs) if getattr(q, "ahead", None) in (1, 2)})
+    la_need = sorted(set(la_acc) | {s for s, q in enumerate(qs) if getattr(q, "ahead", None) in (1, 2)}
+                     | {s for s, q in enumerate(qs) if getattr(q, "pg", None) in (1, 2, 3)})
     la_rec = {s: {} for s in la_acc}
-    la_any = bool(la_need) or any(getattr(q, "ahead", None) is not None for q in qs)
+    la_any = bool(la_need) or any(getattr(q, "ahead", None) is not None or getattr(q, "pg", None) is not None
+                                  for q in qs)
+    la_mid = [s for s, q in enumerate(qs) if getattr(q, "pg", None) == 2]   # T38: router(L) on h_mid(L-1)
     P2 = {}                                             # 2-ahead predictions for the current layer (from li-2)
+    PM = {}                                             # T38 predictions for the current layer from h_mid(li-1)
     if la_any:
         log(f"lookahead: accuracy streams {[qs[s].name for s in la_acc]}, predictions for {[qs[s].name for s in la_need]}")
     dump = set()
@@ -567,7 +574,8 @@ def cmd_run(a):
         la = None
         if la_any:
             with torch.no_grad():                           # router lookahead on h_in(li) = h_out(li-1)
-                la = {s: {1: None, 2: P2.get(s)} for s in range(len(qs))}
+                la = {s: {1: None, 2: P2.get(s), **({"m": PM.get(s)} if s in la_mid else {})} for s in range(len(qs))}
+                PM = {}
                 if sparse:
                     for s in la_need:
                         la[s][1] = la_route(layer.post_attention_layernorm, layer.mlp.gate,
@@ -586,7 +594,8 @@ def cmd_run(a):
                                        assign=True)
                     for s in la_need:
                         P2[s] = la_route(nx, gx, hid[s].view(N * SEQ, -1), a.moe_chunk)
-                    del nx, gx
+                    if not la_mid:
+                        del nx, gx
         with torch.no_grad():
             for h in hid:                                   # attention, per stream
                 for s0 in range(0, N, a.attn_chunk):
@@ -599,6 +608,10 @@ def cmd_run(a):
                     h[s0:s1] += att
                     del att
             flats = [h.view(N * SEQ, -1) for h in hid]
+            if la_mid and li + 1 < nl and cfg.mlp_layer_types[li + 1] == "sparse":
+                for s in la_mid:                            # T38: layer li+1's router on h_mid(li)
+                    PM[s] = la_route(nx, gx, flats[s], a.moe_chunk)
+                del nx, gx
             keep = hmid = None
             if li in dump:
                 hmid = [h.cpu() for h in hid]               # residual after attention (MoE block input, pre-norm)
