@@ -65,8 +65,11 @@ class RankLayerEff:
         (planes are strip-major, so experts concatenate) -> [len(Es), N, K]"""
         P0=getattr(s.ex[Es[0]],which);rk=P0.rk;N,K=(2*s.I,s.H) if which=='gu' else (s.H,s.I);n=len(Es)
         Ps=[getattr(s.ex[E],which) for E in Es];assert all(P.rk==rk for P in Ps)
-        p=types.SimpleNamespace(N=N*n,K=K,rk=rk,z=MO.proj_sizes(N*n,K,None,rk),fl=None,flags=None,
+        bk=int(getattr(P0,'bk',0) or 0);assert all(int(getattr(P,'bk',0) or 0)==bk for P in Ps)
+        p=types.SimpleNamespace(N=N*n,K=K,rk=rk,bk=bk,z=MO.proj_sizes(N*n,K,None,rk,bk),fl=None,flags=None,
                                 base=torch.cat([P.base for P in Ps]),var=torch.cat([P.var for P in Ps]))
+        if bk:    # nq-res-v2 pattern-rate base: sub-array packing is per expert, so unpack each expert then concatenate
+            z1=MO.proj_sizes(N,K,None,rk,bk);p.bw=torch.cat([MO.unpack_words(P.base,z1['S']*z1['C']*32,MO.rbits(bk)) for P in Ps])
         if level==4:
             z=MO.proj_sizes(N,K,None,rk);nrec=z['S']*z['C']*32;o,m=s.seg[which+'.p4']
             p.p4w=torch.cat([unpack_words(s.rec[E,o:o+m].view(torch.int32),MO.rbits(rk),nrec) for E in Es])
@@ -75,7 +78,7 @@ class RankLayerEff:
     def experts(s,Es,level,bs=8):
         """batched expert(): {E: (Wgate, Wup, Wdown)}"""
         out={};grp={}
-        for E in Es:grp.setdefault((s.ex[E].gu.rk,s.ex[E].dn.rk),[]).append(E)
+        for E in Es:x_=s.ex[E];grp.setdefault((x_.gu.rk,x_.dn.rk,int(getattr(x_.gu,'bk',0) or 0),int(getattr(x_.dn,'bk',0) or 0)),[]).append(E)
         for g in grp.values():
             for i in range(0,len(g),bs):
                 b=g[i:i+bs];WG=s._proj(b,'gu',level);WD=s._proj(b,'dn',level)
