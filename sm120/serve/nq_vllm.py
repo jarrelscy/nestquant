@@ -112,6 +112,7 @@ class Runtime:
         _JOINT=os.environ.get('NQ_PREDICTOR','') in ('joint','jf','tf')   # tf = nq-tfpred transformer (same k0 layout); jF joint predictor: k0 layout (no fixed set, all floating)
         _JFIX=_JOINT and os.environ.get('NQ_JOINT_FIXED','0')=='1'   # jF/tf with the thread-22 boundary-token fixed set (26/layer) + NF floating instead of k0
         nf=NF if (_JFIX or not _JOINT) else 77
+        nf=_nf_layers(nf,L_,fx)   # nq-lalloc: NQ_NF_LAYERS per-layer floating counts (unset = the scalar, unchanged)
         if _JOINT and not _JFIX:fx={L:[] for L in L_};src='joint-k0'
         elif _JFIX:src+='+joint'
         if os.environ.get('NQ_STREAM','1')=='0' and os.environ.get('NQ_STATIC_FLOAT','0')=='1' and not _JOINT:   # nq-kld static arm: fixed set U floating_default (nqfloat0), no streaming
@@ -142,7 +143,8 @@ class Runtime:
             s.thread=threading.Thread(target=s.share_loop,args=(fm,),name='nq-share',daemon=True);s.thread.start();return
         nslot=int(os.environ.get('NQ_SLOTS_PER_LAYER','56'))*len(L_)
         T22=NQ_HOME+'/threads/22-boundary-experts/fixed_set.json';fj=json.load(open(T22))
-        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:nf]] for L in L_}
+        dflt={L:[int(x) for x in np.argsort(-np.where(np.isin(np.arange(NE),fx[L]),-1,np.array(fj['n_routed'][str(L)])))[:(nf if np.ndim(nf)==0 else int(nf[i]))]] for i,L in enumerate(L_)}
+        if np.ndim(nf):assert nslot>=int(nf.sum()),('NQ_NF_LAYERS: floating total over the slot pool',int(nf.sum()),nslot)
         lead=os.environ.get('NQ_LEADER','1')!='0' and s.tp>1
         _steps=(s.rank==0 or not lead)   # this rank runs the real predictor; the others use 'ema'
         if _JOINT and _steps and os.environ.get('NQ_PREDICTOR')=='tf':   # nq-tfpred multi-window transformer (threads/36-tfpred)
@@ -157,6 +159,7 @@ class Runtime:
                                       hm=float(os.environ.get('NQ_JOINT_HM','0.7')),device=dev,
                                       v2_model=os.environ.get('NQ_JOINT_V2','/nqpred/joint/v2_sal_tweedie1.5.txt'),
                                       graph=os.environ.get('NQ_JOINT_GRAPH','0')=='1')
+            if np.ndim(nf):SC.nf_target_patch(pred)
         else:
             pred=(os.environ.get('NQ_PREDICTOR') or SC.DEFAULT_PREDICTOR) if _steps else 'ema'   # followers never step S
         _SCH=SC.Scheduler if not os.environ.get('NQ_SCHED') else __import__('scheduler_tap').make_scheduler   # NQ_SCHED=tap: streaming/scheduler_tap.py (nq-tfpred 93beb7f)
@@ -408,7 +411,7 @@ def _set_reset(S):
         fj=json.load(open(NQ_HOME+'/threads/22-boundary-experts/fixed_set.json'));T=np.zeros(S.state.shape,bool)
         for i,L in enumerate(S.layers):     # k0 = fixed26 + floating_default51 (live D has no fixed set: all 77 float)
             k0=[int(e) for e in fj['fixed_set'][str(L)]]+[int(e) for e in fj['floating_default'][str(L)]]
-            T[i,[e for e in k0 if not S.fixed[i,e]][:S.nf]]=True
+            T[i,[e for e in k0 if not S.fixed[i,e]][:(S.nf if np.ndim(S.nf)==0 else int(S.nf[i]))]]=True
         _K0[0]=T
     T=_K0[0];fx=S.fixed
     if hasattr(S,'doom'):S.doom.clear();S.doomed[:]=False;S.todo.clear()
@@ -450,6 +453,23 @@ def _io_cfg(rank,rp,rb):
         if g<gb:log.warning('NestQuant rank %d: RAM tier %.1f GB asked, MemAvailable %.1f GiB -> %.1f GB',rank,gb,av,g)
         if n>0:kw['tier']=lst[:n];msg.append(f'RAM tier {n} recs')
     return dict(qd=qd,n_host=nh,kw=kw,log=', '.join(msg))
+def _nf_layers(nf,L_,fx):
+    """nq-lalloc (experimental, default off): NQ_NF_LAYERS = json file, either a list (one floating count per scheduled MoE
+    layer, in layer order) or a dict {"<L>": n}; optional NQ_NF_LAYERS_TOTAL_OK=1 skips the equal-total check. Returns the
+    scalar nf unchanged when unset, else an int64 array aligned with L_. Total must equal nf x len(L_) (same slot pool / VRAM)
+    and every entry 0 <= n <= NE - |fixed[L]|."""
+    p=os.environ.get('NQ_NF_LAYERS','')
+    if not p:return nf
+    d=json.load(open(p))
+    if isinstance(d,dict) and 'nf' in d:d=d['nf']
+    a=np.array([int(d[str(L)]) for L in L_] if isinstance(d,dict) else [int(x) for x in d],np.int64)
+    assert len(a)==len(L_),('NQ_NF_LAYERS: need one entry per layer',len(a),len(L_))
+    for i,L in enumerate(L_):assert 0<=a[i]<=NE-len(fx[L]),('NQ_NF_LAYERS: out of range',L,int(a[i]))
+    if os.environ.get('NQ_NF_LAYERS_TOTAL_OK','0')!='1':
+        assert int(a.sum())==int(nf)*len(L_),('NQ_NF_LAYERS: total must equal',int(nf)*len(L_),int(a.sum()))
+    log.warning('NestQuant nq-lalloc: per-layer n_float from %s: total %d (scalar %d x %d), first/last %s / %s, min %d max %d',
+                p,int(a.sum()),int(nf),len(L_),a[:5].tolist(),a[-5:].tolist(),int(a.min()),int(a.max()))
+    return a
 def _tier_watch(rt):
     floor=float(os.environ.get('NQ_RAMTIER_MINAVAIL_GB','30'))
     def run():

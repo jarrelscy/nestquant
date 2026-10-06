@@ -1,0 +1,7 @@
+# nq-lalloc (experimental): pass NQ_NF_LAYERS (per-layer floating counts json, path inside the container, e.g.
+# /nq/streaming/results/nf_layers/R1.json) to the NestQuant serve. Use with NQ_COMPOSE_EXTRA=<this file> NQ_REPO=<tree>.
+# Unset / empty NQ_NF_LAYERS = the scalar n_float (prod).
+services:
+  vllm-glm5.3-hybrid-1m:
+    environment:
+      NQ_NF_LAYERS: ${NQ_NF_LAYERS:-}

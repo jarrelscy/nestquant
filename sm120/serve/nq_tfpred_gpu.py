@@ -149,8 +149,11 @@ class TFGPUPredictor:
         if self.S is None:
             return None
         v, r = self._adj(resident)
-        top = np.argsort(-v, 1, kind='stable')[:, :self.nf]
-        want = np.zeros((self.NL, self.NE), bool); np.put_along_axis(want, top, True, 1)
+        if np.ndim(self.nf) == 0:
+            top = np.argsort(-v, 1, kind='stable')[:, :self.nf]
+            want = np.zeros((self.NL, self.NE), bool); np.put_along_axis(want, top, True, 1)
+        else:                                        # nq-lalloc per-layer n_float
+            from scheduler import nf_topmask; want = nf_topmask(v, self.nf)
         return want
 
     def order_score(self, resident):

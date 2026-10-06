@@ -34,7 +34,7 @@ Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = cli
 Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalised two-horizon value)."""
 import os, time, collections
 import numpy as np
-from scheduler import Scheduler
+from scheduler import Scheduler, nf_at
 
 
 class TapScheduler(Scheduler):
@@ -205,7 +205,7 @@ class TapScheduler(Scheduler):
         ce = np.argsort(-np.where(cand, V, -np.inf), 1, kind='stable'); rv = np.argsort(np.where(res, V, np.inf), 1, kind='stable')
         ncand = cand.sum(1); nres = res.sum(1); oc = occ.sum(1)
         for l in range(s.NL):
-            free = s.nf - int(oc[l]); k = 0
+            free = nf_at(s.nf, l) - int(oc[l]); k = 0
             while k < ncand[l]:
                 e = ce[l, k]; ve = V[l, e]
                 if k < free:

@@ -28,6 +28,26 @@ import os
 import numpy as np
 
 DEFAULT_PREDICTOR='gbdt'
+# nq-lalloc (NQ_NF_LAYERS): n_float may be a per-layer int array (one entry per scheduled layer) instead of a scalar;
+# scalar = the original code paths, bit-identical
+def nf_at(nf,i):
+    return int(nf) if np.ndim(nf)==0 else int(nf[i])
+def nf_topmask(v,nf):
+    """[NL, NE] bool: per row the top nf (scalar) / nf[row] (array) of v, stable descending order"""
+    o=np.argsort(-v,1,kind='stable');w=np.zeros(v.shape,bool)
+    if np.ndim(nf)==0:np.put_along_axis(w,o[:,:nf],True,1);return w
+    rk=np.empty_like(o);np.put_along_axis(rk,o,np.broadcast_to(np.arange(v.shape[1]),v.shape),1)
+    return rk<np.asarray(nf,np.int64)[:,None]
+def nf_target_patch(pred):
+    """GPUJointPredictor.target (the /nqpred copy assumes a scalar n_float) with a per-layer nf array: same math, per-row top"""
+    import types
+    def target(self,resident):
+        if self.S is None:return None
+        v,r=self._adj(resident)
+        tot=np.where(self.fixed,0,np.maximum(self.S,0)).sum(1)
+        want=nf_topmask(v,self.nf);nz=tot<=0;want[nz]=r[nz]
+        return want
+    pred.target=types.MethodType(target,pred)
 def _nfeat(path):
     with open(path) as f:
         for ln in f:
@@ -61,7 +81,7 @@ class Scheduler:
         s.score=np.zeros((len(s.layers),NE))
         s.want=np.zeros_like(s.fixed)                      # floating target
         for L in s.layers:
-            d=[e for e in floating_default[L] if not s.fixed[s.li[L],e]][:n_float];s.want[s.li[L],d]=True
+            d=[e for e in floating_default[L] if not s.fixed[s.li[L],e]][:nf_at(n_float,s.li[L])];s.want[s.li[L],d]=True
         s.state=np.zeros((len(s.layers),NE),np.int8)       # floating: 0 level 2, 1 upgrade in flight, 2 level 4, 3 downgrade in flight
         s.per_tok=cap_GBps*1e9/tok_per_s;s.budget=0.0;s.cap=s.per_tok*burst_tokens
         s.slots=slots                                      # slot pool size (streamed experts per rank); None = unbounded
@@ -77,6 +97,7 @@ class Scheduler:
         hl=hostloop if hostloop is not None else os.environ.get('NQ_HOSTLOOP','py')
         s.core=None
         if hl=='cpp':
+            assert np.ndim(n_float)==0,'NQ_NF_LAYERS (per-layer n_float) needs NQ_HOSTLOOP=py'
             import hostcore;s.core=hostcore.mod().SchedCore(s.layers,NE)
     def step(s,counts,ntok=1,token_ids=None,new_request=False,sal=None):
         """sal: optional [len(layers),NE] per-step salience (sum over the step's routed slots of w^2*|x|^2), forwarded
@@ -93,8 +114,10 @@ class Scheduler:
         elif s.tok>=s.next_refresh:
             s.next_refresh+=s.R
             has=s.score.sum(1)>0                           # layers with no counts keep floating_default
-            sc=np.where(s.fixed,-np.inf,s.score);top=np.argsort(-sc,1,kind='stable')[:,:s.nf]
-            w=np.zeros_like(s.want);np.put_along_axis(w,top,True,1);s.want[has]=w[has]
+            sc=np.where(s.fixed,-np.inf,s.score)
+            if np.ndim(s.nf)==0:top=np.argsort(-sc,1,kind='stable')[:,:s.nf];w=np.zeros_like(s.want);np.put_along_axis(w,top,True,1)
+            else:w=nf_topmask(sc,s.nf)
+            s.want[has]=w[has]
         if s.pin is not None:s.want|=s.pin&~s.fixed
         downs=[(s.layers[i],int(e)) for i,e in zip(*np.nonzero((s.state==2)&~s.want))]
         for L,e in downs:s.state[s.li[L],e]=3
