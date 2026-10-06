@@ -118,6 +118,8 @@ up(){
     --ulimit memlock=-1 --ulimit stack=67108864 --security-opt seccomp=unconfined \
     -v "$REPO":/nq:ro \
     -v "$REPO/spark/overlay/nvfp4_arvq_hybrid.py":/opt/vllm/vllm/model_executor/layers/quantization/nvfp4_arvq_hybrid.py:ro \
+    -v "$REPO/spark/overlay/deep_gemm/sm121_fp8_mqa_logits.cuh":/opt/vllm/vllm/third_party/deep_gemm/include/deep_gemm/impls/sm121_fp8_mqa_logits.cuh:ro \
+    -v "$REPO/spark/overlay/deep_gemm/sm121_fp8_paged_mqa_logits.cuh":/opt/vllm/vllm/third_party/deep_gemm/include/deep_gemm/impls/sm121_fp8_paged_mqa_logits.cuh:ro \
     -v "$NQ_DATA/backbone":/model:ro -v "$NQ_DATA/tp2":/nqrepack:ro -v "$NQ_DATA/pred/serving/predictor":/nqpred:ro \
     -v "$NQ_DATA/build":/nqbuild -v "$NQ_DATA/dbg":/dbg \
     -v "$NQ_DATA/cache/vllm":/root/.cache/vllm -v "$NQ_DATA/cache/triton":/root/.triton \

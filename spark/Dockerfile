@@ -51,6 +51,13 @@ RUN . .venv/bin/activate && python use_existing_torch.py \
     && while read -r r; do uv pip install "$r" || echo "optional requirement skipped on aarch64: $r"; done < /tmp/optional.txt \
     && python -c "import vllm, vllm._C; print('vllm', vllm.__version__)"
 
+# DeepGEMM JIT names the fp8 MQA-logits headers impls/sm{arch}_*.cuh, so on GB10 it looks for sm121_*, which DeepGEMM
+# does not ship (the indexer crashes on its first eager call, e.g. cudagraph_mode NONE). The sm120 kernels are
+# guarded by __CUDA_ARCH__ >= 1200: copy them under the sm121 name (start_spark.sh also mounts spark/overlay/deep_gemm).
+RUN cd vllm/third_party/deep_gemm/include/deep_gemm/impls \
+    && for k in fp8_mqa_logits fp8_paged_mqa_logits; do \
+         [ -f sm121_$k.cuh ] || sed "s/void sm120_$k(/void sm121_$k(/" sm120_$k.cuh > sm121_$k.cuh; done
+
 # ARVQ ctypes kernels (ship as .cu + build scripts hard-coded to sm_120a). Only the MTP layer and non-routed parts use
 # the hybrid quant path on Spark (NestQuant serves every routed expert), but the module imports the libraries at load.
 RUN . .venv/bin/activate && cd vllm/model_executor/layers/quantization/arvq \
