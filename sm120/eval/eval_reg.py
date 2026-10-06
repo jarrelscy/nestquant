@@ -19,13 +19,14 @@ Streams (name -> source/levels):
 import argparse,json,math,os,re,sys,time
 import numpy as np,torch,torch.distributed as dist
 HERE=os.path.dirname(os.path.abspath(__file__));REPO=os.path.dirname(os.path.dirname(HERE))
-for p in (HERE,REPO+'/sm120',REPO+'/streaming',REPO+'/threads/34-tr3','/data/Jarrel/nq-serve/predictor/joint','/data/Jarrel/nq-kld/reg/lgbstub'):
+JD=os.environ.get('NQ_JF_DIR','/data/Jarrel/nq-serve/predictor/joint')   # jF.pt + v2 trees (needs lightgbm, or NQ_LGB_STUB = dir with a dump_model() stub)
+for p in (HERE,REPO+'/sm120',REPO+'/streaming',REPO+'/threads/34-tr3',JD)+tuple(filter(None,[os.environ.get('NQ_LGB_STUB')])):
     if p not in sys.path:sys.path.insert(0,p)
 import eval_fp8 as EF,nq_io,nqeff,fixed_set as FS,kvq
 from safetensors.torch import load_file
-PANEL='/data/Jarrel/nq-kld/reg/root';PRIV='/data/Jarrel/nq-kld/reg/private'
-REPACK={'b24':'/home/jarrelscy/nq-p4rec/hf','b175':'/home/jarrelscy/nq-175/hf'}
-JD='/data/Jarrel/nq-serve/predictor/joint';HM=0.7
+PANEL=os.environ.get('NQ_PANEL','/data/Jarrel/nq-kld/reg/root');PRIV=os.environ.get('NQ_PRIV','/data/Jarrel/nq-kld/reg/private')   # panel download / per-token arrays
+REPACK={'b24':os.environ.get('NQ_REPACK_B24','/home/jarrelscy/nq-p4rec/hf'),'b175':os.environ.get('NQ_REPACK_B175','/home/jarrelscy/nq-175/hf')}
+HM=0.7
 CARD={'b24':(2.025757,4.141464),'b175':(1.775757,4.141464)}   # model-card accounting (threads/35-nq15/results/sizing.json): base incl. scales / level 4 incl. residual + low-rank
 NE,TOPK,SEQ,G=256,8,2048,16;NB=SEQ//G
 RANK=int(os.environ.get('RANK','0'));WORLD=int(os.environ.get('WORLD_SIZE','1'))
