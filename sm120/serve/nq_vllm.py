@@ -165,11 +165,16 @@ class Runtime:
         log.info('NestQuant rank %d: floating-set predictor %s',s.rank,s.S.predictor_name)
         s.S.io_all=(lambda:io_all(s)) if os.environ.get('NQ_TAP_IO','1')=='1' else (lambda:{})   # nq-kld NQ_TAP_IO=0: tap sees rank 0 only (= prod NQ_IOSTATS=0) while stats still publish
         IO=_io_cfg(s.rank,rp,rb)
+        _tap_probe(s,rf,rb,IO)             # nq-tapad boot probe (NQ_TAP_PROBE; default on with NQ_SCHED=tap NQ_TAP_ADAPT=1): before any engine read
         s.X=EX.RankExecutor(rf,{L:(s.lay[L]['M'],s.lay[L]['MB'],s.lay[L]['ex']) for L in L_},nslot,n_host=IO['n_host'],qd=IO['qd'],device=dev.index,
                                shadow=os.environ.get('NQ_SHADOW','0')=='1',**IO['kw'])
         if IO['log']:log.info('NestQuant rank %d: nq-io %s, RAM tier %d records (%.1f GiB)',s.rank,IO['log'],s.X.tier_n,s.X.tier_n*rb/2**30)
         if s.X.tier_n:_tier_watch(s)
         X_=s.X;s.S.xq=lambda:len(X_.pend)+sum(1 for v in list(X_.ops.values()) if v[2]==4)   # nq-kld tap qreal: real rank-0 outstanding upgrades
+        if getattr(s.S,'tad',False):     # nq-tapad: reads at the drive (engine queued + waiting + reading) = the rate-sample saturation test;
+            s.S.xio=lambda:(lambda d:d['queued']+d['waiting']+d['reading'])(X_.eng.stats())   # tier / LRU-hit / borrowed-pool landings
+            if not os.environ.get('NQ_TAP_SAT_Q'):s.S.tsat=IO['qd']+IO['kw'].get('qd_alt',0)   # leave the drive-rate sample (every rank:
+            s.X.nd_on=True;s.S.xnd=s.X.land_nd                                                  # followers publish drv_GBps)
         init=[(L,E) for L in L_ for E in dflt[L] if E not in fx[L]][:nslot]
         for L,E in init:s.S.state[s.S.li[L],E]=1
         s.X.apply(init,[],s.S)
@@ -326,6 +331,7 @@ class Runtime:
 #                 (also dropped while /dev/shm/nq_tier_drop exists)
 # NQ_FOLLOW_COALESCE=1  followers replay by net effect (oplog.CoalescingFollower)
 # NQ_HOSTLOOP=cpp  leader Scheduler.step array work + follower replay in C++ (streaming/nqhost.cpp, bit-exact)
+# NQ_TAP_PROBE    nq-tapad boot probe reads (NQ_SCHED=tap NQ_TAP_ADAPT=1: default 384, see _tap_probe); NQ_TAP_PROBE_S (3)
 # NQ_FOLLOW_CHECK=1 (or NQ_CHECK=1) followers check, whenever quiescent, landed set == leader log's set (stats check_ok/bad)
 # NQ_RANK_SHARE=1 followers log their own served level-4 share; NQ_IOSTATS=<s> every rank writes its io_stats() JSON
 #                 to /dev/shm/nq_io_<boot>_r<rank>.json every <s> seconds (Runtime.io_all() reads them all)
@@ -450,6 +456,21 @@ def _io_cfg(rank,rp,rb):
         if g<gb:log.warning('NestQuant rank %d: RAM tier %.1f GB asked, MemAvailable %.1f GiB -> %.1f GB',rank,gb,av,g)
         if n>0:kw['tier']=lst[:n];msg.append(f'RAM tier {n} recs')
     return dict(qd=qd,n_host=nh,kw=kw,log=', '.join(msg))
+def _tap_probe(rt,rf,rb,IO):
+    """nq-tapad: NQ_TAP_PROBE=<reads> (0 = off; unset = 384 with NQ_SCHED=tap NQ_TAP_ADAPT=1, else off) random record reads on this
+    rank's drive (rf.path: NQ_IO_MODE=split already pointed it at NQ_REPACK_ALT) at the engine qd, + the alt drive copy at
+    qd_alt with NQ_IO_MODE=dual (both at once, rate = sum), NQ_TAP_PROBE_S (3 s) cap -> TapScheduler.probe_rate (the starting
+    rate instead of NQ_TAP_RATE_GBPS; rank 0 schedules, so its probe sets the start for every rank; a follower's is logged only)"""
+    tad=getattr(rt.S,'tad',False);n=os.environ.get('NQ_TAP_PROBE');n=int(n) if n else (384 if tad else 0)
+    if n<=0 or not hasattr(rt.S,'probe_rate'):return
+    import tap_probe as TP
+    try:r=TP.probe(rf.path,rb,n=n,qd=IO['qd'],alt=IO['kw'].get('alt_path'),qd_alt=IO['kw'].get('qd_alt',0),
+                   max_s=float(os.environ.get('NQ_TAP_PROBE_S','3')),seed=rt.rank)
+    except Exception:log.exception('NestQuant rank %d: tap probe failed, starting rate stays NQ_TAP_RATE_GBPS',rt.rank);return
+    rt.probe=r;g=r['GBps']
+    log.info('NestQuant rank %d: tap probe %d reads in %.2fs: %.2f GB/s (%s; p50 %.2f ms p99 %.2f ms%s)',rt.rank,r['n'],r['s'],g,
+             ' + '.join('%.2f'%d['GBps'] for d in r['drives']),r['p50_ms'],r['p99_ms'],'' if r['direct'] else ', buffered')
+    if g>0 and r['n']>=8:rt.S.probe_rate(g)
 def _tier_watch(rt):
     floor=float(os.environ.get('NQ_RAMTIER_MINAVAIL_GB','30'))
     def run():

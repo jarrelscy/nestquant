@@ -18,6 +18,9 @@ nq-io extensions (defaults = original behaviour):
                       the engine (sched.cancelled(L, E) on the poll that reports it); False if it is already reading
   io_stats()          live I/O numbers since the previous call (delivered GB/s, per-drive GB/s / in-flight, queue
                       depths, tier hit share, op latency p50/p99) - the API the throughput-aware scheduler reads
+  nd_on=True          nq-tapad (NQ_TAP_ADAPT, set by nq_vllm; off = nothing below happens): land_nd = upgrades that landed
+                      without a normal-pool SSD read (RAM-tier / host-LRU hit, prefill-borrow pool slot; the scheduler's
+                      landed() takes them out of its drive-rate sample), io_stats drv_GBps = the other landings (drive rate)
 nq-prefill (prefill-borrow, sm120/serve/nq_pb.py; nothing changes unless x_borrow() is called):
   x_borrow(ep, addrs) a second, temporary slot pool at device addresses lent by vLLM's KV cache (free blocks) for
                       epoch ep; an upgrade key (L + XB*ep, E) goes to that pool (followers get the same keys from the
@@ -48,6 +51,7 @@ class RankExecutor:
         s.n_refused=0;s.n_failed=0;s.n_waited=0;s.lat=[];s.wait=wait_for_slot;s.pend=[]
         s.odst={}                                                 # tag -> device destination of an in-flight borrowed-pool upgrade
         s.lent=set()                                              # nq-lmpf slot borrow: normal-pool slots lent to LMPF (never in free)
+        s.nd_on=False;s.land_nd=set();s.n_land_d=0;s.prev_d={}       # nq-tapad drive-only landing accounting (nd_on)
         s.nslot=nslot;s.xep=0;s.xfree=[];s.xaddr={};s.xpend=[];s.xtag=False;s.x_have=0;s.x_done=0;s.xst=collections.Counter()   # nq-prefill borrowed pool
         # host-loop cost is GIL time taken from the serving thread: rows are precomputed numpy (level-4 row = template +
         # slot address on the P4 fields), mailbox counters are read through numpy views
@@ -90,6 +94,7 @@ class RankExecutor:
             dst=s.slot0+sl*s.rb if sl<s.nslot else s.xaddr[sl]
             s.eng.upgrade(s.tag,s.rf.rec(L,E),dst,st+sb*E,s._row(L,E,4,sl),sq+4*E,q)
             s.ops[s.tag]=(L,E,4,q);s.up_tag[L,E]=s.tag
+            if s.nd_on:s.land_nd.discard((L,E))
             if sl>=s.nslot:s.odst[s.tag]=dst                   # borrowed-pool destination: x_reclaim fences on it
     def poll(s,sched=None,issue=True):
         for tag,hit,trd,te2e in s.eng.poll():
@@ -105,6 +110,9 @@ class RankExecutor:
                 continue
             s.layers[L][1].hseq[E]=q;s.wait_apply[L,E]=(kind,q)
             if kind==4:s.lat.append(te2e);s.lat_w.append(te2e);s.lat_rc.append((trd,te2e-trd));s.n_landed+=1
+            if kind==4 and s.nd_on:
+                if hit or s.slot_of.get((L,E),0)>=s.nslot:s.land_nd.add((L,E))
+                else:s.n_land_d+=1
         for (L,E),(kind,q) in list(s.wait_apply.items()):
             if s.ah[L][E]!=q:continue
             del s.wait_apply[L,E]
@@ -151,7 +159,11 @@ class RankExecutor:
             ssd_cum=int(c['ssd']),tier_cum=int(c['tier']),landed_cum=int(c['landed']),
             op_p50_ms=float(np.percentile(lat,50))*1e3 if lat is not None else None,
             op_p99_ms=float(np.percentile(lat,99))*1e3 if lat is not None else None,
-            **s._rc_stats())
+            **s._rc_stats(),**s._drv(name,t))
+    def _drv(s,name,t):    # nq-tapad (nd_on): drive-only landed rate
+        if not s.nd_on:return {}
+        p=s.prev_d.get(name) or (t-1e-9,0);s.prev_d[name]=(t,s.n_land_d)
+        return dict(drv_GBps=(s.n_land_d-p[1])*s.rb/max(t-p[0],1e-9)/1e9)
     def _rc_stats(s):      # nq-kld: op latency split: issue -> read done (engine queue + SSD) and read done -> copy done (ring wait + h2d)
         if not s.lat_rc:return {}
         a=np.array(s.lat_rc)*1e3;return dict(rd_p50_ms=float(np.percentile(a[:,0],50)),rd_p99_ms=float(np.percentile(a[:,0],99)),

@@ -31,6 +31,26 @@ Env: NQ_TAP_C (1.0 hits) NQ_TAP_H (256 tok) NQ_TAP_HA (0 = fixed H; k -> H = cli
        NQ_TAP_LAT_HL refreshes, default 4; floor NQ_TAP_H instead of 64 so a short lat never shrinks the window).
        The issue budget keeps using the queue-model latency (only queueing consumes the window; a measured fixed
        latency is pipelined), so a large measured latency never stalls issuing.
+     NQ_TAP_ADAPT (0; 1 = nq-tapad adaptive SSD rate, everything below off with 0 = the behaviour above bit for bit):
+       rate: s.peak = time-based EWMA of the DELIVERED drive read rate per rank (records/s), half-life NQ_TAP_EWMA_HL s
+         (1.0: a drive that slows - SLC cache exhausted, thermal - is tracked within ~2-4 s, while one 250 ms sample of a
+         few hundred landings (Poisson noise ~5-10%) moves it by ~16%), instead of the peak-hold + x0.999 decay per refresh
+         (which needs ~1200 refreshes = ~19K tokens to forget a 3x too-high rate). A sample counts only where the drive
+         had work: rank 0 over >= 250 ms (<= 1 s: a longer interval, e.g. prefill, may have drained) with >= NQ_TAP_SAT_Q
+         (8; nq_vllm: qd + qd_alt) reads at the drive at every refresh in it (s.xio(): engine queued + waiting + reading;
+         None = q0) -> the delivered rate IS the drive rate; an unsaturated interval can only raise the estimate
+         (delivered <= capacity), an idle one says nothing. Only drive landings count: s.xnd (nq_vllm: the executor's
+         land_nd set) holds the ups that landed without a normal-pool SSD read (RAM-tier / host-LRU hit, prefill-borrow
+         pool), excluded from the rate and the latency signal. Followers: one sample per new io_all publish (rate =
+         drv_GBps, the executor's same drive-only count; else delivered_GBps), saturated if eng_waiting + eng_reading
+         >= NQ_TAP_SAT_Q. The start is NQ_TAP_RATE_GBPS or the boot probe (probe_rate(): nq_vllm NQ_TAP_PROBE=<reads>,
+         streaming/tap_probe.py). NQ_HOSTLOOP=cpp: same (the TapCore refresh takes _plan's budget; issue marking and
+         landed() stay here in Python).
+       backpressure (NQ_TAP_BP=1): AIMD multiplier m on the issue budget. Signal = max(queue-model latency over ranks,
+         median rank-0 issue->land latency of the drive reads landed since the last refresh), tokens; above
+         NQ_TAP_BP_TGT (1.0) x mla x H (the window the budget plans reads to land in): m *= NQ_TAP_BP_MD (0.7), floor
+         NQ_TAP_BP_MIN (0.05); else m += NQ_TAP_BP_AI (0.05), max 1. budget = max(int(m x budget), NQ_TAP_MIN_ISSUE (4)):
+         issuing never stops (the floor also applies with NQ_TAP_BP=0). stats: ad_* (samples), bp_cut, bp_m_sum, ad_gbps
 Mirror of nq-tfpred/nqalgo ext.py tap-jfe512-c<c>-H<H>-mla<k> (JFLandFC normalised two-horizon value)."""
 import os, time, collections
 import numpy as np
@@ -69,6 +89,13 @@ class TapScheduler(Scheduler):
         s.t_iss = None; s.lat0 = None; s.lat_ema = None
         if s.tlat == 'meas':
             s.t_iss = np.full((len(s.layers), s.NE), np.nan); s.lat0 = collections.deque(maxlen=int(e('NQ_TAP_LAT_N', '256')))
+        s.tad = e('NQ_TAP_ADAPT', '0') == '1'         # nq-tapad (docstring); off = none of the state below exists
+        if s.tad:
+            s.thl = float(e('NQ_TAP_EWMA_HL', '1.0')); s.tsat = int(e('NQ_TAP_SAT_Q', '8')); s.xio = None; s.xnd = None; s.ad_q = 0; s.ad_t = {}
+            s.tbp = e('NQ_TAP_BP', '1') == '1'; s.bp_t = float(e('NQ_TAP_BP_TGT', '1.0')); s.bp_md = float(e('NQ_TAP_BP_MD', '0.7'))
+            s.bp_ai = float(e('NQ_TAP_BP_AI', '0.05')); s.bp_lo = float(e('NQ_TAP_BP_MIN', '0.05')); s.tmin = int(e('NQ_TAP_MIN_ISSUE', '4'))
+            s.bpm = 1.0; s.alat = []
+            if s.t_iss is None: s.t_iss = np.full((len(s.layers), s.NE), np.nan)   # issue->land samples for the backpressure signal
         s.span = 64.0; s.NL = len(s.layers)
         s.doom = {}; s.doomed = np.zeros((s.NL, s.NE), bool); s.todo = collections.deque()
         s.peak = None; s.t_last = None; s.tps = None; s.n_land = 0; s.t_rate = None; s.n_land0 = 0
@@ -83,6 +110,7 @@ class TapScheduler(Scheduler):
         if s.tcore is not None: s.tcore.fix = s.tfixm if s.tfix else 0
         if s.tfix: s.stats.update(nf_shrink_evict=0, todo_full_skip=0)
         if s.tlat == 'meas': s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
+        if s.tad: s.stats.update(ad_samples=0, ad_sat=0, ad_nd=0, bp_cut=0, bp_m_sum=0.0, ad_gbps=s.rate0 * s.rb_rank / 1e9)
         s.sched_name = 'tap'
 
     def _setcap(s, g):
@@ -91,13 +119,23 @@ class TapScheduler(Scheduler):
         s.rate0 = min(s.rate00, s.tcap) if s.tcap > 0 else s.rate00
         if s.tcap > 0 and getattr(s, 'peak', None) is not None: np.minimum(s.peak, s.tcap, out=s.peak)
 
+    def probe_rate(s, g):
+        """nq-tapad boot probe: g = measured GB/s of this rank's drive(s) -> starting rate (rate0, under NQ_TAP_PEAK_GBPS; the
+        held / averaged rate restarts from it)"""
+        s.rate00 = g * 1e9 / s.rb_rank; s.rate0 = min(s.rate00, s.tcap) if s.tcap > 0 else s.rate00; s.peak = None
+        if s.tad: s.stats['ad_gbps'] = s.rate0 * s.rb_rank / 1e9
+
     # ---- executor feedback (counts landings for the live rank-0 rate)
     def landed(s, L, e):
         i = s.li[L]
         if s.state[i, e] == 1:
-            s.n_land += 1
-            if s.lat0 is not None and s.t_iss[i, e] == s.t_iss[i, e]:      # not for ups set in flight outside step()
-                s.lat0.append(s.clock() - s.t_iss[i, e]); s.t_iss[i, e] = np.nan; s.stats['lat0_n'] += 1
+            nd = s.tad and s.xnd is not None and (L, e) in s.xnd      # nq-tapad: landed without a normal-pool drive read
+            if nd: s.xnd.discard((L, e)); s.stats['ad_nd'] += 1
+            else: s.n_land += 1
+            if s.t_iss is not None and s.t_iss[i, e] == s.t_iss[i, e]:     # not for ups set in flight outside step()
+                x = s.clock() - s.t_iss[i, e]; s.t_iss[i, e] = np.nan
+                if s.lat0 is not None: s.lat0.append(x); s.stats['lat0_n'] += 1
+                if s.tad and not nd: s.alat.append(x)
         super().landed(L, e)
 
     # ---- live I/O state
@@ -120,7 +158,19 @@ class TapScheduler(Scheduler):
             el = lm if s.tlat == 'meas' else lat     # meas: a fixed per-read latency shifts the window, costs no bandwidth
             rate = float(s.peak.min()) if s.peak is not None else s.rate0
             budget = max(0, int((s.tmla * H - el) / tps * rate))
+            if s.tad: budget = s._bp(el, H, tps, budget)
         return lat, H, budget
+
+    def _bp(s, el, H, tps, budget):
+        """NQ_TAP_ADAPT: AIMD backpressure on the issue budget (docstring); el = queue-model latency, tokens"""
+        sig = el
+        if len(s.alat) >= 4: sig = max(sig, float(np.median(s.alat)) * tps); s.alat = []
+        if s.tbp:
+            if sig > s.bp_t * s.tmla * H: s.bpm = max(s.bp_lo, s.bpm * s.bp_md); s.stats['bp_cut'] += 1
+            else: s.bpm = min(1.0, s.bpm + s.bp_ai)
+            budget = int(budget * s.bpm)
+        s.stats['bp_m_sum'] += s.bpm; s.stats['ad_gbps'] = float(s.peak.min()) * s.rb_rank / 1e9
+        return max(budget, s.tmin)
 
     def _ctl(s):
         try: m = os.stat(s.tctl).st_mtime_ns
@@ -135,16 +185,18 @@ class TapScheduler(Scheduler):
         if 'qreal' in kv: s.tqreal = kv['qreal'] == '1'
         if kv.get('lat') in ('model', 'meas') and kv['lat'] != s.tlat:
             s.tlat = kv['lat']
-            if s.tlat == 'meas' and s.t_iss is None:
-                s.t_iss = np.full((len(s.layers), s.NE), np.nan); s.lat0 = collections.deque(maxlen=int(os.environ.get('NQ_TAP_LAT_N', '256')))
+            if s.tlat == 'meas' and s.lat0 is None:       # (t_iss is None <=> lat0 is None unless NQ_TAP_ADAPT)
+                if s.t_iss is None: s.t_iss = np.full((len(s.layers), s.NE), np.nan)
+                s.lat0 = collections.deque(maxlen=int(os.environ.get('NQ_TAP_LAT_N', '256')))
                 s.stats.update(lat_model_tok_sum=0.0, H_sum=0.0, lat0_n=0)
-            elif s.tlat == 'model': s.t_iss = None; s.lat0 = None
+            elif s.tlat == 'model': s.t_iss = s.t_iss if s.tad else None; s.lat0 = None
         import logging; logging.getLogger('vllm.nestquant').warning('NestQuant tap ctl: floor %.2f GB/s/rank, mla %s, lat %s, cap %.2f GB/s total, qreal %s', s.tfloor * s.rb_rank / 1e9, s.tmla, s.tlat, s.tcap * s.rb_rank * max(1, s.tp_n) / 1e9, s.tqreal)
 
     def _rates(s, now, q0, nt=None):
         """-> (lat_s per rank list). Rank 0 live; followers from io_all() if available.
         nt (todo length) given: -> (model list, measured list): measured = pre-issue queue / peak + measured issue->land latency (model
         value where no measurement exists)"""
+        if s.tad: return s._rates_ad(now, q0, nt)
         if s.t_rate is None: s.t_rate = now; s.n_land0 = s.n_land
         dt = now - s.t_rate
         out = []
@@ -182,6 +234,50 @@ class TapScheduler(Scheduler):
                           pre / max(s.peak[r], 1.0) + min(max(p / 1e3, 0.0), 30.0))
         if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
         return (out, me) if meas else out
+
+    def _rates_ad(s, now, q0, nt=None):
+        """NQ_TAP_ADAPT=1 _rates (same outputs): s.peak = drive-rate EWMA, sampled only where the drive had work (docstring)"""
+        qe = s.xio() if s.xio is not None else q0       # reads at the drive now (sim / no hook: rank-0 queue)
+        if s.t_rate is None: s.t_rate = now; s.n_land0 = s.n_land; s.ad_q = qe
+        s.ad_q = min(s.ad_q, qe)                         # min over the refreshes of this interval (incl. its start)
+        io = {}
+        f = getattr(s, 'io_all', None)
+        if f is not None:
+            try: io = f() or {}
+            except Exception: io = {}
+        nr = max(len(io), 1)
+        if s.peak is None: s.peak = np.full(nr, s.rate0)
+        elif len(s.peak) != nr: p = np.full(nr, s.rate0); k = min(nr, len(s.peak)); p[:k] = s.peak[:k]; s.peak = p   # keep the averages
+        dt = now - s.t_rate
+        if dt >= 0.25: s._ew(0, (s.n_land - s.n_land0) / dt, dt, s.ad_q >= s.tsat and dt <= 1.0); s.t_rate = now; s.n_land0 = s.n_land; s.ad_q = qe
+        for r in sorted(io):
+            if r == 0 or r >= nr: continue
+            d = io[r]; t = d.get('t_wall'); dr = d.get('dt_s')
+            if t is None or t == s.ad_t.get(r) or not isinstance(dr, (int, float)) or not dr > 0: continue
+            s.ad_t[r] = t; g = d.get('drv_GBps'); g = d.get('delivered_GBps') if g is None else g
+            s._ew(r, (g or 0.0) * 1e9 / (s.rb / nr), min(dr, 10.0), (d.get('eng_waiting') or 0) + (d.get('eng_reading') or 0) >= s.tsat)
+        if s.tfloor > 0: np.maximum(s.peak, s.tfloor, out=s.peak)
+        if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
+        out = [q0 / max(s.peak[0], 1.0) + s.tsvc]; me = []
+        meas = nt is not None
+        if meas:
+            m0 = float(np.quantile(np.fromiter(s.lat0, float, len(s.lat0)), s.tlat_q)) if len(s.lat0) >= 8 else None
+            me.append(out[0] if m0 is None else nt / max(s.peak[0], 1.0) + min(max(m0, 0.0), 30.0))
+        for r in sorted(io):
+            if r == 0 or r >= nr: continue
+            d = io[r]; pre = (d.get('slot_wait') or 0) + (d.get('backlog') or 0)
+            out.append(((d.get('ops_outstanding') or 0) + pre) / max(s.peak[r], 1.0) + s.tsvc)
+            if meas:
+                p = d.get('op_p50_ms')
+                me.append(out[-1] if not isinstance(p, (int, float)) or not p == p else
+                          pre / max(s.peak[r], 1.0) + min(max(p / 1e3, 0.0), 30.0))
+        return (out, me) if meas else out
+
+    def _ew(s, r, x, dt, sat):
+        """rate sample x (records/s over dt s) of rank r: saturated -> EWMA step; unsaturated -> only upward (lower bound)"""
+        p = float(s.peak[r])
+        if not (x == x) or (not sat and x <= p): return
+        a = 0.5 ** (dt / max(s.thl, 1e-9)); s.peak[r] = a * p + (1 - a) * x; s.stats['ad_samples'] += 1; s.stats['ad_sat'] += int(sat)
 
     def _value(s, lat, H):
         S = np.asarray(s.P.S, np.float32); S = np.where(s.fixed, 0, np.maximum(S, 0))
