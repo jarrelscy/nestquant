@@ -53,6 +53,8 @@ class TapScheduler(Scheduler):
         fr = e('NQ_TAP_FAR', 'tail:0.1'); s.tfar = float(fr.split(':')[1]) if fr.startswith('tail:') else None   # far window: EMA512 | tail:<x> = x * jF rate
         s.tp_n = int(e('NQ_TAP_TP', '4')); s.rb_rank = s.rb / max(1, s.tp_n)
         s.rate0 = float(e('NQ_TAP_RATE_GBPS', '6')) * 1e9 / s.rb_rank      # records/s per rank before measurement
+        if not np.isfinite(s.rate0) or s.rate0 <= 0:
+            raise ValueError('NQ_TAP_RATE_GBPS must provide a positive finite initial rate')
         # nq-kld (default off): NQ_TAP_RATE_FLOOR_GBPS per rank = lower bound of the peak-held rate (the 0.999 decay can't pull
         # it under); in-boot override of floor / mla / lat via /dev/shm/nq_tap_ctl ("floor=<GB/s> mla=<x> lat=model|meas"), re-read on change
         s.tfloor = float(e('NQ_TAP_RATE_FLOOR_GBPS', '0')) * 1e9 / s.rb_rank; s.tctl = e('NQ_TAP_CTL', '/dev/shm/nq_tap_ctl'); s.tctl_m = None
@@ -159,7 +161,9 @@ class TapScheduler(Scheduler):
             except Exception: io = {}
         nr = max(len(io), 1)
         if s.peak is None or len(s.peak) != nr: s.peak = np.full(nr, s.rate0)
-        s.peak *= 0.999
+        # No delivered bytes without queued demand is not an I/O capacity measurement.
+        # Aging through idle refreshes can floor the issue budget to zero forever.
+        if q0 > 0: s.peak[0] *= 0.999
         if s.tfloor > 0: np.maximum(s.peak, s.tfloor, out=s.peak)
         if s.tcap > 0: np.minimum(s.peak, s.tcap, out=s.peak)
         if r0 is not None: s.peak[0] = max(s.peak[0], r0)
@@ -172,9 +176,11 @@ class TapScheduler(Scheduler):
             if r == 0 or r >= nr: continue
             d = io[r]; rbr = s.rb / nr
             g = d.get('delivered_GBps') or 0.0
-            s.peak[r] = max(s.peak[r], g * 1e9 / rbr)
             pre = (d.get('slot_wait') or 0) + (d.get('backlog') or 0)
             q = (d.get('ops_outstanding') or 0) + pre
+            if q > 0: s.peak[r] *= 0.999
+            s.peak[r] = max(s.peak[r], s.tfloor, g * 1e9 / rbr)
+            if s.tcap > 0: s.peak[r] = min(s.peak[r], s.tcap)
             out.append(q / max(s.peak[r], 1.0) + s.tsvc)
             if meas:
                 p = d.get('op_p50_ms')

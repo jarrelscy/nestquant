@@ -104,7 +104,10 @@ class RankExecutor:
                 if sched is not None:sched.failed(L,E,read_error=True)
                 continue
             s.layers[L][1].hseq[E]=q;s.wait_apply[L,E]=(kind,q)
-            if kind==4:s.lat.append(te2e);s.lat_w.append(te2e);s.lat_rc.append((trd,te2e-trd));s.n_landed+=1
+            if kind==4:
+                s.lat.append(te2e)
+                if len(s.lat)>4096:del s.lat[:-4096]   # preserve slicing API; statistics use at most the recent256
+                s.lat_w.append(te2e);s.lat_rc.append((trd,te2e-trd));s.n_landed+=1
         for (L,E),(kind,q) in list(s.wait_apply.items()):
             if s.ah[L][E]!=q:continue
             del s.wait_apply[L,E]

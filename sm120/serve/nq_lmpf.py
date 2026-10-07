@@ -727,11 +727,16 @@ class LM:
     def ring_off(s,why):
         """ring off for the boot; close joins the reader and synchronizes the I/O stream, so no read still lands in a slot
         that a later borrow return hands back to decode"""
-        R=s.ring;s.ring=None
+        R=s.ring
         if R is None:return
+        s.rt.err=RuntimeError(f'NestQuant LMPF ring failed ({why}); restart worker before serving more requests')
         log.warning('NestQuant LMPF rank %d: ring off (%s), closing I/O',s.rt.rank,why)
         try:R.eng.close()
-        except Exception:log.exception('NestQuant LMPF rank %d: ring I/O close failed',s.rt.rank)
+        except Exception:
+            log.exception('NestQuant LMPF rank %d: ring I/O close failed; span must remain quarantined',s.rt.rank)
+            raise
+        s.ring=None
+        raise s.rt.err
     def bw_return(s):
         """local: drain the ring, sync the stream (every reader of the span done), give the span back"""
         if s.bwi is None:return
@@ -783,13 +788,13 @@ class LM:
             with rt.cv:
                 rt.ncap+=1
                 ok=rt.cv.wait_for(lambda:not rt.in_iter and not rt.X.ops,timeout=PAUSE_S)
-            if not ok:log.warning('NestQuant LMPF rank %d: executor not idle after %.0f s (%d ops in flight), snapshot anyway',rt.rank,PAUSE_S,len(rt.X.ops))
+            if not ok:
+                with rt.cv:rt.ncap-=1;rt.cv.notify_all()
+                raise TimeoutError('NestQuant LMPF: cannot snapshot slots while executor is active')
         s.paused=True
         s.snap_tables()
     def unpause(s):
-        if s.bwi is not None:
-            try:s.bw_return()
-            except Exception:log.exception('NestQuant LMPF rank %d: slot borrow return failed',s.rt.rank)
+        if s.bwi is not None:s.bw_return()  # never resume decode after failed ownership recovery
         if not s.paused:return
         rt=s.rt;s.paused=False;s.snapt=None;s.lv=None;s.prid=None
         if hasattr(rt,'X'):

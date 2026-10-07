@@ -312,7 +312,9 @@ class PB:
         rt=s.rt
         with rt.cv:
             rt.pb_pause+=1
-            if not rt.cv.wait_for(lambda:not rt.in_iter,timeout=60):log.warning('NestQuant prefill-borrow: streaming loop busy > 60 s')
+            if not rt.cv.wait_for(lambda:not rt.in_iter,timeout=60):
+                rt.pb_pause-=1;rt.cv.notify_all()
+                raise TimeoutError('NestQuant prefill-borrow: cannot mutate slots while streaming loop is active')
     def _resume(s):
         rt=s.rt
         with rt.cv:rt.pb_pause-=1;rt.cv.notify_all()
@@ -335,6 +337,7 @@ class PB:
                     try:s._reclaim()
                     except Exception:log.exception('NestQuant prefill-borrow: reclaim after error failed')
                     finally:s._resume()
+                    raise  # slot/KV ownership cannot be trusted after a worker-hook error
             return
         s._pause()
         try:
@@ -346,6 +349,7 @@ class PB:
             try:
                 if s.ep:s._reclaim()
             except Exception:log.exception('NestQuant prefill-borrow: reclaim after error failed')
+            raise
         finally:s._resume()
     def _borrow(s,runner,ep,phase,runs,nslots,kv=None):
         rt=s.rt;X=rt.X;t0=time.time()
@@ -471,7 +475,10 @@ def install(rt):
         pb=getattr(rt,'PB',None)
         if pb is not None and scheduler_output is not None:
             try:pb.on_sched(self.model_runner,scheduler_output)
-            except Exception:log.exception('NestQuant prefill-borrow: hook failed');pb.dead=True
+            except Exception as e:
+                rt.err=e
+                log.exception('NestQuant prefill-borrow: hook failed; refusing forward with uncertain slot/KV ownership');pb.dead=True
+                raise
         return ex0(self,scheduler_output,*a,**k)
     functools.update_wrapper(execute_model,ex0);W.execute_model=execute_model;W._nq_pb=True
     if KV_OFF:patch_gac(rt)

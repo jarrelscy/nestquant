@@ -97,7 +97,10 @@ class Runtime:
         if not s.lay:log.info('NestQuant rank %d: CUDA stack limit %d -> %d B/thread',rank,*_stack_limit())
         t=time.time();ex,H,I=RS.load(f"{os.environ['NQ_REPACK']}/res/rank{rank}/L{L}.pt",dev)
         M=MoELayer(NE,H,I,Bmax=BMAX,dev=dev);MB=Mailbox(M)
-        for E,x in ex.items():M.table[E].copy_(entry(x,2))
+        if set(ex)!=set(range(NE)):raise ValueError(f'NestQuant L{L}: resident expert IDs must cover 0..{NE-1}')
+        for E,x in ex.items():
+            M.validate(x,4)   # streamed upgrades must be compatible before any row is visible
+            M.table[E].copy_(entry(x,2))
         hits=torch.zeros(NE,dtype=torch.int32).pin_memory()
         if os.environ.get('NQ_HITS','1')!='0':M.hits_ptr=hits.data_ptr()
         s.lay[L]=dict(M=M,MB=MB,ex=ex,hits=hits,H=H,I=I);s.rank,s.tp,s.dev=rank,tp,dev
@@ -179,7 +182,7 @@ class Runtime:
             # /dev/shm is the host's and container pids repeat across boots: key the log by the parent's start time too,
             # so a follower can never open (and replay) a previous boot's log before the leader has created this one
             pp=os.getppid();st=open(f'/proc/{pp}/stat').read().rsplit(')',1)[1].split()[19]
-            s.log=OL.OpLog(f'/dev/shm/nq_oplog_{pp}_{st}.bin',writer=s.rank==0)
+            s.log=OL.OpLog(f'/dev/shm/nq_oplog_{pp}_{st}.bin',writer=s.rank==0, reader_id=s.rank if s.rank else None, reader_count=max(s.tp-1,0))
             if s.rank:
                 coal=os.environ.get('NQ_FOLLOW_COALESCE','0')=='1'
                 if HOSTLOOP=='cpp':s.F=OL.CppFollower(s.X,s.log,L_,coalesce=coal)        # nq-io upgrade 5
@@ -200,7 +203,10 @@ class Runtime:
         if LAH.MODE or LAH.MEAS:s.LA=LAH.LA(s)
         if os.environ.get('NQ_PF_BLOCK','0')=='1' and s.LA is not None:   # nq-kld eval knob: prefill layers wait for their planes
             import nq_pfblock;s.PFB=nq_pfblock.PFBlock(s,L_)
-        if s.F is None and s.rank==0:s.SR=SRM.SessionRestore(s);_hook_sched(s)   # per-session floating-set restore (nq_session.py)
+        if s.F is None and s.rank==0:
+            s.SR=SRM.SessionRestore(s)
+            if s.SR.on:SRM._check_predictor(s.S.P)
+        _hook_sched(s)   # per-session floating-set restore (nq_session.py)
         if os.environ.get('NQ_PREFILL_BORROW','0')=='1':     # nq-prefill: KV blocks lent to the slot pool during long prefills
             if HOSTLOOP=='cpp':log.warning('NestQuant prefill-borrow: NQ_HOSTLOOP=cpp not supported, off')
             else:
@@ -211,18 +217,19 @@ class Runtime:
         if os.environ.get('NQ_LMPF','0')=='1':        # windowed layer-major 4-bit prefill (worker side, set up after warmup)
             try:
                 import nq_lmpf;s.LM=nq_lmpf.install(s)
-            except Exception:log.exception('NestQuant LMPF: install failed, off')
+            except Exception:
+                log.exception('NestQuant LMPF: requested feature failed to install');raise
         s.L_=L_;s.thread=threading.Thread(target=s.loop,name='nq-stream',daemon=True);s.thread.start()
     def _sr(s,f,*a,dflt=None):
-        """session restore is an optimization: any error turns it off (pin dropped), streaming goes on"""
+        """Do not continue after a session operation partially mutates predictor/residency."""
         try:return f(*a)
         except Exception:
-            log.exception('NestQuant session restore failed, turned off');s.SR=None;s.S.pin=None;return dflt
+            log.exception('NestQuant session restore failed');raise
     def share_loop(s,lv4):
         """NQ_STREAM=0: log the level-4 share of routed slots of the fixed set (same format as the streaming loop)."""
         H=[s.lay[L]['hits'].numpy() for L in s.L_];prev=np.stack(H).astype(np.int64);s4=st=0;n=0
         while not s.stop:
-            time.sleep(1.);n+=1;cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;s4+=int(c[lv4].sum());st+=int(c.sum())
+            time.sleep(1.);n+=1;cur=np.stack(H).astype(np.int64);c=_hit_delta(cur,prev);prev=cur;s4+=int(c[lv4].sum());st+=int(c.sum())
             if st and n%60==0:
                 log.info('NestQuant rank %d: level-4 hit share %.4f (%d/%d routed slots)',s.rank,s4/st,s4,st);s4=st=0
     def loop(s):
@@ -250,7 +257,7 @@ class Runtime:
                             if r is not None and not r[0] and s.F.stats['check_bad']<=5:
                                 log.error('NestQuant rank %d: follower != leader log when quiescent: %d missing %d extra (%s)',s.rank,r[1],r[2],s.F.check_msg)
                         if fsh and not cap:          # this rank's served level-4 share (its own landed set, not the leader's)
-                            cur=np.stack(H).astype(np.int64);c=cur-fprev;fprev=cur
+                            cur=np.stack(H).astype(np.int64);c=_hit_delta(cur,fprev);fprev=cur
                             if c.sum()>0:                  # every interval (a decode step's later layers often land after layer 0's poll)
                                 a4=int(c[s.S.fixed|s.F.mask].sum());at=int(c.sum());fs4+=a4;fst+=at
                                 k=_pfk(c);sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at
@@ -259,7 +266,7 @@ class Runtime:
                     if s.LA is not None and s.F is None and not cap and issue:s.LA.service(s.S,s.X,s.log)
                     if s.SR is not None and not cap and issue:s._sr(s.SR.service,s.S,s.X,s.log)
                     if s.F is None and not cap:        # hits counted during a capture are dropped with it (warmup inputs)
-                        cur=np.stack(H).astype(np.int64);c=cur-prev;prev=cur;ntok=int(c[0].sum())//TOPK
+                        cur=np.stack(H).astype(np.int64);c=_hit_delta(cur,prev);prev=cur;ntok=int(c[0].sum())//TOPK
                         hc=_hit_carry()
                         if ntok==0 and (not hc or _pfk(c)==1):pstep=pstep+c   # NQ_HIT_CARRY: a prefill-tail interval is not carried into decode
                         if c.sum()>0:                 # nq-kld: routing seen vs routing that reaches S.step (per layer); per-layer decode hot
@@ -272,7 +279,7 @@ class Runtime:
                             if SH is not None:scur=np.stack(SH);sal=np.maximum(scur-sprev,0.);sprev=scur   # cumulative fp64, diffed like the hits
                             lv=s.S.fixed|(s.S.state==2);s4+=int(c[lv].sum());st+=int(c.sum())   # share at the levels served this step
                             if RANK_SHARE:k=_pfk(c);a4=int(c[lv].sum());at=int(c.sum());sp4[k]+=a4;spt[k]+=at;s.shc[k]+=a4;s.shc[2+k]+=at;s.shc[4+k]+=int(c[s.S.state==1].sum())
-                            if hc:cs=cur-pstep;ntok=int(cs[0].sum())//TOPK   # NQ_HIT_CARRY: hits of decode polls without new layer-0 tokens join this step
+                            if hc:cs=_hit_delta(cur,pstep);ntok=int(cs[0].sum())//TOPK   # NQ_HIT_CARRY: hits of decode polls without new layer-0 tokens join this step
                             else:cs=c
                             pstep=cur;s.hstep+=cs.sum(1)
                             if s.SR is not None and issue:ntok=s._sr(s.SR.on_counts,s.S,cs,ntok,lv,dflt=ntok)   # handover / prefill residue / window share
@@ -478,20 +485,30 @@ def io_all(rt=None):
         except (OSError,ValueError):pass
     return out
 
+def _hit_delta(cur,prev):
+    """Mapped atomic int32 counters wrap; preserve unsigned differences on the host."""
+    return (cur-prev)&0xffffffff
+
+def _check_health(rt):
+    if rt.err is not None:
+        raise RuntimeError('NestQuant background streaming/upgrade worker failed') from rt.err
+
+
 def _hook_sched(rt):
     """Worker.execute_model(scheduler_output) -> rt.SR.on_sched first (request arrival = its first step, before the
     step's LMCache load and forward): the session key is known as early as the worker can see the request"""
     try:from vllm.v1.worker import gpu_worker as GW
-    except Exception as e:log.warning('NestQuant session restore: no gpu_worker (%s), off',e);rt.SR=None;return
+    except Exception as e:raise RuntimeError('NestQuant cannot install worker health/session hook') from e
     W=GW.Worker
     if getattr(W,'_nq_sr',False):return
     ex0=W.execute_model
     def execute_model(self,scheduler_output,*a,**k):
-        sr=RT.SR
-        if sr is not None:
-            try:sr.on_sched(scheduler_output)
-            except Exception:log.exception('NestQuant session restore: hook failed, off');RT.SR=None
-        return ex0(self,scheduler_output,*a,**k)
+        _check_health(rt)
+        sr=rt.SR
+        if sr is not None:sr.on_sched(scheduler_output)
+        result=ex0(self,scheduler_output,*a,**k)
+        _check_health(rt)
+        return result
     functools.update_wrapper(execute_model,ex0);W.execute_model=execute_model;W._nq_sr=True
 
 def _gate_captures(rt):
@@ -505,8 +522,12 @@ def _gate_captures(rt):
         with rt.cv:
             rt.ncap+=1
             if not rt.cv.wait_for(lambda:not rt.in_iter and not rt.X.ops,timeout=120):
-                log.warning('NestQuant rank %d: engine not idle before graph capture (%d ops in flight)',rt.rank,len(rt.X.ops))
-        return b0(g,*a,**k)
+                rt.ncap-=1;rt.cv.notify_all()
+                raise TimeoutError('NestQuant engine not idle before CUDA graph capture')
+        try:return b0(g,*a,**k)
+        except BaseException:
+            with rt.cv:rt.ncap-=1;rt.cv.notify_all()
+            raise
     def end(g,*a,**k):
         try:return e0(g,*a,**k)
         finally:

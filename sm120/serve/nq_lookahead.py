@@ -104,7 +104,7 @@ class LA:
             s.dsrc=DT
         s.gamma=load_gamma(s.layers,s.dev) if GAMMA else {};s.gsc={}
         if not s.delta:log.warning('NestQuant lookahead: no delta table, salience = sum w^2 ||x||^2')
-        s.cid=0;s.q=collections.deque();s.pool=[torch.zeros(10,NE,dtype=torch.float32).pin_memory() for _ in range(4*len(s.layers)+8)];s.pi=0
+        s.cid=0;s.q=collections.deque();s.pool=[torch.zeros(10,NE,dtype=torch.float32).pin_memory() for _ in range(4*len(s.layers)+8)];s.free=collections.deque(s.pool)
         s.plan={};s.cs=collections.defaultdict(lambda:collections.defaultdict(float))
         s.evs={}                                      # router-cost events (start, end) per chunk
         # measurement state
@@ -156,7 +156,11 @@ class LA:
         if MODE is None and not s.meas:return
         dl=s.delta.get(L);x2=torch.linalg.vector_norm(x,dim=1,dtype=torch.float32).square();A=stats(ids,w.float(),x2,dl)
         if s.meas:s._measure(L,x,x2,A)
-        buf=s.pool[s.pi];s.pi=(s.pi+1)%len(s.pool)
+        # Only the consumer returns a buffer, after its copy completed and its
+        # contents were detached. Dropping optional lookahead work is safe;
+        # overwriting a queued DMA destination is not.
+        try:buf=s.free.popleft()
+        except IndexError:return
         e0=torch.cuda.Event(enable_timing=True);e1=torch.cuda.Event(enable_timing=True);e0.record()
         fb=False
         if MODE is None:Lt=None;P=None                 # off (measure only): log the served level-4 shares
@@ -175,7 +179,7 @@ class LA:
     def service(s,S,X,oplog):
         n=0
         while s.q and s.q[0][4].query():
-            L,cid,Lt,buf,ev,mode,rrow,bud,fb=s.q.popleft();a=buf.numpy();A=a[0:4];lvl=a[4];P=a[5:9];n+=1;c=s.cs[cid];i=S.li[L]
+            L,cid,Lt,buf,ev,mode,rrow,bud,fb=s.q.popleft();a=buf.numpy().copy();s.free.append(buf);A=a[0:4];lvl=a[4];P=a[5:9];n+=1;c=s.cs[cid];i=S.li[L]
             # layer L served this chunk: its level-4 set and (if planned) the chosen set vs its actual routing
             tot=A.sum(1)+1e-30;l4=lvl==4
             for j,nm in enumerate(MEAS_N):c['served_'+nm]+=A[j][l4].sum()/tot[j]

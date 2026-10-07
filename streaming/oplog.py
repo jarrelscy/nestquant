@@ -6,7 +6,7 @@ waits for its slowest rank, and independently scheduled ranks drift apart by up 
                         expert (an op on an expert whose previous op is still in flight here waits, in order); a
                         downgrade of an expert that never landed here (read error) is dropped
 Record: int32 [MAGIC, n_ups, n_downs, L0, E0, L1, E1, ...] (ups then downs), one os.write per record. The log rotates
-every ROT bytes: [MAGIC, -1, 0] = continue in path.<gen+1>; the leader deletes generation gen-2 when it rotates.
+every ROT bytes: [MAGIC, -1, 0] = continue in path.<gen+1>; the leader deletes old generations only after every configured follower has acknowledged advancing past them.
 nq-prefill (prefill-borrow): an upgrade key (L + XB*ep, E) = into the borrowed slot pool of epoch ep (executor.py);
 [MAGIC, -2, ep] = the leader reclaimed epoch ep. With get(gate=X) a reader stops before a record it may not replay
 yet: a borrowed-pool upgrade of an epoch this rank has not borrowed (X.x_have), or the reclaim marker of an epoch it
@@ -16,11 +16,49 @@ MAGIC=0x4E514F50;ROT=16<<20;XB=65536;_XS=1<<20   # = executor.XS (borrowed slot 
 def _dk(k):return (k[0]%XB,k[1]) if k[0]>=XB else k    # nq-prefill: borrowed-pool upgrade key -> (L, E)
 
 class OpLog:
-    def __init__(s,path,writer):
+    def __init__(s,path,writer,reader_id=None,reader_count=None):
         s.base=path;s.writer=writer;s.gen=0;s.off=0;s.fd=None
+        # No implicit reader discovery: a follower may not have started yet. Unknown membership retains logs.
+        if reader_count is not None and reader_count<0:raise ValueError('reader_count must be nonnegative')
+        if reader_id is not None and (reader_id<1 or (reader_count is not None and reader_id>reader_count)):
+            raise ValueError('reader_id outside configured follower ranks')
+        s.reader_id=reader_id;s.reader_count=reader_count;s._gc_next=0
         if writer:s._open_w()
     def _p(s,g):return f'{s.base}.{g}'
-    def _open_w(s):s.fd=os.open(s._p(s.gen),os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_APPEND,0o600);s.off=0
+    def _publish(s,path,value):
+        tmp=f'{path}.{os.getpid()}.tmp'
+        with open(tmp,'w') as f:f.write(str(value))
+        os.replace(tmp,path)
+    def _open_w(s):
+        s.fd=os.open(s._p(s.gen),os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_APPEND,0o600);s.off=0
+        s._publish(s.base+'.head',s.gen)
+    def _open_r(s):
+        try:s.fd=os.open(s._p(s.gen),os.O_RDONLY)
+        except FileNotFoundError:
+            try:
+                with open(s.base+'.head') as f:head=int(f.read())
+            except (OSError,ValueError):return False
+            if head>=s.gen:raise RuntimeError(f'oplog missing generation {s.gen}, writer at {head}: resynchronization required')
+            return False
+        # Acknowledgement means all older records have been handed to the replay queue, NOT yet applied.
+        # Reader fd owns this generation; only strictly older generations may now be reclaimed.
+        if s.reader_id is not None:s._publish(f'{s.base}.ack.{s.reader_id}',s.gen)
+        return True
+    def _gc(s):
+        if s.reader_count is None:return
+        low=s.gen
+        for r in range(1,s.reader_count+1):
+            try:
+                with open(f'{s.base}.ack.{r}') as f:a=int(f.read())
+            except (OSError,ValueError):return
+            if not 0<=a<=s.gen:return
+            low=min(low,a)
+        # Keep current and previous generation for diagnostics even when every reader advanced.
+        stop=min(low,s.gen-1)
+        while s._gc_next<stop:
+            try:os.unlink(s._p(s._gc_next))
+            except FileNotFoundError:pass
+            s._gc_next+=1
     def _w(s,a):
         n=os.write(s.fd,a.tobytes());assert n==a.nbytes,(n,a.nbytes);s.off+=n
     def put_reclaim(s,ep):s._w(np.array([MAGIC,-2,int(ep)],np.int32))
@@ -29,14 +67,11 @@ class OpLog:
         s._w(np.array([MAGIC,len(ups),len(downs)]+[x for p in list(ups)+list(downs) for x in p],np.int32))
         if s.off>=ROT:
             s._w(np.array([MAGIC,-1,0],np.int32));os.close(s.fd);s.gen+=1;s._open_w()
-            try:os.unlink(s._p(s.gen-2))
-            except FileNotFoundError:pass
+            s._gc()
     def get(s,gate=None):
         out=[]
         while True:
-            if s.fd is None:
-                if not os.path.exists(s._p(s.gen)):return out
-                s.fd=os.open(s._p(s.gen),os.O_RDONLY)
+            if s.fd is None and not s._open_r():return out
             b=os.pread(s.fd,1<<22,s.off);a=np.frombuffer(b[:len(b)//4*4],np.int32);i=0;nxt=False
             while i+3<=len(a):
                 assert a[i]==MAGIC,f'oplog {s._p(s.gen)}: bad record at byte {s.off+4*i}'
@@ -56,9 +91,7 @@ class OpLog:
         """reader, nq-io: like get() but hands each new int32 chunk to feed(a) -> (words consumed, rotation marker hit)
         (CppFollower: the record scan runs in C++)"""
         while True:
-            if s.fd is None:
-                if not os.path.exists(s._p(s.gen)):return
-                s.fd=os.open(s._p(s.gen),os.O_RDONLY)
+            if s.fd is None and not s._open_r():return
             b=os.pread(s.fd,1<<22,s.off);used,rot=feed(np.frombuffer(b[:len(b)//4*4],np.int32));s.off+=4*used
             if not rot:return
             os.close(s.fd);s.fd=None;s.gen+=1;s.off=0

@@ -83,8 +83,7 @@ def patch_lmh32(m):
 
 FP8_OPROJ=os.environ.get('NQ_DBG_FP8_OPROJ_ONLY','0')=='1'   # fp8_w8a16 (e4m3 per-out-channel W8A16) restricted to self_attn.o_proj (needs VLLM_DISABLE_FP8_W8A16=0, VLLM_ENABLE_NVFP4_P4_O_PROJ=0)
 
-# NQ_DBG_FP8O_FUSED (default 1): decode gemv = csrc/nq_fp8o.cu (bf16 in/out, prescale + casts fused into the kernel,
-# bit-identical to the host-side cast/mul/cast + fp16 gemv + cast chain it replaces)
+# NQ_DBG_FP8O_FUSED (default 1): decode gemv = csrc/nq_fp8o.cu (BF16 in/out, FP32 accumulation).
 FUSED=os.environ.get('NQ_DBG_FP8O_FUSED','1')=='1'
 _FUSED_OK=[False]
 def _load_fused():
@@ -100,9 +99,10 @@ def patch_fp8o(m):
     def fp8_w8a16_linear(x2d:torch.Tensor,weight:torch.Tensor,scale:torch.Tensor,dec_max:int,shift:int)->torch.Tensor:
         Mo=weight.shape[0]
         if x2d.shape[0]<=dec_max or torch.cuda.is_current_stream_capturing():
-            if FUSED and x2d.dtype==torch.bfloat16 and shift==6:return torch.ops.nq_fp8o.gemv_bf16(x2d.contiguous(),weight,scale)
-            xh=(x2d.to(torch.float32)*(2.0**-shift)).half().contiguous()
-            y=m._get_ext().fp8_w8a16_gemv(xh,weight,scale)
+            if FUSED and x2d.dtype==torch.bfloat16:return torch.ops.nq_fp8o.gemv_bf16(x2d.contiguous(),weight,scale)
+            # The legacy extension narrows BF16 inputs, partials and output through
+            # half. Keep the fallback safe too (slower diagnostic/non-BF16 path).
+            y=torch.nn.functional.linear(x2d.float(),weight.view(torch.float8_e4m3fn).float())*scale
         else:
             xa=x2d.to(torch.float32);xs=xa.abs().amax(dim=1,keepdim=True).clamp_min(1e-8)/448.0
             xq=(xa/xs).clamp(-448,448).to(torch.float8_e4m3fn)
@@ -112,7 +112,7 @@ def patch_fp8o(m):
     def _(x2d,weight,scale,dec_max,shift):return x2d.new_empty((x2d.shape[0],weight.shape[0]))
     C=m.Fp8W8A16LinearMethod;_pw=C.process_weights_after_loading
     def process_weights_after_loading(self,layer):
-        _pw(self,layer);m._get_ext()          # JIT-build/load the ext outside torch.compile
+        _pw(self,layer)
         if FUSED:_load_fused()
     def apply(self,layer,x,bias=None):
         y=torch.ops.nq_dbg.fp8_w8a16_linear(x.reshape(-1,x.shape[-1]),layer.weight,layer.weight_scale,self.DECODE_MAX_TOKENS,self.ACT_SHIFT)

@@ -65,6 +65,28 @@ struct Engine {
     std::mutex mu; std::condition_variable cv; std::deque<Op*> q; std::vector<Op*> reading, copying;
     std::vector<std::tuple<int64_t, bool, double, double>> done; std::thread th; std::atomic<bool> stop{false};
     int64_t n_up = 0, n_post = 0, n_hit = 0, bytes = 0, n_inflight_read = 0;
+    // Only the worker reads its mutable counters/containers. stats() reads this snapshot under mu.
+    struct StatsSnapshot {
+        int64_t up=0, post=0, hit=0, bytes=0, fault=0, reading=0, copying=0;
+        int64_t reads[2]={0,0}, drive_bytes[2]={0,0};
+        int inflight[2]={0,0}; double read_s[2]={0,0};
+        int64_t tier_recs=0, tier_hits=0, tier_bytes=0, cancelled=0;
+        int tier_state=0;
+    } published;
+    void publish_stats() {
+        StatsSnapshot x;
+        x.up=n_up; x.post=n_post; x.hit=n_hit; x.bytes=bytes; x.fault=n_fault;
+        x.reading=(int64_t)reading.size(); x.copying=(int64_t)copying.size();
+        for (int i=0;i<nd;++i) {
+            x.reads[i]=d_reads[i]; x.drive_bytes[i]=d_bytes[i]; x.inflight[i]=infl[i]; x.read_s[i]=d_rdt[i];
+        }
+        x.tier_state=tier_state.load(std::memory_order_acquire);
+        // tier_load publishes tier_n via release-store of state=1; before then it may still be constructing it.
+        if (x.tier_state==1 || x.tier_state==2) x.tier_recs=(int64_t)tier_n;
+        x.tier_hits=n_tier_hit; x.tier_bytes=tier_bytes_served; x.cancelled=n_cancel;
+        std::lock_guard<std::mutex> g(mu); published=x;
+    }
+
     // fault injection (C3 tests only): NQ_FAULT_READ_MS = minimum spacing between SSD reads (a slow drive, cap =
     // rec_bytes / spacing), NQ_FAULT_FAIL_PPM = share of completed reads reported as failed (a failing drive)
     double fault_gap = 0, next_ok = 0; int64_t fault_ppm = 0, n_fault = 0; uint64_t frng = 88172645463325252ull;
@@ -124,14 +146,14 @@ struct Engine {
     }
     py::dict stats()
     {
-        std::lock_guard<std::mutex> g(mu); py::dict d;
-        d["upgrades"] = n_up; d["posts"] = n_post; d["host_hits"] = n_hit; d["bytes_read"] = bytes;
-        d["fault_injected"] = n_fault; d["queued"] = (int64_t)q.size(); d["reading"] = (int64_t)reading.size(); d["copying"] = (int64_t)copying.size();
+        std::lock_guard<std::mutex> g(mu); const auto& x=published; py::dict d;
+        d["upgrades"]=x.up; d["posts"]=x.post; d["host_hits"]=x.hit; d["bytes_read"]=x.bytes;
+        d["fault_injected"]=x.fault; d["queued"]=(int64_t)q.size(); d["reading"]=x.reading; d["copying"]=x.copying;
         py::list fi, fr, fb, ft, fq;
-        for (int i = 0; i < nd; ++i) { fi.append(infl[i]); fr.append(d_reads[i]); fb.append(d_bytes[i]); ft.append(d_rdt[i]); fq.append(qdd[i]); }
-        d["drives"] = nd; d["drive_qd"] = fq; d["drive_inflight"] = fi; d["drive_reads"] = fr; d["drive_bytes"] = fb; d["drive_read_s"] = ft;
-        d["n_host"] = nh; d["tier_state"] = tier_state.load(); d["tier_recs"] = (int64_t)tier_n; d["tier_hits"] = n_tier_hit;
-        d["tier_bytes"] = tier_bytes_served; d["cancelled"] = n_cancel; d["waiting"] = n_wait.load(); d["now"] = now();
+        for (int i=0;i<nd;++i) { fi.append(x.inflight[i]); fr.append(x.reads[i]); fb.append(x.drive_bytes[i]); ft.append(x.read_s[i]); fq.append(qdd[i]); }
+        d["drives"]=nd; d["drive_qd"]=fq; d["drive_inflight"]=fi; d["drive_reads"]=fr; d["drive_bytes"]=fb; d["drive_read_s"]=ft;
+        d["n_host"]=nh; d["tier_state"]=x.tier_state; d["tier_recs"]=x.tier_recs; d["tier_hits"]=x.tier_hits;
+        d["tier_bytes"]=x.tier_bytes; d["cancelled"]=x.cancelled; d["waiting"]=n_wait.load(); d["now"]=now();
         return d;
     }
     // ---- RAM tier ----
@@ -274,6 +296,7 @@ struct Engine {
             if (!n && reading.empty() && !copying.empty()) usleep(20);   // copies in flight only: don't spin a core
             if (throttled && !n) usleep(200);
             n_wait.store((int64_t)(wait_entry.size() + ready.size()), std::memory_order_relaxed);
+            publish_stats();
         }
         // drain
         while (!reading.empty()) { io_uring_cqe* c; if (io_uring_wait_cqe(&ring, &c)) break; Op* o = (Op*)io_uring_cqe_get_data(c); io_uring_cqe_seen(&ring, c);

@@ -1,9 +1,6 @@
-/*
- * nq_fp8o.cu (nq-kld) -- fused variant of vllm csrc/quantization/aqlm_moe/fp8_linear_v4.cu for the FP8 o_proj decode
- * path: takes the bf16 activation directly (the 2^-ACT_SHIFT prescale + fp16 cast happen while staging the tile to
- * shared memory: bf16 -> fp32 -> *2^-6 (exact) -> fp16 RN, bit-identical to the host prescale) and writes bf16
- * (fp32 -> fp16 RN -> bf16 RN, bit-identical to the old .half() output + .to(bf16)). One kernel per o_proj instead of
- * cast/mul/cast/gemv/cast. Registered as torch op nq_fp8o::gemv_bf16.
+/* FP8 output projection with BF16 inputs, FP32 products/accumulation and BF16 output.
+ * Do not narrow inputs, partial sums or outputs through FP16: valid BF16 values
+ * can overflow the old fixed-prescale half-FMA path before the weight scale applies.
  */
 
 #include <cuda.h>
@@ -15,9 +12,6 @@
 #include <c10/cuda/CUDAStream.h>
 #include <c10/cuda/CUDAGuard.h>
 
-#ifndef ACT_SHIFT
-#define ACT_SHIFT 6  // host multiplies activations by 2^-6, epilogue undoes it
-#endif
 
 namespace nq_fp8o {
 
@@ -28,7 +22,7 @@ __device__ __forceinline__ half2 e4m3x2_to_half2(uint16_t v) {
   return half2(__nv_cvt_fp8x2_to_halfraw2((__nv_fp8x2_storage_t)v, __NV_E4M3));
 }
 
-// C[N, M] = (act_prescaled[N, K] @ w_e4m3[M, K]^T) * (scale[M] * 2^ACT_SHIFT)
+// C[N, M] = (act_bf16[N, K] @ w_e4m3[M, K]^T) * scale[M]
 __global__ void Fp8W8A16Gemv(const int4* __restrict__ packed,   // e4m3 [M,K]
                              const float* __restrict__ scale,   // [M]
                              const int4* __restrict__ B_all,    // bf16 [N,K] (unscaled)
@@ -45,7 +39,7 @@ __global__ void Fp8W8A16Gemv(const int4* __restrict__ packed,   // e4m3 [M,K]
   const int4* B = B_all + (int64_t)slot * (prob_k / 8);
 
   // Per tile: 32 lanes * 2 int4 of activation (each lane consumes 16 half).
-  __shared__ int4 sh_b[32 * 2];
+  __shared__ float sh_b[512];
   float res = 0;
 
   int iters = (prob_k / 8 + 2 * 32 - 1) / (2 * 32);
@@ -60,11 +54,8 @@ __global__ void Fp8W8A16Gemv(const int4* __restrict__ packed,   // e4m3 [M,K]
       if (b_gl_rd + i < prob_k / 8) {
         int4 raw = B[b_gl_rd + i];
         const __nv_bfloat16* rb = reinterpret_cast<const __nv_bfloat16*>(&raw);
-        int4 o;
-        half* oh = reinterpret_cast<half*>(&o);
 #pragma unroll
-        for (int j = 0; j < 8; j++) oh[j] = __float2half_rn(__bfloat162float(rb[j]) * (1.0f / (float)(1 << ACT_SHIFT)));
-        sh_b[i] = o;
+        for (int j = 0; j < 8; j++) sh_b[i * 8 + j] = __bfloat162float(rb[j]);
       }
     }
     __syncthreads();
@@ -76,11 +67,15 @@ __global__ void Fp8W8A16Gemv(const int4* __restrict__ packed,   // e4m3 [M,K]
       uint4 w_nx = have_nx ? a_row[a_nx] : uint4{};  // prefetch next chunk
 
       const uint16_t* wp = reinterpret_cast<const uint16_t*>(&w_cur);
-      const half2* bb = reinterpret_cast<const half2*>(&sh_b[lane * 2]);
-      half2 acc = {};
+      const float* bb = sh_b + lane * 16;
+      float ax = 0.f, ay = 0.f;
 #pragma unroll
-      for (int i = 0; i < 8; i++) acc = __hfma2(e4m3x2_to_half2(wp[i]), bb[i], acc);
-      res += __half2float(acc.x) + __half2float(acc.y);
+      for (int i = 0; i < 8; i++) {
+        const half2 wh = e4m3x2_to_half2(wp[i]);
+        ax = fmaf(__half2float(wh.x), bb[2 * i], ax);
+        ay = fmaf(__half2float(wh.y), bb[2 * i + 1], ay);
+      }
+      res += ax + ay;
 
       a_rd = a_nx;
       w_cur = w_nx;
@@ -92,15 +87,15 @@ __global__ void Fp8W8A16Gemv(const int4* __restrict__ packed,   // e4m3 [M,K]
 #pragma unroll
     for (int i = 16; i > 0; i /= 2) res += __shfl_down_sync(0xffffffff, res, i);
     if (lane == 0) {
-      const float s = scale[row] * (float)(1 << ACT_SHIFT);
-      C[(int64_t)slot * prob_m + row] = __float2bfloat16_rn(__half2float(__float2half(res * s)));
+      const float s = scale[row];
+      C[(int64_t)slot * prob_m + row] = __float2bfloat16_rn(res * s);
     }
   }
 }
 
 // Multi-slot variant: one weight read serves NS activation rows (MTP verify N=4: the per-slot grid above re-reads the
-// weight per row -> ~670 GB/s at N=4). Per slot the arithmetic (hfma2 chain over the 8 half2 of a chunk, res += x + y,
-// shuffle tree, epilogue) is exactly the per-slot kernel's -> bit-identical output.
+// weight per row -> ~670 GB/s at N=4). Per slot the FP32 arithmetic and reduction
+// tree match the per-slot kernel.
 template <int NS>
 __global__ void Fp8W8A16GemvMS(const int4* __restrict__ packed, const float* __restrict__ scale,
                                const int4* __restrict__ B_all, __nv_bfloat16* __restrict__ C,
@@ -115,7 +110,7 @@ __global__ void Fp8W8A16GemvMS(const int4* __restrict__ packed, const float* __r
   const int kb = prob_k / 8;  // int4 (8 bf16) per activation row
   const int4* B = B_all + (int64_t)slot0 * kb;
 
-  __shared__ int4 sh_b[NS][32 * 2];
+  __shared__ float sh_b[NS][512];
   float res[NS];
 #pragma unroll
   for (int s = 0; s < NS; s++) res[s] = 0;
@@ -133,11 +128,8 @@ __global__ void Fp8W8A16GemvMS(const int4* __restrict__ packed, const float* __r
       if (s < nv && b_gl_rd + c < kb) {
         int4 raw = B[(int64_t)s * kb + b_gl_rd + c];
         const __nv_bfloat16* rb = reinterpret_cast<const __nv_bfloat16*>(&raw);
-        int4 o;
-        half* oh = reinterpret_cast<half*>(&o);
 #pragma unroll
-        for (int j = 0; j < 8; j++) oh[j] = __float2half_rn(__bfloat162float(rb[j]) * (1.0f / (float)(1 << ACT_SHIFT)));
-        sh_b[s][c] = o;
+        for (int j = 0; j < 8; j++) sh_b[s][c * 8 + j] = __bfloat162float(rb[j]);
       }
     }
     __syncthreads();
@@ -154,11 +146,14 @@ __global__ void Fp8W8A16GemvMS(const int4* __restrict__ packed, const float* __r
 #pragma unroll
       for (int s = 0; s < NS; s++) {
         if (s < nv) {
-          const half2* bb = reinterpret_cast<const half2*>(&sh_b[s][lane * 2]);
-          half2 acc = {};
+          const float* bb = sh_b[s] + lane * 16;
+          float ax = 0.f, ay = 0.f;
 #pragma unroll
-          for (int i = 0; i < 8; i++) acc = __hfma2(wh[i], bb[i], acc);
-          res[s] += __half2float(acc.x) + __half2float(acc.y);
+          for (int i = 0; i < 8; i++) {
+            ax = fmaf(__half2float(wh[i].x), bb[2 * i], ax);
+            ay = fmaf(__half2float(wh[i].y), bb[2 * i + 1], ay);
+          }
+          res[s] += ax + ay;
         }
       }
       a_rd = a_nx;
@@ -168,13 +163,13 @@ __global__ void Fp8W8A16GemvMS(const int4* __restrict__ packed, const float* __r
   }
 
   if (pred) {
-    const float sc = scale[row] * (float)(1 << ACT_SHIFT);
+    const float sc = scale[row];
 #pragma unroll
     for (int s = 0; s < NS; s++) {
       float r = res[s];
 #pragma unroll
       for (int i = 16; i > 0; i /= 2) r += __shfl_down_sync(0xffffffff, r, i);
-      if (lane == 0 && s < nv) C[(int64_t)(slot0 + s) * prob_m + row] = __float2bfloat16_rn(__half2float(__float2half(r * sc)));
+      if (lane == 0 && s < nv) C[(int64_t)(slot0 + s) * prob_m + row] = __float2bfloat16_rn(r * sc);
     }
   }
 }
@@ -194,10 +189,10 @@ static void pick_grid(int prob_m, int n, dim3& blocks, int& threads) {
 
 }  // namespace nq_fp8o
 
-// x:      [N, K] half (already prescaled by 2^-ACT_SHIFT on host)
+// x:      [N, K] BF16 (unscaled)
 // packed: [M, K] uint8 (e4m3 bits)
 // scale:  [M] f32 per-output-channel dequant scale
-// returns [N, M] half
+// returns [N, M] BF16
 torch::Tensor gemv_bf16(const torch::Tensor& x,
                              const torch::Tensor& packed,
                              const torch::Tensor& scale) {

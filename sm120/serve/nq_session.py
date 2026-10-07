@@ -56,9 +56,36 @@ def session_key(ids,cap=KEYCAP):
     except ValueError:k=min(len(ids),cap)
     return hashlib.blake2b(np.asarray(ids[:k],np.int64).tobytes(),digest_size=8).hexdigest(),k
 
+def _check_predictor(P):
+    """Only the CPU predictors whose complete state schema is defined above.
+
+    Joint/GPU predictors own additional history and CUDA-graph-bound buffers;
+    restoring a partial generic attribute list silently corrupts their policy.
+    They need their own snapshot protocol before session restore can be enabled.
+    Check before draining refresh queues or changing scheduler residency.
+    """
+    if P is None:return
+    kind=(type(P).__module__,type(P).__name__)
+    if kind not in {('gbdt_predictor','GBDTPredictor'),
+                    ('gbdt_predictor_v2','GBDTPredictorV2')}:
+        raise RuntimeError(f'NestQuant session restore unsupported predictor {kind}; disable NQ_SESSION_RESTORE')
+
+def _restore_value(current, saved):
+    # Preserve array identities held by consumers, including nested EMA arrays.
+    if isinstance(current,np.ndarray) and isinstance(saved,np.ndarray):
+        if current.shape!=saved.shape or current.dtype!=saved.dtype:
+            raise ValueError('NestQuant session state array schema changed')
+        np.copyto(current,saved);return current
+    if isinstance(current,list) and isinstance(saved,list):
+        if len(current)!=len(saved):raise ValueError('NestQuant session state list schema changed')
+        for i,v in enumerate(saved):current[i]=_restore_value(current[i],v)
+        return current
+    return copy.deepcopy(saved)
+
 def p_snap(P):
     """copy of a GBDT predictor's decode state; drains (and keeps) a next_refresh result in flight"""
     if P is None:return None
+    _check_predictor(P)
     pend=None
     if getattr(P,'_pending',False):pend=P._res.get();P._pending=False
     d={k:copy.deepcopy(getattr(P,k)) for k in PSTATE if hasattr(P,k)};d['_pend']=pend
@@ -66,9 +93,10 @@ def p_snap(P):
 
 def p_load(P,d):
     if P is None or d is None:return
+    _check_predictor(P)
     if getattr(P,'_pending',False):P._res.get();P._pending=False
     for k,v in d.items():
-        if k!='_pend':setattr(P,k,copy.deepcopy(v))
+        if k!='_pend':setattr(P,k,_restore_value(getattr(P,k,None),v))
     if d['_pend'] is not None:P._res.put(d['_pend']);P._pending=True
 
 class SessionRestore:
@@ -144,6 +172,7 @@ class SessionRestore:
                     else:s._maybe_finish(S)
     def _arrive(s,S,X,oplog,rid,key,kl,plen,ncomp,nsched,t,multi):
         s._ctl()
+        if s.on and not multi:_check_predictor(S.P)
         if s.A is not None:s._finish(S,'superseded')
         known=key in s.store;seen=key in s.seen;switch=key!=s.cur;on=s.on and not multi;s.seen.add(key)
         if multi and s.on and not s.multi:

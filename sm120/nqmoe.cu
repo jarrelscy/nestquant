@@ -786,6 +786,15 @@ __global__ void __launch_bounds__(256, NQ_MINB) nq_moe(MoeArgs a)
     if (MODE == 0 && a.hits && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x < a.B * a.topk)
         if (__half2float(a.rw[threadIdx.x]) != 0.f) atomicAdd(a.hits + a.sel[threadIdx.x], 1);
     __syncthreads();
+    if (nr == 0)
+    {
+        // No finisher runs in an all-inactive batch; overwrite the reused output.
+        if constexpr (MODE == 1)
+            if (blockIdx.y == 0 && blockIdx.z == 0)
+                for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+                     i < (size_t)a.B * a.H; i += (size_t)gridDim.x * blockDim.x) a.out[i] = 0.f;
+        return;
+    }
     if ((int)blockIdx.z >= nr) return;
     do_item<G, CPW, MODE>(a, R, nr, blockIdx.z, blockIdx.x, blockIdx.y, gridDim.y, smem, &last);
 }
@@ -806,6 +815,10 @@ __global__ void __launch_bounds__(256, NQ_MINB) nq_moe_p(MoeArgs a, int NX, int 
     }
     __syncthreads();
     const int total = nr * NX * NY;
+    if constexpr (MODE == 1)
+        if (nr == 0)
+            for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+                 i < (size_t)a.B * a.H; i += (size_t)gridDim.x * blockDim.x) a.out[i] = 0.f;
     while (true)
     {
         if (threadIdx.x == 0) item = atomicAdd(wq, 1);

@@ -203,7 +203,8 @@ class DecAsync:
                         fr={t.name:sys._current_frames().get(t.ident) for t in __import__('threading').enumerate()}
                         log.warning('NestQuant dec-block async rank %d: timed out at stage %d; streaming thread stack:\n%s',s.P.rt.rank,
                                     getattr(s.P,'_dstage',0),''.join(traceback.format_stack(fr.get('nq-stream'))) if fr.get('nq-stream') is not None else '(none)')
-            except Exception:
+            except Exception as e:
+                s.P.rt.err=e
                 log.exception('NestQuant dec-block async waiter failed')
             finally:
                 s.fv[0]=max(int(s.fv[0]),n)
@@ -246,8 +247,9 @@ def install_dec():
         fr=_G['fresh'];_G['fresh']=False
         if fr and not k.get('dummy_run',False):_G['fresh']=True   # consumed by dec_wait below (mode 3), reset after
         if not k.get('dummy_run',False) and getattr(scheduler_output,'scheduled_new_reqs',None):PI.new=True   # NQ_PRED_INPUTS new_request
+        # Track request prompt lengths on prefill too; new requests usually exceed MX.
+        late=_firstn_skip(scheduler_output) if not k.get('dummy_run',False) else False
         if not k.get('dummy_run',False) and 0<scheduler_output.total_num_scheduled_tokens<=MX:
-            late=_firstn_skip(scheduler_output)
             if late and _FN['after']==0:_G['fresh']=False;return orig(self,scheduler_output,*a,**k)
             import nq_vllm
             P=getattr(nq_vllm.RT,'PFB',None)

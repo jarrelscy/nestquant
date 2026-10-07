@@ -240,16 +240,26 @@ class MoELayer:
         s.zd=torch.zeros(S*(I//128)*4,dtype=torch.float32,device=dev);s.cnt_h=torch.zeros(S*(I//128),dtype=torch.int32,device=dev)
         s.out=torch.zeros(Bmax,H,dtype=torch.float32,device=dev)
         s.cfg_gu=[1,8,3];s.cfg_dn=[1,8,2];s.hits_ptr=0   # set to a (host-mapped) int32 [E] pointer to export routing hits
-    def set(s,e,ex,level):
-        w=had_dn(ex);assert w in (128,512) and s.I%w==0,f'in_had_down {w} must be 128 or 512 and divide I={s.I}'
-        if getattr(ex,'lr',None) is not None:assert ex.rg<=4 and ex.rd<=4 and ex.lr.dtype==torch.float16
+    def validate(s,ex,level=4):
+        """Validate resident metadata before either base or upgrade rows are published."""
+        if (ex.H,ex.I)!=(s.H,s.I):raise ValueError(f'expert shape {(ex.H,ex.I)} != layer {(s.H,s.I)}')
+        if level not in (2,4):raise ValueError(f'unsupported expert level {level}')
+        w=had_dn(ex)
+        if w not in (128,512) or s.I%w:raise ValueError(f'in_had_down {w} must be 128 or 512 and divide I={s.I}')
+        if not (0<=ex.rg<=4 and 0<=ex.rd<=4):raise ValueError(f'unsupported low-rank dimensions {(ex.rg,ex.rd)}')
+        if ex.rg+ex.rd and getattr(ex,'lr',None) is None:raise ValueError('missing resident low-rank plane')
+        if getattr(ex,'lr',None) is not None and ex.lr.dtype!=torch.float16:raise ValueError('low-rank plane must be fp16')
         bks=(base_code(ex.gu),base_code(ex.dn))
+        if any(c<0 or c>=32 for c in bks):raise ValueError(f'invalid base codes {bks}')
         if bks!=(0,0):                                    # kernels without bk_codes() decode only the K=2 base
             if not hasattr(s,'bkm'):s.bkm=s.M.bk_codes() if hasattr(s.M,'bk_codes') else [1,1]
-            assert s.bkm[0]>>bks[0]&1 and s.bkm[1]>>bks[1]&1,f'base K code gu {bks[0]} / dn {bks[1]} not compiled (bk_codes {s.bkm})'
+            if not (s.bkm[0]>>bks[0]&1 and s.bkm[1]>>bks[1]&1):raise ValueError(f'base K code gu {bks[0]} / dn {bks[1]} not compiled (bk_codes {s.bkm})')
         if level==4:
+            if any(c<0 or c>=32 for c in (ex.gu.rk,ex.dn.rk)):raise ValueError('invalid residual code')
             if not hasattr(s,'rkm'):s.rkm=s.M.rk_codes() if hasattr(s.M,'rk_codes') else [255,255]
-            assert s.rkm[0]>>ex.gu.rk&1 and s.rkm[1]>>ex.dn.rk&1,f'residual K code gu {ex.gu.rk} / dn {ex.dn.rk} not compiled (rk_codes {s.rkm})'
+            if not (s.rkm[0]>>ex.gu.rk&1 and s.rkm[1]>>ex.dn.rk&1):raise ValueError(f'residual K code gu {ex.gu.rk} / dn {ex.dn.rk} not compiled (rk_codes {s.rkm})')
+    def set(s,e,ex,level):
+        s.validate(ex,level)
         s.table[e].copy_(entry(ex,level).to(s.table.device),non_blocking=False)
     def __call__(s,x,sel,rw,out=None,force_level=0,which=3,cfg_gu=None,cfg_dn=None,table=None):
         """table: optional [E,TBL_W] override (default s.table), e.g. NQ_LMPF ring rows"""
