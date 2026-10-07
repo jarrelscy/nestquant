@@ -43,6 +43,20 @@ class PFBlock:
         if oplog is not None:s.mk[i,1]=oplog.gen;s.mk[i,2]=oplog.off
         s.mk[i,0]=tc
         if s.net is not None:s.net.put_mark(0,i,tc)
+    def release(s):
+        """leader's streaming thread stopped: publish every plan / decode step as ready so the followers stop waiting
+        (their own waits keep checking their own in-flight reads)"""
+        rt=s.rt;lg=rt.log;BIG=2**31-1
+        if rt.rank!=0:return
+        if s.mk is not None and (s.path or s.net is not None):
+            for i in range(len(s.L_)):
+                if lg is not None:s.mk[i,1]=lg.gen;s.mk[i,2]=lg.off
+                s.mk[i,0]=BIG
+                if s.net is not None:s.net.put_mark(0,i,BIG)
+        if s.dm is not None:
+            if lg is not None:s.dm[1]=lg.gen;s.dm[2]=lg.off
+            s.dm[0]=BIG
+            if s.net is not None:s.net.put_mark(1,0,BIG)
     def _marker(s):
         if s.mk is None and s.path and os.path.exists(s.path):
             try:s.mk=np.memmap(s.path,dtype=np.int64,mode='r',shape=(len(s.L_),3))
@@ -75,6 +89,7 @@ class PFBlock:
             s.warned=1;log.warning('NestQuant pf-block: chunk counter %d != lookahead cid %d',c,rt.LA.cid)
         with rt.cv:
             while True:
+                if rt.err is not None:break             # streaming thread stopped: fail open
                 if not rt.in_iter and s._ready(L,c):ok=True;break
                 r=dl-time.perf_counter()
                 if r<=0:break
@@ -131,6 +146,7 @@ class PFBlock:
             except Exception:s.dm=None
         def wt(pred):
             while True:
+                if rt.err is not None:return False      # streaming thread stopped: fail open (no landings will come)
                 if not rt.in_iter and pred():return True
                 r=dl-time.perf_counter()
                 if r<=0:return False

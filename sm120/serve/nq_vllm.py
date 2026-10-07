@@ -264,7 +264,7 @@ class Runtime:
                                 import nq_pfblock as _PB;t_,n_=_PB.pi_take();s.pi_t+=t_;s.pi_n=s.pi_n or n_
                                 if ntok<=16:
                                     tid=s.pi_t or None;nrq=s.pi_n;s.pi_t=[];s.pi_n=False;s.pi_st[0]+=len(tid or ());s.pi_st[1]+=int(nrq)
-                                    if nrq and _pred_inputs()>=2:_pred_newreq(s.S.P);s.pi_st[2]+=1
+                                    if nrq and _pred_inputs()>=2:_pred_newreq_safe(s.S.P);s.pi_st[2]+=1
                             xu=xd=()
                             if nrq and _pred_inputs()>=4:xu,xd=_set_reset(s.S);s.pi_xu=getattr(s,'pi_xu',0)+len(xu);s.pi_xd=getattr(s,'pi_xd',0)+len(xd)
                             fsp=_force_sets() if _pred_inputs()>0 else None
@@ -297,6 +297,10 @@ class Runtime:
                     if s.F is None and s.S.P is not None:log.info('NestQuant rank %d: predictor %s stats %s',s.rank,s.S.predictor_name,getattr(s.S.P,'stats',{}))
         except Exception as e:           # streaming stops; every expert keeps its current (valid) row
             s.err=e;log.exception('NestQuant streaming thread stopped')
+            if getattr(s,'PFB',None) is not None:   # fail open: landing waits on every rank give up instead of hanging
+                try:s.PFB.release()
+                except Exception:log.exception('NestQuant pf-block release failed')
+            with s.cv:s.cv.notify_all()
 
 # ---- nq-io ----
 # NQ_REPACK_ALT   identical copy of the record files on the second drive (none = one drive, DGX Spark) (rank*.json + artifact_stamp.json + rank*.bin size
@@ -344,14 +348,26 @@ def _pred_newreq(P):
             oc()
             if _pred_inputs()>=2:P.b_pos.clamp_(max=POSMAX)
         P._close_block=cb;P._nq_posclamp=True
+    def fill(t,v):            # torch (GPUJointPredictor) or numpy state (CPU JointPredictor)
+        if t is None:return
+        if hasattr(t,'fill_'):t.fill_(v)
+        else:t[...]=v
     if _pred_inputs()>=3:      # 3: full state reset = a fresh predictor per request, as the offline evaluator (one per chain)
-        for t in P.E:t.zero_()
-        for h in P.Hc:P.Hc[h].zero_();P.Hs[h].zero_()
-        for t in (P.Et,P.Ea,P.bc,P.bca,P.bs,P.h16,P.s16):t.zero_()
-        P.last.fill_(-10**6);P.wt=P.wa=0.0;P.btok=P.bans=P.nblk=0;P.seg=0;P.bst_state=0
-        P.b_wt.fill_(1.);P.b_wa.fill_(1.);P.b_state.fill_(False);P.b_nblk.fill_(0);P.b_pos.fill_(0.);P.S=None
+        for t in P.E:fill(t,0)
+        for h in P.Hc:fill(P.Hc[h],0);fill(P.Hs[h],0)
+        for k in ('Et','Ea','bc','bca','bs','h16','s16'):fill(getattr(P,k,None),0)
+        fill(P.last,-10**6);P.wt=P.wa=0.0;P.btok=P.bans=P.nblk=0;P.seg=0;P.bst_state=0;P.S=None
+        if hasattr(P,'b_wt'):      # device scalars of the GPU predictor only
+            P.b_wt.fill_(1.);P.b_wa.fill_(1.);P.b_state.fill_(False);P.b_nblk.fill_(0);P.b_pos.fill_(0.)
         return
-    sh=P.nblk;P.nblk=0;P.last.sub_(sh);P.b_nblk.fill_(0);P.b_pos.fill_(0.)
+    sh=P.nblk;P.nblk=0;P.last-=sh
+    if hasattr(P,'b_nblk'):P.b_nblk.fill_(0);P.b_pos.fill_(0.)
+def _pred_newreq_safe(P):
+    """a failed predictor reset must not stop the streaming thread (a dead thread turns into a decode hang, issue #1):
+    log once, keep the predictor state as it is"""
+    try:_pred_newreq(P)
+    except Exception:
+        if not getattr(P,'_nq_reset_err',False):P._nq_reset_err=True;log.exception('NestQuant predictor reset failed (state kept; further errors silent)')
 _FS=[None,0.]
 def _force_sets():
     """nq-kld forced-set arm: /dev/shm/nq_force_sets = path of a per-window .npy [blocks, layers, NE] bool (offline floating
