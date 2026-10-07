@@ -365,7 +365,10 @@ def _pred_newreq(P):
 def _pred_newreq_safe(P):
     """a failed predictor reset must not stop the streaming thread (a dead thread turns into a decode hang, issue #1):
     log once, keep the predictor state as it is"""
-    try:_pred_newreq(P)
+    try:
+        if hasattr(P,'stream'):                      # GPU predictor: reset on its own stream, ordered with its step()
+            with P.stream():_pred_newreq(P)
+        else:_pred_newreq(P)
     except Exception:
         if not getattr(P,'_nq_reset_err',False):P._nq_reset_err=True;log.exception('NestQuant predictor reset failed (state kept; further errors silent)')
 _FS=[None,0.]

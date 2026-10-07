@@ -7,6 +7,7 @@ scalar weights stay on the host.  Same interface as streaming/gbdt_predictor_v2.
 Arithmetic mirrors joint_predictor.JointPredictor (numpy): float32 for the serve-v2 EMAs / mem_cur_state, float64 for
 the salience + extra EMAs and the tree comparisons (LightGBM compares double(x) <= threshold).  Parity:
 parity_gpu.py.  Fresh instance per chain (offline features restart at every chain)."""
+import contextlib
 import os
 import sys
 
@@ -95,6 +96,11 @@ class GPUJointPredictor:
         self.b_nblk = torch.zeros((), dtype=torch.long, device=device)
         self.b_pos = torch.zeros((), dtype=torch.float32, device=device)
         self.graph = None
+        # own non-blocking stream for all predictor GPU work: the caller (NestQuant streaming thread) otherwise runs on
+        # the legacy default stream, which waits for everything queued on the engine's streams (issue #1 deadlock)
+        self.st = None
+        if device != "cpu":
+            self.st = torch.cuda.Stream(device=device); self.st.wait_stream(torch.cuda.current_stream())
         if graph:
             assert device != "cpu"
             st = torch.cuda.Stream(); st.wait_stream(torch.cuda.current_stream())
@@ -109,7 +115,14 @@ class GPUJointPredictor:
     def _t(self, a, dt):
         return a.to(self.dev, dt) if torch.is_tensor(a) else torch.as_tensor(np.asarray(a), dtype=dt, device=self.dev)
 
+    def stream(self):
+        return torch.cuda.stream(self.st) if self.st is not None else contextlib.nullcontext()
+
     def step(self, counts, ntok=1, token_ids=None, new_request=False, sal=None):
+        with self.stream():
+            return self._step(counts, ntok, token_ids, new_request, sal)
+
+    def _step(self, counts, ntok=1, token_ids=None, new_request=False, sal=None):
         if ntok > self.max_ntok:
             return False
         c = self._t(counts, torch.float32)
