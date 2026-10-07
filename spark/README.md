@@ -70,6 +70,10 @@ Each layer's linears are converted just before that layer's NestQuant planes loa
 
 The slot pool is allocated while weights load, so vLLM's memory profile already counts it when sizing the KV cache from `NQ_UTIL` (0.95). On the first boot, check the log's KV-cache token count. It must cover `NQ_MAXLEN`; if it doesn't, lower `NQ_SLOTS_PER_LAYER` (and `NQ_JF_NFLOAT`).
 
+Measured on 2x GB10 (issue #1): with MTP ns=1 at 131072 the engine refused to start (6.7 GiB KV needed, 3.0 GiB available, at 12 floating / 15 slots). 65536 boots. With MTP, use `NQ_MAXLEN=65536`, or lower the slot count for 128K. `NQ_UTIL` is the whole vLLM budget: raising it gives KV more room, lowering it shrinks everything.
+
+Triage for a hang: `docker logs <c> | grep "streaming thread stopped"`. Since 6215f74 the landing waits fail open after this, so the server keeps running with whatever experts are resident (lower quality), but the traceback above that line is the bug to report.
+
 More memory and speed, not done here (both need a KLD gate):
 - NVFP4 for the shared experts and q_b (~2.2 GiB less per token per node, ~1.2x decode).
 - kv_b in fp8 after MLA absorption (1.07 GiB per token per node).
