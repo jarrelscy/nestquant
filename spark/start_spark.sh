@@ -109,7 +109,7 @@ up(){
   rm -f /dev/shm/nq_la_ctl /dev/shm/nq_pf_off /dev/shm/nq_sr_ctl /dev/shm/nq_tier_drop /dev/shm/nq_dec_block \
         /dev/shm/nq_dec_block_firstn /dev/shm/nq_dec_async /dev/shm/nq_dec_async_switch /dev/shm/nq_hit_carry \
         /dev/shm/nq_pred_inputs /dev/shm/nq_tap_ctl /dev/shm/nq_pf_block /dev/shm/nq_force_sets 2>/dev/null || true
-  IB=();[ -d /dev/infiniband ] && IB=(--device /dev/infiniband)
+  IB=();[ -d /dev/infiniband ] && IB=(--device /dev/infiniband --cap-add IPC_LOCK)   # RoCE over the CX-7 (image carries rdma-core/libibverbs)
   SC=();[ "$NUM_SPEC" -gt 0 ] && SC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$NUM_SPEC,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}")
   CAP=${ARVQ_CAPTURE_SIZES:-[1,2,4,8]}
   ROLEARGS=(--port 8001 --served-model-name "$SERVED" local)

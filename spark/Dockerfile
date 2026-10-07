@@ -15,6 +15,7 @@ FROM ${CUDA_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git curl ca-certificates build-essential ninja-build cmake pkg-config libnuma-dev \
+        rdma-core libibverbs1 ibverbs-providers ibverbs-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
