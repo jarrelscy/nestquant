@@ -346,7 +346,7 @@ def _pred_newreq(P):
         oc=P._close_block
         def cb():
             oc()
-            if _pred_inputs()>=2:P.b_pos.clamp_(max=POSMAX)
+            if _pred_inputs()>=2 and hasattr(P,'b_pos'):P.b_pos.clamp_(max=POSMAX)   # GPU predictor only
         P._close_block=cb;P._nq_posclamp=True
     def fill(t,v):            # torch (GPUJointPredictor) or numpy state (CPU JointPredictor)
         if t is None:return
