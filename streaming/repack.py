@@ -7,7 +7,24 @@ per-layer written flag and per-expert lr ranks. The resident planes (base, scale
 import os,sys,json,time,fcntl,torch
 HERE=os.path.dirname(os.path.abspath(__file__));sys.path[:0]=[HERE,HERE+'/../sm120']
 import nqload as NQ,p4rec as PR,resident as RS
-NE=256;L0=3
+def model_layout(root, layers):
+    """Record stride is the checkpoint expert count, never a Flash/full-GLM guess."""
+    manifests=[json.load(open(NQ.layer_dir(root,L)+'/manifest.json')) for L in layers]
+    counts={m.get('n_experts',len(m['experts'])) for m in manifests}
+    if len(counts)!=1:raise ValueError(f'inconsistent expert counts: {counts}')
+    ne=counts.pop()
+    for m in manifests:
+        if sorted(m['experts'])!=list(range(ne)):
+            raise ValueError(f"L{m['layer']}: incomplete/duplicate expert manifest")
+    config_path=os.path.join(root,'config.json')
+    cfg=json.load(open(config_path)) if os.path.exists(config_path) else {}
+    cfg=cfg.get('text_config',cfg)
+    return ne,int(cfg.get('first_k_dense_replace',3))
+
+def validate_index(idx, tp, rank, l0, ne):
+    for k,v in dict(format='nq-p4rec-v1',tp=tp,rank=rank,L0=l0,NE=ne).items():
+        if idx.get(k)!=v:raise ValueError(f'repack index {k}={idx.get(k)!r}, expected {v!r}')
+
 
 def parse_layers(s):
     a,b=(s.split('-')+[s])[:2];return list(range(int(a),int(b)+1))
@@ -15,6 +32,8 @@ def parse_layers(s):
 def main():
     root,out=sys.argv[1],sys.argv[2];tp=int(sys.argv[3]) if len(sys.argv)>3 else 4
     layers=parse_layers(sys.argv[4]) if len(sys.argv)>4 else list(range(3,78))
+    NE,L0=model_layout(root,layers)
+    dev=os.environ.get('NQ_REPACK_DEVICE','cuda')
     os.makedirs(out,exist_ok=True)
     for L in layers:
         d=NQ.layer_dir(root,L)
@@ -22,9 +41,10 @@ def main():
             print(f'L{L}: not fitted / downloaded yet');continue
         for r in range(tp):
             ip=f'{out}/rank{r}.json';idx=json.load(open(ip)) if os.path.exists(ip) else dict(format='nq-p4rec-v1',tp=tp,rank=r,L0=L0,NE=NE,layers={})
+            validate_index(idx,tp,r,L0,NE)
             rp=f'{out}/res/rank{r}/L{L}.pt';os.makedirs(os.path.dirname(rp),exist_ok=True)
             if str(L) in idx['layers'] and os.path.exists(rp):continue
-            t=time.time();RL=NQ.RankLayer(root,L,r,tp)
+            t=time.time();RL=NQ.RankLayer(root,L,r,tp,dev=dev)
             if not os.path.exists(rp):RS.save(RL,rp);print(f'L{L} rank{r}: resident planes {os.path.getsize(rp)/2**20:.0f} MiB',flush=True)
             if str(L) in idx['layers']:del RL;torch.cuda.empty_cache();continue
             lay=PR.layout(next(iter(RL.ex.values())),RL.H,RL.I)
@@ -39,7 +59,7 @@ def main():
             ent=dict(experts=RL.experts,rg={E:RL.ex[E].rg for E in RL.experts},rd={E:RL.ex[E].rd for E in RL.experts})
             with open(f'{out}/rank{r}.lock','w') as lk:  # several repacks may run at once (one per layer): merge under a lock
                 fcntl.flock(lk,fcntl.LOCK_EX)
-                if os.path.exists(ip):cur=json.load(open(ip));cur.setdefault('rec_bytes',idx['rec_bytes']);cur.setdefault('seg',idx['seg']);idx=cur
+                if os.path.exists(ip):cur=json.load(open(ip));validate_index(cur,tp,r,L0,NE);cur.setdefault('rec_bytes',idx['rec_bytes']);cur.setdefault('seg',idx['seg']);idx=cur
                 idx['layers'][str(L)]=ent
                 json.dump(idx,open(f'{ip}.{os.getpid()}.tmp','w'));os.replace(f'{ip}.{os.getpid()}.tmp',ip)
             print(f'L{L} rank{r}: {len(RL.experts)} records x {rb} B in {time.time()-t:.1f}s',flush=True)

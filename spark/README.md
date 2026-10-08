@@ -1,3 +1,5 @@
+> **For GLM-5.3-Flash on one Spark, use [the Flash candidate port](flash/README.md).** This document describes full GLM-5.3 on two Sparks.
+
 # NestQuant GLM-5.3 b1.75/4 on 2x DGX Spark
 
 Serves [jarrelscy/GLM-5.3-Vision-NestQuant-1.75-4bit](https://huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-1.75-4bit) on two DGX Spark (GB10) nodes as one TP2 vLLM instance over the ConnectX-7 link. Each node holds the 1.75-bit base of every routed expert for its half of the tensor-parallel split, and streams 4-bit upgrades for the jF-predicted hot experts from its NVMe.

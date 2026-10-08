@@ -1,17 +1,18 @@
 """Build/load the nqstream io_uring upgrade engine (nqstream.cu) and a thin wrapper over one rank's record file."""
-import os,sys,json,torch
+import os,sys,json,torch,glob
 os.environ.setdefault('CUDA_HOME','/home/jarrelscy/cuda128')
 os.environ['PATH']=os.environ['CUDA_HOME']+'/bin:'+os.path.dirname(sys.executable)+':'+os.environ['PATH']
 os.environ.setdefault('TORCH_CUDA_ARCH_LIST','12.0a')
 from torch.utils.cpp_extension import load
 D=os.path.dirname(os.path.abspath(__file__));URING=os.environ.get('LIBURING','/data/Jarrel/liburing')
+CUDA_HEADER_FLAGS=[f for p in glob.glob(os.path.join(os.path.dirname(torch.__file__),'..','nvidia','*','include')) for f in ('-isystem',p)]
 _m=None
 def mod():
     global _m
     if _m is None:
         b=os.environ.get('NQ_BUILD','/data/Jarrel/nq-build')+'/nqstream';os.makedirs(b,exist_ok=True)
-        _m=load('nqstream',[D+'/nqstream.cu'],extra_include_paths=[URING+'/include'],extra_ldflags=[URING+'/lib/liburing.a'],
-                extra_cuda_cflags=['-O2'],build_directory=b,verbose=False)
+        _m=load('nqstream',[D+'/nqstream.cu'],extra_include_paths=[URING+'/include'],extra_cflags=CUDA_HEADER_FLAGS,extra_ldflags=[URING+'/lib/liburing.a'],
+                extra_cuda_cflags=CUDA_HEADER_FLAGS+['-O2'],build_directory=b,verbose=False)
     return _m
 
 class RankFile:

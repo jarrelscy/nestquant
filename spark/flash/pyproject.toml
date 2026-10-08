@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "nestquant-flash-plugin"
+version = "0.1.0"
+requires-python = ">=3.10"
+[project.entry-points."vllm.general_plugins"]
+nq_flash = "nq_flash_plugin:install"
+[tool.setuptools]
+py-modules = ["nq_flash_plugin", "nq_flash_runtime", "nq_flash_layout", "nq_flash_pool", "jt_runtime", "nq_flash_attention", "nq_flash_metrics", "nq_flash_prefetch"]

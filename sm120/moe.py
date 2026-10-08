@@ -8,8 +8,8 @@ A_=float(np.array([0x1eee],np.uint16).view(np.float16)[0]);B_=float(np.array([0x
 
 # residual window patterns (table code -> (KA, MASK)); LSB-first period-16 fractional steps (thread 15)
 RKP={0:(2,0),1:(1,0xEEEE),2:(2,0xAAAA),3:(2,0x8888),4:(3,0),5:(1,0xAAAA),6:(1,0xFFFE),7:(2,0x9248),8:(1,0xFEFE),
-     9:(2,0xD5AA)}                                       # 9: K=2.5625 (2, bres(9)), threads/35 b1.75 down residual
-RK_OF={2:0,1.75:1,2.5:2,2.25:3,3:4,1.5:5,1.9375:6,2.3125:7,1.875:8,2.5625:9}
+     9:(2,0xD5AA),10:(2,0xFBDE)}                                       # 9: K=2.5625 (2, bres(9)), threads/35 b1.75 down residual
+RK_OF={2:0,1.75:1,2.5:2,2.25:3,3:4,1.5:5,1.9375:6,2.3125:7,1.875:8,2.5625:9,2.8125:10}
 # Base K code (nq-res-v2, table [19]): same numbering as RKP. 0 = today's K=2 ring base (uint4 per record, == the
 # sub-array layout at 128 bits); 1 = K=1.75 (1,0xEEEE) pattern-rate base (threads/35), 112 bits per record in the P4
 # sub-array layout (uint2 | uint | ushort). Spec: sm120/NQ_RES_V2.md.
@@ -204,6 +204,8 @@ class Expert:
         if s.lr is not None:
             Vg,U2g,U2u,U4g,U4u,Vd,U2d,U4d=[t.float() for t in s.lrT];z=x@Vg.T
             g=g+z@U2g+(z@U4g if level==4 else 0);u=u+z@U2u+(z@U4u if level==4 else 0)
+        limit=M.swiglu_limit() if M is not None and hasattr(M,'swiglu_limit') else 0
+        if limit:g=g.clamp(max=limit);u=u.clamp(min=-limit,max=limit)
         sw=torch.nn.functional.silu(g)*u
         h=wht(sw*sud,Hd).half().float();y=wht(h@Wd.T)*svo
         if s.lr is not None:z=sw@Vd.T;y=y+z@U2d+(z@U4d if level==4 else 0)

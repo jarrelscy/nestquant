@@ -12,6 +12,7 @@ for _p in (_R+'/threads/05-exl3-harness',_R+'/threads/12-reference-encoder'):
     if _p not in sys.path:sys.path.append(_p)
 import nq_decode as D
 from moe import RK_OF,RKP,rbits,proj_sizes,pack_words
+D.PATTERNS.setdefault(2.8125,(2,0xFBDE))              # Flash down residual
 D.PATTERNS.setdefault(2.5625,(2,0xD5AA))               # threads/35 b1.75 down residual (== nq15.NEW; T12 lacks it)
 PROJ=('gate','up','down')
 NSH=8

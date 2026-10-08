@@ -152,6 +152,7 @@ template <> struct RK<5> { static constexpr int KA = 1, M = 0xAAAA; };
 template <> struct RK<6> { static constexpr int KA = 1, M = 0xFFFE; };   // K = 1.9375 (T14 pattern-rate, gate|up)
 template <> struct RK<7> { static constexpr int KA = 2, M = 0x9248; };   // K = 2.3125 (T14 pattern-rate, down)
 template <> struct RK<8> { static constexpr int KA = 1, M = 0xFEFE; };   // K = 1.875 (T14 pattern-rate)
+template <> struct RK<10> { static constexpr int KA = 2, M = 0xFBDE; }; // Flash down residual K=2.8125
 template <> struct RK<9> { static constexpr int KA = 2, M = 0xD5AA; };   // K = 2.5625 (threads/35 b1.75 down residual, bres(9))
 // residual record bits of template code RC (low 4 bits); BKB = base record bits (high bits: 0 -> 128, 1 -> 112)
 template <int RC> struct RKB { static constexpr int BITS = 4 * (16 * RK<(RC & 15)>::KA + popc16(RK<(RC & 15)>::M)), NW = (BITS + 31) / 32; };
@@ -244,6 +245,16 @@ __device__ __forceinline__ void mma16816(float* c, const uint32_t* a, uint32_t b
         : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
         : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
 }
+// Flash clamps only the positive gate tail and both tails of the up projection.
+__device__ __forceinline__ float nq_swiglu(float gate, float up)
+{
+#ifdef NQ_SWIGLU_LIMIT
+    gate = fminf(gate, float(NQ_SWIGLU_LIMIT));
+    up = fminf(fmaxf(up, -float(NQ_SWIGLU_LIMIT)), float(NQ_SWIGLU_LIMIT));
+#endif
+    return gate / (1.f + __expf(-gate)) * up;
+}
+
 template <int G> __device__ __forceinline__ int ring_src(int lane)
 {
     if constexpr (G == 1) return lane;
@@ -331,8 +342,8 @@ __device__ __forceinline__ void compute_stage(const Stage<LV, CPW, RC>& S, float
     {
         uint32_t w[6], r[NWR + 2];
         #pragma unroll
-        for (int i = 0; i < 4; ++i) w[i] = S.wb[c][i];
-        ext_words<BKB<RC>::BITS, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
+        for (int i = 0; i < (BKB<RC>::BITS + 31) / 32; ++i) w[i] = S.wb[c][i];
+        ext_words<BKB<RC>::BITS, (BKB<RC>::BITS + 31) / 32>(w, __shfl_sync(0xffffffffu, w[0], src));
         const int kc = kc0 + c * 128;
         const uint32_t sgm = ((S.on >> (16 + c)) & 1u) * 0x80008000u;
 #ifdef NQ_WDUMP
@@ -566,11 +577,18 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
     const int NS = N / 16, rc = (int)R.ent[10 + MODE];
     constexpr unsigned BKM = ((MODE == 0 ? NQ_BK_GU : NQ_BK_DN) & NQ_BK_CODES) | 1;
     const int bk = (int)(R.ent[19] >> (8 * MODE)) & 0xFF, bkm = bk < 16 && ((BKM >> bk) & 1) ? bk : 0;
-#if NQ_BK_CODES & 2
-#define BODY(LVv, RCv) do { if constexpr ((BKM & 2) != 0) { if (bkm == 1) BODY1(LVv, (RCv) | 16); else BODY1(LVv, RCv); } else BODY1(LVv, RCv); } while (0)
+// Instantiate only enabled base codes. Code 5 is Flash's 96-bit base.
+#if NQ_BK_CODES & 32
+#define BODY5(LVv, RCv) if (bkm == 5) { BODY1(LVv, (RCv) | 80); } else
 #else
-#define BODY(LVv, RCv) BODY1(LVv, RCv)
+#define BODY5(LVv, RCv)
 #endif
+#if NQ_BK_CODES & 2
+#define BODY1BASE(LVv, RCv) if (bkm == 1) { BODY1(LVv, (RCv) | 16); } else
+#else
+#define BODY1BASE(LVv, RCv)
+#endif
+#define BODY(LVv, RCv) do { BODY5(LVv, RCv) BODY1BASE(LVv, RCv) { BODY1(LVv, RCv); } } while (0)
 #define BODY1(LVv, RCv) gemv_body<LVv, G, CPW, RCv>(P, strip, C, nm, NS, chunk0, a.NST, acc, xs, kslice, lane, ntok WDX)
 #ifdef NQ_NO_MASK
 #define LV45(RCv) BODY(4, RCv)
@@ -609,9 +627,14 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
 #if NQ_RK_CODES & 512
         case 9: if constexpr (RKM & 512) LV45(9); break;
 #endif
+#if NQ_RK_CODES & 1024
+        case 10: if constexpr (RKM & 1024) LV45(10); break;
+#endif
         default: LV45(0); break;
     }
 #undef BODY
+#undef BODY5
+#undef BODY1BASE
 #undef BODY1
 #undef LV45
 #undef WDX
@@ -691,7 +714,7 @@ __device__ __forceinline__ void do_item(const MoeArgs& a, const RunInfo& R, int 
             for (int i = 0; i < 4; ++i)
             {
                 float gg = sg[(j * 2) * 128 + lane * 4 + i], uu = sg[(j * 2 + 1) * 128 + lane * 4 + i];
-                v[i] = gg / (1.f + __expf(-gg)) * uu;
+                v[i] = nq_swiglu(gg, uu);
             }
             for (int r = 0; r < rd; ++r)   // down lr partial over these 128 SwiGLU columns
             {
@@ -975,6 +998,13 @@ int64_t occ(int64_t mode, int64_t G, int64_t cpw, int64_t sb, int64_t shm)
 // compiled residual K codes per kernel (bit c = code c): {gate|up, down}. Codes outside a mask silently decode as code 0,
 // so hosts must check (MoELayer.set does).
 std::vector<int64_t> rk_codes() { return {(NQ_RK_GU & NQ_RK_CODES) | 1, (NQ_RK_DN & NQ_RK_CODES) | 1}; }
+double swiglu_limit() {
+#ifdef NQ_SWIGLU_LIMIT
+    return double(NQ_SWIGLU_LIMIT);
+#else
+    return 0.0;
+#endif
+}
 std::vector<int64_t> bk_codes() { return {(NQ_BK_GU & NQ_BK_CODES) | 1, (NQ_BK_DN & NQ_BK_CODES) | 1}; }
 
 // ============================== prefill (T > BMAX): dense decode + grouped GEMM =================================
@@ -1033,8 +1063,8 @@ __device__ __forceinline__ void unit_dec(const Planes& P, int strip, int ch, int
     constexpr int NWR = RKB<RC>::NW;
     uint32_t w[6], r[NWR + 2];
     #pragma unroll
-    for (int i = 0; i < 4; ++i) w[i] = S.wb[0][i];
-    ext_words<BKB<RC>::BITS, 4>(w, __shfl_sync(0xffffffffu, w[0], src));
+    for (int i = 0; i < (BKB<RC>::BITS + 31) / 32; ++i) w[i] = S.wb[0][i];
+    ext_words<BKB<RC>::BITS, (BKB<RC>::BITS + 31) / 32>(w, __shfl_sync(0xffffffffu, w[0], src));
     const uint32_t sgm = ((S.on >> 16) & 1u) * 0x80008000u;
     if constexpr (LV == 2) chunk_dec<false, RC>(w, r, 0, sgm, tile, lane);
     else
@@ -1070,11 +1100,18 @@ __global__ void __launch_bounds__(256) nq_pf_decode(const int64_t* table, const 
     const int nm = MODE == 0 ? nm_gu : nm_dn, rc = (int)ent[10 + MODE];
     const unsigned BKM = ((MODE == 0 ? NQ_BK_GU : NQ_BK_DN) & NQ_BK_CODES) | 1;
     const int bk = (int)(ent[19] >> (8 * MODE)) & 0xFF, bkm = bk < 16 && ((BKM >> bk) & 1) ? bk : 0;
-#if NQ_BK_CODES & 2
-#define UD(LVv, RCv) do { if (bkm == 1) UD1(LVv, (RCv) | 16); else UD1(LVv, RCv); } while (0)
+// Instantiate only enabled base codes. Code 5 is Flash's 96-bit base.
+#if NQ_BK_CODES & 32
+#define UD5(LVv, RCv) if (bkm == 5) { UD1(LVv, (RCv) | 80); } else
 #else
-#define UD(LVv, RCv) UD1(LVv, RCv)
+#define UD5(LVv, RCv)
 #endif
+#if NQ_BK_CODES & 2
+#define UD1BASE(LVv, RCv) if (bkm == 1) { UD1(LVv, (RCv) | 16); } else
+#else
+#define UD1BASE(LVv, RCv)
+#endif
+#define UD(LVv, RCv) do { UD5(LVv, RCv) UD1BASE(LVv, RCv) { UD1(LVv, RCv); } } while (0)
 #define UD1(LVv, RCv) unit_dec<LVv, RCv>(P, strip, ch, C, NS, nm, tile, lane)
 #ifdef NQ_NO_MASK
 #define UD45(RCv) UD(4, RCv)
@@ -1114,9 +1151,14 @@ __global__ void __launch_bounds__(256) nq_pf_decode(const int64_t* table, const 
 #if NQ_RK_CODES & 512
         case 9: UD45(9); break;
 #endif
+#if NQ_RK_CODES & 1024
+        case 10: UD45(10); break;
+#endif
         default: UD45(0); break;
     }
 #undef UD
+#undef UD5
+#undef UD1BASE
 #undef UD1
 #undef UD45
     __syncwarp();
@@ -1209,7 +1251,7 @@ __global__ void __launch_bounds__(128) nq_pf_mid(const float* acc_g, const float
         }
         float v[4], s[4]; ld4h(su_d + col, s);
         #pragma unroll
-        for (int i = 0; i < 4; ++i) { const float gg = gu[0][i], uu = gu[1][i]; v[i] = gg / (1.f + __expf(-gg)) * uu; }
+        for (int i = 0; i < 4; ++i) { const float gg = gu[0][i], uu = gu[1][i]; v[i] = nq_swiglu(gg, uu); }
         for (int r = 0; r < rd; ++r)
         {
             float vd[4]; ld4h(lrp + (size_t)rg * H + 2 * (size_t)rg * I + (size_t)r * I + col, vd);
@@ -1344,5 +1386,5 @@ void pf_hits(torch::Tensor counts, int64_t hits_ptr)
     const int E = counts.numel(); TORCH_CHECK(counts.scalar_type() == at::kInt);
     nq_pf_hits<<<(E + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream()>>>((const int*)counts.data_ptr(), (int*)hits_ptr, E);
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("rk_codes", &rk_codes); m.def("bk_codes", &bk_codes); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump);
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("moe_forward", &moe_forward); m.def("rk_codes", &rk_codes); m.def("bk_codes", &bk_codes); m.def("swiglu_limit", &swiglu_limit); m.def("occ", &occ); m.def("mailbox", &mailbox); m.def("set_wdump", &set_wdump);
     m.def("pf_decode", &pf_decode); m.def("pf_pre", &pf_pre); m.def("pf_mid", &pf_mid); m.def("pf_post", &pf_post); m.def("pf_hits", &pf_hits); }

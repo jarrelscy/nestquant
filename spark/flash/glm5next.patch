@@ -1,0 +1,143 @@
+diff --git a/vllm/models/glm5next/nvidia/attention.py b/vllm/models/glm5next/nvidia/attention.py
+index 91a8047..45d2c1c 100644
+--- a/vllm/models/glm5next/nvidia/attention.py
++++ b/vllm/models/glm5next/nvidia/attention.py
+@@ -1,11 +1,13 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import os
+ import torch
+ import torch.nn.functional as F
+ from torch import nn
+ 
+ from vllm.config import (
++    get_current_vllm_config,
+     CacheConfig,
+     VllmConfig,
+ )
+@@ -491,7 +493,8 @@ class Glm5NextMLAAttention(nn.Module):
+             self.kv_lora_rank,
+             self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
+             bias=False,
+-            quant_config=quant_config,
++            quant_config=(get_current_vllm_config().quant_config
++                          if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else quant_config),
+             prefix=f"{prefix}.kv_b_proj",
+         )
+         self.o_proj = RowParallelLinear(
+diff --git a/vllm/models/glm5next/nvidia/kda.py b/vllm/models/glm5next/nvidia/kda.py
+index d5bf66a..4f510e7 100644
+--- a/vllm/models/glm5next/nvidia/kda.py
++++ b/vllm/models/glm5next/nvidia/kda.py
+@@ -14,6 +14,7 @@ GLM5-Next-only. ``forward`` calls ``self._forward`` directly (no
+ the decorated ``_forward``.
+ """
+ 
++import os
+ import torch
+ from torch import nn
+ 
+@@ -201,22 +202,33 @@ class Glm5NextLinearAttention(GatedDeltaNetAttention):
+         # Merge q, k, v, b, f_a, g_a projections into one GEMM (6→1 launches).
+         # Order matches checkpoint's fused_qkvbfg_a_proj convention.
+         # Shards 4 (f_a) and 5 (g_a) are replicated across TP ranks.
+-        self.in_proj_qkvbfg_a = _Glm5NextMergedColumnParallelLinear(
+-            self.hidden_size,
+-            [
+-                projection_size,  # q (shard 0)
+-                projection_size,  # k (shard 1)
+-                projection_size,  # v (shard 2)
+-                self.num_heads,  # b (shard 3)
+-                self.head_dim,  # f_a (shard 4, replicated)
+-                self.head_dim,  # g_a (shard 5, replicated)
+-            ],
+-            replicated_shard_ids=(4, 5),
+-            tp_size=self.tp_size,
+-            bias=False,
+-            quant_config=self.quant_config,
+-            prefix=f"{prefix}.in_proj_qkvbfg_a",
+-        )
++        self.nq_native_fp8 = os.environ.get("NQ_FLASH_NATIVE_FP8") == "1"
++        if self.nq_native_fp8:
++            # Keep only Q/K/V in FP8; the small beta/f/g projections stay BF16.
++            self.in_proj_qkv = MergedColumnParallelLinear(
++                self.hidden_size, [projection_size] * 3, bias=False,
++                quant_config=saved_quant_config, prefix=f"{prefix}.in_proj_qkv")
++            self.in_proj_bfg_a = _Glm5NextMergedColumnParallelLinear(
++                self.hidden_size, [self.num_heads, self.head_dim, self.head_dim],
++                replicated_shard_ids=(1, 2), tp_size=self.tp_size, bias=False,
++                quant_config=None, prefix=f"{prefix}.in_proj_bfg_a")
++        else:
++            self.in_proj_qkvbfg_a = _Glm5NextMergedColumnParallelLinear(
++                self.hidden_size,
++                [
++                    projection_size,  # q (shard 0)
++                    projection_size,  # k (shard 1)
++                    projection_size,  # v (shard 2)
++                    self.num_heads,  # b (shard 3)
++                    self.head_dim,  # f_a (shard 4, replicated)
++                    self.head_dim,  # g_a (shard 5, replicated)
++                ],
++                replicated_shard_ids=(4, 5),
++                tp_size=self.tp_size,
++                bias=False,
++                quant_config=self.quant_config,
++                prefix=f"{prefix}.in_proj_qkvbfg_a",
++            )
+ 
+         self.f_b_proj = ColumnParallelLinear(
+             self.head_dim,
+@@ -280,7 +292,7 @@ class Glm5NextLinearAttention(GatedDeltaNetAttention):
+             projection_size,
+             self.hidden_size,
+             bias=False,
+-            quant_config=self.quant_config,
++            quant_config=saved_quant_config if self.nq_native_fp8 else self.quant_config,
+             prefix=f"{prefix}.o_proj",
+         )
+ 
+@@ -324,7 +336,11 @@ class Glm5NextLinearAttention(GatedDeltaNetAttention):
+     ) -> torch.Tensor:
+         num_tokens = hidden_states.size(0)
+         # One merged GEMM for q, k, v, b, f_a, g_a (replaces 6 separate GEMMs).
+-        projected = self.in_proj_qkvbfg_a(hidden_states)[0]
++        if self.nq_native_fp8:
++            projected = torch.cat((self.in_proj_qkv(hidden_states)[0],
++                                   self.in_proj_bfg_a(hidden_states)[0]), dim=-1)
++        else:
++            projected = self.in_proj_qkvbfg_a(hidden_states)[0]
+         qkv, beta_raw, f_a, g_a = projected.split(
+             [
+                 3 * self.local_projection_size,
+diff --git a/vllm/models/glm5next/nvidia/model.py b/vllm/models/glm5next/nvidia/model.py
+index ea615de..6261f80 100644
+--- a/vllm/models/glm5next/nvidia/model.py
++++ b/vllm/models/glm5next/nvidia/model.py
+@@ -4,6 +4,7 @@
+ from collections.abc import Iterable
+ from typing import ClassVar, Literal
+ 
++import os
+ import torch
+ from torch import nn
+ 
+@@ -736,12 +737,12 @@ class Glm5NextModel(nn.Module):
+             (".wk_weights_proj", ".wk", 0),
+             (".wk_weights_proj", ".weights_proj", 1),
+             # KDA: merge q, k, v, b, f_a, g_a projections into one GEMM
+-            (".in_proj_qkvbfg_a", ".q_proj", 0),
+-            (".in_proj_qkvbfg_a", ".k_proj", 1),
+-            (".in_proj_qkvbfg_a", ".v_proj", 2),
+-            (".in_proj_qkvbfg_a", ".b_proj", 3),
+-            (".in_proj_qkvbfg_a", ".f_a_proj", 4),
+-            (".in_proj_qkvbfg_a", ".g_a_proj", 5),
++            ((".in_proj_qkv" if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else ".in_proj_qkvbfg_a"), ".q_proj", (0 if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else 0)),
++            ((".in_proj_qkv" if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else ".in_proj_qkvbfg_a"), ".k_proj", (1 if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else 1)),
++            ((".in_proj_qkv" if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else ".in_proj_qkvbfg_a"), ".v_proj", (2 if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else 2)),
++            ((".in_proj_bfg_a" if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else ".in_proj_qkvbfg_a"), ".b_proj", (0 if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else 3)),
++            ((".in_proj_bfg_a" if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else ".in_proj_qkvbfg_a"), ".f_a_proj", (1 if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else 4)),
++            ((".in_proj_bfg_a" if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else ".in_proj_qkvbfg_a"), ".g_a_proj", (2 if os.environ.get("NQ_FLASH_NATIVE_FP8") == "1" else 5)),
+         ]
+         if self.config.is_moe:
+             # Params for weights, fp8 weight scales, fp8 activation scales
