@@ -2,8 +2,8 @@
 
 Implemented behind `NQ_FLASH_MLA_CACHE=fp4_g16`; default `fp8` is unchanged.
 This implementation was developed separately from the benchmark. Isolated
-SM120 GPU numerical checks now pass; end-to-end serving and quality validation
-are still pending. It is lossy. The published FP8-KV KLD result does not apply
+SM120 GPU numerical checks and basic live MTP2 serving smoke now pass;
+full-context memory and model-quality validation remain pending. It is lossy. The published FP8-KV KLD result does not apply
 to it, and isolated attention timings are not serving TPS.
 
 ## Format and scope
@@ -27,8 +27,11 @@ query tokens × 8 splits × 64 heads × 512 values × 4 bytes = 16 MiB, plus LSE
 
 The 11 main MLA layers and the one MTP MLA layer use FP4. The 34 KDA layers'
 recurrent state, DSA compressed FP8 indexer cache, and indexer tail buffers
-remain unchanged. The existing sparse indexer supplies causal DSA+SWA indices;
-attention uses one softmax over that union. It does not maintain predictor or
+remain unchanged. The indexer expands up to 512 completed four-token pools
+into 2048 history entries, appends at most three incomplete-pool tail tokens,
+and pads the buffer to 2176 with -1. These tails are not a 128-token sliding
+window. Completed-pool history and incomplete-pool tails are disjoint;
+attention uses one softmax over all valid entries. It does not maintain predictor or
 commit state. Rejected draft entries remain inaccessible through the existing
 causal indices, and accepted-position overwrites replace whole records.
 
@@ -91,8 +94,8 @@ Do not run this on top of the live benchmark.
 - Eight CPU tests passed, including real Triton kernel code executed through
   its CPU interpreter against an independently enumerated FP64 oracle.
   Includes all E2M1 codes, halfway rounding, negative values, FP16 scale limits,
-  zero rows, padded/permuted pages, partial/empty sparse sets, DSA2048 and
-  DSA+SWA2176 widths, split softmax merge, masked draft rows, and slot reuse.
+  zero rows, padded/permuted pages, partial/empty sparse sets, 2048 and padded
+  2176-entry buffers, split softmax merge, masked draft rows, and slot reuse.
 - All 33 Flash CPU tests passed together in interpreter mode; normal mode
   passes 31 with the two interpreter-only tests skipped.
 - All pack/attention/merge variants compiled without a CUDA context for SM120
@@ -115,6 +118,18 @@ Do not run this on top of the live benchmark.
   These include bounded scratch allocation and merge, exclude cache packing,
   and do not establish a speedup over FP8 or an end-to-end TPS result.
   Log: `/tmp/nestquant/flash-artifacts/fp4-gpu-parity-fixed.log`.
+- Live SM120 MTP2 smoke passed arithmetic, code, a 10,042-token needle and a
+  32,040-token needle, followed by repeated short arithmetic requests. The
+  32K prompt exercises genuine sparse selection, chunked prefill and multiple
+  14,080-token physical-page boundaries. This is smoke evidence, not broad
+  quality parity or a 262K fit test. Results:
+  `/tmp/nestquant/flash-artifacts/fp4-api-smoke.json` and
+  `/tmp/nestquant/flash-artifacts/fp4-boundary-smoke.json`.
+- Integration code audit verified source hashes against the installed image
+  for MLA forward, sparse remap, kpool indexer and pool expansion. Absorbed
+  query projection, original attention scale and V-up projection are unchanged;
+  MTP step zero resets top-k reuse and compacts the accepted last-query row.
+  No additional FP4-specific correctness defect was found in this audit.
 
 Commands (use an environment with Torch, NumPy and Triton):
 
@@ -131,10 +146,9 @@ Still required before promotion:
    neither the current image nor standard host paths contain it, so memcheck
    remains untested. Run device parity and timing on actual SM121 Spark as well;
    that target has only been compiled offline.
-2. Start an isolated model process, confirm hybrid group sizing and MTP cache
-   ownership, run repeated requests, prefill chunk boundaries, long-context
-   needle/coherence and stochastic generation checks. Explicitly test MTP off,
-   MTP1 and MTP2. Compare quality against FP8 KV using the established teacher
+2. Extend live smoke to full-context needle/coherence and stochastic generation
+   checks, and captured real-activation attention parity. MTP2 smoke is complete;
+   explicitly test MTP off and MTP1 as well. Compare quality against FP8 KV using the established teacher
    method when available; this implementation does not reproduce private KLD.
 3. Measure peak GPU+host memory at 262K, real prefill/decode throughput and
    acceptance, then compare with FP8 at the same hot pool and request settings.
