@@ -27,6 +27,7 @@ class ThroughputPrefetch:
         self.cancel_sent = set()
         self.issued = self.demotions = self.cancellations = 0
         self.peak_pending = 0
+        self.last_io = {}
         self.ex.io_stats('prefetch')  # prime the interval, excluding startup bytes
 
     def observe_decode(self, committed, elapsed):
@@ -35,10 +36,13 @@ class ThroughputPrefetch:
 
     def measure(self, now):
         d = self.ex.io_stats('prefetch')
-        # Do not interpret idle/under-fed throughput as the SSD's capacity.
+        self.last_io = d
         delivered = max(0., float(d.get('delivered_GBps', 0.)))*1e9/self.ex.rb
-        if delivered > 0 and (self.rate is None or self.peak_pending >= self.minimum):
-            self.rate = delivered if self.rate is None else .75*self.rate+.25*delivered
+        # Delivered bandwidth is a lower bound when admission/acknowledgments
+        # starve the drive. Keep the observed peak rather than feeding our own
+        # under-admission back into a shrinking capacity estimate.
+        if delivered > 0:
+            self.rate = max(self.rate or 0., delivered)
         if self.rate is not None:
             window = min(self.lookahead, self.horizon/max(self.tps, 1.))
             self.limit = max(self.minimum, min(self.maximum, math.ceil(self.rate*window)))
@@ -64,9 +68,14 @@ class ThroughputPrefetch:
             self.measure(now)
         limit = self.maximum if bootstrap else self.limit
         pending = int(np.count_nonzero((p.state == 1) | (p.state == 3)))
-        self.peak_pending = max(self.peak_pending, pending)
-        room = limit-pending
-        if room <= 0:
+        # An I/O completion awaiting a layer mailbox is not an outstanding
+        # read. Demotions contain no SSD read at all. Bound these separately.
+        reads = sum(op[2] == 4 for op in self.ex.ops.values())
+        room = min(limit-reads, self.maximum-pending)
+        down_room = min(self.minimum-int(np.count_nonzero(p.state == 3)),
+                        self.maximum-pending)
+        self.peak_pending = max(self.peak_pending, reads)
+        if room <= 0 and down_room <= 0:
             return
         candidates = np.argwhere((p.state == 0) & p.wanted)
         if not len(candidates):
@@ -79,7 +88,7 @@ class ThroughputPrefetch:
         free=len(self.ex.free)
         ups,downs=[],[]
         for i,e in candidates[order]:
-            if not room:
+            if room <= 0 and down_room <= 0:
                 break
             i,e=int(i),int(e)
             if occupied[i] >= self.budgets[i]:
@@ -87,16 +96,18 @@ class ThroughputPrefetch:
                 # Do not demote a whole layer while its replacements queue.
                 victims=np.flatnonzero((p.state[i] == 2) & ~p.wanted[i])
                 already=int(np.count_nonzero(p.state[i] == 3))
-                if not len(victims) or already:
+                if not len(victims) or already or down_room <= 0 or pending >= self.maximum:
                     continue
                 victim=int(victims[np.argmin(score[i,victims])])
                 p.state[i,victim]=3
                 downs.append((p.layers[i],victim))
-                room-=1
-            elif free:
+                down_room-=1;pending+=1
+                room=min(room,self.maximum-pending)
+            elif free and room > 0 and pending < self.maximum:
                 p.state[i,e]=1
                 ups.append((p.layers[i],e))
-                occupied[i]+=1;free-=1;room-=1
+                occupied[i]+=1;free-=1;room-=1;pending+=1
+                down_room=min(down_room,self.maximum-pending)
         if ups or downs:
             # No executor slot-wait queue: every admitted read owns a free slot.
             self.ex.apply(ups,downs,p)
@@ -107,7 +118,10 @@ class ThroughputPrefetch:
     def stats(self):
         p=self.pool
         return dict(mode='throughput', pending_limit=self.limit,
-                    maximum_pending=self.maximum, estimated_records_per_second=self.rate,
+                    maximum_pending=self.maximum, outstanding_reads=sum(op[2] == 4 for op in self.ex.ops.values()),
+                    mailbox_pending=len(self.ex.wait_apply),
+                    pending_demotions=int(np.count_nonzero(p.state == 3)),
+                    estimated_records_per_second=self.rate,
                     estimated_committed_tps=self.tps, issued=self.issued,
                     demotions=self.demotions, stale_cancel_requests=self.cancellations,
                     pending=int(np.count_nonzero((p.state == 1) | (p.state == 3))),

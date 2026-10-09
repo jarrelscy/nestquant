@@ -6,23 +6,23 @@ from nq_flash_prefetch import ThroughputPrefetch
 
 class Executor:
  def __init__(self,pool,slots):
-  self.p=pool;self.free=list(range(slots));self.ops={};self.owned={};self.reading=set();self.rb=1000;self.rate=.0001
+  self.p=pool;self.free=list(range(slots));self.ops={};self.owned={};self.reading=set();self.rb=1000;self.rate=.0001;self.wait_apply={}
  def io_stats(self,name):return {'delivered_GBps':self.rate}
  def apply(self,ups,downs,sched):
   for k in downs:
    assert k not in self.ops
-   self.ops[k]=3
+   self.ops[k]=(*k,2,1)
   for k in ups:
    assert k not in self.ops and self.free
-   self.owned[k]=self.free.pop();self.ops[k]=1
+   self.owned[k]=self.free.pop();self.ops[k]=(*k,4,1)
  def cancel_up(self,L,E,sched):
   k=(L,E)
   if k in self.reading:return True
   if k not in self.ops:return False
   del self.ops[k];self.free.append(self.owned.pop(k));sched.cancelled(L,E);return True
  def complete(self,k):
-  kind=self.ops.pop(k);self.reading.discard(k)
-  if kind==1:self.p.landed(*k)
+  kind=self.ops.pop(k)[2];self.reading.discard(k)
+  if kind==4:self.p.landed(*k)
   else:self.free.append(self.owned.pop(k));self.p.released(*k)
 
 class Tests(unittest.TestCase):
@@ -72,4 +72,22 @@ class Tests(unittest.TestCase):
   t.pump(force=True)
   self.assertLessEqual(np.count_nonzero(p.state==3),2)
   self.assertGreaterEqual(np.count_nonzero(p.state==2),6)
+ def test_mailbox_demotions_do_not_use_read_budget(self):
+  p,e,t,clock=self.make()
+  p.state[:,7]=3;p.wanted[:,7]=False
+  e.wait_apply={(L,7):(2,1) for L in p.layers}
+  t.limit=t.minimum
+  t.pump(force=True)
+  self.assertTrue(any(op[2]==4 for op in e.ops.values()))
+  self.assertLessEqual(np.count_nonzero(p.state),t.maximum)
+ def test_underfed_sample_does_not_shrink_capacity(self):
+  p,e,t,clock=self.make();e.rate=.001;t.measure(0);high=t.rate
+  e.rate=.000001;t.peak_pending=4;t.measure(1)
+  self.assertEqual(t.rate,high)
+ def test_all_acknowledgments_remain_bounded(self):
+  p,e,t,clock=self.make()
+  p.state[:,:2]=1
+  e.wait_apply={(L,E):(4,1) for L in p.layers for E in range(2)}
+  t.pump(force=True)
+  self.assertFalse(e.ops)
 if __name__=='__main__':unittest.main()

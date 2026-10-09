@@ -97,6 +97,10 @@ class Runtime:
   s.metric_phase="prefill" if s.batch.has_prefill else "decode"
   s.step_started=time.monotonic()
   s.pool.wanted=s.predictor.prepare();s.dispatch()
+  # Diagnostic only: ensure every selected upgrade is ready before verify.
+  # Preserve jT selection and active budgets; pay the delivery delay explicitly.
+  if not s.batch.has_prefill and os.environ.get('NQ_FLASH_WAIT_FOR_UPGRADES')=='1':
+   s.drain()
  def forward(s,L,x,weights,ids):
   m,mb,_=s.layers[L];s.poll();mb.apply()
   xh=x.half().contiguous();rw=weights.half().contiguous();sel=ids.long().contiguous()
