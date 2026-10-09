@@ -93,9 +93,9 @@ class RowLedger:
 
 def layer_budgets(meta,preset):
     """Explicit serving presets; do not alter published research allocations."""
-    if preset in ('spark_128K_U_2352','spark_256K_U_2504'):
-        total=2352 if preset=='spark_128K_U_2352' else 2504
-        filename='u_distribution.json' if total==2352 else 'u_distribution_2504.json'
+    if preset in ('spark_128K_U_2352','spark_256K_U_2504','spark_256K_U_2630'):
+        total={'spark_128K_U_2352':2352,'spark_256K_U_2504':2504,'spark_256K_U_2630':2630}[preset]
+        filename='u_distribution.json' if total==2352 else f'u_distribution_{total}.json'
         config=json.loads((Path(__file__).with_name(filename)).read_text())
         budgets={int(L):int(n) for L,n in config['budgets'].items()}
         if sum(budgets.values())!=total or config['active_slots']!=total:raise ValueError('Wrong U-distribution slot total')

@@ -153,3 +153,9 @@ Still required before promotion:
 3. Measure peak GPU+host memory at 262K, real prefill/decode throughput and
    acceptance, then compare with FP8 at the same hot pool and request settings.
    End-to-end quality/performance and full-context memory fit remain **untested**.
+
+## U2630 benchmark configuration
+
+The local SM120 experiment uses `spark_256K_U_2630`: zero fixed experts, 2,630 active floating slots plus eight spares, U proportions and unchanged jT. Compared to U2504 it adds 126 slots (1,047,158,784 record bytes). FP4 MLA, unchanged FP8 indexer/KDA, MTP2, 262,144 request limit, eager, and GPU utilization 0.8810 produce 1.91 GiB profiled KV and 307,341 reported tokens of capacity. This is an experimental benchmark configuration, not a quality-equivalence or native Spark claim. Full 262K request peak remains untested.
+
+U2630 startup measured 113.120 GB GPU + host excluding clean disk-backed page cache, or 115.790 GB including that cache. The benchmark memory gate now subtracts all clean disk-backed file pages (`file - shmem - file_dirty - file_writeback`), not only inactive file pages. All shmem, anonymous and kernel allocations remain counted. This differs from prior gate accounting and is a reclaimability estimate, not native Spark peak validation. Explicit file-cache eviction was attempted before correcting this accounting; no checkpoint files were deleted or modified.

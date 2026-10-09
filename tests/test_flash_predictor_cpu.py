@@ -51,6 +51,12 @@ class PredictorTests(unittest.TestCase):
  def test_u_distribution_layer_budget_policy_parity(self):
   self.u_distribution=True
   self.test_exact_policy_and_causal_inputs()
+ def test_u2630_policy_parity(self):
+  self.u_distribution=True;self.u_preset='spark_256K_U_2630';self.u_total=2630
+  b=layer_budgets({},self.u_preset);old=layer_budgets({},'spark_256K_U_2504')
+  self.assertEqual(sum(b.values()),2630)
+  self.assertTrue(all(b[L]>=old[L] for L in old))
+  self.test_exact_policy_and_causal_inputs()
  def test_layer_presets_preserve_total_and_source_order(self):
   b=layer_budgets({},'spark_128K_U_2352')
   self.assertEqual(sum(b.values()),2352)
@@ -68,7 +74,7 @@ class PredictorTests(unittest.TestCase):
    def predict(s,tok,ids,q):
     s.inputs.extend(zip(tok,ids.copy(),q.copy()));i=s.position;s.position+=len(tok);return blocks[i:s.position]
   p=CommittedPredictor.__new__(CommittedPredictor)
-  p.net=Net();p.layers=list(range(3,45));p.budgets=(layer_budgets({},'spark_128K_U_2352') if getattr(self,'u_distribution',False) else {L:102 if L<18 else 74 for L in p.layers})
+  p.net=Net();p.layers=list(range(3,45));p.budgets=(layer_budgets({},getattr(self,'u_preset','spark_128K_U_2352')) if getattr(self,'u_distribution',False) else {L:102 if L<18 else 74 for L in p.layers})
   p.defaults=[np.arange(p.budgets[L]) for L in p.layers];p.policy_cls=self.policy;p.reset()
   oracle=[self.policy(p.budgets[L],d) for L,d in zip(p.layers,p.defaults)]
   rows=[(t,100+t,rng.integers(0,288,(42,8)),rng.random((42,8)),rng.random(42)) for t in range(40)]
@@ -86,7 +92,7 @@ class PredictorTests(unittest.TestCase):
      def once(block,_o=o,_orig=original):
       _o.before_row=_orig;return _o.cur.copy(),[]
      o.before_row=once
-  self.assertEqual(int(want.sum()),2352 if getattr(self,'u_distribution',False) else 3528)
+  self.assertEqual(int(want.sum()),getattr(self,'u_total',2352) if getattr(self,'u_distribution',False) else 3528)
   for t,(token,ids,q) in enumerate(p.net.inputs):
    self.assertEqual(token,100+t)
    if t:np.testing.assert_array_equal(ids,rows[t-1][2])

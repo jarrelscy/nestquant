@@ -1,4 +1,4 @@
-# Flash on one DGX Spark — candidate port
+# Flash serving — U2630 + FP4 default
 
 **GB10/aarch64 execution and unified-memory fit are not yet validated.** The Flash
 runtime has served on one SM120 96 GiB discrete GPU with host-mapped residuals.
@@ -19,7 +19,7 @@ spark/flash/run_spark.sh build
 spark/flash/run_spark.sh fetch
 spark/flash/run_spark.sh prepare
 # Supply VLLM_API_KEY through your environment; do not put it in logs.
-NUM_SPEC=1 spark/flash/run_spark.sh up
+spark/flash/run_spark.sh up
 spark/flash/run_spark.sh logs
 ```
 
@@ -29,30 +29,29 @@ symlinks unchanged files. Preparation is offline and must not compete with servi
 for Spark's shared RAM. Reserve at least 400 GB disk until measured locally;
 source + TP1 + overlay + build caches coexist. No private calibration data is used.
 
-Defaults: TP1, max_num_seqs1, eager, no prefix cache, FP8 KV, 131072 context,
-utilization0.90, one probabilistic MTP token; `NUM_SPEC=2` is supported by the
-committed-row ledger and has served on SM120. Native vision support remains.
-No synthetic TPS cap on real Spark; `NQ_FLASH_TPS=35` explicitly applies one.
-The unchanged published jT policy has zero fixed experts, 102 floating per layer
-3–17 and 74 per layer18–44, plus eight physical spare slots overall. Two draft
-steps use vLLM's metadata-rebuild fallback; no speed gain is guaranteed.
+## Published serving defaults
 
-## Memory: mandatory first-boot verification
+U2630: zero fixed experts, 2,630 active floating slots with U layer proportions,
+plus eight spares. jT selection/policy is unchanged. FP4 MLA cache uses E2M1
+with FP16 group scales; DSA indexer stays FP8 and KDA state stays unchanged.
+TP1, one sequence, eager, no prefix cache, 262,144 context, probabilistic MTP2,
+thinking off, temperature0.7/top_p0.95, and no artificial TPS cap.
+The launcher supplies the tested template and sampling defaults; requests can
+still override sampling. `NQ_FLASH_TPS=0` is the native default. The SM120 benchmark used an explicit35
+tok/s cap; `NQ_FLASH_TPS=35` reproduces that pacing, not native Spark hardware.
 
-On discrete SM120 the runtime measured approximately74.74 GiB loaded device
-weights plus27.37 GiB host-mapped slots, before KV, peak activations, predictor,
-OS and other runtime allocations. **On GB10 those allocations share RAM.**
-The launcher explicitly caps KV at4 GiB (`NQ_KV_BYTES`) instead of assuming the
-CUDA memory profiler accounts for host-mapped slots. An explicit KV budget
-supersedes utilization-based KV sizing; vLLM must validate that it holds128K.
-This is a conservative candidate budget, not a measured guarantee.
+Native Spark's initial explicit KV budget is2 GiB (`NQ_KV_BYTES`). Check startup
+capacity and actual shared-memory peak before claiming fit. It is not validated
+on GB10; the SM120 experiment used profiled1.91 GiB and307,341-token capacity.
+Never silently shrink context or expert allocation. Do not add Spark GPU memory
+to total host RAM usage: both refer to the same physical shared memory.
 
-Measure process/host peak RAM and CUDA memory during load, prefill, repeated
-requests and MTP. The reported research115 GB estimate is not a live measurement.
-If128K does not fit, `NQ_MAXLEN=65536 NQ_KV_BYTES=2147483648` is an explicit smaller
-context option, retaining102/74. Do not silently reduce floating budgets or claim
-the reference KLD for changed configurations. Any alternate allocation's quality
-is unmeasured. The reported0.0691 KLD was not reproduced here.
+Read [SPARK_MONITORING.md](SPARK_MONITORING.md) for exact runtime checks, coverage,
+backlog/SSD diagnostics, memory accounting and benchmark reproduction limits.
+[FP4_KV.md](FP4_KV.md) records numerical validation and unsupported modes.
+Legacy `spark_128K` (102/74, FP8 KV) remains an explicit alternative:
+`NQ_FLASH_PRESET=spark_128K NQ_FLASH_MLA_CACHE=fp8 NQ_MAXLEN=131072 NQ_KV_BYTES=4294967296`.
+The research KLD0.0691 does not apply to the new default.
 
 ## Issue #1 audit
 
