@@ -113,8 +113,20 @@ def layer_budgets(meta,preset):
     return budgets
 
 
+def fixed_counts_for_fraction(budgets, fraction):
+    """Same fraction per layer, largest-remainder rounding at fixed total."""
+    from fractions import Fraction
+    f=Fraction(str(fraction))
+    if not 0<=f<1:raise ValueError('Fixed fraction must be in [0,1)')
+    raw={L:n*f for L,n in budgets.items()};counts={L:int(v) for L,v in raw.items()}
+    total=int(sum(budgets.values())*f+Fraction(1,2))
+    for L in sorted(raw,key=lambda L:(-(raw[L]-counts[L]),L))[:total-sum(counts.values())]:counts[L]+=1
+    if any(counts[L]>=budgets[L] for L in budgets):raise ValueError('Fixed share must leave floating slots')
+    return counts
+
+
 class CommittedPredictor:
-    def __init__(self,root,preset='spark_128K',device='cuda',dtype=torch.float16):
+    def __init__(self,root,preset='spark_128K',device='cuda',dtype=torch.float16,n_fixed=0,fixed_fraction=None):
         root=Path(root);pd=root/'serving/predictor'
         meta=json.loads((pd/'predictor.json').read_text())['params']
         required=dict(n_fixed=0,refresh_tokens=8,hm=4.0,mix_block=0.5,
@@ -125,6 +137,11 @@ class CommittedPredictor:
         self.layers=list(range(3,45));self.budgets=budgets
         counts=json.loads((root/'fixed_set.json').read_text())['n_routed']
         self.defaults=[np.argsort(-np.asarray(counts[str(L)]),kind='stable')[:budgets[L]] for L in self.layers]
+        if not isinstance(n_fixed,int) or not 0<=n_fixed<min(budgets.values()):raise ValueError('Invalid fixed count')
+        if fixed_fraction is not None and n_fixed:raise ValueError('Choose fixed count or fraction, not both')
+        self.fixed_counts=(fixed_counts_for_fraction(budgets,fixed_fraction) if fixed_fraction is not None else {L:n_fixed for L in self.layers})
+        self.n_fixed=sum(self.fixed_counts.values())
+        self.fixed_ids=[d[:self.fixed_counts[L]].copy() for L,d in zip(self.layers,self.defaults)]
         jt=module(pd/'jt/jt_model.py','nq_flash_release_jt')
         self.policy_cls=module(pd/'jt/policy.py','nq_flash_release_policy').FloatingSet
         self.net=IncrementalJT(jt.load(pd/'jt',device=device,dtype=dtype),jt.rope)
@@ -133,7 +150,11 @@ class CommittedPredictor:
     def reset(self):
         self.net.reset();self.t=0;self.prepared_t=-1;self.block=None
         self.previous_ids=np.zeros((42,8),np.int64);self.previous_q=np.zeros((42,8),np.float32)
-        self.policies=[self.policy_cls(self.budgets[L],d) for L,d in zip(self.layers,self.defaults)]
+        if getattr(self,'n_fixed',0):
+            from fixed_policy import FixedSetPolicy
+            self.policies=[FixedSetPolicy(self.policy_cls,self.budgets[L],d,f) for L,d,f in zip(self.layers,self.defaults,self.fixed_ids)]
+        else:
+            self.policies=[self.policy_cls(self.budgets[L],d) for L,d in zip(self.layers,self.defaults)]
         self.prepare()
 
     def prepare(self):
