@@ -90,6 +90,17 @@ class Tests(unittest.TestCase):
   e.wait_apply={(L,E):(4,1) for L in p.layers for E in range(2)}
   t.pump(force=True)
   self.assertFalse(e.ops)
+ def test_replacement_window_spans_layers_without_exceeding_bounds(self):
+  layers=list(range(3,45));wanted=np.zeros((42,8),bool);wanted[:,4:]=True
+  p=Pool(layers,8,wanted);p.state[:,:4]=2;e=Executor(p,8)
+  t=ThroughputPrefetch(p,e,{L:4 for L in layers},lambda:np.ones((42,8)),
+                       max_pending=64,min_pending=8,max_demotions=32)
+  t.pump(force=True)
+  self.assertEqual(np.count_nonzero(p.state==3),32)
+  self.assertTrue(np.all(np.count_nonzero(p.state==3,axis=1)<=1))
+  self.assertTrue(np.all(np.count_nonzero(p.state,axis=1)==4))
+  self.assertFalse(any(op[2]==4 for op in e.ops.values()))
+  self.assertEqual(len(e.free),8)  # no reuse before acknowledgment
  def test_blocked_layers_are_filtered_before_scoring(self):
   p,e,t,clock=self.make()
   p.state[:,:4]=2;p.state[:,0]=3

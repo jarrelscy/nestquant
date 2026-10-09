@@ -104,3 +104,30 @@ Final uninstrumented 1024-token MTP2 strict-wait probes: prose 17.40 TPS;
 code 20.95 TPS, 60.49% hot and 82.57% salience, zero desired-but-cold routes.
 Strict waits therefore retain a substantial speed/coverage tradeoff even after
 repairing the admission scan. No benchmark restart or score mixing was performed.
+
+
+### Async replacement admission, October 9
+
+Decoupled the demotion window from the minimum read depth: default 32 pending
+GPU demotions globally, still at most one per layer and 64 total transitions.
+`NQ_FLASH_PREFETCH_MAX_DEMOTIONS` overrides this limit (clamped to half the total
+transition limit). No additional allocation or change to jT selection, causal
+state, expert budgets, MTP rejection handling, or mailbox-owned slot reuse.
+This allows replacement reads across 42 layers to start sooner without drain.
+23 CPU tests pass, including blocked layers, cancellation, pool capacity, and the
+wider replacement window retaining slots until acknowledgment.
+
+First uninstrumented async run, same 1024-token screening prompts, temperature1,
+top_p .95, seed42, MTP2 probabilistic, cap35, thinking off: prose20.04 TPS,
+85.40% hot salience (desired86.77%); code27.61 TPS,77.35% (desired79.47%).
+Desired-but-cold salience was1.72%/2.67%. These are generated-output probes,
+not fixed-routing controls; no universal80% coverage or quality claim follows.
+Local raw records: `prefetch-ab-async-window32.json`.
+
+Warm repeat: prose20.39 TPS,84.06% hot salience (desired85.84%); code26.09 TPS,
+79.89% (desired81.09%). Telemetry covered1007/981 committed rows respectively
+of1024 generated tokens. TTFT0.56/0.64s. Across the two screening runs, code
+coverage77.35–79.89% at26.09–27.61 TPS; prose84.06–85.40% at20.04–20.39 TPS.
+Repeat records: `prefetch-ab-async-window32-repeat.json`. The server remains
+async MTP2, cap35, thinking off; the benchmark remains stopped. Actual Spark
+hardware and end-to-end benchmark quality remain untested for this change.

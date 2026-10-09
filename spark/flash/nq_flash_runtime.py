@@ -51,6 +51,7 @@ class Runtime:
   if mode=='throughput':
    s.prefetch=ThroughputPrefetch(s.pool,s.executor,s.predictor.budgets,s.predictor.loading_priority,
        max_pending=int(os.environ.get('NQ_FLASH_PREFETCH_MAX_PENDING','64')),
+       max_demotions=int(os.environ.get('NQ_FLASH_PREFETCH_MAX_DEMOTIONS','32')),
        lookahead_seconds=float(os.environ.get('NQ_FLASH_PREFETCH_SECONDS','0.1')))
   else:s.executor.apply(*s.pool.operations(),s.pool)
   s.started=True;s.drain();s.executor.io_stats("routing_metrics")

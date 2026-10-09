@@ -10,13 +10,19 @@ import numpy as np
 
 class ThroughputPrefetch:
     def __init__(self, pool, executor, budgets, priority, *, max_pending=64,
-                 min_pending=8, lookahead_seconds=.1, horizon_tokens=16,
+                 min_pending=8, max_demotions=32, lookahead_seconds=.1, horizon_tokens=16,
                  clock=time.monotonic):
         if not 1 <= min_pending <= max_pending or lookahead_seconds <= 0:
             raise ValueError('Invalid prefetch limits')
+        if max_demotions < 1:
+            raise ValueError('Invalid demotion limit')
         self.pool, self.ex, self.priority = pool, executor, priority
         self.budgets = np.asarray([budgets[L] for L in pool.layers])
         self.maximum, self.minimum = max_pending, min_pending
+        # Demotions await per-layer GPU acknowledgment, not disk service.
+        # Let multiple layers prepare replacements without consuming the
+        # entire transition window; keep room for the ensuing reads.
+        self.max_demotions = min(max_demotions, max_pending // 2 or 1)
         self.lookahead, self.horizon = lookahead_seconds, horizon_tokens
         self.clock = clock
         self.rate = None
@@ -72,7 +78,7 @@ class ThroughputPrefetch:
         # read. Demotions contain no SSD read at all. Bound these separately.
         reads = sum(op[2] == 4 for op in self.ex.ops.values())
         room = min(limit-reads, self.maximum-pending)
-        down_room = min(self.minimum-int(np.count_nonzero(p.state == 3)),
+        down_room = min(self.max_demotions-int(np.count_nonzero(p.state == 3)),
                         self.maximum-pending)
         self.peak_pending = max(self.peak_pending, reads)
         if room <= 0 and down_room <= 0:
@@ -127,7 +133,7 @@ class ThroughputPrefetch:
     def stats(self):
         p=self.pool
         return dict(mode='throughput', pending_limit=self.limit,
-                    maximum_pending=self.maximum, outstanding_reads=sum(op[2] == 4 for op in self.ex.ops.values()),
+                    maximum_pending=self.maximum, maximum_demotions=self.max_demotions, outstanding_reads=sum(op[2] == 4 for op in self.ex.ops.values()),
                     mailbox_pending=len(self.ex.wait_apply),
                     pending_demotions=int(np.count_nonzero(p.state == 3)),
                     estimated_records_per_second=self.rate,
