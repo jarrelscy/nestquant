@@ -1,16 +1,19 @@
 # Experimental Flash FP4 MLA cache
 
 Implemented behind `NQ_FLASH_MLA_CACHE=fp4_g16`; default `fp8` is unchanged.
-This implementation is isolated from the running benchmark. It has **not** run
-on a GPU or served a model yet. It is lossy, and has no model-quality or speed
-claim. The published FP8-KV KLD result does not apply to it.
+This implementation was developed separately from the benchmark. Isolated
+SM120 GPU numerical checks now pass; end-to-end serving and quality validation
+are still pending. It is lossy. The published FP8-KV KLD result does not apply
+to it, and isolated attention timings are not serving TPS.
 
 ## Format and scope
 
 A NoPE MLA token stores 512 latent values as E2M1 nibbles (low nibble first),
 plus 32 little-endian FP16 scales, one per 16 values. Total: **320 bytes/token**.
 For each group, store `FP16(max(max(abs(x))/6, 2^-24))`; choose the nearest E2M1
-code using that rounded scale, ties to even code. The supported finite range
+code using that rounded scale, ties to even code. The kernel compares input
+magnitudes against midpoint × scale: GPU reciprocal division was found to
+misclassify exact halfway cases and is not used. The supported finite range
 is ±393024. Inputs outside it are invalid (`TRITON_DEBUG=1` diagnoses them).
 
 The current FP8 sparse-MLA adapter stores **656 bytes/token**: 512 latent bytes,
@@ -64,7 +67,7 @@ need measurement. A fixed `--kv-cache-memory-bytes` budget will normally buy
 more token capacity instead of freeing GPU memory. Lower that explicit budget
 only after a full 262K fit/peak test, then increase hot slots separately.
 
-## Activation (after GPU and quality validation)
+## Activation (after serving and quality validation)
 
 The existing launcher forwards the opt-in variable:
 
@@ -99,6 +102,19 @@ Do not run this on top of the live benchmark.
   process: one-token alignment probe, stamped/merged MLA specs, unchanged
   non-Flash spec, backend shape and actual padded-cache reshape. CUDA context
   remained uninitialized. No live process or files were modified.
+- GPU numerical checks passed on RTX PRO 6000 SM120 after benchmark/server
+  were stopped by the coordinator. Packing matches the independent CPU format
+  byte-for-byte, including non-unit-scale midpoint regression cases. Checked
+  padded/permuted pages, addresses near 262K, guards, slot reuse and attention
+  batches 1/2/3/4/17/65 at both 2048/2176 sparse widths.
+- Maximum discrepancies against FP64 attention on the quantized cache:
+  FP16 max-abs 7.90e-5, relative L2 2.83e-4; BF16 max-abs 6.49e-4,
+  relative L2 0.00217. These measure kernel numerics, not FP4 model quality.
+- Isolated attention GPU timings: 0.068–0.080 ms for batches 1–4,
+  0.234–0.262 ms for batch 17, 0.722–0.804 ms for batch 65 (64 heads).
+  These include bounded scratch allocation and merge, exclude cache packing,
+  and do not establish a speedup over FP8 or an end-to-end TPS result.
+  Log: `/tmp/nestquant/flash-artifacts/fp4-gpu-parity-fixed.log`.
 
 Commands (use an environment with Torch, NumPy and Triton):
 
@@ -111,10 +127,10 @@ python spark/flash/benchmarks/check_fp4_vllm_specs.py --container glm53-flash-ne
 
 Still required before promotion:
 
-1. Obtain the GPU lease; run `benchmarks/check_fp4_kv_gpu.py` (also under
-   compute-sanitizer), inspect max-abs/relative-L2 reports for both dtypes,
-   decode/MTP batches 1–4 and prefill 17/65. Script also checks high addresses
-   near 262K, padding guards and reused slots. No speed threshold is claimed.
+1. Run `benchmarks/check_fp4_kv_gpu.py` under compute-sanitizer when available:
+   neither the current image nor standard host paths contain it, so memcheck
+   remains untested. Run device parity and timing on actual SM121 Spark as well;
+   that target has only been compiled offline.
 2. Start an isolated model process, confirm hybrid group sizing and MTP cache
    ownership, run repeated requests, prefill chunk boundaries, long-context
    needle/coherence and stochastic generation checks. Explicitly test MTP off,
@@ -122,4 +138,4 @@ Still required before promotion:
    method when available; this implementation does not reproduce private KLD.
 3. Measure peak GPU+host memory at 262K, real prefill/decode throughput and
    acceptance, then compare with FP8 at the same hot pool and request settings.
-   GPU numerical parity and end-to-end quality/performance remain **untested**.
+   End-to-end quality/performance and full-context memory fit remain **untested**.

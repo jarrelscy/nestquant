@@ -32,6 +32,9 @@ def main():
     )
     cache = torch.as_strided(backing, (blocks, page, 320), (page_stride, 320, 1))
     x = torch.tensor(rng.normal(size=(2176, 512)), dtype=torch.bfloat16)
+    midpoints = torch.tensor([0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 6.0])
+    for row, scale in enumerate((0.46875, 0.234375, 0.2890625)):
+        x[row] = torch.cat((midpoints, -midpoints)).repeat(32) * scale
     # Includes the final slot of a 262K cache and non-monotonic physical pages.
     slots = np.r_[np.arange(2160), np.arange(blocks * page - 16, blocks * page)].astype(
         np.int64

@@ -57,22 +57,27 @@ def _pack(
     sf = tl.minimum(
         tl.maximum(tl.max(tl.abs(x), 1) / 6.0, 5.960464477539063e-8), 65504.0
     ).to(tl.float16)
-    y = tl.abs(x) / sf[:, None].to(tl.float32)
-    # E2M1 round-to-nearest-even, including all seven bin boundaries.
+    y = tl.abs(x)
+    s = sf[:, None].to(tl.float32)
+    # Compare in the original domain: CUDA reciprocal division can move exact
+    # midpoints across a boundary. These dyadic midpoint * FP16-scale products
+    # are exact in FP32, preserving nearest-even on the device as on the CPU.
     z = tl.where(
-        y <= 0.25,
+        y <= 0.25 * s,
         0,
         tl.where(
-            y < 0.75,
+            y < 0.75 * s,
             1,
             tl.where(
-                y <= 1.25,
+                y <= 1.25 * s,
                 2,
                 tl.where(
-                    y < 1.75,
+                    y < 1.75 * s,
                     3,
                     tl.where(
-                        y <= 2.5, 4, tl.where(y < 3.5, 5, tl.where(y <= 5.0, 6, 7))
+                        y <= 2.5 * s,
+                        4,
+                        tl.where(y < 3.5 * s, 5, tl.where(y <= 5.0 * s, 6, 7)),
                     ),
                 ),
             ),

@@ -126,6 +126,11 @@ class KernelInterpreter(unittest.TestCase):
         x = torch.randn((8, 512), generator=torch.Generator().manual_seed(715))
         vals = torch.tensor([0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 6.0])
         x[0] = torch.cat((vals, -vals)).repeat(32)
+        # Non-unit dyadic scales catch hardware reciprocal approximation at
+        # exact FP4 midpoints (which the CPU interpreter alone cannot reveal).
+        x[4] = x[0] * 0.46875
+        x[6] = x[0] * 0.234375
+        x[7] = x[0] * 0.2890625
         x[1].zero_()
         x[2] = torch.tensor(np.r_[ref.VALUES, -ref.VALUES].copy()).repeat(32) * 2**-24
         x[3] = torch.tensor(np.r_[ref.VALUES, -ref.VALUES].copy()).repeat(32) * 65504.0
