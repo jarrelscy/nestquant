@@ -57,6 +57,13 @@ class PredictorTests(unittest.TestCase):
   self.assertEqual(sum(b.values()),2630)
   self.assertTrue(all(b[L]>=old[L] for L in old))
   self.test_exact_policy_and_causal_inputs()
+ def test_u2630_flat50_policy_parity(self):
+  self.u_distribution=True;self.u_preset='spark_256K_U_2630_flat50';self.u_total=2630
+  b=layer_budgets({},self.u_preset)
+  self.assertEqual(sum(b.values()),2630)
+  self.assertEqual((min(b.values()),max(b.values())),(48,114))
+  self.assertEqual(set(b),set(range(3,45)))
+  self.test_exact_policy_and_causal_inputs()
  def test_layer_presets_preserve_total_and_source_order(self):
   b=layer_budgets({},'spark_128K_U_2352')
   self.assertEqual(sum(b.values()),2352)
