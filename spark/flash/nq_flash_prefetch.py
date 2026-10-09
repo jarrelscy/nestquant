@@ -77,15 +77,25 @@ class ThroughputPrefetch:
         self.peak_pending = max(self.peak_pending, reads)
         if room <= 0 and down_room <= 0:
             return
-        candidates = np.argwhere((p.state == 0) & p.wanted)
+        occupied = np.count_nonzero(p.state, axis=1)
+        free = len(self.ex.free)
+        demoting = np.any(p.state == 3, axis=1)
+        victim_mask = (p.state == 2) & ~p.wanted
+        has_victim = np.any(victim_mask, axis=1)
+        can_load = (occupied < self.budgets) & (free > 0) & (room > 0)
+        can_demote = ((occupied >= self.budgets) & ~demoting & has_victim
+                      & (down_room > 0))
+        # Filter once per layer. A pending mailbox can block hundreds of
+        # candidates; rescanning that layer for every expert starves launches.
+        candidates = np.argwhere((p.state == 0) & p.wanted
+                                 & (can_load | can_demote)[:, None])
         if not len(candidates):
             return
         score=np.asarray(self.priority(), np.float64)
         if score.shape != p.state.shape or not np.isfinite(score).all():
             raise ValueError('Invalid committed jT loading priorities')
         order=np.lexsort((candidates[:,1], candidates[:,0], -score[tuple(candidates.T)]))
-        occupied=np.count_nonzero(p.state, axis=1)
-        free=len(self.ex.free)
+        victims = np.argmin(np.where(victim_mask, score, np.inf), axis=1)
         ups,downs=[],[]
         for i,e in candidates[order]:
             if room <= 0 and down_room <= 0:
@@ -94,12 +104,11 @@ class ThroughputPrefetch:
             if occupied[i] >= self.budgets[i]:
                 # Keep useful old residents until an admission is possible.
                 # Do not demote a whole layer while its replacements queue.
-                victims=np.flatnonzero((p.state[i] == 2) & ~p.wanted[i])
-                already=int(np.count_nonzero(p.state[i] == 3))
-                if not len(victims) or already or down_room <= 0 or pending >= self.maximum:
+                if not has_victim[i] or demoting[i] or down_room <= 0 or pending >= self.maximum:
                     continue
-                victim=int(victims[np.argmin(score[i,victims])])
+                victim=int(victims[i])
                 p.state[i,victim]=3
+                demoting[i]=True
                 downs.append((p.layers[i],victim))
                 down_room-=1;pending+=1
                 room=min(room,self.maximum-pending)

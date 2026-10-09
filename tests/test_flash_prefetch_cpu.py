@@ -90,4 +90,11 @@ class Tests(unittest.TestCase):
   e.wait_apply={(L,E):(4,1) for L in p.layers for E in range(2)}
   t.pump(force=True)
   self.assertFalse(e.ops)
+ def test_blocked_layers_are_filtered_before_scoring(self):
+  p,e,t,clock=self.make()
+  p.state[:,:4]=2;p.state[:,0]=3
+  p.wanted[:]=False;p.wanted[:,4:]=True;t.limit=t.minimum
+  def forbidden():self.fail('No eligible layer: loading scores must not be consulted')
+  t.priority=forbidden;t.pump(force=True)
+  self.assertFalse(e.ops)
 if __name__=='__main__':unittest.main()

@@ -58,3 +58,49 @@ No KLD or end-to-end quality claim, no GB10 measurement, and no production promo
 The original thinking-off benchmark was stopped at the user's request, with 72/80
 scenarios complete; its results must not mix with these subsequent configurations.
 Raw local probe records: `/tmp/nestquant/flash-artifacts/prefetch-ab-*.json`.
+
+### Follow-up isolation: CPU scan regression
+
+The first admission patch above introduced excessive scans: its read budget could
+remain open while every candidate layer was blocked by pending demotions. It still
+sorted/scanned all wanted experts and rebuilt victim lists for each expert. The
+follow-up filters ineligible layers first and computes eviction candidates once
+per layer. Limits, jT membership and executor-owned acknowledgment remain intact.
+
+A same-process old/new/old test on a 512-token code prompt reproduced 27.76/20.27/
+27.43 TPS. Holding the seeded pool fixed gave 32.13 new vs 32.30 old on warm runs,
+so the regression required active pool changes. Different generated outputs are
+not a bit-exact performance control; all probes used temp0, seed42, MTP2, cap35.
+
+CUDA event and CPU timers isolated the regressed version at 55.23 ms/step in poll
+vs 2.04 old; expert GPU execution was 69.66 vs 60.53 ms. The repaired run averaged
+about 6.4 ms polling and recovered 26.70 TPS vs 17.72 regressed with instrumentation.
+Neighboring old-loader runs were 28.94 and 26.49 TPS. A synthetic blocked-pool CPU
+probe fell from 9.73 to 0.050 ms per pump (30 iterations). The old scan, not just
+increased 4-bit usage, was the principal cause of this performance regression.
+
+An independent GPU experiment held input tensors, selected expert IDs and 4-bit
+weights fixed, changing only residual storage. Across 42 layers with eight distinct
+hot experts/layer, batches 1/2/3 took about 56.1/56.1/56.2 ms from host-mapped RAM,
+versus 4.82/5.03/5.28 ms from VRAM; base-only 3.02/3.23/3.46 ms. Repeated host runs
+agreed. Only 2.60 GiB of selected residuals were copied; tables restored afterward.
+Host/VRAM output max-abs differences were 1.90e-5/2.41e-5/2.43e-5; no bit-exactness
+claim (atomic reduction scheduling differs). This is expert-kernel timing, not
+whole-model TPS or a DGX Spark result. Full diagnostics remain local under
+`/tmp/nestquant/flash-artifacts/isolate-*` and `prefetch-ab-isolate-*.json`.
+
+Final strict-wait isolation (same diagnostic process, repaired loader, MTP2,
+512-token code prompt): async 27.14 TPS, 54.54% hot, 74.19% salience; strict wait
+20.51 TPS, 59.52% hot, 82.20% salience. Explicit drain timers accumulated 7.383 s
+across 188 decode steps (39.27 ms/step). Expert GPU time rose from 69.79 to 77.55
+ms/step; unique hot experts across 42 layers from 416 to 463. Target forward time
+85.03 to 93.60 ms, polling within the target forward 4.35 to 1.29 ms. Waiting
+happens before that target-forward timer. Coverage/timing snapshots cover slightly
+different prefixes, and generated outputs differ, so components are not an exact
+wall-clock accounting identity. This directly distinguishes the repaired CPU bug
+from the remaining strict-wait and additional PCIe-weight costs.
+
+Final uninstrumented 1024-token MTP2 strict-wait probes: prose 17.40 TPS;
+code 20.95 TPS, 60.49% hot and 82.57% salience, zero desired-but-cold routes.
+Strict waits therefore retain a substantial speed/coverage tradeoff even after
+repairing the admission scan. No benchmark restart or score mixing was performed.
