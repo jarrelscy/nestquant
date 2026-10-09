@@ -91,6 +91,26 @@ class RowLedger:
         return result
 
 
+def layer_budgets(meta,preset):
+    """Explicit serving presets; do not alter published research allocations."""
+    if preset=='spark_128K_U_2352':
+        config=json.loads((Path(__file__).with_name('u_distribution.json')).read_text())
+        budgets={int(L):int(n) for L,n in config['budgets'].items()}
+        if sum(budgets.values())!=2352:raise ValueError('Wrong U-distribution slot total')
+    else:
+        allocation=({'3-17':74,'18-44':46} if preset=='spark_128K_74_46'
+                    else meta['n_float'][preset])
+        budgets={}
+        for span,n in allocation.items():
+            lo,hi=map(int,span.split('-'))
+            for L in range(lo,hi+1):
+                if L in budgets:raise ValueError('Overlapping predictor allocation')
+                budgets[L]=int(n)
+    if set(budgets)!=set(range(3,45)) or any(not 1<=n<=288 for n in budgets.values()):
+        raise ValueError('Invalid predictor layer allocation')
+    return budgets
+
+
 class CommittedPredictor:
     def __init__(self,root,preset='spark_128K',device='cuda',dtype=torch.float16):
         root=Path(root);pd=root/'serving/predictor'
@@ -99,10 +119,7 @@ class CommittedPredictor:
                       ema_half_life_tokens=64,block_horizon=16,NE=288,top_k=8)
         for k,v in required.items():
             if meta.get(k)!=v:raise ValueError(f'Unsupported jT policy {k}: {meta.get(k)}')
-        budgets={}
-        for span,n in meta['n_float'][preset].items():
-            lo,hi=map(int,span.split('-'));budgets.update({L:int(n) for L in range(lo,hi+1)})
-        if set(budgets)!=set(range(3,45)):raise ValueError('Incomplete predictor layer allocation')
+        budgets=layer_budgets(meta,preset)
         self.layers=list(range(3,45));self.budgets=budgets
         counts=json.loads((root/'fixed_set.json').read_text())['n_routed']
         self.defaults=[np.argsort(-np.asarray(counts[str(L)]),kind='stable')[:budgets[L]] for L in self.layers]

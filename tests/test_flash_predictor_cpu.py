@@ -3,7 +3,7 @@ import os,pathlib,sys,unittest
 import numpy as np
 import torch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'spark/flash'))
-from jt_runtime import IncrementalJT,RowLedger,module,CommittedPredictor
+from jt_runtime import IncrementalJT,RowLedger,module,CommittedPredictor,layer_budgets
 
 RELEASE=os.environ.get('NQ_FLASH_TEST_MODEL')
 
@@ -48,6 +48,17 @@ class PredictorTests(unittest.TestCase):
    np.testing.assert_allclose(out,expected,rtol=3e-5,atol=1e-7)
    self.assertLessEqual(c.cache[0][0].shape[-2],7)
    c.reset();self.assertEqual(c.position,0)
+ def test_u_distribution_layer_budget_policy_parity(self):
+  self.u_distribution=True
+  self.test_exact_policy_and_causal_inputs()
+ def test_layer_presets_preserve_total_and_source_order(self):
+  b=layer_budgets({},'spark_128K_U_2352')
+  self.assertEqual(sum(b.values()),2352)
+  self.assertEqual(b[3],147);self.assertEqual(b[35],29)
+  self.assertGreater(b[42],b[28]);self.assertEqual(set(b),set(range(3,45)))
+  legacy={'n_float':{'spark_128K':{'3-17':102,'18-44':74}}}
+  self.assertEqual(sum(layer_budgets(legacy,'spark_128K').values()),3528)
+  self.assertEqual(sum(layer_budgets({},'spark_128K_74_46').values()),2352)
  def test_exact_policy_and_causal_inputs(self):
   rng=np.random.default_rng(192)
   blocks=rng.random((40,42,288));blocks/=blocks.sum(-1,keepdims=True)
@@ -57,7 +68,7 @@ class PredictorTests(unittest.TestCase):
    def predict(s,tok,ids,q):
     s.inputs.extend(zip(tok,ids.copy(),q.copy()));i=s.position;s.position+=len(tok);return blocks[i:s.position]
   p=CommittedPredictor.__new__(CommittedPredictor)
-  p.net=Net();p.layers=list(range(3,45));p.budgets={L:102 if L<18 else 74 for L in p.layers}
+  p.net=Net();p.layers=list(range(3,45));p.budgets=(layer_budgets({},'spark_128K_U_2352') if getattr(self,'u_distribution',False) else {L:102 if L<18 else 74 for L in p.layers})
   p.defaults=[np.arange(p.budgets[L]) for L in p.layers];p.policy_cls=self.policy;p.reset()
   oracle=[self.policy(p.budgets[L],d) for L,d in zip(p.layers,p.defaults)]
   rows=[(t,100+t,rng.integers(0,288,(42,8)),rng.random((42,8)),rng.random(42)) for t in range(40)]
@@ -75,7 +86,7 @@ class PredictorTests(unittest.TestCase):
      def once(block,_o=o,_orig=original):
       _o.before_row=_orig;return _o.cur.copy(),[]
      o.before_row=once
-  self.assertEqual(int(want.sum()),3528)
+  self.assertEqual(int(want.sum()),2352 if getattr(self,'u_distribution',False) else 3528)
   for t,(token,ids,q) in enumerate(p.net.inputs):
    self.assertEqual(token,100+t)
    if t:np.testing.assert_array_equal(ids,rows[t-1][2])

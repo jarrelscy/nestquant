@@ -131,3 +131,17 @@ coverage77.35–79.89% at26.09–27.61 TPS; prose84.06–85.40% at20.04–20.39 
 Repeat records: `prefetch-ab-async-window32-repeat.json`. The server remains
 async MTP2, cap35, thinking off; the benchmark remains stopped. Actual Spark
 hardware and end-to-end benchmark quality remain untested for this change.
+
+
+### Reduced residency and U distribution
+
+Added explicit runtime presets `spark_128K_74_46` and `spark_128K_U_2352`.
+Both retain2352 active upgrades and8 spares,1176 fewer records than102/74,
+saving9,773,481,984 bytes. Published predictor metadata is unchanged.
+The74/46 startup gate measured24,955,281,408 host bytes plus88,847,941,632 GPU
+bytes =113.80322304 decimal GB. This is a startup measurement, not native Spark
+peak-memory validation. Its short run was stopped at user request to switch to U.
+U preserves the total pool and jT dynamic selection with nonuniform layer budgets.
+25 CPU tests pass, including exact shipped policy/causal-input parity with U
+budgets, legacy-presets checks, repeated reset and speculative rejection tests.
+Quality/KLD of either smaller allocation remains unmeasured.

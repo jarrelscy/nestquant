@@ -88,3 +88,31 @@ Before calling the port supported: build on native aarch64, run expert numerical
 parity and attention checks on sm121, confirm peak memory, run at least20 repeated
 requests (short/long/multimodal, MTP1 and2), and exercise read failure handling.
 Existing SM120 results and CPU tests do not substitute for these GB10 checks.
+
+
+## Explicit reduced-residency experiment
+
+`NQ_FLASH_PRESET=spark_128K_74_46` selects zero fixed experts,74 floating per
+layer3–17 and46 per layer18–44:2352 active slots, plus the same8 spares.
+This runtime-only preset leaves the shipped predictor files and research presets
+unchanged. Compared with102/74 it removes1176 slots, saving9,773,481,984 bytes
+at8,310,784 bytes/record. The target is110–115 decimal GB combined GPU and host
+serving memory on the SM120 simulation. Actual Spark fit and this allocation's
+KLD are unmeasured; do not attach the published0.0691 KLD to it.
+
+
+## U distribution
+
+`NQ_FLASH_PRESET=spark_128K_U_2352` redistributes the same2352 active floating
+slots using the U layer allocation. jT still selects experts; there
+are zero fixed experts and8 physical spares. `u_distribution.json` records the
+source means, mapping and exact budgets. For each layer, weight=reference mean routed
+projection payload bpw minus1.5. Normalize these weights to2352 and use largest
+remainders (layer ID breaks ties). This is a budget-normalized layer pattern,
+with jT selecting whole-expert1.5/4-bit residency at runtime.
+
+Layer3 gets147 slots; layers4/5 get110/105; layers27–38 mostly29–32;
+layers41–44 get70/91/87/72. The shipped jT policy, refresh, EMA and causal/rejected
+row handling are unchanged. Quality/KLD and native Spark memory fit are unmeasured.
+The matching74/46 total-slot baseline measured113.80 decimal GB combined memory
+at startup on SM120. Verify U peak usage independently under real workloads.
