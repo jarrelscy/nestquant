@@ -31,6 +31,7 @@ case ${1:-help} in
    -e VLLM_API_KEY -e TORCH_CUDA_ARCH_LIST=12.1a -e MAX_JOBS=4 -e OMP_NUM_THREADS=4 \
    -e NQ_FLASH_MODEL=/data/fp8-backbone -e NQ_REPACK=/data/repack-tp1 -e NQ_BUILD=/data/build \
    -e NQ_FLASH_PRESET="${NQ_FLASH_PRESET:-spark_128K}" -e NQ_UNIFIED=1 -e NQ_FLASH_SPARE_SLOTS=8 \
+   -e NQ_FLASH_MLA_CACHE="${NQ_FLASH_MLA_CACHE:-fp8}" \
    -e NQ_FLASH_ROUTING_STATS=/data/routing.json -e NQ_FLASH_TPS="${NQ_FLASH_TPS:-0}" \
    -e NQ_DEFS=NQ_RK_CODES=0x405,NQ_RK_GU=0x5,NQ_RK_DN=0x401,NQ_BK_CODES=0x21,NQ_SWIGLU_LIMIT=10 \
    -v "$DATA/cache:/root/.cache" "$IMAGE" \

@@ -7,6 +7,12 @@ def install():
  import torch
  from nq_flash_attention import install as install_attention
  install_attention()
+ kv_format=os.environ.get("NQ_FLASH_MLA_CACHE", "fp8")
+ if kv_format not in ("fp8", "fp4_g16"):
+  raise ValueError("NQ_FLASH_MLA_CACHE must be fp8 or fp4_g16")
+ if kv_format=="fp4_g16":
+  from nq_flash_fp4_kv import install as install_fp4_kv
+  install_fp4_kv()
  # SM12x DeepGEMM FP8 indexer supports 64-entry pages, not 32.
  # This also makes kpool storage block alignment 4*64 tokens.
  import vllm.utils.deep_gemm as deep_gemm
