@@ -11,12 +11,9 @@ PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
   bytes. The base is always loaded; refinement planes promote an expert to 3 or 4 bit.
 - **Only the hot experts float.** A few experts per layer carry most of each token. A predictor picks that
   hot set and the streamer promotes/demotes planes to match. The rest sit at the 2-bit base.
-- **Predictor.** Prod uses `jF` (joint): a small GPU transformer on v2 salience features, 77 floating
-  experts per layer out of 80 slots, refreshed on a background thread that overlaps decode. A tap scheduler
-  (horizon 64) orders the plane reads. `gbdt` (a GBDT on the same features, 26 fixed + 51 floating) is
-  still available with `NQ_PREDICTOR=gbdt NQ_SLOTS_PER_LAYER=56`; it has not been re-measured on the
-  current config. `NQ_JOINT_FIXED=1` keeps jF but restores the 26 fixed experts (recommended for reasoning,
-  see below).
+- **Predictor.** Production uses GPU jF (joint), **26 fixed + 51 floating** experts per layer,
+  with 56 floating/staging slots. TAP (horizon 64) schedules reads asynchronously.
+  For the historical zero-fixed layout, explicitly set `NQ_JOINT_FIXED=0 NQ_SLOTS_PER_LAYER=80`.
 - **Prefill.** During prefill the pool borrows free KV pages to hold 155 slots per layer and returns them
   for decode. When the KV pool is nearly full, used KV of some layers is parked in host RAM for the borrow.
 - **Layer-major prefill (default on, `NQ_LMPF=1`).** Prompts with at least 32K new tokens run one layer at a
@@ -30,7 +27,7 @@ PRO 6000 (SM120, 96 GB each), TP4 + DCP4, MTP ns=3.
 
 ## Measured
 
-2026-10-03, commit 8c8f9d5, default `./start.sh` config: 1M context (KV pool 1,083,392 tokens),
+2026-10-03, commit 8c8f9d5, historical zero-fixed config (not the current default): 1M context (KV pool 1,083,392 tokens),
 `NQ_UTIL=0.925`, 80 slots/layer, jF predictor, dual-NVMe reads, concurrency 1, MTP ns=3.
 
 | | |
@@ -62,6 +59,25 @@ add+RMSNorm (NCCL alone was 2.5% slower).
 
 ## Run it
 
+The one-command default is the latest full-model TB4 allocation: **26 fixed + 51 floating**, TP4 + DCP4,
+MTP3, FP8 KV, 1,048,576 context and concurrency one. TAP, compiled layer-major prefill, slot borrowing,
+prefill KV offload, asynchronous decode reads, coalesced follower reads and CPU LMCache are enabled.
+Explicit environment overrides remain supported. This targets four **96 GB Blackwell** cards, not RTX 6000 Ada.
+
+Prerequisites: Docker with NVIDIA Container Toolkit, Python 3 with venv/pip, approximately 251 GB host RAM
+as on the reference machine, and at least 437 GB model/record disk space plus caches and results. The optional
+second-drive copy needs additional space for the rank record files. The launcher installs an isolated HF CLI
+if needed. LMCache allows 72 GB host RAM across four ranks; monitor available RAM and leave more than 60 GiB
+available on the reference-size host during long runs.
+
+```bash
+# Optional but recommended: choose large NVMe locations, then reuse these exports on restart.
+export NQ_STATE=/mnt/nvme0/nestquant
+export NQ_REPACK_ALT_DIR=/mnt/nvme1/nestquant-records
+./start.sh config     # resolved settings only; does not print the API key or start GPU work
+./start.sh            # downloads, prepares second copy, builds and waits for readiness
+```
+
 ```bash
 ./start.sh            # fetch what is missing, build kernels, start, wait for /v1/models (up is default)
 ./start.sh smoke      # "The capital of France is ..." coherence check
@@ -87,10 +103,10 @@ OpenAI-compatible on `:8001`, served as `glm-5.3-nq` (alias `local`). Weights:
 
 You supply:
 - 4× RTX PRO 6000 Blackwell (SM120, 96 GB each), records on fast NVMe (~11 GB/s plane-read ceiling);
-- optionally a copy of `rank*.bin`, `rank*.json`, `artifact_stamp.json` on a second NVMe at
-  `NQ_REPACK_ALT_DIR` for dual-drive reads. Without it `start.sh` reads from one drive.
+- optionally a directory on a second NVMe at `NQ_REPACK_ALT_DIR`; the launcher copies the records
+  there automatically before starting workers. Without it, reads use one drive.
 
-Every host path is an env var with a default matching the reference box:
+Host paths default under `$HOME/.local/share/nestquant`. Set `NQ_STATE` to a large writable NVMe filesystem. All individual path overrides still work:
 
 ```bash
 NQ_MODELS_ROOT=/mnt/models NQ_MODEL_DIR=/data/models/glm-5.3-nq-base \
@@ -111,7 +127,7 @@ in flight) leaves a 1.08M-token KV pool.
 
 ```bash
 # ~120 hot experts per layer, context down to 400k
-NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 ./start.sh
+NQ_JOINT_FIXED=0 NQ_SLOTS_PER_LAYER=124 NQ_MAXLEN=400000 ./start.sh
 ```
 
 +44 slots ≈ +8.4 GiB/GPU ≈ 640k tokens, leaving ~440k. Approximate; check the KV pool size in the boot
@@ -120,8 +136,7 @@ log and keep the prefill-peak line a few GiB under 97.9 GB/GPU. If not, trim `NQ
 
 ### Reasoning / agentic use: 26 fixed + 51 floating
 
-For long reasoning and agent runs, keep the 26 boundary-token experts per layer pinned at 4 bit and let
-51 float:
+This is now the default. The equivalent explicit settings keep 26 boundary-token experts per layer pinned at 4 bit and let 51 float:
 
 ```bash
 NQ_JOINT_FIXED=1 NQ_SLOTS_PER_LAYER=56 ./start.sh
@@ -168,3 +183,12 @@ and streaming policy).
 
 Model weights are not in this repo; fitting scripts expect the GLM FP8 experts at
 `/tmp/nestquant/glm53-fp8-experts` (override with `NQ_GLM_SOURCE`).
+
+### Terminal-Bench 4.0
+
+Use the [published Harbor config and instructions](https://huggingface.co/jarrelscy/GLM-5.3-Vision-NestQuant-2-4bit/tree/main/benchmarks/tb4.0).
+The latest attempts used stock Terminus-2, one task at a time, temperature 1.0, top_p 0.95,
+65,536 output tokens per call, and an 8-hour agent timeout. `clear_thinking=true` excludes earlier reasoning
+from later requests; it does not disable reasoning generation. Keep KLD hooks off for normal benchmarks.
+Check the launch summary, startup logs and smoke output before starting Harbor. Monitor host RAM,
+streaming backlog/read errors, hot-expert coverage, MTP acceptance and decode throughput.

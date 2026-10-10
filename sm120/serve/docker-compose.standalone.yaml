@@ -1,7 +1,7 @@
 # Self-contained NestQuant GLM-5.3 serve (OpenAI API on :8001). Started by ../../start.sh.
 #
-# Every default below is the production config (switch.sh glm5.3-nq-jf on the reference box, nestquant main 8c8f9d5):
-# jF predictor, 80 slots/layer (77 floating), tap scheduler, prefill borrow 155, dual-drive reads, step 2 rc decode
+# Defaults match the latest TB4 production allocation (4x 96 GB RTX PRO 6000 Blackwell):
+# jF predictor, 26 fixed + 51 floating (56 floating/staging slots), TAP, prefill borrow 155, step 2 rc decode
 # settings, NQ_TAP_TODO_FIX=2, UTIL 0.925, 1M context, one request slot, MTP ns=3. This file is the one place the
 # defaults live; override any of them from the environment. Host paths are env vars too (see start.sh).
 services:
@@ -64,7 +64,7 @@ services:
       NQ_LAYERS: ${NQ_LAYERS:-3-77}
       NQ_STREAM: ${NQ_STREAM:-1}
       NQ_STATIC_FLOAT: ${NQ_STATIC_FLOAT:-0}
-      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-80}          # 77 floating + 3 for swaps in flight
+      NQ_SLOTS_PER_LAYER: ${NQ_SLOTS_PER_LAYER:-56}          # 51 floating + 5 staging/spare; 26 fixed are separate
       NQ_CAP_GBPS: ${NQ_CAP_GBPS:-0}                         # 0 = uncapped
       NQ_HITS: ${NQ_HITS:-1}
       NQ_POLL_MS: ${NQ_POLL_MS:-4}
@@ -73,7 +73,7 @@ services:
       NQ_SHADOW: ${NQ_SHADOW:-0}
       NQ_HOSTLOOP: ${NQ_HOSTLOOP:-py}
       NQ_RANK_SHARE: ${NQ_RANK_SHARE:-0}
-      # --- I/O: dual = each read goes to the less busy of NQ_REPACK / NQ_REPACK_ALT (start.sh drops to '' without a copy)
+      # --- I/O: start.sh prepares the configured second copy; no second path = single drive
       NQ_IO_MODE: ${NQ_IO_MODE-dual}
       NQ_IO_SPLIT_RANKS: ${NQ_IO_SPLIT_RANKS:-2,3}
       NQ_IO_QD: ${NQ_IO_QD:-8}
@@ -87,7 +87,7 @@ services:
       # --- expert predictor: joint (jF, default) | gbdt | ema ---
       NQ_PREDICTOR: ${NQ_PREDICTOR:-joint}
       NQ_JOINT_HM: ${NQ_JOINT_HM:-0.7}
-      NQ_JOINT_FIXED: ${NQ_JOINT_FIXED:-0}     # 1 = reasoning layout: keep the 26 boundary-token experts/layer fixed at 4 bit + 51 floating; set NQ_SLOTS_PER_LAYER=56
+      NQ_JOINT_FIXED: ${NQ_JOINT_FIXED:-1}     # 1 = reasoning layout: keep the 26 boundary-token experts/layer fixed at 4 bit + 51 floating; set NQ_SLOTS_PER_LAYER=56
       NQ_JOINT_GRAPH: ${NQ_JOINT_GRAPH:-0}
       NQ_JOINT_NET: ${NQ_JOINT_NET:-/nqpred/joint/jF.pt}
       NQ_JOINT_V2: ${NQ_JOINT_V2:-/nqpred/joint/v2_sal_tweedie1.5.txt}
