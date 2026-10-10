@@ -30,6 +30,16 @@
 # API key: VLLM_API_KEY from the environment, else from $NQ_ENV_FILE (default ./.env, gitignored), else no auth.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+# This branch defaults to single-Spark Flash. Explicit 2-4/spark keeps the legacy profiles.
+if [[ ${2:-${NQ_VARIANT:-flash}} == flash ]]; then
+  action=${1:-setup}
+  if [[ $action == setup ]]; then
+    for step in build fetch prepare up; do "$HERE/spark/flash/run_spark.sh" "$step"; done
+  else
+    exec "$HERE/spark/flash/run_spark.sh" "$action"
+  fi
+  exit 0
+fi
 export COMPOSE_FILE="$HERE/sm120/serve/docker-compose.standalone.yaml" COMPOSE_PROJECT_NAME=nestquant
 export NQ_REPO=${NQ_REPO:-$HERE}
 NQ_VARIANT=${2:-${NQ_VARIANT:-2-4}}

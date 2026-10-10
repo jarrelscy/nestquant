@@ -1,6 +1,6 @@
 {
   "source": "vcruz305/RED-SNOW-5.3-FLASH-EXL3-SAGE-2.49bpw",
-  "method": "50% U2630 integer allocation +50% uniform2630/42; largest remainder, ties by ascending layer ID.",
+  "method": "Sweep: alpha=0.5 times U plus (1-alpha) uniform; largest remainder",
   "active_slots": 2630,
   "base_bpw_for_mapping": 1.5,
   "layer_mean_payload_bpw": {
@@ -90,7 +90,5 @@
     "42": 82,
     "43": 80,
     "44": 71
-  },
-  "parent_allocation": "u_distribution_2630.json",
-  "uniform_mix": 0.5
+  }
 }

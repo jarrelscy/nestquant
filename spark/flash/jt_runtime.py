@@ -4,6 +4,10 @@ The predictor has its own CUDA stream and a bounded per-layer sliding KV cache.
 Only verified target rows enter this module; speculative rows stay in RowLedger.
 """
 import contextlib
+import os
+import math
+import pickle
+from functools import partial
 import importlib.util
 import json
 from pathlib import Path
@@ -16,6 +20,21 @@ def module(path,name):
     spec=importlib.util.spec_from_file_location(name,path)
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     return mod
+
+
+def policy_parameters(raw=None):
+    """Explicit experimental overrides; 75/25 every-committed-token serving defaults."""
+    p=dict(mix=.75,hm=4.,G=1,half_life=64.)
+    if raw:
+        overrides=json.loads(raw)
+        if not isinstance(overrides,dict) or set(overrides)-set(p):raise ValueError('Unknown jT override')
+        p.update(overrides)
+    if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in p.values()):
+        raise ValueError('Nonfinite or nonnumeric jT override')
+    if not 0<=p['mix']<=1 or not 0<=p['hm']<=16 or not 1<=p['half_life']<=4096:
+        raise ValueError('jT override outside supported range')
+    if not isinstance(p['G'],int) or not 1<=p['G']<=64:raise ValueError('Invalid refresh interval')
+    return p
 
 
 class IncrementalJT:
@@ -179,11 +198,16 @@ class CommittedPredictor:
         self.n_fixed=sum(self.fixed_counts.values())
         self.defaults,self.fixed_ids=initial_expert_pools(manifest,self.layers,budgets,self.fixed_counts)
         jt=module(pd/'jt/jt_model.py','nq_flash_release_jt')
-        self.policy_cls=module(pd/'jt/policy.py','nq_flash_release_policy').FloatingSet
+        self.parameters=policy_parameters(os.environ.get('NQ_FLASH_JT_PARAMS'))
+        self.policy_cls=partial(module(pd/'jt/policy.py','nq_flash_release_policy').FloatingSet,**self.parameters)
+        self.trace_path=os.environ.get('NQ_FLASH_JT_TRACE')
+        self.trace_request=-1
+        print(json.dumps({'nq_flash_jt_parameters':self.parameters}),flush=True)
         self.net=IncrementalJT(jt.load(pd/'jt',device=device,dtype=dtype),jt.rope)
         self.reset()
 
     def reset(self):
+        self.trace_request=getattr(self,"trace_request",-1)+1
         self.net.reset();self.t=0;self.prepared_t=-1;self.block=None
         self.previous_ids=np.zeros((42,8),np.int64);self.previous_q=np.zeros((42,8),np.float32)
         if getattr(self,'n_fixed',0):
@@ -207,7 +231,8 @@ class CommittedPredictor:
         ema=np.stack([p.state for p in self.policies])
         shares=ema/np.maximum(ema.sum(-1,keepdims=True),1e-30)
         block=np.zeros_like(shares) if self.block is None else self.block
-        return .5*shares+.5*block
+        mix=getattr(self,"parameters",{}).get("mix",.75)
+        return (1-mix)*shares+mix*block
 
     def commit(self,rows):
         # Bound predictor temporaries independently of prefill length.
@@ -219,6 +244,12 @@ class CommittedPredictor:
                 q=np.square(w.astype(np.float32));q/=np.maximum(q.sum(-1,keepdims=True),1e-30)
                 self.previous_ids=ids.copy();self.previous_q=q
             blocks=self.net.predict(tok,np.asarray(prev_ids),np.asarray(prev_q))
+            if getattr(self,'trace_path',None):
+                # Local diagnostic capture; no tokens, bounded to 128 rows per write.
+                # Only committed rows arrive here, preserving rejection semantics.
+                with open(self.trace_path,'ab') as f:
+                    pickle.dump(dict(request=self.trace_request,phase=getattr(self,'trace_phase','unknown'),
+                        rows=[(r[0],r[2],r[3],r[4]) for r in chunk],blocks=blocks),f,protocol=5)
             for row,block in zip(chunk,blocks):
                 pos,token,ids,w,xn=row
                 if pos!=self.t:raise ValueError(f'Predictor row {pos} != committed clock {self.t}')

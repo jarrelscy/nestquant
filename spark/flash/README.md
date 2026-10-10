@@ -1,3 +1,27 @@
+# Current default: 75% jT / 25% EMA
+
+On the `spark-flash` branch, `./start.sh` builds, downloads, prepares and launches
+single-Spark Flash. `./start.sh up` reuses prepared artifacts. Set VLLM_API_KEY
+privately before launch. Explicit legacy profiles remain `./start.sh up 2-4`
+and `./start.sh up spark`; neither is the Flash launcher.
+
+Defaults: flat50 U2630, 526 salience-ranked fixed + 2104 floating experts,
+eight spare slots, jT block prediction mix .75, refresh each committed token,
+EMA half-life64, hysteresis4, MTP2 probabilistic, FP4 MLA,262144 context,
+max_num_seqs1, temperature.7/top_p.95, thinking off. Native pacing is uncapped.
+Override predictor settings with NQ_FLASH_JT_PARAMS JSON. The shipped predictor
+metadata describes the original training/reference policy; runtime overrides
+are logged as nq_flash_jt_parameters. No jMT or single-token urgency is enabled.
+
+Completed80-task/two-repeat SM120 benchmark: TrueScore87.03197, quality84.01199,
+calibration94.80574, reliability88.54626, efficiency100, responsiveness66.91436.
+This was one RTX PRO6000 plus host RAM,35TPS cap; native GB10 performance and
+shared-memory fit remain unverified. These numbers are not a Spark measurement.
+Every-token refresh increased observed SSD demand in six-prompt tests to roughly
+1.5–2.8GB/s. Monitor delivered salience, selected-but-late salience, per-layer
+coverage, outstanding reads, GPU mailbox backlog, host RAM, and emitted TPS.
+A faster refresh is not a guarantee that upgrades arrive in time on Spark.
+
 # Flash serving — U2630 + FP4 default
 
 **GB10/aarch64 execution and unified-memory fit are not yet validated.** The Flash

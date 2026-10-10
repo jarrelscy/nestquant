@@ -24,13 +24,15 @@ case ${1:-help} in
  up)
   [[ $(uname -m) == aarch64 ]] || { echo 'This launcher targets native aarch64 DGX Spark.' >&2; exit 1; }
   [[ -f $DATA/fp8-backbone/config.json && -f $DATA/repack-tp1/rank0.json ]] || { echo 'Run fetch and prepare first.' >&2; exit 1; }
+  jt_params=${NQ_FLASH_JT_PARAMS:-'{"mix":0.75,"G":1,"hm":4.0,"half_life":64.0}'}
   ns=${NUM_SPEC:-2}; [[ $ns == 1 || $ns == 2 ]] || { echo 'NUM_SPEC must be 1 or 2.' >&2; exit 1; }
   # Default KV ceiling is explicit because host-mapped slots consume unified RAM.
   # vLLM must still validate max_model_len; it must not silently shrink the preset.
   docker run -d --name "$NAME" "${common[@]}" --gpus all -p "${NQ_PORT:-8001}:8000" \
    -e VLLM_API_KEY -e TORCH_CUDA_ARCH_LIST=12.1a -e MAX_JOBS=4 -e OMP_NUM_THREADS=4 \
    -e NQ_FLASH_MODEL=/data/fp8-backbone -e NQ_REPACK=/data/repack-tp1 -e NQ_BUILD=/data/build \
-   -e NQ_FLASH_PRESET="${NQ_FLASH_PRESET:-spark_256K_U_2630}" -e NQ_UNIFIED=1 -e NQ_FLASH_SPARE_SLOTS=8 \
+   -e NQ_FLASH_PRESET="${NQ_FLASH_PRESET:-spark_256K_U_2630_flat50}" -e NQ_UNIFIED=1 -e NQ_FLASH_SPARE_SLOTS=8 \
+   -e NQ_FLASH_JT_PARAMS="$jt_params" -e NQ_FLASH_FIXED_FRACTION="${NQ_FLASH_FIXED_FRACTION:-0.2}" \
    -e NQ_FLASH_PREFETCH=throughput -e NQ_FLASH_PREFETCH_MAX_PENDING=64 \
    -e NQ_FLASH_PREFETCH_MAX_DEMOTIONS=32 -e NQ_FLASH_PREFETCH_SECONDS=0.1 \
    -e NQ_FLASH_WAIT_FOR_UPGRADES=0 \
