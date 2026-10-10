@@ -25,6 +25,14 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 export COMPOSE_FILE="$HERE/sm120/serve/docker-compose.standalone.yaml" COMPOSE_PROJECT_NAME=nestquant
 export NQ_REPO=${NQ_REPO:-$HERE}
+# Stateful predictor/streaming setup is validated for one active sequence only.
+case "${1:-up}" in up|config)
+  if [ "${NQ_MAX_NUM_SEQS:-1}" != 1 ] || [ "${MAX_NUM_SEQS:-1}" != 1 ]; then
+    echo "NestQuant serving requires max_num_seqs=1. Unset conflicting NQ_MAX_NUM_SEQS/MAX_NUM_SEQS overrides." >&2
+    exit 2
+  fi ;;
+esac
+export NQ_MAX_NUM_SEQS=1
 export NQ_IMAGE=${NQ_IMAGE:-jarrelscy/glm53-nestquant-sm120:fixes12-mtp-buffer-rng-20260917}
 # Portable host paths. Set NQ_STATE to a large NVMe filesystem before first boot.
 export NQ_STATE=${NQ_STATE:-${HOME}/.local/share/nestquant}

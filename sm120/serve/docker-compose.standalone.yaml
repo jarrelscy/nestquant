@@ -32,7 +32,7 @@ services:
       PARALLEL: ${PARALLEL:-tp4-1m-mtp}              # entrypoint preset: TP4 + DCP4 + MTP
       MAXLEN: ${NQ_MAXLEN:-1048576}
       UTIL: ${NQ_UTIL:-0.925}                        # 0.92 fails the 1M KV check (the FP8 o_proj adds 0.79 GiB/GPU)
-      MAX_NUM_SEQS: ${NQ_MAX_NUM_SEQS:-1}
+      MAX_NUM_SEQS: '1'  # Required: stateful serving supports one active sequence
       MAX_NUM_BATCHED_TOKENS: ${NQ_MNBT:-4096}
       NUM_SPEC: ${NUM_SPEC:-3}
       VLLM_SERVER_DEV_MODE: ${NQ_DEV_MODE:-0}

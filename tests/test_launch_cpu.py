@@ -50,6 +50,14 @@ class LauncherTests(unittest.TestCase):
                       'ENABLE_LMCACHE=1', 'NUM_SPEC=3', 'MAXLEN=1048576', 'MAX_NUM_SEQS=1']:
             self.assertIn(value, out)
 
+    def test_reject_multiple_sequences(self):
+        for key in ('NQ_MAX_NUM_SEQS', 'MAX_NUM_SEQS'):
+            env = dict(os.environ, **{key: '2'})
+            out = subprocess.run(['bash', str(ROOT / 'start.sh'), 'config'],
+                                 env=env, text=True, capture_output=True)
+            self.assertEqual(out.returncode, 2)
+            self.assertIn('requires max_num_seqs=1', out.stderr)
+
     def test_overrides_preserved(self):
         out = self.config(NQ_JOINT_FIXED='0', NQ_SLOTS_PER_LAYER='80', NQ_LMPF='0')
         for value in ['NQ_JOINT_FIXED=0', 'NQ_SLOTS_PER_LAYER=80', 'NQ_LMPF=0', 'NOTE:']:

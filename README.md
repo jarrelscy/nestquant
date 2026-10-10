@@ -62,7 +62,7 @@ add+RMSNorm (NCCL alone was 2.5% slower).
 The one-command default is the latest full-model TB4 allocation: **26 fixed + 51 floating**, TP4 + DCP4,
 MTP3, FP8 KV, 1,048,576 context and concurrency one. TAP, compiled layer-major prefill, slot borrowing,
 prefill KV offload, asynchronous decode reads, coalesced follower reads and CPU LMCache are enabled.
-Explicit environment overrides remain supported. This targets four **96 GB Blackwell** cards, not RTX 6000 Ada.
+**One active sequence is enforced (`--max-num-seqs 1`); conflicting concurrency overrides are rejected.** Other environment overrides remain supported. This targets four **96 GB Blackwell** cards, not RTX 6000 Ada.
 
 Prerequisites: Docker with NVIDIA Container Toolkit, Python 3 with venv/pip, approximately 251 GB host RAM
 as on the reference machine, and at least 437 GB model/record disk space plus caches and results. The optional
