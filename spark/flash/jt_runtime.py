@@ -125,6 +125,43 @@ def fixed_counts_for_fraction(budgets, fraction):
     return counts
 
 
+def initial_expert_pools(manifest, layers, budgets, fixed_counts):
+    """Pin by shipped blended salience; initialize remaining floats by frequency.
+
+    `fixed_set` is the shipped top-K subset, stored in expert-ID order.
+    `score` ranks all experts, allowing a variable per-layer fixed-slot count.
+    Zero-fixed initialization preserves the original n_routed path exactly.
+    """
+    defaults, fixed_ids = [], []
+    for L in layers:
+        counts = np.asarray(manifest['n_routed'][str(L)])
+        if counts.shape != (288,) or not np.isfinite(counts).all():
+            raise ValueError(f'L{L}: invalid routing counts')
+        frequency = np.argsort(-counts, kind='stable')
+        n = fixed_counts[L]
+        if not 0 <= n < budgets[L] <= 288:
+            raise ValueError(f'L{L}: invalid fixed-slot budget')
+        if n:
+            if str(L) not in manifest.get('score', {}):
+                raise ValueError(f'L{L}: missing shipped salience score')
+            scores = np.asarray(manifest['score'][str(L)], dtype=np.float64)
+            if scores.shape != (288,) or not np.isfinite(scores).all() or np.any(scores < 0) or scores.sum() <= 0:
+                raise ValueError(f'L{L}: invalid shipped salience score')
+            ranked = np.argsort(-scores, kind='stable')
+            shipped = manifest.get('fixed_set', {}).get(str(L))
+            if shipped is not None and sorted(shipped) != sorted(ranked[:len(shipped)].tolist()):
+                raise ValueError(f'L{L}: score ranking disagrees with shipped fixed_set')
+            fixed = ranked[:n].copy()
+            floating = frequency[~np.isin(frequency, fixed)][:budgets[L]-n]
+            initial = np.concatenate((fixed, floating))
+        else:
+            fixed = np.empty(0, dtype=np.int64)
+            initial = frequency[:budgets[L]]
+        defaults.append(initial)
+        fixed_ids.append(fixed)
+    return defaults, fixed_ids
+
+
 class CommittedPredictor:
     def __init__(self,root,preset='spark_128K',device='cuda',dtype=torch.float16,n_fixed=0,fixed_fraction=None):
         root=Path(root);pd=root/'serving/predictor'
@@ -135,13 +172,12 @@ class CommittedPredictor:
             if meta.get(k)!=v:raise ValueError(f'Unsupported jT policy {k}: {meta.get(k)}')
         budgets=layer_budgets(meta,preset)
         self.layers=list(range(3,45));self.budgets=budgets
-        counts=json.loads((root/'fixed_set.json').read_text())['n_routed']
-        self.defaults=[np.argsort(-np.asarray(counts[str(L)]),kind='stable')[:budgets[L]] for L in self.layers]
+        manifest=json.loads((root/'fixed_set.json').read_text())
         if not isinstance(n_fixed,int) or not 0<=n_fixed<min(budgets.values()):raise ValueError('Invalid fixed count')
         if fixed_fraction is not None and n_fixed:raise ValueError('Choose fixed count or fraction, not both')
         self.fixed_counts=(fixed_counts_for_fraction(budgets,fixed_fraction) if fixed_fraction is not None else {L:n_fixed for L in self.layers})
         self.n_fixed=sum(self.fixed_counts.values())
-        self.fixed_ids=[d[:self.fixed_counts[L]].copy() for L,d in zip(self.layers,self.defaults)]
+        self.defaults,self.fixed_ids=initial_expert_pools(manifest,self.layers,budgets,self.fixed_counts)
         jt=module(pd/'jt/jt_model.py','nq_flash_release_jt')
         self.policy_cls=module(pd/'jt/policy.py','nq_flash_release_policy').FloatingSet
         self.net=IncrementalJT(jt.load(pd/'jt',device=device,dtype=dtype),jt.rope)

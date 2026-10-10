@@ -55,7 +55,7 @@ class Runtime:
        lookahead_seconds=float(os.environ.get('NQ_FLASH_PREFETCH_SECONDS','0.1')))
   else:s.executor.apply(*s.pool.operations(),s.pool)
   s.started=True;s.drain();s.executor.io_stats("routing_metrics")
-  print(json.dumps({'nq_flash':'ready','active_slots':nactive,'spare_slots':spares,'fixed':s.predictor.n_fixed,'fixed_per_layer':s.predictor.fixed_counts,'floating_slots':nactive-s.predictor.n_fixed,
+  print(json.dumps({'nq_flash':'ready','active_slots':nactive,'spare_slots':spares,'fixed':s.predictor.n_fixed,'fixed_per_layer':s.predictor.fixed_counts,'fixed_ranking':'fixed_set.json:score','fixed_ids':{str(L):ids.tolist() for L,ids in zip(s.predictor.layers,s.predictor.fixed_ids)},'floating_slots':nactive-s.predictor.n_fixed,
         'record_bytes':s.executor.rb,'host_mapped_slots':s.executor.unified,
         'slot_bytes':(nactive+spares)*s.executor.rb,'predictor_bytes':sum(p.numel()*p.element_size() for p in s.predictor.net.model.parameters())}),flush=True)
  def poll(s):
