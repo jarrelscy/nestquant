@@ -203,7 +203,11 @@ class CommittedPredictor:
         self.trace_path=os.environ.get('NQ_FLASH_JT_TRACE')
         self.trace_request=-1
         print(json.dumps({'nq_flash_jt_parameters':self.parameters}),flush=True)
-        self.net=IncrementalJT(jt.load(pd/'jt',device=device,dtype=dtype),jt.rope)
+        if os.environ.get('NQ_FLASH_JMT'):
+            from jmt_runtime import JMTIncremental
+            self.net=JMTIncremental(os.environ['NQ_FLASH_JMT'],device,dtype)
+        else:
+            self.net=IncrementalJT(jt.load(pd/'jt',device=device,dtype=dtype),jt.rope)
         self.reset()
 
     def reset(self):

@@ -18,6 +18,10 @@ class RoutingMetrics:
         self.io = {}
 
     def new_request(self):
+        archive=os.environ.get('NQ_FLASH_REQUEST_METRICS')
+        if archive and self.current:
+            with open(archive,'a') as f:
+                f.write(json.dumps(dict(request=self.requests,updated_at=time.time(),decode=self.summarize(self.current).get('decode_committed'),io=self.io))+'\n')
         self.requests += 1
         self.current = {}
 

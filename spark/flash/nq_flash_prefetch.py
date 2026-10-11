@@ -11,12 +11,15 @@ import numpy as np
 class ThroughputPrefetch:
     def __init__(self, pool, executor, budgets, priority, *, max_pending=64,
                  min_pending=8, max_demotions=32, lookahead_seconds=.1, horizon_tokens=16,
-                 clock=time.monotonic):
+                 clock=time.monotonic, horizon_provider=None, retention_priority=None, paired_retention_priority=None):
         if not 1 <= min_pending <= max_pending or lookahead_seconds <= 0:
             raise ValueError('Invalid prefetch limits')
         if max_demotions < 1:
             raise ValueError('Invalid demotion limit')
         self.pool, self.ex, self.priority = pool, executor, priority
+        self.retention_priority = retention_priority
+        self.paired_retention_priority = paired_retention_priority
+        self.horizon_provider=horizon_provider;self.horizon_blocked=0;self.horizon_protected=0;self.horizon_arrival=None
         self.budgets = np.asarray([budgets[L] for L in pool.layers])
         self.maximum, self.minimum = max_pending, min_pending
         # Demotions await per-layer GPU acknowledgment, not disk service.
@@ -74,6 +77,9 @@ class ThroughputPrefetch:
             self.measure(now)
         limit = self.maximum if bootstrap else self.limit
         pending = int(np.count_nonzero((p.state == 1) | (p.state == 3)))
+        if hasattr(self.ex, 'preloads'):
+            # Reserve the victim acknowledgement before issuing a paired load.
+            pending += sum(tx['phase'] in ('reading','ready') for tx in self.ex.preloads.values())
         # An I/O completion awaiting a layer mailbox is not an outstanding
         # read. Demotions contain no SSD read at all. Bound these separately.
         reads = sum(op[2] == 4 for op in self.ex.ops.values())
@@ -83,14 +89,49 @@ class ThroughputPrefetch:
         self.peak_pending = max(self.peak_pending, reads)
         if room <= 0 and down_room <= 0:
             return
+        # Bounded speculative payload preloading into existing spare slots.
+        # Keep the victim hot; executor publishes a paired switch only when ready.
+        if hasattr(self.ex, 'preload') and not bootstrap and room > 0:
+            score = np.asarray(self.priority(), np.float64)
+            if score.shape != p.state.shape or not np.isfinite(score).all():raise ValueError('Invalid preload priorities')
+            paired_cost = self.paired_retention_priority or self.retention_priority
+            retention = score if paired_cost is None else np.asarray(paired_cost(), np.float64)
+            if retention.shape != p.state.shape or not np.isfinite(retention).all():raise ValueError("Invalid retention priorities")
+            occ = np.count_nonzero(p.state, axis=1)
+            cold = np.argwhere((p.state == 0) & p.wanted)
+            victim_mask = (p.state == 2) & ~p.wanted
+            costs = np.min(np.where(victim_mask, retention, np.inf), axis=1)
+            gains = score[tuple(cold.T)] if len(cold) else np.array([])
+            if self.retention_priority is not None and len(cold):gains = gains-costs[cold[:,0]]
+            order = np.lexsort((cold[:,1],cold[:,0],-gains)) if len(cold) else []
+            for i,e in cold[order]:
+                i,e=int(i),int(e);L=p.layers[i]
+                if room<=0 or pending+2>self.maximum or not self.ex.free:break
+                if L in self.ex.staged_layers or occ[i]!=self.budgets[i] or np.any(p.state[i]==3):continue
+                victims=np.flatnonzero((p.state[i]==2)&~p.wanted[i])
+                if not len(victims):continue
+                victim=int(victims[np.argmin(retention[i,victims])])
+                if self.retention_priority is not None and score[i,e]<=retention[i,victim]:continue
+                self.ex.preload(L,e,victim,p);self.issued+=1;pending+=2;room=min(room-1,self.maximum-pending)
+            down_room=min(down_room,self.maximum-pending)
         occupied = np.count_nonzero(p.state, axis=1)
         free = len(self.ex.free)
         demoting = np.any(p.state == 3, axis=1)
         victim_mask = (p.state == 2) & ~p.wanted
+        horizon=None
+        if self.horizon_provider is not None and not bootstrap:
+            horizon=self.horizon_provider(self.rate,pending,self.tps)
+            if horizon is not None:
+                self.horizon_arrival=horizon['arrival']
+                self.horizon_protected+=int(np.count_nonzero(victim_mask & horizon['protect']))
+                victim_mask &= ~horizon['protect']
         has_victim = np.any(victim_mask, axis=1)
         can_load = (occupied < self.budgets) & (free > 0) & (room > 0)
         can_demote = ((occupied >= self.budgets) & ~demoting & has_victim
                       & (down_room > 0))
+        if hasattr(self.ex, 'staged_layers'):
+            for L in self.ex.staged_layers:
+                can_load[p.li[L]]=False;can_demote[p.li[L]]=False
         # Filter once per layer. A pending mailbox can block hundreds of
         # candidates; rescanning that layer for every expert starves launches.
         candidates = np.argwhere((p.state == 0) & p.wanted
@@ -100,8 +141,16 @@ class ThroughputPrefetch:
         score=np.asarray(self.priority(), np.float64)
         if score.shape != p.state.shape or not np.isfinite(score).all():
             raise ValueError('Invalid committed jT loading priorities')
-        order=np.lexsort((candidates[:,1], candidates[:,0], -score[tuple(candidates.T)]))
-        victims = np.argmin(np.where(victim_mask, score, np.inf), axis=1)
+        eviction_score=score if self.retention_priority is None else np.asarray(self.retention_priority(), np.float64)
+        if eviction_score.shape != p.state.shape or not np.isfinite(eviction_score).all():raise ValueError('Invalid retention priorities')
+        if horizon is not None:eviction_score=horizon['cost']
+        if horizon is not None:score=horizon['gain']
+        gains=score[tuple(candidates.T)]
+        if self.retention_priority is not None and not bootstrap:
+            costs=np.min(np.where(victim_mask,eviction_score,np.inf),axis=1)
+            gains=gains-np.where(occupied[candidates[:,0]]>=self.budgets[candidates[:,0]],costs[candidates[:,0]],0.)
+        order=np.lexsort((candidates[:,1], candidates[:,0], -gains))
+        victims = np.argmin(np.where(victim_mask, eviction_score, np.inf), axis=1)
         ups,downs=[],[]
         for i,e in candidates[order]:
             if room <= 0 and down_room <= 0:
@@ -113,6 +162,9 @@ class ThroughputPrefetch:
                 if not has_victim[i] or demoting[i] or down_room <= 0 or pending >= self.maximum:
                     continue
                 victim=int(victims[i])
+                if (horizon is not None or (self.retention_priority is not None and not bootstrap)) and score[i,e]<=eviction_score[i,victim]:
+                    self.horizon_blocked+=1
+                    continue
                 p.state[i,victim]=3
                 demoting[i]=True
                 downs.append((p.layers[i],victim))
@@ -125,6 +177,7 @@ class ThroughputPrefetch:
                 down_room=min(down_room,self.maximum-pending)
         if ups or downs:
             # No executor slot-wait queue: every admitted read owns a free slot.
+            if p.observer is not None:p.observer.issued_ops(ups,downs)
             self.ex.apply(ups,downs,p)
             self.issued+=len(ups);self.demotions+=len(downs)
             self.peak_pending=max(self.peak_pending,
@@ -132,7 +185,7 @@ class ThroughputPrefetch:
 
     def stats(self):
         p=self.pool
-        return dict(mode='throughput', pending_limit=self.limit,
+        return dict(mode='throughput', horizon_eviction=self.horizon_provider is not None,horizon_arrival=self.horizon_arrival,horizon_blocked=self.horizon_blocked,horizon_protected=self.horizon_protected,pending_limit=self.limit,
                     maximum_pending=self.maximum, maximum_demotions=self.max_demotions, outstanding_reads=sum(op[2] == 4 for op in self.ex.ops.values()),
                     mailbox_pending=len(self.ex.wait_apply),
                     pending_demotions=int(np.count_nonzero(p.state == 3)),

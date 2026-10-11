@@ -15,6 +15,7 @@ class Pool:
         if self.wanted.shape != self.state.shape:
             raise ValueError('Wrong desired-pool shape')
         self.read_errors=0
+        self.observer=None
 
     def operations(self):
         down=np.argwhere((self.state==2)&~self.wanted)
@@ -28,14 +29,17 @@ class Pool:
         i=self.li[L]
         if self.state[i,E]!=1:raise RuntimeError(f'Unexpected landing {L}/{E}')
         self.state[i,E]=2
+        if self.observer is not None:self.observer.event("landed",L,E)
 
     def released(self,L,E):
         i=self.li[L]
         if self.state[i,E]!=3:raise RuntimeError(f'Unexpected release {L}/{E}')
         self.state[i,E]=0
+        if self.observer is not None:self.observer.event("released",L,E)
 
     def failed(self,L,E,read_error=False):
         self.state[self.li[L],E]=0
+        if self.observer is not None:self.observer.event("failed",L,E)
         if read_error:
             self.read_errors+=1
             raise IOError(f'Failed Flash residual read L{L}/E{E}')

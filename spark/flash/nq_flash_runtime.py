@@ -37,13 +37,16 @@ class Runtime:
  def start(s,device):
   from stream_engine import RankFile,unified_default
   from executor import RankExecutor
+  if os.environ.get("NQ_FLASH_SPARE_PRELOAD")=="1":
+   from preload_executor import PreloadExecutor
+   RankExecutor=PreloadExecutor
   validate_repack(os.environ['NQ_REPACK'])
   s.metrics=RoutingMetrics(s.layer_ids,os.environ.get('NQ_FLASH_ROUTING_STATS','/artifacts/nq-flash-routing.json'))
   s.metrics.export(force=True)
   s.predictor=CommittedPredictor(os.environ['NQ_FLASH_MODEL'],os.environ.get('NQ_FLASH_PRESET','spark_128K'),device,n_fixed=int(os.environ.get('NQ_FLASH_FIXED_PER_LAYER','0')),fixed_fraction=os.environ.get('NQ_FLASH_FIXED_FRACTION'))
   s.pool=Pool(s.layer_ids,288,s.predictor.prepare())
   nactive=sum(s.predictor.budgets.values());spares=int(os.environ.get('NQ_FLASH_SPARE_SLOTS','8'))
-  s.prefetch=None
+  s.prefetch=None;s.joint=None;s.hit_trace=None
   mode=os.environ.get('NQ_FLASH_PREFETCH','throughput')
   if mode not in ('throughput','legacy'):raise ValueError('Unknown Flash prefetch mode')
   s.executor=RankExecutor(RankFile(os.environ['NQ_REPACK'],0),s.layers,nactive+spares,
@@ -52,14 +55,52 @@ class Runtime:
    s.prefetch=ThroughputPrefetch(s.pool,s.executor,s.predictor.budgets,s.predictor.loading_priority,
        max_pending=int(os.environ.get('NQ_FLASH_PREFETCH_MAX_PENDING','64')),
        max_demotions=int(os.environ.get('NQ_FLASH_PREFETCH_MAX_DEMOTIONS','32')),
-       lookahead_seconds=float(os.environ.get('NQ_FLASH_PREFETCH_SECONDS','0.1')))
+       lookahead_seconds=float(os.environ.get('NQ_FLASH_PREFETCH_SECONDS','0.1')),horizon_provider=s.horizon_scores if os.environ.get('NQ_FLASH_HORIZON_EVICT','0')=='1' else None)
   else:s.executor.apply(*s.pool.operations(),s.pool)
+  if os.environ.get('NQ_FLASH_JMT_JOINT','0')=='1':
+   if mode!='throughput' or not os.environ.get('NQ_FLASH_JMT'):raise ValueError('Joint policy requires throughput and jMT')
+   from jmt_joint import JointPlanner
+   fixed=np.zeros_like(s.pool.wanted)
+   for i,ids in enumerate(s.predictor.fixed_ids):fixed[i,ids]=True
+   s.joint=JointPlanner(s.pool,[s.predictor.budgets[L] for L in s.layer_ids],fixed,width=int(os.environ.get('NQ_FLASH_JOINT_WIDTH','8')),mix=s.predictor.parameters['mix'],full_horizon=os.environ.get('NQ_FLASH_JOINT_FULL_HORIZON','0')=='1',reload_penalty=float(os.environ.get('NQ_FLASH_JOINT_RELOAD_PENALTY','.5')))
+   if os.environ.get('NQ_FLASH_JMT_BENEFIT') or os.environ.get('NQ_FLASH_JMT_OBJECTIVE')=='hits':
+    if s.predictor.parameters['mix']!=1:raise ValueError('Probability policy requires mix1; shares cannot mix with inclusion probabilities')
+    from jmt_probability_planner import ProbabilityPlanner
+    if os.environ.get("NQ_FLASH_QUEUE_COST", "0")=="1":
+     from jmt_queuecost import QueueCostPlanner as ProbabilityPlanner
+    benefit=s.predictor.net.pool.benefit.detach().cpu().numpy()
+    s.joint=ProbabilityPlanner(s.pool,[s.predictor.budgets[L] for L in s.layer_ids],fixed,benefit,risk=float(os.environ.get('NQ_FLASH_JOINT_RELOAD_PENALTY','.5')))
+   s.pool.observer=s.joint;s.joint.decode=False
+   s.prefetch.priority=lambda:s.joint.priority
+   if hasattr(s.joint,"retention"):s.prefetch.retention_priority=lambda:s.joint.retention
+   if hasattr(s.joint,"paired_retention"):s.prefetch.paired_retention_priority=lambda:s.joint.paired_retention
+  if os.environ.get('NQ_FLASH_HIT_TRACE'):
+   from hit_trace import HitTrace,Observer
+   s.hit_trace=HitTrace(os.environ['NQ_FLASH_HIT_TRACE'],s.pool,s.executor,[s.predictor.budgets[L] for L in s.layer_ids])
+   s.pool.observer=Observer(s.hit_trace,s.pool.observer)
+  if os.environ.get("NQ_DELIVERY_TIMING")=="1":
+   from delivery_timing import PhaseMeter
+   meter=PhaseMeter();s.executor.delivery_meter=meter
+   hooks=[(s,"poll","runtime_poll"),(s,"finish","target_finish_d2h"),(s.predictor,"commit","predictor_commit"),(s.metrics,"add","routing_metrics"),(s.metrics,"export","metrics_export")]
+   if s.prefetch is not None:hooks.append((s.prefetch,"pump","prefetch_pump"))
+   if s.joint is not None:hooks.extend([(s.joint,"plan","joint_plan"),(s.joint,"committed","joint_observe")])
+   if s.hit_trace is not None:hooks.extend([(s.hit_trace,"consume","trace_consume"),(s.hit_trace,"layer","trace_layer_snapshot")])
+   if hasattr(s.executor,"publish_ready"):hooks.append((s.executor,"publish_ready","paired_publication"))
+   for obj,method,label in hooks:meter.wrap(obj,method,label)
   s.started=True;s.drain();s.executor.io_stats("routing_metrics")
   print(json.dumps({'nq_flash':'ready','active_slots':nactive,'spare_slots':spares,'fixed':s.predictor.n_fixed,'fixed_per_layer':s.predictor.fixed_counts,'fixed_ranking':'fixed_set.json:score','fixed_ids':{str(L):ids.tolist() for L,ids in zip(s.predictor.layers,s.predictor.fixed_ids)},'floating_slots':nactive-s.predictor.n_fixed,
         'record_bytes':s.executor.rb,'host_mapped_slots':s.executor.unified,
         'slot_bytes':(nactive+spares)*s.executor.rb,'predictor_bytes':sum(p.numel()*p.element_size() for p in s.predictor.net.model.parameters())}),flush=True)
+ def horizon_scores(s,rate,pending,tps):
+  forecasts=getattr(getattr(s.predictor.net,"pool",None),"forecasts",None)
+  if forecasts is None:return None
+  from horizon_eviction import replacement_scores
+  return replacement_scores(forecasts,np.stack([p.state for p in s.predictor.policies]),s.predictor.parameters['mix'],rate,pending,tps)
  def poll(s):
   s.executor.poll(s.pool)
+  if os.environ.get("NQ_FLASH_EARLY_PUBLISH")=="1" and not s.dummy and hasattr(s,'publication_stream'):
+   if torch.cuda.current_stream().cuda_stream!=s.publication_stream.cuda_stream:raise RuntimeError('Early publication must use target compute stream')
+   s.executor.publish_all_ready(s.pool,getattr(s.joint,"publication_priority",s.joint.priority) if s.joint is not None else s.predictor.loading_priority(),retention=getattr(s.joint,"publication_retention",getattr(s.joint,"retention",None)))
   if s.prefetch is not None:s.prefetch.pump()
  def dispatch(s):
   s.poll()
@@ -77,6 +118,7 @@ class Runtime:
  def begin(s,input_ids,positions):
   s.rows={}
   if s.dummy:return
+  s.publication_stream=torch.cuda.current_stream()
   if torch.cuda.is_current_stream_capturing():raise RuntimeError('Flash predictor history requires eager execution')
   if s.batch is None:raise RuntimeError('Flash worker input hook missing')
   s.metric_skip=any(r.startswith(("_warmup_","_v2_mixed_warmup","_dummy_req_")) for r in s.batch.req_ids)
@@ -86,7 +128,9 @@ class Runtime:
   s.positions=positions[:n].detach().cpu().numpy().copy()
   if s.positions.ndim!=1:raise ValueError('Unsupported multi-axis positions')
   if len(s.positions) and s.positions[0]==0:
-   s.predictor.reset();s.ledger.reset();s.pace_deadline=0.
+   s.predictor.reset();s.ledger.reset();s.pace_deadline=0.;s.feedback_last=None
+   if s.joint is not None:s.joint.reset()
+   if s.hit_trace is not None:s.hit_trace.reset(str(s.batch.req_ids[0]))
    if not s.metric_skip:s.metrics.new_request()
   if s.ledger.pending:
    raise RuntimeError('Previous target rows were not resolved by the sampler hook')
@@ -96,18 +140,28 @@ class Runtime:
    delay=s.pace_deadline-time.monotonic()
    if delay>0:time.sleep(delay)
   s.metric_phase="prefill" if s.batch.has_prefill else "decode"
+  if s.joint is not None:s.joint.decode=not s.batch.has_prefill
+  if s.hit_trace is not None:s.hit_trace.begin(s.predictor,s.batch.has_prefill)
   s.step_started=time.monotonic()
-  s.pool.wanted=s.predictor.prepare();s.dispatch()
+  if hasattr(s.executor,'delivery_meter'):
+   s.delivery_gpu_start=torch.cuda.Event(enable_timing=True);s.delivery_gpu_end=torch.cuda.Event(enable_timing=True)
+   s.delivery_gpu_start.record()
+  if s.joint is None or s.predictor.t==0:s.pool.wanted=s.predictor.prepare()
+  s.dispatch()
   # Diagnostic only: ensure every selected upgrade is ready before verify.
   # Preserve jT selection and active budgets; pay the delivery delay explicitly.
   if not s.batch.has_prefill and os.environ.get('NQ_FLASH_WAIT_FOR_UPGRADES')=='1':
    s.drain()
  def forward(s,L,x,weights,ids):
-  m,mb,_=s.layers[L];s.poll();mb.apply()
+  m,mb,_=s.layers[L];s.poll()
+  if hasattr(s.executor,"publish_ready") and not s.dummy:s.executor.publish_ready(L,s.pool,getattr(s.joint,"publication_priority",s.joint.priority) if s.joint is not None else s.predictor.loading_priority(),retention=getattr(s.joint,"publication_retention",getattr(s.joint,"retention",None)))
+  mb.apply()
+  if s.hit_trace is not None and not s.dummy:s.hit_trace.layer(L)
   xh=x.half().contiguous();rw=weights.half().contiguous();sel=ids.long().contiguous()
   out=m.prefill(xh,sel,rw) if len(x)>8 else m(xh,sel,rw)
   if not s.dummy:
    n=len(s.tokens)
+   if s.hit_trace is not None:s.hit_trace.table[L]=m.table[sel[:n]][...,[0,2,6]].clone()
    # Own the snapshot: routing buffers may be reused by the next layer.
    # IDs are <=287 and exact in float32; one packed D2H at finish avoids
    # three synchronous copies per layer on the eager serving thread.
@@ -118,7 +172,12 @@ class Runtime:
  def finish(s):
   if s.dummy:return
   if set(s.rows)!=set(s.layer_ids):raise RuntimeError('Incomplete target routing rows')
+  if hasattr(s.executor,'delivery_meter'):s.delivery_gpu_end.record()
+  if s.hit_trace is not None:s.trace_tables=torch.stack([s.hit_trace.table[L] for L in s.layer_ids],1).cpu().numpy()
   packed=torch.stack([s.rows[L] for L in s.layer_ids],1).cpu().numpy()
+  if hasattr(s.executor,'delivery_meter'):
+   # Existing D2H above already fences this stream; do not add a GPU sync.
+   samples=getattr(s.executor,'target_stream_ms',[]);samples.append(s.delivery_gpu_start.elapsed_time(s.delivery_gpu_end));s.executor.target_stream_ms=samples[-1024:]
   s.routing_desired=np.take_along_axis(s.pool.wanted[None,:,:],packed[:,:,:8].astype(np.int64),axis=2)
   s.routing_salience=np.square(packed[:,:,8:16].astype(np.float64))*packed[:,:,16:17].astype(np.float64)
   s.routing_hot=packed[:,:,17:25].astype(bool);s.routing_active=packed[:,:,25:33].astype(bool)
@@ -134,12 +193,30 @@ class Runtime:
    if time.monotonic()-s.metrics.last_write>=2:
     s.metrics.io=s.executor.io_stats("routing_metrics")
     s.metrics.io.update(host_mapped_slots=s.executor.unified,mailbox_pending=len(s.executor.wait_apply))
+    if s.joint is not None:s.metrics.io["joint"]=s.joint.stats()
     s.metrics.io["prefetch"]=s.prefetch.stats() if s.prefetch is not None else {"mode":"legacy"}
+    if hasattr(s.predictor.net,"stats"):s.metrics.io["jmt"]=s.predictor.net.stats()
     s.metrics.export()
   rows=s.ledger.accept_before(s.ledger.committed_end+count)
-  s.pool.wanted=s.predictor.commit(rows)
+  if s.hit_trace is not None:s.hit_trace.consume(rows,s.routing_hot[:count],s.trace_tables)
+  if s.joint is not None:s.joint.committed(rows,s.routing_hot,decode=not s.batch.has_prefill)
+  wanted=s.predictor.commit(rows)
+  if s.joint is not None:
+   forecasts=getattr(s.predictor.net.pool,'forecasts',None)
+   if forecasts is None:raise RuntimeError('Missing committed jMT heads')
+   s.pool.wanted=s.joint.plan(forecasts,np.stack([p.state for p in s.predictor.policies]),s.prefetch.rate,sum(op[2]==4 for op in s.executor.ops.values()),s.prefetch.tps)
+  else:s.pool.wanted=wanted
   if s.prefetch is not None and not s.batch.has_prefill:
    s.prefetch.observe_decode(count,time.monotonic()-s.step_started)
+   if hasattr(s.predictor.net,"delivery"):
+    s.predictor.net.delivery(s.prefetch.rate,int(np.count_nonzero((s.pool.state==1)|(s.pool.state==3))),s.prefetch.tps)
+   if hasattr(s.predictor.net,"observe") and not s.metric_skip:
+    now=time.monotonic();previous=getattr(s,"feedback_last",None)
+    dt=now-previous if previous is not None else now-s.step_started
+    s.feedback_last=now
+    sal=np.where(s.routing_active[:count],s.routing_salience[:count],0.)
+    hot=s.routing_hot[:count];wanted=s.routing_desired[:count]
+    s.predictor.net.observe(count,float(sal.sum()),float((sal*hot).sum()),float((sal*wanted*~hot).sum()),dt)
   s.dispatch()
   emitted=int(num_sampled.detach().cpu().reshape(-1)[0])
   if s.tps>0 and not s.batch.has_prefill:s.pace_deadline=s.step_started+emitted/s.tps
