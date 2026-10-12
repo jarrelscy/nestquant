@@ -27,7 +27,7 @@ The measured median positive generation-log interval was **17.2 tokens/s**, with
 
 ## Start on Spark
 
-**Image publication is still pending.** The validated image tag is not yet available from Docker Hub. The steps below document the release procedure, but a fresh installation must wait for the verified ARM64 image digest. No replacement image or superseded launcher is implied.
+The validated **linux/arm64** image is published as `docker.io/jarrelscy/nestquant:spark-flash-jt75-g1-20261011`. The commands below pin its verified immutable digest.
 
 Requirements: native ARM64 Spark, CUDA 13-capable drivers, Docker with GPU support, and at least 400 GB of disk for the checkpoint, packed weights, backbone and caches. The tested memory guard requires host ZFS telemetry at `/proc/spl/kstat/zfs/arcstats`; this recipe fails closed when that source is absent. Other host memory-monitoring environments have not been validated by this run.
 
@@ -36,7 +36,7 @@ git clone --branch spark-flash https://github.com/jarrelscy/nestquant.git
 cd nestquant
 git checkout spark-readfirst-recipe-20261012
 export NQ_FLASH_DATA="$HOME/nq-flash"
-# Set NQ_FLASH_IMAGE to the published, verified linux/arm64 digest when available.
+export NQ_FLASH_IMAGE="docker.io/jarrelscy/nestquant@sha256:3859a4e0018ec915ca0d4a3f9488158026fc2525534051433e2b37a729102364"
 # Set VLLM_API_KEY privately in your environment.
 : "${NQ_FLASH_IMAGE:?Validated image digest is required}"
 : "${VLLM_API_KEY:?Set your serving API key}"
