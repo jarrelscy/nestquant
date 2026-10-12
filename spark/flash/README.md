@@ -34,7 +34,7 @@ Requirements: native ARM64 Spark, CUDA 13-capable drivers, Docker with GPU suppo
 ```bash
 git clone --branch spark-flash https://github.com/jarrelscy/nestquant.git
 cd nestquant
-git checkout spark-readfirst-recipe-20261012
+git checkout spark-readfirst-recipe-20261012-v2
 export NQ_FLASH_DATA="$HOME/nq-flash"
 export NQ_FLASH_IMAGE="docker.io/jarrelscy/nestquant@sha256:3859a4e0018ec915ca0d4a3f9488158026fc2525534051433e2b37a729102364"
 # Set VLLM_API_KEY privately in your environment.

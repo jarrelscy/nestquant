@@ -1,6 +1,7 @@
 import pathlib,json,time,subprocess,os
-p=pathlib.Path(__file__).resolve().parent
-name='nq-wasted-watts-full80-readfirst'
+p=pathlib.Path(os.environ.get('NQ_GUARD_LOG_DIR', str(pathlib.Path(__file__).resolve().parent)))
+p.mkdir(parents=True, exist_ok=True)
+name=os.environ.get('NQ_FLASH_CONTAINER', 'nq-spark-flash')
 low=0;high=0;seen=False;low_since=None;high_since=None
 for i in range(172800):
  row={'time':time.time(),'physical_source':'host ZFS arcstats; namespace PSI separately labeled'}
