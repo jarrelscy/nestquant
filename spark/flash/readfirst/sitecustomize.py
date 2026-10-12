@@ -1,0 +1,2 @@
+import loader_memory_diagnostic
+loader_memory_diagnostic.install()

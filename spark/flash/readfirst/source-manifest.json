@@ -1,0 +1,34 @@
+{
+  "status": "Matched AG02 completed; full benchmark authorized and pending. This is a source snapshot, not production promotion.",
+  "configuration": {
+    "active_slots": 2630,
+    "fixed_fraction": 0.2,
+    "jt_fraction": 0.75,
+    "ema_fraction": 0.25,
+    "update_every_tokens": 1,
+    "mtp": 2,
+    "kv_bytes": 2147483648,
+    "context": 262144,
+    "uncapped": true
+  },
+  "sha256": {
+    "post_layer_publication.py": "1f5d5e732c4df4a3a48fbac7ef998499adeb2ad3029f242af41644299309091c",
+    "guard.py": "b98dd0e6ba8f060731865313b4aeabe6830efe5ff140c70b77cf5a31881888e5",
+    "sitecustomize.py": "93a1861a6ea1d5e4fc96e65ba33d20696d368599a9fca1e5fd892d4212035499",
+    "stream_engine.py": "7c34dfb9ae0ec4177cde33ac6ebdae0a33d55c48da9deb9e81a7137f745d202a",
+    "publication_observer.py": "c1dc1141b86bd56423359413c1baa2fa96295965fd93089db48fe89b1c2a713f",
+    "run_diagnostic.sh": "457201fa6b95c0e4164afb1fb127389d7d2da211336f84b1e9e80396726ce305",
+    "nqstream.cu": "5fa8ebf8d66037c8cfb58bf1df209650b749970e8db17f48d89464ade8be955a",
+    "loader_memory_diagnostic.py": "d9368fb9a186bdcc3541e95133aaec3983ce71fb5a63ef47eb66e8688b4e5edc",
+    "base/run_spark.sh": "8d52d1df33b6cfe8de0823fb1d589c20352c1b4dde6da48bd3b14590d44c736a",
+    "base/jt_runtime.py": "88724f4af59e37885ca0657255cd7ce3d6e01e2a0299d8261c97a23e075d0425",
+    "base/nq_flash_runtime.py": "dbc604ef8528f4036dd56934ff990f5bdb36248df2e6d6163948a40052056f35",
+    "base/Dockerfile": "75ff969d67dfc7a69452437d9cd9b721a71f064900137e5605e85a13006dc16e"
+  },
+  "snapshot_notes": [
+    "base/ preserves runtime files that differ from upstream spark-flash",
+    "Overlay launcher contains original host paths; this snapshot is not a portable release recipe",
+    "base/Dockerfile refers to a separately staged vLLM source archive; no archive or image is included",
+    "Full benchmark results remain private pending review"
+  ]
+}

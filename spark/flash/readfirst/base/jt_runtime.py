@@ -1,0 +1,259 @@
+"""Committed-token jT inference and the unmodified release floating-set policy.
+
+The predictor has its own CUDA stream and a bounded per-layer sliding KV cache.
+Only verified target rows enter this module; speculative rows stay in RowLedger.
+"""
+import contextlib
+import os
+import math
+import pickle
+from functools import partial
+import importlib.util
+import json
+from pathlib import Path
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+
+def module(path,name):
+    spec=importlib.util.spec_from_file_location(name,path)
+    mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+    return mod
+
+
+def policy_parameters(raw=None):
+    """Explicit experimental overrides; release settings remain the default."""
+    p=dict(mix=.5,hm=4.,G=8,half_life=64.)
+    if raw:
+        overrides=json.loads(raw)
+        if not isinstance(overrides,dict) or set(overrides)-set(p):raise ValueError('Unknown jT override')
+        p.update(overrides)
+    if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in p.values()):
+        raise ValueError('Nonfinite or nonnumeric jT override')
+    if not 0<=p['mix']<=1 or not 0<=p['hm']<=16 or not 1<=p['half_life']<=4096:
+        raise ValueError('jT override outside supported range')
+    if not isinstance(p['G'],int) or not 1<=p['G']<=64:raise ValueError('Invalid refresh interval')
+    return p
+
+
+class IncrementalJT:
+    def __init__(self,model,rope):
+        self.model=model;self.rope=rope
+        dev=next(model.parameters()).device
+        self.cuda_stream=torch.cuda.Stream(device=dev) if dev.type=='cuda' else None
+        if self.cuda_stream is not None:self.cuda_stream.wait_stream(torch.cuda.current_stream(dev))
+        self.reset()
+
+    def stream(self):
+        return torch.cuda.stream(self.cuda_stream) if self.cuda_stream is not None else contextlib.nullcontext()
+
+    def reset(self):
+        # All inference/reset calls must be serialized by the owning scheduler.
+        with self.stream():self.cache=[None]*len(self.model.blocks);self.position=0
+
+    @torch.inference_mode()
+    def predict(self,tokens,prev_ids,prev_q):
+        with self.stream():return self._predict(tokens,prev_ids,prev_q)
+
+    def _predict(self,tokens,prev_ids,prev_q):
+        m=self.model;dev=next(m.parameters()).device
+        tok=torch.as_tensor(tokens,dtype=torch.long,device=dev)[None]
+        ids=torch.as_tensor(prev_ids,dtype=torch.long,device=dev)[None]
+        q=torch.as_tensor(prev_q,dtype=m.re.weight.dtype,device=dev)[None]
+        _,T,NL,topk=ids.shape;NE=m.bhead.out_features//NL
+        if T==0:raise ValueError('Empty predictor batch')
+        off=torch.arange(NL,device=dev)[:,None]*NE
+        rout=m.re((ids+off).reshape(T,-1),per_sample_weights=q.reshape(T,-1)).view(1,T,-1)
+        x=m.tp(m.tok(tok))+m.rn(rout)
+        pos=torch.arange(self.position,self.position+T,device=dev)[None]
+        for i,b in enumerate(m.blocks):
+            B,_,D=x.shape
+            q,k,v=b.qkv(b.l1(x)).view(B,T,3,b.nh,D//b.nh).permute(2,0,3,1,4)
+            q,k=self.rope(q,pos),self.rope(k,pos)
+            old=self.cache[i];old_n=0 if old is None else old[0].shape[-2]
+            if old is not None:k=torch.cat((old[0],k),-2);v=torch.cat((old[1],v),-2)
+            kp=torch.arange(self.position-old_n,self.position+T,device=dev)
+            mask=(pos[0,:,None]>=kp)&(pos[0,:,None]-kp<m.win)
+            a=F.scaled_dot_product_attention(q,k,v,attn_mask=mask[None,None])
+            x=x+b.o(a.transpose(1,2).reshape(B,T,D))
+            x=x+b.f2(F.gelu(b.f1(b.l2(x))))
+            keep=m.win-1
+            self.cache[i]=(k[...,-keep:,:].contiguous(),v[...,-keep:,:].contiguous()) if keep else None
+        self.position+=T
+        return m.bhead(m.ln(x)).view(T,NL,NE).float().softmax(-1).cpu().numpy()
+
+
+class RowLedger:
+    """Keep verify rows provisional until the next target start position proves acceptance.
+
+    Example: pending positions [p,p+1]; next target start p+1 commits only p
+    (draft rejected), whereas start p+2 commits both. New requests discard pending
+    rows and reset all predictor state. Prefix-cache restores need saved histories.
+    """
+    def __init__(self):self.pending=[];self.committed_end=0
+    def reset(self):self.pending=[];self.committed_end=0
+    def stage(self,positions,tokens,ids,weights,xn):
+        if self.pending:raise RuntimeError('Resolve pending verify rows before staging more')
+        pos=np.asarray(positions)
+        if len(pos) and not np.array_equal(pos,np.arange(self.committed_end,self.committed_end+len(pos))):
+            raise ValueError('Non-contiguous target rows or missing prefix history')
+        if not all(len(x)==len(pos) for x in (tokens,ids,weights,xn)):
+            raise ValueError('Mismatched routing rows')
+        self.pending=[(int(p),int(t),np.array(i,copy=True),np.array(w,copy=True),np.array(n,copy=True))
+                      for p,t,i,w,n in zip(pos,tokens,ids,weights,xn)]
+    def accept_before(self,next_position):
+        if not self.committed_end<=next_position<=self.committed_end+len(self.pending):
+            raise ValueError('Invalid committed position; preemption/prefix restore needs predictor history')
+        n=next_position-self.committed_end
+        result=self.pending[:n];self.pending=[];self.committed_end=next_position
+        return result
+
+
+def layer_budgets(meta,preset):
+    """Explicit serving presets; do not alter published research allocations."""
+    if preset in ('spark_128K_U_2352','spark_256K_U_2504','spark_256K_U_2630','spark_256K_U_2630_flat50'):
+        total={'spark_128K_U_2352':2352,'spark_256K_U_2504':2504,'spark_256K_U_2630':2630,'spark_256K_U_2630_flat50':2630}[preset]
+        filename=('u_distribution_2630_flat50.json' if preset=='spark_256K_U_2630_flat50' else ('u_distribution.json' if total==2352 else f'u_distribution_{total}.json'))
+        config=json.loads((Path(__file__).with_name(filename)).read_text())
+        budgets={int(L):int(n) for L,n in config['budgets'].items()}
+        if sum(budgets.values())!=total or config['active_slots']!=total:raise ValueError('Wrong U-distribution slot total')
+    else:
+        allocation=({'3-17':74,'18-44':46} if preset=='spark_128K_74_46'
+                    else meta['n_float'][preset])
+        budgets={}
+        for span,n in allocation.items():
+            lo,hi=map(int,span.split('-'))
+            for L in range(lo,hi+1):
+                if L in budgets:raise ValueError('Overlapping predictor allocation')
+                budgets[L]=int(n)
+    if set(budgets)!=set(range(3,45)) or any(not 1<=n<=288 for n in budgets.values()):
+        raise ValueError('Invalid predictor layer allocation')
+    return budgets
+
+
+def fixed_counts_for_fraction(budgets, fraction):
+    """Same fraction per layer, largest-remainder rounding at fixed total."""
+    from fractions import Fraction
+    f=Fraction(str(fraction))
+    if not 0<=f<1:raise ValueError('Fixed fraction must be in [0,1)')
+    raw={L:n*f for L,n in budgets.items()};counts={L:int(v) for L,v in raw.items()}
+    total=int(sum(budgets.values())*f+Fraction(1,2))
+    for L in sorted(raw,key=lambda L:(-(raw[L]-counts[L]),L))[:total-sum(counts.values())]:counts[L]+=1
+    if any(counts[L]>=budgets[L] for L in budgets):raise ValueError('Fixed share must leave floating slots')
+    return counts
+
+
+def initial_expert_pools(manifest, layers, budgets, fixed_counts):
+    """Pin by shipped blended salience; initialize remaining floats by frequency.
+
+    `fixed_set` is the shipped top-K subset, stored in expert-ID order.
+    `score` ranks all experts, allowing a variable per-layer fixed-slot count.
+    Zero-fixed initialization preserves the original n_routed path exactly.
+    """
+    defaults, fixed_ids = [], []
+    for L in layers:
+        counts = np.asarray(manifest['n_routed'][str(L)])
+        if counts.shape != (288,) or not np.isfinite(counts).all():
+            raise ValueError(f'L{L}: invalid routing counts')
+        frequency = np.argsort(-counts, kind='stable')
+        n = fixed_counts[L]
+        if not 0 <= n < budgets[L] <= 288:
+            raise ValueError(f'L{L}: invalid fixed-slot budget')
+        if n:
+            if str(L) not in manifest.get('score', {}):
+                raise ValueError(f'L{L}: missing shipped salience score')
+            scores = np.asarray(manifest['score'][str(L)], dtype=np.float64)
+            if scores.shape != (288,) or not np.isfinite(scores).all() or np.any(scores < 0) or scores.sum() <= 0:
+                raise ValueError(f'L{L}: invalid shipped salience score')
+            ranked = np.argsort(-scores, kind='stable')
+            shipped = manifest.get('fixed_set', {}).get(str(L))
+            if shipped is not None and sorted(shipped) != sorted(ranked[:len(shipped)].tolist()):
+                raise ValueError(f'L{L}: score ranking disagrees with shipped fixed_set')
+            fixed = ranked[:n].copy()
+            floating = frequency[~np.isin(frequency, fixed)][:budgets[L]-n]
+            initial = np.concatenate((fixed, floating))
+        else:
+            fixed = np.empty(0, dtype=np.int64)
+            initial = frequency[:budgets[L]]
+        defaults.append(initial)
+        fixed_ids.append(fixed)
+    return defaults, fixed_ids
+
+
+class CommittedPredictor:
+    def __init__(self,root,preset='spark_128K',device='cuda',dtype=torch.float16,n_fixed=0,fixed_fraction=None):
+        root=Path(root);pd=root/'serving/predictor'
+        meta=json.loads((pd/'predictor.json').read_text())['params']
+        required=dict(n_fixed=0,refresh_tokens=8,hm=4.0,mix_block=0.5,
+                      ema_half_life_tokens=64,block_horizon=16,NE=288,top_k=8)
+        for k,v in required.items():
+            if meta.get(k)!=v:raise ValueError(f'Unsupported jT policy {k}: {meta.get(k)}')
+        budgets=layer_budgets(meta,preset)
+        self.layers=list(range(3,45));self.budgets=budgets
+        manifest=json.loads((root/'fixed_set.json').read_text())
+        if not isinstance(n_fixed,int) or not 0<=n_fixed<min(budgets.values()):raise ValueError('Invalid fixed count')
+        if fixed_fraction is not None and n_fixed:raise ValueError('Choose fixed count or fraction, not both')
+        self.fixed_counts=(fixed_counts_for_fraction(budgets,fixed_fraction) if fixed_fraction is not None else {L:n_fixed for L in self.layers})
+        self.n_fixed=sum(self.fixed_counts.values())
+        self.defaults,self.fixed_ids=initial_expert_pools(manifest,self.layers,budgets,self.fixed_counts)
+        jt=module(pd/'jt/jt_model.py','nq_flash_release_jt')
+        self.parameters=policy_parameters(os.environ.get('NQ_FLASH_JT_PARAMS'))
+        self.policy_cls=partial(module(pd/'jt/policy.py','nq_flash_release_policy').FloatingSet,**self.parameters)
+        self.trace_path=os.environ.get('NQ_FLASH_JT_TRACE')
+        self.trace_request=-1
+        print(json.dumps({'nq_flash_jt_parameters':self.parameters}),flush=True)
+        self.net=IncrementalJT(jt.load(pd/'jt',device=device,dtype=dtype),jt.rope)
+        self.reset()
+
+    def reset(self):
+        self.trace_request=getattr(self,"trace_request",-1)+1
+        self.net.reset();self.t=0;self.prepared_t=-1;self.block=None
+        self.previous_ids=np.zeros((42,8),np.int64);self.previous_q=np.zeros((42,8),np.float32)
+        if getattr(self,'n_fixed',0):
+            from fixed_policy import FixedSetPolicy
+            self.policies=[FixedSetPolicy(self.policy_cls,self.budgets[L],d,f) for L,d,f in zip(self.layers,self.defaults,self.fixed_ids)]
+        else:
+            self.policies=[self.policy_cls(self.budgets[L],d) for L,d in zip(self.layers,self.defaults)]
+        self.prepare()
+
+    def prepare(self):
+        if self.prepared_t!=self.t:
+            for i,p in enumerate(self.policies):p.before_row(None if self.block is None else self.block[i])
+            self.prepared_t=self.t
+        return np.stack([p.cur for p in self.policies])
+
+    def loading_priority(self):
+        """Rank delivery within the chosen pool using committed jT/EMA scores.
+
+        Does not apply a second hysteresis or change FloatingSet membership.
+        """
+        ema=np.stack([p.state for p in self.policies])
+        shares=ema/np.maximum(ema.sum(-1,keepdims=True),1e-30)
+        block=np.zeros_like(shares) if self.block is None else self.block
+        mix=getattr(self,"parameters",{}).get("mix",.5)
+        return (1-mix)*shares+mix*block
+
+    def commit(self,rows):
+        # Bound predictor temporaries independently of prefill length.
+        for start in range(0,len(rows),128):
+            chunk=rows[start:start+128]
+            tok=[];prev_ids=[];prev_q=[]
+            for pos,token,ids,w,xn in chunk:
+                tok.append(token);prev_ids.append(self.previous_ids);prev_q.append(self.previous_q)
+                q=np.square(w.astype(np.float32));q/=np.maximum(q.sum(-1,keepdims=True),1e-30)
+                self.previous_ids=ids.copy();self.previous_q=q
+            blocks=self.net.predict(tok,np.asarray(prev_ids),np.asarray(prev_q))
+            if getattr(self,'trace_path',None):
+                # Local diagnostic capture; no tokens, bounded to 128 rows per write.
+                # Only committed rows arrive here, preserving rejection semantics.
+                with open(self.trace_path,'ab') as f:
+                    pickle.dump(dict(request=self.trace_request,phase=getattr(self,'trace_phase','unknown'),
+                        rows=[(r[0],r[2],r[3],r[4]) for r in chunk],blocks=blocks),f,protocol=5)
+            for row,block in zip(chunk,blocks):
+                pos,token,ids,w,xn=row
+                if pos!=self.t:raise ValueError(f'Predictor row {pos} != committed clock {self.t}')
+                self.prepare()
+                for i,p in enumerate(self.policies):p.after_row(ids[i],w[i],xn[i])
+                self.block=block;self.t+=1
+        return self.prepare()
