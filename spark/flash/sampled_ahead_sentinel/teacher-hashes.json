@@ -1,0 +1,22 @@
+[
+  {
+    "tag": "confirmation-0000",
+    "teacher_sha256": "226b31271d991c3e281a28c66d5c33b7d2a152857ea8846a4d1a43415bf3c5d2",
+    "tokens_file_sha256": "11c149e808853487a7cecc0f81f320b88d4d4b3cf767534a55d06e814445ece4"
+  },
+  {
+    "tag": "confirmation-0001",
+    "teacher_sha256": "264bc7f0cd41f1c49dd4db94e12c1eac54c3083f7989bacf3c11310e871a4ff5",
+    "tokens_file_sha256": "2def7320274445d1cae0c659ff023ac4a6d57a48e876f2218046d79a9e771318"
+  },
+  {
+    "tag": "confirmation-0002",
+    "teacher_sha256": "36ef7cf51de4fd788f3c51c924132bf7db73f98e20ea92e47ca839b6e5414b55",
+    "tokens_file_sha256": "7f2728b782aa53e69dbd8a0457838d0978f0e12ab19bacd79a07c856484de05e"
+  },
+  {
+    "tag": "confirmation-0003",
+    "teacher_sha256": "eb6d329a942d19829b6ed406049e76c3d034e23f922dd95bade99714dcf7d1ae",
+    "tokens_file_sha256": "967f72323c3717cc799478ffc41f598a924ed895da1c591f69f28c83837666eb"
+  }
+]

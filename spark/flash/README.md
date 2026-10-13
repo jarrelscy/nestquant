@@ -1,6 +1,8 @@
 # GLM-5.3-Flash NestQuant — single DGX Spark
 
-**Spark Bench TrueScore: 87.5 · Quality: 85.4 · 160/160 runs completed · Zero errors · PASS**
+**Current accepted runtime:** [sampled-ahead sentinel recipe](sampled_ahead_sentinel/README.md), decode KLD **0.09006744** over all four BF16 confirmation windows and **21.24688 tokens/s** in one 512-token sampled probe. The full SparkBench rerun of this runtime is pending.
+
+**Earlier readfirst Spark Bench TrueScore: 87.5 · Quality: 85.4 · 160/160 runs completed · Zero errors · PASS**
 
 Measured on one native ARM64 DGX Spark GB10 on 2026-10-12: all 80 scenarios, two repeats each, using the official Spark Bench scorer on a separate machine. The run used native uncapped serving and the configuration below.
 
@@ -73,4 +75,4 @@ python -u spark_bench.py eval --endpoint http://127.0.0.1:18975/v1 \
 
 This runs all 80 scenarios with repeat seeds 43 and 44. Generated trajectories can differ despite matched settings. The published evidence includes the exact scorer outputs and per-repeat transcripts, so 87.5 is an observed result, not a promised score for every rerun.
 
-The local SM120 reference scored TrueScore 87.03197 and quality 84.01199 with a 35-token/s cap; it is a different hardware/pacing comparison. Matched Spark decode KLD for the current 75/25 setup is pending measurement.
+The local SM120 reference scored TrueScore 87.03197 and quality 84.01199 with a 35-token/s cap; it is a different hardware/pacing comparison. The accepted sampled-ahead runtime now has a completed four-window decode KLD measurement; see the linked recipe above. Its SparkBench rerun remains pending.
