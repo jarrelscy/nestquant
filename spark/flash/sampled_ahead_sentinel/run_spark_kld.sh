@@ -62,8 +62,8 @@ CHECK_MEMORY
    -e NQ_DEFS=NQ_RK_CODES=0x405,NQ_RK_GU=0x5,NQ_RK_DN=0x401,NQ_BK_CODES=0x21,NQ_SWIGLU_LIMIT=10 \
    -v "$DATA/cache:/root/.cache" "$IMAGE" \
    serve /data/fp8-backbone --served-model-name glm-5.3-flash-nq \
-   --tensor-parallel-size 1 --max-num-seqs 1 --max-model-len "${NQ_MAXLEN:-262144}" \
-   --gpu-memory-utilization 0.50 --kv-cache-memory-bytes "${NQ_KV_BYTES:-2147483648}" \
+   --tensor-parallel-size 1 --max-num-seqs 1 --max-model-len "${NQ_MAXLEN:-131072}" \
+   --gpu-memory-utilization 0.50 --kv-cache-memory-bytes "${NQ_KV_BYTES:-1073741824}" \
    --max-num-batched-tokens 1024 --enforce-eager --no-enable-prefix-caching --kv-cache-dtype fp8 \
    --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$ns,\"draft_sample_method\":\"probabilistic\"}" \
    --chat-template "$chat_template" \
