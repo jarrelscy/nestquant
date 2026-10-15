@@ -15,7 +15,7 @@ try:
   actual=hashlib.sha256(pathlib.Path("/diag",name).read_bytes()).hexdigest();assert actual==want;proof[name]={"origin":"/diag/"+name,"sha256":actual}
  for name,want in {'packet_timing.py': '1119d77107272da87b3edcf335ac25dd77f522f0d770df5ad05bfa28bec1c3ec'}.items():
   actual=hashlib.sha256(pathlib.Path("/diag",name).read_bytes()).hexdigest();assert actual==want;proof[name]={"origin":"/diag/"+name,"sha256":actual}
- for name,want in {'prewarm_mla.py': 'c173bfd9c3a1d779f73a3254af66cb27288660875ffaa3cf7488360ad3aa56b0', 'loader_memory_diagnostic.py': '55a62d1d6350b8b90867fcf2e26803d4705b3b5ee525e83f04d560dd7247ce79'}.items():
+ for name,want in {'prewarm_mla.py': 'c173bfd9c3a1d779f73a3254af66cb27288660875ffaa3cf7488360ad3aa56b0', 'loader_memory_diagnostic.py': 'ba438def6cf5109db09187beddffb3c08a26c7d3eae908f1603493300f5a95c5'}.items():
   actual=hashlib.sha256(pathlib.Path('/diag',name).read_bytes()).hexdigest();assert actual==want,(name,actual);proof[name]={'origin':'/diag/'+name,'sha256':actual}
  indexer_path=pathlib.Path("/opt/vllm/vllm/model_executor/layers/sparse_attn_indexer_kpool.py");indexer_sha=hashlib.sha256(indexer_path.read_bytes()).hexdigest();assert indexer_sha=="62d88a567877c7f22e03dc2eaf860fbaed1b355486ae5c8d088a5cc6693b9758";proof["indexer"]={"origin":str(indexer_path),"sha256":indexer_sha}
  out=pathlib.Path('/data/kld-sampled-ahead-sentinel');out.mkdir(exist_ok=True);(out/f'module-provenance-{os.getpid()}.json').write_text(json.dumps(proof))

@@ -305,6 +305,19 @@ def patch_resident(module):
             experts[E].lr=new;offset+=n
         if offset!=packed.numel():raise RuntimeError('Low-rank compact storage length mismatch')
         print(json.dumps({'nq_resident_lr_compact':True,'time':time.time(),'layer_file':str(path).rsplit('/',1)[-1],'experts':len(experts),'live_experts':len(live),'old_storage_bytes':sum(old_storages.values()),'new_storage_bytes':packed.numel()*packed.element_size(),'saved_bytes':sum(old_storages.values())-packed.numel()*packed.element_size(),'byte_equal':True,'row_alignment_bytes':128}),flush=True)
+        # The mmap-backed CPU tensors are no longer referenced after original()
+        # has copied every resident plane to CUDA.  Evict this clean source file
+        # now instead of accumulating all 42 layer files until first forward;
+        # on a 116 GiB LXC that otherwise consumes the final layer's headroom.
+        import gc,os
+        gc.collect()
+        fd=os.open(path,os.O_RDONLY)
+        try:
+            size=os.fstat(fd).st_size
+            os.posix_fadvise(fd,0,0,os.POSIX_FADV_DONTNEED)
+        finally:
+            os.close(fd)
+        print(json.dumps({'nq_resident_source_cache_release':True,'time':time.time(),'layer_file':str(path).rsplit('/',1)[-1],'file_bytes':size}),flush=True)
         return experts,H,I
     module.load=load
 
