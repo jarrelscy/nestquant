@@ -43,7 +43,7 @@ case ${1:-help} in
   # memory guard or rely on the kernel OOM path.
   sudo -n true >/dev/null 2>&1 || { echo 'Passwordless sudo is required to release build page cache before serving.' >&2; exit 1; }
   sync
-  sudo -n sh -c 'echo 3 > /proc/sys/vm/drop_caches'
+  echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null
   python3 - <<'CHECK_MEMORY'
 import pathlib
 v={s[0]:int(s[2]) for line in pathlib.Path('/proc/spl/kstat/zfs/arcstats').read_text().splitlines()[2:] if len(s:=line.split())==3}
