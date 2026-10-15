@@ -24,7 +24,7 @@ esac
 case ${1:-help} in
  build) docker build -f "$ROOT/spark/flash/Dockerfile" -t "$IMAGE" "$ROOT" ;;
  fetch)
-  docker run "${common[@]}" -e HF_TOKEN --entrypoint python "$IMAGE" -c 'from huggingface_hub import snapshot_download; snapshot_download("jarrelscy/GLM-5.3-Flash-NestQuant-1.5-4bit", revision="4023870a6f2c6097e37fa5d2e54040db64b011e9", local_dir="/data/checkpoint")'
+  docker run "${common[@]}" -e HF_TOKEN --entrypoint python "$IMAGE" -c 'from huggingface_hub import snapshot_download; snapshot_download("jarrelscy/GLM-5.3-Flash-NestQuant-1.5-4bit", revision="4023870a6f2c6097e37fa5d2e54040db64b011e9", local_dir="/data/checkpoint", ignore_patterns=["experiments/**", "evaluations/**"])'
   ;;
  prepare)
   # CPU-only, one layer at a time; do not run concurrently with serving on Spark.
