@@ -5,9 +5,22 @@ ROOT=${NQ_SOURCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
 DATA=${NQ_FLASH_DATA:-$HOME/nq-flash}
 IMAGE=${NQ_FLASH_IMAGE:?Set NQ_FLASH_IMAGE to the published immutable ARM64 digest}
 NAME=${NQ_FLASH_CONTAINER:-nq-spark-flash}
+THINKING=${NQ_THINKING:-off}
 mkdir -p "$DATA"
 DATA=$(cd "$DATA" && pwd)
 common=(--security-opt seccomp=unconfined --cap-add IPC_LOCK --ipc host -v "$DATA:/data")
+case "$THINKING" in
+ on)
+  [[ -f "$ROOT/spark/flash/sampled_ahead_sentinel/thinking_on.jinja" ]] || { echo 'Missing pinned thinking-on template.' >&2; exit 1; }
+  thinking_mount=(-v "$ROOT/spark/flash/sampled_ahead_sentinel/thinking_on.jinja:/diag/thinking_on.jinja:ro")
+  chat_template=/diag/thinking_on.jinja
+  ;;
+ off)
+  thinking_mount=()
+  chat_template=/nq/spark/flash/thinking_off.jinja
+  ;;
+ *) echo 'NQ_THINKING must be on or off.' >&2; exit 2 ;;
+esac
 case ${1:-help} in
  build) docker build -f "$ROOT/spark/flash/Dockerfile" -t "$IMAGE" "$ROOT" ;;
  fetch)
@@ -35,7 +48,7 @@ CHECK_MEMORY
   # Default KV ceiling is explicit because host-mapped slots consume unified RAM.
   # vLLM must still validate max_model_len; it must not silently shrink the preset.
   mkdir -p "$DATA/readfirst-runtime" "$DATA/cache"
-  docker run -d --name "$NAME" -v "$DATA/kld-sampled-ahead-sentinel/startup_sentinel.py:/diag/startup_sentinel.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/sparse_attn_indexer_kpool.py:/opt/vllm/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/packet_timing.py:/diag/packet_timing.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/loader_memory_diagnostic.py:/diag/loader_memory_diagnostic.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/prewarm_mla.py:/diag/prewarm_mla.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/nq_flash_plugin.py:/nq/spark/flash/nq_flash_plugin.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/startup_thp.py:/diag/startup_thp.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/gdn_attn_initcheck.py:/opt/vllm/vllm/v1/attention/backends/gdn_attn.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/runtime.py:/nq/spark/flash/nq_flash_runtime.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/jt_runtime.py:/nq/spark/flash/jt_runtime.py:ro" -v "$DATA/kld-startup-cache/torchinductor_root:/tmp/torchinductor_root" -e TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_root "${common[@]}" --gpus all -p "127.0.0.1:${NQ_PORT:-8001}:8000" \
+  docker run -d --name "$NAME" "${thinking_mount[@]}" -v "$DATA/kld-sampled-ahead-sentinel/startup_sentinel.py:/diag/startup_sentinel.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/sparse_attn_indexer_kpool.py:/opt/vllm/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/packet_timing.py:/diag/packet_timing.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/loader_memory_diagnostic.py:/diag/loader_memory_diagnostic.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/prewarm_mla.py:/diag/prewarm_mla.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/nq_flash_plugin.py:/nq/spark/flash/nq_flash_plugin.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/startup_thp.py:/diag/startup_thp.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/gdn_attn_initcheck.py:/opt/vllm/vllm/v1/attention/backends/gdn_attn.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/runtime.py:/nq/spark/flash/nq_flash_runtime.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/jt_runtime.py:/nq/spark/flash/jt_runtime.py:ro" -v "$DATA/kld-startup-cache/torchinductor_root:/tmp/torchinductor_root" -e TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_root "${common[@]}" --gpus all -p "127.0.0.1:${NQ_PORT:-8001}:8000" \
    -v "$DATA/kld-sampled-ahead-sentinel/sitecustomize.py:/diag/sitecustomize.py:ro" -v "$DATA/kld-sampled-ahead-sentinel/nq_spark_kld.py:/diag/nq_spark_kld.py:ro" -e NQ_KLD_DIR=/data/kld-sampled-ahead-sentinel/output -e NQ_KLD_FKNOB=/data/kld-sampled-ahead-sentinel/force -e NQ_FLASH_JT_TRACE=/data/kld-sampled-ahead-sentinel/jt-trace.pkl -e NQ_KLD_RING=64 -e PYTHONPATH=/diag:/nq/spark/flash -v /proc/spl/kstat/zfs/arcstats:/diag-host-arcstats:ro -e NQ_PUBLICATION_OBSERVER=/data/kld-sampled-ahead-sentinel/publication.jsonl -e VLLM_API_KEY -e TORCH_CUDA_ARCH_LIST=12.1a -e MAX_JOBS=2 -e OMP_NUM_THREADS=4 \
    -e NQ_FLASH_MODEL=/data/fp8-backbone -e NQ_REPACK=/data/repack-tp1 -e NQ_BUILD=/data/build \
    -e NQ_FLASH_PRESET="${NQ_FLASH_PRESET:-spark_256K_U_2630_flat50}" -e NQ_UNIFIED=1 -e NQ_FLASH_SPARE_SLOTS=8 \
@@ -53,7 +66,7 @@ CHECK_MEMORY
    --gpu-memory-utilization 0.50 --kv-cache-memory-bytes "${NQ_KV_BYTES:-2147483648}" \
    --max-num-batched-tokens 1024 --enforce-eager --no-enable-prefix-caching --kv-cache-dtype fp8 \
    --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$ns,\"draft_sample_method\":\"probabilistic\"}" \
-   --chat-template /nq/spark/flash/thinking_off.jinja \
+   --chat-template "$chat_template" \
    --override-generation-config '{"temperature":0.7,"top_p":0.95}' \
    --trust-remote-code --enable-auto-tool-choice --tool-call-parser glm47 --reasoning-parser glm45 \
    --limit-mm-per-prompt '{"image":1,"video":0}'
