@@ -374,11 +374,10 @@ def install():
             or c.parallel_config.decode_context_parallel_size != 1
             or not c.model_config.enforce_eager
             or c.scheduler_config.max_num_seqs != 1
-            or c.cache_config.enable_prefix_caching
             or c.kv_transfer_config is not None
         ):
             raise ValueError(
-                "FP4 MLA requires Flash TP1/DCP1 eager, max-num-seqs 1, no prefix cache or KV connector"
+                "FP4 MLA requires Flash TP1/DCP1 eager, max-num-seqs 1, no KV connector"
             )
         if (
             c.speculative_config is not None

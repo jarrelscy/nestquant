@@ -206,16 +206,65 @@ class CommittedPredictor:
         self.net=IncrementalJT(jt.load(pd/'jt',device=device,dtype=dtype),jt.rope)
         self.reset()
 
+    def _new_policies(self):
+        if getattr(self,'n_fixed',0):
+            from fixed_policy import FixedSetPolicy
+            return [FixedSetPolicy(self.policy_cls,self.budgets[L],d,f) for L,d,f in zip(self.layers,self.defaults,self.fixed_ids)]
+        return [self.policy_cls(self.budgets[L],d) for L,d in zip(self.layers,self.defaults)]
+
     def reset(self):
         self.trace_request=getattr(self,"trace_request",-1)+1
         self.net.reset();self.t=0;self.prepared_t=-1;self.block=None;self.ahead=None;self.ahead_started=False
         self.previous_ids=np.zeros((42,8),np.int64);self.previous_q=np.zeros((42,8),np.float32)
-        if getattr(self,'n_fixed',0):
-            from fixed_policy import FixedSetPolicy
-            self.policies=[FixedSetPolicy(self.policy_cls,self.budgets[L],d,f) for L,d,f in zip(self.layers,self.defaults,self.fixed_ids)]
-        else:
-            self.policies=[self.policy_cls(self.budgets[L],d) for L,d in zip(self.layers,self.defaults)]
+        self.policies=self._new_policies()
         self.prepare()
+
+    def prefix_snapshot(self):
+        return {
+            "t": self.t,
+            "block": None if self.block is None else np.asarray(self.block).copy(),
+            "previous_ids": self.previous_ids.copy(),
+            "previous_q": self.previous_q.copy(),
+            "policy_t": np.asarray([p.t for p in self.policies], np.int64),
+            "policy_state": np.asarray([p.state for p in self.policies], np.float64),
+            "policy_cur": np.asarray([p.cur for p in self.policies], bool),
+            "net_cache": [(None if c is None or c[0].numel()==0 else (c[0].detach().cpu().clone(),c[1].detach().cpu().clone())) for c in self.net.cache],
+        }
+
+    def prefix_restore(self, state):
+        if not isinstance(state, dict) or set(state) != {"t","block","previous_ids","previous_q","policy_t","policy_state","policy_cur","net_cache"}:
+            raise ValueError("Invalid predictor prefix state")
+        t=int(state["t"])
+        if not (self.t == 0 <= t):
+            raise ValueError("Predictor prefix restore requires a fresh request")
+        if np.shape(state["previous_ids"]) != (42,8) or np.shape(state["previous_q"]) != (42,8):
+            raise ValueError("Invalid predictor history shape")
+        cache=state["net_cache"]
+        if len(cache) != len(self.net.cache):
+            raise ValueError("Invalid predictor neural cache length")
+        self.policies=self._new_policies()
+        if len(self.policies) != len(state["policy_t"]):
+            raise ValueError("Invalid policy state length")
+        for p,t_,st,cur in zip(self.policies,state["policy_t"],state["policy_state"],state["policy_cur"]):
+            if np.shape(st) != (288,) or np.shape(cur) != (288,) or int(t_) < 0:
+                raise ValueError("Invalid policy prefix state")
+            p.t=int(t_); p.state=np.asarray(st,np.float64).copy(); p.cur=np.asarray(cur,bool).copy()
+        device=next(self.net.model.parameters()).device
+        self.net.cache=[]
+        for old in cache:
+            if old is None:
+                self.net.cache.append(None)
+            else:
+                k,v=old
+                if k.ndim < 2 or v.ndim < 2 or tuple(k.shape[:-2]) != tuple(v.shape[:-2]) or k.shape[-2:] != v.shape[-2:]:
+                    raise ValueError("Invalid predictor neural cache")
+                self.net.cache.append((k.to(device).clone(),v.to(device).clone()))
+        self.net.position=t
+        self.t=t;self.prepared_t=-1
+        self.block=None if state["block"] is None else np.asarray(state["block"]).copy()
+        self.previous_ids=state["previous_ids"].copy();self.previous_q=state["previous_q"].copy()
+        self.ahead=None;self.ahead_started=False
+        return self.prepare()
 
     def prepare(self):
         if self.prepared_t!=self.t:

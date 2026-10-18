@@ -5,7 +5,7 @@ waiter hung. io_uring/H2D remain asynchronous; mailbox acknowledgments own reuse
 The predictor runs on a dedicated CUDA stream. Graphs and prefix restores are
 explicitly disabled until routing-history buffers support them.
 """
-import os,sys,time,json
+import os,sys,time,json,hashlib
 from pathlib import Path
 import numpy as np
 import torch
@@ -27,7 +27,7 @@ sys.path[:0]=[str(ROOT/'streaming'),str(ROOT/'sm120')]
 class Runtime:
  def __init__(s):
   s.layers={};s.layer_ids=list(range(3,45));s.started=False;s.dummy=True;s.batch=None;s.rows={}
-  s.ledger=RowLedger();s.pace_deadline=0.;s.tps=float(os.environ.get('NQ_FLASH_TPS','0'))
+  s.ledger=RowLedger();s.pace_deadline=0.;s.tps=float(os.environ.get('NQ_FLASH_TPS','0'));s.prefix_states={};s.prefix_capacity=int(os.environ.get('NQ_FLASH_PREFIX_STATES','128'));s.prefix_prompts={};s.prefix_new_request=False
  def add_layer(s,L,device):
   from resident import load
   from moe import MoELayer,Mailbox
@@ -93,12 +93,31 @@ class Runtime:
   s.positions=positions[:n].detach().cpu().numpy().copy()
   if s.positions.ndim!=1:raise ValueError('Unsupported multi-axis positions')
   if len(s.positions) and s.positions[0]==0:
-   s.predictor.reset();s.ledger.reset();s.pace_deadline=0.
+   s.predictor.reset();s.ledger.reset();s.pace_deadline=0.;s.prefix_tokens=[]
+   s.prefix_new_request=False
    if not s.metric_skip:s.metrics.new_request()
   if s.ledger.pending:
    raise RuntimeError('Previous target rows were not resolved by the sampler hook')
-  if len(s.positions) and int(s.positions[0])!=s.ledger.committed_end:
-   raise RuntimeError('Predictor history discontinuity; prefix restores are disabled')
+  cached_tokens=max(0,int(s.batch.num_computed_tokens_np[0]) if len(s.batch.num_computed_tokens_np) else 0) if len(s.positions) else 0
+  if len(s.positions) and cached_tokens>0 and not s.metric_skip and int(s.positions[0])==cached_tokens and s.prefix_new_request:
+   req_ids=list(s.batch.req_ids);req_id=str(req_ids[0]) if req_ids else None
+   prompt_ids=s.prefix_prompts.get(req_id) if req_id is not None else None
+   if prompt_ids is None:raise RuntimeError('Prefix cache hit has no prompt token identity')
+   cached=int(s.positions[0])
+   if len(prompt_ids)<cached_tokens:raise RuntimeError('Prefix cache hit prompt is shorter than computed prefix')
+   prefix_key=hashlib.sha256(np.asarray(prompt_ids[:cached_tokens],dtype=np.int64).tobytes()).hexdigest()
+   state=s.prefix_states.get(prefix_key)
+   if state is None:raise RuntimeError('No exact NestQuant predictor state for cached prefix')
+   s.predictor.reset();s.predictor.prefix_restore({key:value for key,value in state.items() if key!='tokens'})
+   if len(state.get('tokens',()))!=cached_tokens:raise RuntimeError('Saved predictor prefix length mismatch')
+   s.ledger.pending=[];s.ledger.committed_end=cached_tokens
+   s.prefix_tokens=[int(token) for token in state.get('tokens',())]
+   s.prefix_prompts.pop(req_id,None)
+   s.prefix_new_request=False
+   s.metric_skip=False;s.metrics.new_request()
+  cached=max(0,int(s.batch.num_computed_tokens_np[0]) if len(s.batch.num_computed_tokens_np) else 0) if len(s.positions) else 0
+  if not s.metric_skip and cached>int(s.positions[0]):
+   s.ledger.pending=[];s.ledger.committed_end=int(s.positions[0])
   if s.tps>0 and not s.batch.has_prefill:
    delay=s.pace_deadline-time.monotonic()
    if delay>0:time.sleep(delay)
@@ -148,9 +167,20 @@ class Runtime:
   emitted=int(num_sampled.detach().cpu().reshape(-1)[0])
   next_token=known_next_token(sampled_token_ids,emitted)
   s.pool.wanted=s.predictor.commit(rows,next_token=next_token)
-  if s.prefetch is not None and not s.batch.has_prefill:
-   s.prefetch.observe_decode(count,time.monotonic()-s.step_started)
-  s.dispatch()
-  emitted=int(num_sampled.detach().cpu().reshape(-1)[0])
-  if s.tps>0 and not s.batch.has_prefill:s.pace_deadline=s.step_started+emitted/s.tps
+  if not s.metric_skip:
+   committed=s.ledger.committed_end
+   if committed>len(s.prefix_tokens):
+    old_len=len(s.prefix_tokens)
+    if len(rows)!=committed-old_len:raise RuntimeError('Predictor sidecar row ledger mismatch')
+    s.prefix_tokens.extend(int(row[1]) for row in rows)
+   if len(s.prefix_tokens)!=committed:raise RuntimeError('Predictor sidecar token ledger mismatch')
+   while len(s.prefix_states)>=s.prefix_capacity:s.prefix_states.pop(next(iter(s.prefix_states)))
+   prefix_key=hashlib.sha256(np.asarray(s.prefix_tokens,dtype=np.int64).tobytes()).hexdigest()
+   state={'tokens':np.asarray(s.prefix_tokens,dtype=np.int64).copy()}
+   state.update(s.predictor.prefix_snapshot())
+   s.prefix_states[prefix_key]=state
+
+ def note_prefix_prompt(s,req_id,prompt_ids,num_computed_tokens):
+  s.prefix_prompts[str(req_id)]=np.asarray(prompt_ids,dtype=np.int64).copy()
+  s.prefix_new_request=True
 RT=Runtime()

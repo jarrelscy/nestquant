@@ -37,7 +37,6 @@ def install():
    if get_tensor_model_parallel_world_size()!=1 or cfg.parallel_config.enable_expert_parallel or cfg.parallel_config.enable_eplb:
     raise ValueError('Flash streaming currently requires TP1, no EP/EPLB')
    if not cfg.model_config.enforce_eager:raise ValueError('Flash committed routing capture requires --enforce-eager')
-   if cfg.cache_config.enable_prefix_caching:raise ValueError('Flash prefix predictor-history restore is not implemented')
    if cfg.scheduler_config.max_num_seqs!=1:raise ValueError('Flash streaming requires --max-num-seqs 1')
    if cfg.speculative_config is not None and cfg.speculative_config.num_speculative_tokens not in (1,2):
     raise ValueError('Flash MTP port currently supports one or two drafts')
@@ -88,6 +87,34 @@ def install():
  def prepare(self,*a,**kw):
   batch=original_prepare(self,*a,**kw);RT.batch=batch;return batch
  GPUModelRunner.prepare_inputs=prepare
+ original_add_requests=GPUModelRunner.add_requests
+ @functools.wraps(original_add_requests)
+ def add_requests(self,scheduler_output,*a,**kw):
+  original_add_requests(self,scheduler_output,*a,**kw)
+  for new_req_data in scheduler_output.scheduled_new_reqs:
+   prompt_ids=getattr(new_req_data,'prompt_token_ids',None)
+   if prompt_ids is not None:RT.note_prefix_prompt(new_req_data.req_id,prompt_ids,int(new_req_data.num_computed_tokens))
+ GPUModelRunner.add_requests=add_requests
+ original_update=GPUModelRunner.update_requests
+ @functools.wraps(original_update)
+ def update_requests(self,scheduler_output,*a,**kw):
+  original_update(self,scheduler_output,*a,**kw)
+  cached_reqs=getattr(scheduler_output,'scheduled_cached_reqs',None)
+  req_states=getattr(self,'req_states',None)
+  index_map=getattr(req_states,'req_id_to_index',{}) if req_states is not None else {}
+  all_token_ids=getattr(getattr(req_states,'all_token_ids',None),'np',None) if req_states is not None else None
+  prefill_len=getattr(getattr(req_states,'prefill_len',None),'np',None) if req_states is not None else None
+  num_computed=getattr(req_states,'num_computed_tokens',None) if req_states is not None else None
+  req_ids=cached_reqs.req_ids if cached_reqs is not None else list(index_map)
+  if not req_ids:
+   req_ids=[new_req_data.req_id for new_req_data in getattr(scheduler_output,'scheduled_new_reqs',())]
+  for req_id in req_ids:
+   index=index_map.get(req_id) if hasattr(index_map,'get') else None
+   if index is None or all_token_ids is None or prefill_len is None or num_computed is None:continue
+   prompt_len=int(prefill_len[index]); computed=int(num_computed[index])
+   ids=all_token_ids[index][:prompt_len+computed].tolist() if hasattr(all_token_ids,'tolist') else []
+   if ids:RT.note_prefix_prompt(req_id,ids,computed)
+ GPUModelRunner.update_requests=update_requests
  original_sample=GPUModelRunner.sample
  @functools.wraps(original_sample)
  def sample(self,*a,**kw):
