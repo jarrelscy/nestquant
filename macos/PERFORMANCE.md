@@ -218,6 +218,10 @@ Neither accelerator probe executes MTP. The fixed-expert microbenchmark also exc
 
 ## Effective hot coverage and predictor calibration
 
+The published [Spark preset](../spark/flash/run_spark.sh) allocates 2,630 refinement slots using its per-layer distribution. The native Mac experiment scales that distribution to 242 slots with a minimum per layer and integer rounding. Both configure a 20% fixed subset, 75% jT plus 25% exponential moving average, one-token refresh, retention multiplier (1 + 4), and a 64-token EMA half-life. The Mac uses the release-derived [committed predictor](../spark/flash/sampled_ahead_sentinel/jt_runtime.py). It advances the known target token before its forward and commits its routing only after evaluation. Spark's [sampled-ahead runtime](../spark/flash/sampled_ahead_sentinel/runtime.py) also carries the next sampled token ahead and commits accepted verification rows through a ledger.
+
+Spark allows up to 64 pending throughput prefetches and uses separate spare slots. The Mac experiment allows two pending reads on one worker with a 64 MiB staging limit. Both publish only complete refinements and fall back to base precision when a refinement is unavailable. The Mac retains existing rows until a replacement can be installed, with the per-layer budget intact. These differences in capacity, dispatch, and publication prevent a direct comparison of quality or effective hot coverage.
+
 Allocation counts slots among 12,096 experts. Effective hot coverage counts routed expert calls that actually execute at 4-bit. Desired coverage counts routed calls inside the predictor's requested set. These denominators differ.
 
 The [historical intersection analysis](results/effective-hot-historical.json) separates delivery misses from cached hits outside the requested set. In each short 2% run, 976 of 5,040 routed calls were wanted; 934 of those were ready. Another 12 calls used previously cached refinements outside the wanted set. Thus actual coverage was 946/5,040, or 18.77%, and delivery covered 934/976, or 95.70%, of wanted calls. Subtracting desired and actual coverage alone would hide those 12 cached hits.
