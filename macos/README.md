@@ -4,7 +4,7 @@ This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 chec
 
 **Status, 2026-11-05.** The native path reached 3.52 tokens/s on a fixed 128-token replay at 45.73 GiB peak process footprint. The reference reached 1.27 tokens/s on the same inputs at 57.87 GiB. A separate native mixed run passed HumanEval/3 at 2.04 tokens/s. See [measurements and limits](PERFORMANCE.md#matched-native-replay).
 
-The asynchronous path reads refinements in the background and executes the precision that is ready. The grouped reader passed three full-model answer checks and delivered 16.25% actual hot-call coverage. The earlier reader also passed one complete coding task. General quality remains unverified. Accelerator probes remain outside production inference. MTP is not implemented. The unchunked BF16 comparison retains its documented tolerance failure. See the [asynchronous path](ASYNC.md).
+The asynchronous path reads refinements in the background and executes the precision that is ready. The grouped reader passed three full-model answer checks and delivered 16.25% actual hot-call coverage. The earlier reader also passed one complete coding task. The unchunked BF16 comparison retains its documented tolerance failure. See the [asynchronous path](ASYNC.md) and [the separate greedy MTP experiment](#greedy-mtp-experiment).
 
 ## Requirements
 
@@ -143,6 +143,8 @@ The native path is an explicit alternative to the PyTorch reference. Install `ml
 export MODEL="$MODEL_ROOT"
 export BASE_ARCHIVE="$HOME/Models/GLM/resident-banks-v1"
 export BACKBONE_ARCHIVE="$HOME/Models/GLM/backbone-affine8-v1"
+export RESULTS="$PWD/macos-results"
+mkdir -p "$RESULTS"
 uv pip install --python .venv-macos/bin/python -r macos/requirements.txt 'mlx-vlm==0.7.12'
 .venv-macos/bin/python macos/native_assets.py --model "$MODEL" --output-dir "$BASE_ARCHIVE"
 .venv-macos/bin/python macos/native_backbone.py --model "$MODEL" --output-dir "$BACKBONE_ARCHIVE"
@@ -186,6 +188,43 @@ python macos/native_generate.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
 
 See [the measured results](PERFORMANCE.md#base-cache-and-native-execution) for memory accounting, throughput and the constraints on each comparison.
 
+### Loopback chat and prefix reuse
+
+The experimental native server accepts one greedy, non-streaming text request at a time. It binds to loopback. Its OpenAI-compatible routes require a local model ID and send no requests to OpenAI. The server accepts function schemas and renders them with the pinned chat template. It returns model tool calls for the client to execute.
+
+Keep the host memory watchdog active. Start the server with a verified checkpoint and prepared weights.
+
+```sh
+.venv-macos/bin/python macos/native_server.py --model "$MODEL" \
+  --archive "$BASE_ARCHIVE" --backbone "$BACKBONE_ARCHIVE" --port 18085
+curl --fail http://127.0.0.1:18085/v1/models
+curl --fail http://127.0.0.1:18085/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"glm-nestquant-local","temperature":0,"max_tokens":3,"messages":[{"role":"user","content":"Reply with exactly GLM_OK."}]}'
+```
+
+Send the same request again to verify prefix reuse. Check `usage.prompt_tokens_details.cached_tokens` and `timings.computed_prompt_tokens`. Time to first token is measured inside the model. The HTTP server returns the complete response after decode. The cache uses exact rendered token prefixes and keeps attention, recurrent, pooling, and committed predictor state together. Its 512 MiB budget covers retained checkpoints. Requests can still need memory for the active model state.
+
+Add `--refinements` for four-bit prefill and asynchronous mixed decode. Run the state checks with the same model and both prepared directories.
+
+```sh
+.venv-macos/bin/python macos/verify_prefix.py --model "$MODEL" \
+  --archive "$BASE_ARCHIVE" --backbone "$BACKBONE_ARCHIVE" --refinements \
+  --output "$RESULTS/prefix-state.json"
+```
+
+### Greedy MTP experiment
+
+The MTP verifier loads and checks the checkpoint's FP8 draft shards. It runs the native draft head and batches verification with cache rollback. It uses base-only target experts and compares generated tokens with a serial reference. The ordinary mixed CLI and native server do not use MTP.
+
+```sh
+.venv-macos/bin/python macos/verify_mtp.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
+  --backbone "$BACKBONE_ARCHIVE" --mtp 0 --output "$RESULTS/serial.json"
+.venv-macos/bin/python macos/verify_mtp.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
+  --backbone "$BACKBONE_ARCHIVE" --mtp 1 --reference "$RESULTS/serial.json" \
+  --output "$RESULTS/mtp1.json"
+```
+
 ## Benchmark requirements
 
 Verify the checkpoint and run the short answer checks before benchmarking a configuration:
@@ -207,4 +246,4 @@ Keep prompts, output limits, sampling, chunking, cache budgets, and warm-up proc
 
 Reports separate logical tensor reads from process-attributed disk reads. The expert-forward timer includes loading. Reader time can overlap execution and must not be added to elapsed time. Process peaks include model loading and earlier requests. A process restart does not clear the operating-system file cache.
 
-The interface supports one text sequence and greedy generation, with a 4,096-token validation ceiling. Long-context operation, an HTTP endpoint, MTP, vision, audio, and quantized attention caches are not implemented or validated by these benchmarks.
+These reference benchmarks cover one greedy text sequence with a 4,096-token validation ceiling. The native chat and MTP experiments use separate commands and measurements.

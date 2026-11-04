@@ -2202,5 +2202,543 @@
         "baseline_restored": true
       }
     }
+  },
+  "greedy_mtp": {
+    "0": {
+      "prompt_tokens": 19,
+      "generated_ids": [
+        2,
+        425,
+        40216,
+        5755,
+        27715,
+        55339,
+        271,
+        4498,
+        264,
+        425,
+        40216,
+        2150,
+        9041,
+        2480,
+        323,
+        264,
+        501,
+        4343,
+        3880,
+        311,
+        387,
+        21527,
+        11,
+        279
+      ],
+      "ttft_seconds": 13.698604958015494,
+      "decode_seconds": 10.118131666997215,
+      "draft_setup_seconds": null,
+      "decode_tps": 2.2731469363084273,
+      "draft_depth": 0,
+      "accept_lengths": [],
+      "proposal_lengths": [],
+      "memory": {
+        "physical_bytes": 35856675328,
+        "lifetime_physical_peak_bytes": 35856675328,
+        "resident_bytes": 32501039104,
+        "wired_bytes": 10811736064,
+        "mlx_active_bytes": 43754481956,
+        "mlx_peak_bytes": 43881444163,
+        "mlx_cache_bytes": 220793624
+      },
+      "expert_stats": {
+        "forward_to_route_seconds": 4.295017346186796,
+        "hits": 6011,
+        "misses": 1717,
+        "evictions": 24,
+        "read_bytes": 8452314267,
+        "read_seconds": 5.335570078197634,
+        "process_disk_read_bytes": 9100230656
+      },
+      "serial_tokens_identical": true,
+      "supervisor": {
+        "state": "complete",
+        "minimum_free_percent": 38,
+        "last_pressure_level": 1,
+        "peak_observed_footprint_bytes": 35684315504,
+        "baseline_restored": true
+      }
+    },
+    "1": {
+      "prompt_tokens": 19,
+      "generated_ids": [
+        2,
+        425,
+        40216,
+        5755,
+        27715,
+        55339,
+        271,
+        4498,
+        264,
+        425,
+        40216,
+        2150,
+        9041,
+        2480,
+        323,
+        264,
+        501,
+        4343,
+        3880,
+        311,
+        387,
+        21527,
+        11,
+        279
+      ],
+      "ttft_seconds": 12.133889290998923,
+      "decode_seconds": 9.027248459024122,
+      "draft_setup_seconds": 0.9147056250076275,
+      "decode_tps": 2.5478416933354664,
+      "draft_depth": 1,
+      "accept_lengths": [
+        1,
+        1,
+        1,
+        1,
+        0,
+        1,
+        1,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1
+      ],
+      "proposal_lengths": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "memory": {
+        "physical_bytes": 41444226592,
+        "lifetime_physical_peak_bytes": 41534420512,
+        "resident_bytes": 36263198720,
+        "wired_bytes": 15815704576,
+        "mlx_active_bytes": 48521201675,
+        "mlx_peak_bytes": 53909757632,
+        "mlx_cache_bytes": 269711560
+      },
+      "expert_stats": {
+        "forward_to_route_seconds": 3.0168706507829484,
+        "hits": 5616,
+        "misses": 1848,
+        "evictions": 39,
+        "read_bytes": 9097215048,
+        "read_seconds": 5.381238926347578,
+        "process_disk_read_bytes": 9794760704
+      },
+      "serial_tokens_identical": true,
+      "supervisor": {
+        "state": "complete",
+        "minimum_free_percent": 36,
+        "last_pressure_level": 1,
+        "peak_observed_footprint_bytes": 41088660856,
+        "baseline_restored": true
+      }
+    },
+    "2": {
+      "prompt_tokens": 19,
+      "generated_ids": [
+        2,
+        425,
+        40216,
+        5755,
+        27715,
+        55339,
+        271,
+        4498,
+        264,
+        425,
+        40216,
+        2150,
+        9041,
+        2480,
+        323,
+        264,
+        501,
+        4343,
+        3880,
+        311,
+        387,
+        21527,
+        11,
+        279
+      ],
+      "ttft_seconds": 12.918014208989916,
+      "decode_seconds": 16.723599999997532,
+      "draft_setup_seconds": 1.161372125003254,
+      "decode_tps": 1.37530196847589,
+      "draft_depth": 2,
+      "accept_lengths": [
+        2,
+        1,
+        1,
+        1,
+        2,
+        1,
+        0,
+        1,
+        2,
+        2
+      ],
+      "proposal_lengths": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "memory": {
+        "physical_bytes": 41616570104,
+        "lifetime_physical_peak_bytes": 41863624440,
+        "resident_bytes": 35016835072,
+        "wired_bytes": 12707217408,
+        "mlx_active_bytes": 48525681073,
+        "mlx_peak_bytes": 53740606718,
+        "mlx_cache_bytes": 270364549
+      },
+      "expert_stats": {
+        "forward_to_route_seconds": 8.112379919330124,
+        "hits": 6019,
+        "misses": 1901,
+        "evictions": 50,
+        "read_bytes": 9358065507,
+        "read_seconds": 5.711101079301443,
+        "process_disk_read_bytes": 10075967488
+      },
+      "serial_tokens_identical": true,
+      "supervisor": {
+        "state": "complete",
+        "minimum_free_percent": 40,
+        "last_pressure_level": 1,
+        "peak_observed_footprint_bytes": 41863624440,
+        "baseline_restored": true
+      }
+    }
+  },
+  "prefix_state_cases": {
+    "case_results": [
+      {
+        "case": "initial",
+        "input_tokens": 19,
+        "cached_tokens": 0,
+        "computed_tokens": 19,
+        "uncached_seconds": 44.263001957995584,
+        "cached_seconds": 37.37597999998252,
+        "cache_bytes": 298364289,
+        "evictions": 0
+      },
+      {
+        "case": "identical",
+        "input_tokens": 19,
+        "cached_tokens": 19,
+        "computed_tokens": 0,
+        "uncached_seconds": 35.33555708400672,
+        "cached_seconds": 0.007526791014242917,
+        "cache_bytes": 298364289,
+        "evictions": 0
+      },
+      {
+        "case": "shared_suffix",
+        "input_tokens": 19,
+        "cached_tokens": 16,
+        "computed_tokens": 3,
+        "uncached_seconds": 34.47749874999863,
+        "cached_seconds": 8.570124332996784,
+        "cache_bytes": 447637074,
+        "evictions": 0
+      },
+      {
+        "case": "one_before_boundary",
+        "input_tokens": 15,
+        "cached_tokens": 0,
+        "computed_tokens": 15,
+        "uncached_seconds": 24.6560072080174,
+        "cached_seconds": 24.24641883300501,
+        "cache_bytes": 447392550,
+        "evictions": 1
+      },
+      {
+        "case": "on_boundary",
+        "input_tokens": 16,
+        "cached_tokens": 16,
+        "computed_tokens": 0,
+        "uncached_seconds": 24.661933416995453,
+        "cached_seconds": 0.008672708994708955,
+        "cache_bytes": 447392550,
+        "evictions": 1
+      },
+      {
+        "case": "equal_length_other",
+        "input_tokens": 19,
+        "cached_tokens": 0,
+        "computed_tokens": 19,
+        "uncached_seconds": 34.553313124983106,
+        "cached_seconds": 32.57110820800881,
+        "cache_bytes": 447455793,
+        "evictions": 3
+      },
+      {
+        "case": "evicting_other",
+        "input_tokens": 15,
+        "cached_tokens": 0,
+        "computed_tokens": 15,
+        "uncached_seconds": 24.757784792018356,
+        "cached_seconds": 23.898380166996503,
+        "cache_bytes": 447392550,
+        "evictions": 4
+      },
+      {
+        "case": "old_request_evicted",
+        "input_tokens": 19,
+        "cached_tokens": 0,
+        "computed_tokens": 19,
+        "uncached_seconds": 33.596429124998394,
+        "cached_seconds": 32.619800959015265,
+        "cache_bytes": 447392550,
+        "evictions": 6
+      }
+    ],
+    "supervisor_state": "failed",
+    "supervisor_error": "TimeoutError: GLM isolated run exceeded its deadline",
+    "baseline_restored": true
+  },
+  "loopback_prefix_http": {
+    "cold": {
+      "usage": {
+        "prompt_tokens": 180,
+        "completion_tokens": 3,
+        "total_tokens": 183,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "timings": {
+        "ttft_seconds": 52.185943042015424,
+        "elapsed_seconds": 53.32211966702016,
+        "computed_prompt_tokens": 180,
+        "prefix_cache_bytes": 449462556,
+        "prefix_evictions": 3
+      },
+      "choice": {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "GLM_OK"
+        },
+        "finish_reason": "length"
+      }
+    },
+    "identical": {
+      "usage": {
+        "prompt_tokens": 180,
+        "completion_tokens": 3,
+        "total_tokens": 183,
+        "prompt_tokens_details": {
+          "cached_tokens": 180
+        }
+      },
+      "timings": {
+        "ttft_seconds": 0.003445582988206297,
+        "elapsed_seconds": 0.18597870800294913,
+        "computed_prompt_tokens": 0,
+        "prefix_cache_bytes": 449462556,
+        "prefix_evictions": 3
+      },
+      "choice": {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "GLM_OK"
+        },
+        "finish_reason": "length"
+      }
+    },
+    "shared_suffix": {
+      "usage": {
+        "prompt_tokens": 179,
+        "completion_tokens": 2,
+        "total_tokens": 181,
+        "prompt_tokens_details": {
+          "cached_tokens": 160
+        }
+      },
+      "timings": {
+        "ttft_seconds": 1.5643393750069663,
+        "elapsed_seconds": 2.648813167004846,
+        "computed_prompt_tokens": 19,
+        "prefix_cache_bytes": 450071373,
+        "prefix_evictions": 4
+      },
+      "choice": {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "LOCAL_OK"
+        },
+        "finish_reason": "stop"
+      }
+    }
+  },
+  "prefix_eviction_rerun": {
+    "status": "passed",
+    "refinement": true,
+    "results": [
+      {
+        "case": "initial",
+        "input_tokens": 8,
+        "cached_tokens": 0,
+        "computed_tokens": 8,
+        "uncached_seconds": 23.99559466599021,
+        "cached_seconds": 15.784801458998118,
+        "cache_bytes": 148602456,
+        "evictions": 0
+      },
+      {
+        "case": "distinct",
+        "input_tokens": 8,
+        "cached_tokens": 0,
+        "computed_tokens": 8,
+        "uncached_seconds": 19.851262000011047,
+        "cached_seconds": 17.260808458988322,
+        "cache_bytes": 148602456,
+        "evictions": 1
+      },
+      {
+        "case": "old_request_evicted",
+        "input_tokens": 8,
+        "cached_tokens": 0,
+        "computed_tokens": 8,
+        "uncached_seconds": 17.00750016697566,
+        "cached_seconds": 17.55701195797883,
+        "cache_bytes": 148602456,
+        "evictions": 2
+      }
+    ],
+    "memory": {
+      "physical_bytes": 28698796296,
+      "lifetime_physical_peak_bytes": 28712214792,
+      "resident_bytes": 27894005760,
+      "wired_bytes": 1774370816,
+      "mlx_active_bytes": 33898233716,
+      "mlx_peak_bytes": 34046600012,
+      "mlx_cache_bytes": 268034244
+    },
+    "supervisor": {
+      "state": "complete",
+      "baseline_restored": true,
+      "minimum_free_percent": 67,
+      "last_pressure_level": 1,
+      "peak_observed_footprint_bytes": 28712214792
+    }
+  },
+  "loopback_prefix_http_tracked": {
+    "cold": {
+      "usage": {
+        "prompt_tokens": 180,
+        "completion_tokens": 3,
+        "total_tokens": 183,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "timings": {
+        "ttft_seconds": 52.88168037502328,
+        "elapsed_seconds": 54.1327271250193,
+        "computed_prompt_tokens": 180,
+        "prefix_cache_bytes": 449462556,
+        "prefix_evictions": 3
+      },
+      "choice": {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "GLM_OK"
+        },
+        "finish_reason": "length"
+      }
+    },
+    "identical": {
+      "usage": {
+        "prompt_tokens": 180,
+        "completion_tokens": 3,
+        "total_tokens": 183,
+        "prompt_tokens_details": {
+          "cached_tokens": 180
+        }
+      },
+      "timings": {
+        "ttft_seconds": 0.004537000000709668,
+        "elapsed_seconds": 0.20375804201466963,
+        "computed_prompt_tokens": 0,
+        "prefix_cache_bytes": 449462556,
+        "prefix_evictions": 3
+      },
+      "choice": {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "GLM_OK"
+        },
+        "finish_reason": "length"
+      }
+    },
+    "shared_suffix": {
+      "usage": {
+        "prompt_tokens": 179,
+        "completion_tokens": 2,
+        "total_tokens": 181,
+        "prompt_tokens_details": {
+          "cached_tokens": 160
+        }
+      },
+      "timings": {
+        "ttft_seconds": 1.5428106669860426,
+        "elapsed_seconds": 2.7432700420031324,
+        "computed_prompt_tokens": 19,
+        "prefix_cache_bytes": 450071373,
+        "prefix_evictions": 4
+      },
+      "choice": {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "LOCAL_OK"
+        },
+        "finish_reason": "stop"
+      }
+    },
+    "supervisor": {
+      "state": "complete",
+      "baseline_restored": true,
+      "minimum_free_percent": 39,
+      "last_pressure_level": 1,
+      "peak_observed_footprint_bytes": 45164806088
+    }
   }
 }

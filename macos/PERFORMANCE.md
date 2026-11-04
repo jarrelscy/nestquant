@@ -87,6 +87,30 @@ Each row uses the same 34-token prompt, 160 base rows, and a 160-row four-bit sc
 | 8 | 92.54 s | 45.80 s | 145 |
 | 16 | 79.18 s | 44.70 s | 167 |
 
+### Native MTP experiment
+
+The base-only target used 160 rows per layer, the prepared affine-8 backbone, a 19-token prompt, and greedy sampling. The verifier used the checkpoint's actual draft layer with affine-4 prepared weights. The decode measurement includes the draft prompt state and proposal, verification, and rollback work. Weight preparation took 0.91 s for one draft and 1.16 s for two. Each run emitted the same 24 tokens.
+
+| Decode | Tokens/s | Accepted proposals | Accepted per verification round | Peak process footprint |
+|---|---:|---:|---:|---:|
+| Serial | 2.27 | N/A | N/A | 33.39 GiB |
+| One draft | 2.55 | 10/13 | 0.77 | 38.68 GiB |
+| Two drafts | 1.38 | 13/20 | 1.30 | 38.99 GiB |
+
+One draft gained about 12% on this short run. Two drafts slowed it by about 40%. The results validate both acceptance and rejection on one greedy trajectory. They leave mixed-precision speculation, sampled-distribution agreement, and sustained throughput open.
+
+### Loopback prefix experiment
+
+The mixed prefill checks compared logits and complete model and predictor states. An identical 19-token prompt reused all 19 tokens. The shared-suffix case reused 16 and computed three. An equal-length prompt with different tokens missed. The 15-token request also missed the 16-token boundary. The original request recomputed after eviction. All eight checks logged results. The external deadline stopped the child before it wrote the consolidated report. A shorter eviction-only rerun completed normally and preserved exact state across both evictions.
+
+The base-only HTTP test rendered an actual system message and tool schema. Its repeated request returned identical output. These times measure model time to first token, before the non-streaming HTTP response completes.
+
+| Request | Rendered tokens | Reused tokens | Computed tokens | Model time to first token |
+|---|---:|---:|---:|---:|
+| Cold | 180 | 0 | 180 | 52.88 s |
+| Identical | 180 | 180 | 0 | 4.54 ms |
+| Shared suffix | 179 | 160 | 19 | 1.54 s |
+
 ## Grouped expert shard reads
 
 The reader groups adjacent tensor ranges for base loads, synchronous upgrades, and background refinements. All 1,536 sampled expert tensor comparisons matched byte for byte. The test covered three layer 3 experts across eight shards. The sampled read-call counts fell from 408 to 216 for base loads, 360 to 192 for refinements, and 768 to 72 when loading all fields. The separate nine-tensor backbone comparison also matched. The storage and async regression checks passed. See the [real-weight checks](results/grouped-expert-io.json).
@@ -198,7 +222,7 @@ The [historical canonical synchronous benchmark](results/2026-11-04-canonical-ca
 
 The full-base mmap and pread trials stopped under pressure at 42.89 GiB and 78.55 GiB. Neither generated an answer. Their failure receipts remain linked from [the memory procedure](ASYNC.md).
 
-Confidence is high for the recorded measurements and tested correctness checks. General model quality, long-context operation, MTP, and full-model acceleration from Neural Accelerators or the Neural Engine remain unverified. The experimental runtime does not implement MTP.
+Confidence is high for the recorded measurements and tested correctness checks. General model quality, long-context operation, and full-model acceleration from Neural Accelerators or the Neural Engine remain unverified. The [native MTP experiment](#native-mtp-experiment) is separate from these measurements.
 
 ## Accelerator diagnostics
 
@@ -212,7 +236,7 @@ The measurements do not justify integrating either probe into the production pat
 
 ## MTP remains a separate implementation task
 
-The upstream [Spark runtime](../spark/flash/README.md) reports 21.247 tokens/s for one sampled MTP2 probe on its NVIDIA path. The Mac runtime does not implement multi-token prediction (MTP). Its decode adapter accepts one row, and its installed Transformers backbone has no MTP execution path. The checkpoint includes FP8 MTP expert shards, but their presence does not supply draft execution, batched verification, rejected-token cache rollback, or committed predictor updates.
+The upstream [Spark runtime](../spark/flash/README.md) reports 21.247 tokens/s for one sampled MTP2 probe on its NVIDIA path. The Mac reference decoder accepts one row, and its installed Transformers backbone has no MTP execution path. The native base-only verifier runs the real draft and cache rollback. Mixed MTP still needs refinement scheduling and predictor commits for accepted rows.
 
 Neither accelerator probe executes MTP. The fixed-expert microbenchmark also excludes it. A 20-30 tokens/s target on this Mac remains unverified; enabling a configuration flag cannot supply the missing runtime work.
 
