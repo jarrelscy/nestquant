@@ -11,6 +11,7 @@ from safetensors import safe_open
 
 from decoder import projection_matvec, projection_matmul
 from prefetch import BoundedReader
+from positional_reader import PositionalTensorReader
 
 
 class ExpertStore:
@@ -25,7 +26,7 @@ class ExpertStore:
         if async_refinements and (not resident_base or self.cache_budget <= self.staging_budget):
             raise ValueError('Asynchronous refinements require resident base and more than 64 MiB of cache')
         self.cache_limit = self.cache_budget - self.staging_budget
-        self.reader = RefinementReader(root) if async_refinements else None
+        self.reader = RefinementReader(root, use_preadv=True) if async_refinements else None
         self.prefetch = BoundedReader(self.reader.read, self.staging_budget) if self.reader else None
         self.async_targets = set()
         self.async_order = []
@@ -362,13 +363,21 @@ class ExpertStore:
 
 
 class RefinementReader:
-    def __init__(self, root):
+    def __init__(self, root, use_preadv=False):
         self.root = root
+        self.use_preadv = use_preadv
         self.handles = {}
         self.manifests = {}
 
     _manifest = ExpertStore._manifest
-    _handle = ExpertStore._handle
+
+    def _handle(self, layer, shard):
+        if not self.use_preadv:
+            return ExpertStore._handle(self, layer, shard)[0]
+        key = layer, shard
+        if key not in self.handles:
+            self.handles[key] = PositionalTensorReader(self.root / 'layers' / f'L{layer}' / f'tp{shard}.safetensors')
+        return self.handles[key]
 
     def read(self, layer, expert):
         started = time.perf_counter()
@@ -383,7 +392,7 @@ class RefinementReader:
                 fields += ('lrU4',)
             parts = []
             for shard in range(8):
-                handle, _ = self._handle(layer, shard)
+                handle = self._handle(layer, shard)
                 part = {name: handle.get_tensor(f'E{expert}.{projection}.{name}') for name in fields}
                 bytes_read += sum(value.nbytes for value in part.values())
                 parts.append(part)
@@ -410,8 +419,11 @@ class RefinementReader:
         return result, bytes_read, time.perf_counter() - started
 
     def close(self):
-        for handle, _ in self.handles.values():
-            handle.__exit__(None, None, None)
+        for handle in self.handles.values():
+            if self.use_preadv:
+                handle.close()
+            else:
+                handle[0].__exit__(None, None, None)
         self.handles.clear()
 
 
