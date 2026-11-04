@@ -15,11 +15,12 @@ from positional_reader import PositionalTensorReader
 
 class ExpertStore:
     def __init__(self, root: Path, cache_gib: float = 4.0, resident_base: bool = False, async_refinements: bool = False,
-                 base_cache_gib: float | None = None):
+                 base_cache_gib: float | None = None, async_base: bool = False):
         if cache_gib < 0:
             raise ValueError('Expert cache size must be nonnegative')
         self.root = root
         self.memory_check = None
+        self.profile_crossings = False
         self.cache_budget = int(cache_gib * 1024**3)
         self.staging_budget = 64 * 1024**2 if async_refinements else 0
         if async_refinements and (not resident_base or self.cache_budget <= self.staging_budget):
@@ -37,12 +38,21 @@ class ExpertStore:
         if base_cache_gib is not None and (not resident_base or not math.isfinite(base_cache_gib) or base_cache_gib <= 0):
             raise ValueError('A bounded base cache requires resident-base mode and a positive finite budget')
         self.base_cache_limit = int(base_cache_gib * 1024**3) if base_cache_gib is not None else None
+        if async_base and self.base_cache_limit is None:
+            raise ValueError('Asynchronous base reads require a bounded resident base cache')
+        self.base_reader = BaseReader(root) if async_base else None
+        self.base_prefetch = BoundedReader(self.base_reader.read, 64 * 1024**2, max_pending=4) if async_base else None
         self.base_cache = OrderedDict()
         self.base_sizes = {}
         self.base_bytes = 0
         self.handles = {}
         self.manifests = {}
         self.metrics = dict(hits=0, misses=0, load_seconds=0.0, expert_forward_seconds=0.0,
+                            torch_upstream_drain_seconds=0.0, torch_to_host_seconds=0.0, route_bookkeeping_seconds=0.0,
+                            mlx_input_submit_seconds=0.0, mlx_to_host_seconds=0.0,
+                            torch_output_submit_seconds=0.0,
+                            base_async_reads=0, base_async_cancelled=0, base_async_wasted=0,
+                            base_async_worker_seconds=0.0, base_async_wait_seconds=0.0,
                             base_load_seconds=0.0,
                             base_tensor_bytes=0, refinement_tensor_bytes=0, hot_sync_seconds=0.0,
                             base_hits=0, base_misses=0, refinement_hits=0, refinement_misses=0,
@@ -163,13 +173,14 @@ class ExpertStore:
             self.cache_bytes += size
         return result
 
-    def _load(self, layer, expert, level):
+    def _read_expert(self, layer, expert, level):
         manifest = self._manifest(layer)
         projections = ('gate', 'up', 'down')
         fields = ('base', 'var', 'suh2', 'svh2')
         if level == 4:
             fields += ('p4', 'word', 'suh4', 'svh4')
         parts_by_projection = {projection: [] for projection in projections}
+        counts = {'base_tensor_bytes': 0, 'refinement_tensor_bytes': 0}
         for shard in range(8):
             handle = self._handle(layer, shard)
             names = {}
@@ -191,7 +202,7 @@ class ExpertStore:
                 values = {name: tensors[key] for name, key in part.items()}
                 for name, value in values.items():
                     category = 'refinement_tensor_bytes' if name in ('p4', 'word', 'suh4', 'svh4', 'lrU4') else 'base_tensor_bytes'
-                    self.metrics[category] += value.nbytes
+                    counts[category] += value.nbytes
                 parts_by_projection[projection].append(values)
 
         result = {}
@@ -228,10 +239,62 @@ class ExpertStore:
                     raise ValueError('Invalid zero denominator in refinement block')
             if level == 2:
                 merged.update(p4=np.zeros(1, dtype=np.uint8), word=np.zeros(1, dtype=np.int32))
-            result[projection] = ({name: mx.array(value) for name, value in merged.items()}, meta)
+            result[projection] = merged, meta
+        return result, counts
+
+    def _install_expert(self, payload, counts):
+        for name, count in counts.items():
+            self.metrics[name] += count
+        result = {projection: ({name: mx.array(value) for name, value in planes.items()}, meta)
+                  for projection, (planes, meta) in payload.items()}
         arrays = [value for planes, _ in result.values() for value in planes.values()]
         mx.eval(arrays)
         return result
+
+    def _load(self, layer, expert, level):
+        if level == 2 and self.base_prefetch is not None:
+            prepared = []
+            started = time.perf_counter()
+            key = layer, expert
+            pending = key in self.base_prefetch.pending
+
+            def install(value):
+                payload, counts, elapsed = value
+                expected = self.base_payload_bytes(layer, expert)
+                actual = sum(array.nbytes for planes, _ in payload.values() for array in planes.values())
+                if actual != expected:
+                    raise ValueError('Base payload differs from its reserved size')
+                self.metrics['base_async_wait_seconds'] += time.perf_counter() - started
+                self.metrics['base_async_worker_seconds'] += elapsed
+                prepared.append(self._install_expert(payload, counts))
+
+            if self.base_prefetch.consume(key, install):
+                self.metrics['base_async_reads'] += 1
+                return prepared[0]
+            if pending:
+                self.metrics['base_async_cancelled'] += 1
+        return self._install_expert(*self._read_expert(layer, expert, level))
+
+    def base_payload_bytes(self, layer, expert):
+        manifest = self._manifest(layer)
+        ranks = manifest['per_expert'][str(expert)]['lr_rank']
+        size = 0
+        for name, projection in manifest['proj_meta'].items():
+            width = projection['k'] + projection['n']
+            units = projection['tk'] * projection['tn']
+            packed_bytes = 8 * int(projection['base_K'] * 32)
+            size += units * (packed_bytes + 8) + 2 * width * (1 + ranks[name]) + 5
+        return size
+
+    def queue_base(self, layer, experts):
+        if self.base_prefetch is None:
+            return
+        for expert in experts:
+            key = layer, int(expert)
+            if key in self.base_cache or key in self.base_prefetch.pending:
+                continue
+            if not self.base_prefetch.submit(key, self.base_payload_bytes(*key)):
+                return
 
     def _upgrade(self, layer, expert, base):
         reader = RefinementReader(self.root)
@@ -308,6 +371,9 @@ class ExpertStore:
                     break
 
     def finish_decode(self):
+        if self.base_prefetch is not None:
+            self.metrics['base_async_wasted'] += len(self.base_prefetch.pending)
+            self.base_prefetch.discard()
         if self.prefetch is not None:
             def discarded(completed):
                 _, count, elapsed = completed
@@ -343,12 +409,22 @@ class ExpertStore:
 
     def close(self):
         try:
-            if self.prefetch is not None:
-                self.prefetch.close()
+            try:
+                if self.prefetch is not None:
+                    self.prefetch.close()
+            finally:
+                if self.base_prefetch is not None:
+                    self.base_prefetch.close()
         finally:
-            if self.reader is not None:
-                self.reader.close()
-            self._clear()
+            try:
+                if self.reader is not None:
+                    self.reader.close()
+            finally:
+                try:
+                    if self.base_reader is not None:
+                        self.base_reader.close()
+                finally:
+                    self._clear()
 
     def _clear(self):
         self.cache.clear()
@@ -421,6 +497,15 @@ class RefinementReader:
         self.handles.clear()
 
 
+class BaseReader(RefinementReader):
+    _read_expert = ExpertStore._read_expert
+
+    def read(self, layer, expert):
+        started = time.perf_counter()
+        payload, counts = self._read_expert(layer, expert, 2)
+        return payload, counts, time.perf_counter() - started
+
+
 class NestQuantExperts(torch.nn.Module):
     def __init__(self, layer: int, store: ExpertStore, runtime):
         super().__init__()
@@ -431,13 +516,20 @@ class NestQuantExperts(torch.nn.Module):
     def forward(self, hidden_states, top_k_index, top_k_weights):
         if hidden_states.ndim != 2 or hidden_states.shape[1] != 4096:
             raise ValueError('Expected Flash token representations with 4096 channels')
+        started = time.perf_counter()
+        drained = started
+        if self.store.profile_crossings and hidden_states.device.type == 'mps':
+            torch.mps.synchronize()
+            drained = time.perf_counter()
         x_cpu = hidden_states.detach().float().cpu().numpy()
         ids = top_k_index.detach().cpu().numpy()
         weights = top_k_weights.detach().float().cpu().numpy()
+        on_host = time.perf_counter()
         norms = np.square(x_cpu).sum(axis=-1)
         self.runtime.routing[self.layer] = (ids.copy(), weights.copy(), norms)
+        routed = time.perf_counter()
         x = mx.array(x_cpu).astype(mx.float16).astype(mx.float32)
-        started = time.perf_counter()
+        submitted = time.perf_counter()
         if self.runtime.phase == 'prefill':
             result = mx.zeros(hidden_states.shape, dtype=mx.float32)
             for expert in np.unique(ids):
@@ -453,7 +545,8 @@ class NestQuantExperts(torch.nn.Module):
             wanted = self.runtime.wanted[self.layer - 3]
             self.store.poll_refinements()
             outputs = []
-            for expert, weight in zip(ids[0], weights[0]):
+            for position, (expert, weight) in enumerate(zip(ids[0], weights[0])):
+                self.store.queue_base(self.layer, ids[0, position:])
                 desired = bool(wanted[int(expert)])
                 ready = (self.layer, int(expert), 4) in self.store.cache
                 level = 4 if (ready if self.store.prefetch is not None else desired) else 2
@@ -462,8 +555,21 @@ class NestQuantExperts(torch.nn.Module):
                     self.runtime.ready_at_use[self.layer - 3, int(expert)] = level == 4
                 if self.store.prefetch is not None and desired and not ready:
                     self.store.metrics['async_fallbacks'] += 1
-                outputs.append(self.store.apply(self.layer, int(expert), x[0], level) * float(np.float16(weight)))
+                output = self.store.apply(self.layer, int(expert), x[0], level) * float(np.float16(weight))
+                if self.store.base_prefetch is not None:
+                    mx.async_eval(output)
+                outputs.append(output)
             result = mx.stack(outputs).sum(axis=0)[None]
             mx.eval(result)
-        self.store.metrics['expert_forward_seconds'] += time.perf_counter() - started
-        return torch.from_numpy(np.array(result)).to(device=hidden_states.device, dtype=hidden_states.dtype)
+        evaluated = time.perf_counter()
+        host_result = np.array(result)
+        exported = time.perf_counter()
+        output = torch.from_numpy(host_result).to(device=hidden_states.device, dtype=hidden_states.dtype)
+        self.store.metrics['torch_upstream_drain_seconds'] += drained - started
+        self.store.metrics['torch_to_host_seconds'] += on_host - drained
+        self.store.metrics['route_bookkeeping_seconds'] += routed - on_host
+        self.store.metrics['mlx_input_submit_seconds'] += submitted - routed
+        self.store.metrics['expert_forward_seconds'] += evaluated - submitted
+        self.store.metrics['mlx_to_host_seconds'] += exported - evaluated
+        self.store.metrics['torch_output_submit_seconds'] += time.perf_counter() - exported
+        return output

@@ -46,3 +46,20 @@ def configure_slots(predictor, module, root: Path, fraction: float):
     predictor.defaults, predictor.fixed_ids = module.initial_expert_pools(
         manifest, predictor.layers, predictor.budgets, predictor.fixed_counts)
     predictor.reset()
+
+
+def predictor_memory(predictor):
+    def storage_bytes(tensors):
+        storages = {}
+        for tensor in tensors:
+            storage = tensor.untyped_storage()
+            storages[storage.data_ptr()] = storage.nbytes()
+        return sum(storages.values())
+
+    model = predictor.net.model
+    history = [tensor for pair in predictor.net.cache if pair is not None for tensor in pair]
+    policy = [predictor.previous_ids, predictor.previous_q, predictor.block,
+              *predictor.defaults, *predictor.fixed_ids, *(p.state for p in predictor.policies)]
+    return dict(model_bytes=storage_bytes([*model.parameters(), *model.buffers()]),
+                attention_history_bytes=storage_bytes(history),
+                policy_array_bytes=sum(x.nbytes for x in policy if x is not None))

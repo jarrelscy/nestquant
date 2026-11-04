@@ -22,7 +22,7 @@ from checkpoint import validate
 class Runtime:
     def __init__(self, root: Path, cache_gib: float = 4, device: str = 'mps', hot_fraction: float = 2630 / 12096,
                  resident_base: bool = False, resident_hot: bool = False, wired_memory: bool = False, async_refinements: bool = False, memory_limit_gib: float = 84,
-                 base_cache_gib: float | None = None):
+                 base_cache_gib: float | None = None, async_base: bool = False):
         if device == 'mps' and not torch.backends.mps.is_available():
             raise RuntimeError('PyTorch MPS is unavailable')
         if not 2 / 288 <= hot_fraction <= 1:
@@ -44,7 +44,7 @@ class Runtime:
         self.routing = {}
         self.wanted = np.zeros((42, 288), dtype=bool)
         self.store = ExpertStore(root, cache_gib, resident_base=resident_base, async_refinements=async_refinements,
-                                 base_cache_gib=base_cache_gib)
+                                 base_cache_gib=base_cache_gib, async_base=async_base)
         self.store.memory_check = self.memory_guard.check
         predictor_module, self.predictor_staging = staged_predictor()
 
@@ -211,6 +211,8 @@ class Runtime:
             ),
             expert_cache_bytes=dict(limit=self.store.cache_budget, resident_limit=self.store.cache_limit,
                                     staging_reserved=self.store.staging_budget,
+                                    base_staging_reserved=self.store.base_prefetch.budget_bytes if self.store.base_prefetch else 0,
+                                    base_staging_peak=self.store.base_prefetch.peak_reserved_bytes if self.store.base_prefetch else 0,
                                     peak_staging_reserved=self.store.prefetch.peak_reserved_bytes if self.store.prefetch else 0,
                                     after_prefill=cache_bytes_after_prefill,
                                     after_decode=self.store.cache_bytes, resident_base=self.store.base_bytes,
@@ -227,11 +229,13 @@ class Runtime:
                         prefill_bits=4, prefill_chunk_size=prefill_chunk_size, resident_base=self.store.resident_base,
                         resident_hot=self.resident_hot, hot_set_capacity_bytes=self.hot_set_capacity_bytes,
                         wired_memory=self.wired_memory, async_refinements=self.async_refinements,
+                        async_base=self.store.base_prefetch is not None,
                         base_cache_gib=self.store.base_cache_limit / 1024**3 if self.store.base_cache_limit is not None else None,
                         process_memory_limit_bytes=self.memory_guard.limit_bytes),
             limitations=['text only', 'single sequence', '4096 token validation ceiling', 'no speculative decoding',
                          'synchronous prefill SSD reads', 'readiness-dependent decode precision' if self.async_refinements else 'synchronous decode SSD reads', 'greedy sampling', 'unquantized attention cache']
-                        + (['synchronous base-cache misses'] if self.store.base_cache_limit is not None else []),
+                        + (['overlapped base-cache misses with synchronous fallback'] if self.store.base_prefetch
+                           else ['synchronous base-cache misses'] if self.store.base_cache_limit is not None else []),
         )
 
     def close(self):
@@ -255,6 +259,7 @@ def main():
     parser.add_argument('--base-cache-gib', type=float, help='Bound base residency and load misses synchronously on demand instead of preloading all experts')
     parser.add_argument('--resident-hot', action='store_true', help='Keep every predicted hot refinement resident; requires resident base and sufficient cache')
     parser.add_argument('--async-refinements', action='store_true')
+    parser.add_argument('--async-base', action='store_true')
     parser.add_argument('--memory-limit-gib', type=float, default=84)
     parser.add_argument('--wired-memory', action='store_true', help='Keep MLX allocations resident up to the device recommended working set')
     parser.add_argument('--hot-fraction', type=float, default=2630 / 12096)
@@ -269,7 +274,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(8)
     mx.set_cache_limit(1024**3)
-    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base, args.resident_hot, args.wired_memory, args.async_refinements, args.memory_limit_gib, args.base_cache_gib)
+    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base, args.resident_hot, args.wired_memory, args.async_refinements, args.memory_limit_gib, args.base_cache_gib, async_base=args.async_base)
     try:
         report = runtime.generate(args.prompt, args.max_tokens, args.raw, args.thinking, args.prefill_chunk_size)
         args.output.write_text(json.dumps(report, indent=2) + '\n')

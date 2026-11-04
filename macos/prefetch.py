@@ -19,7 +19,7 @@ class BoundedReader:
         # Reserve the shard copies, merged arrays, and installation copy together.
         reservation = 3 * payload_bytes + 1024**2
         if reservation > self.budget_bytes:
-            raise ValueError('One refinement exceeds the read-ahead staging budget')
+            raise ValueError('One expert exceeds the read-ahead staging budget')
         if key in self.pending or len(self.pending) >= self.max_pending:
             return False
         if self.reserved_bytes + reservation > self.budget_bytes:
@@ -44,6 +44,20 @@ class BoundedReader:
             finally:
                 del self.pending[key]
                 self.reserved_bytes -= reservation
+
+    def consume(self, key, accept):
+        entry = self.pending.get(key)
+        if entry is None:
+            return False
+        future, reservation = entry
+        try:
+            if future.cancel():
+                return False
+            accept(future.result())
+            return True
+        finally:
+            del self.pending[key]
+            self.reserved_bytes -= reservation
 
     def discard(self, accept=None):
         error = None

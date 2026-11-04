@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--base-cache-gib', type=float)
     parser.add_argument('--resident-hot', action='store_true')
     parser.add_argument('--async-refinements', action='store_true')
+    parser.add_argument('--async-base', action='store_true')
     parser.add_argument('--memory-limit-gib', type=float, default=84)
     parser.add_argument('--wired-memory', action='store_true')
     parser.add_argument('--hot-fraction', type=float, default=2630 / 12096)
@@ -43,7 +44,8 @@ def main():
     started = time.perf_counter()
     runtime = Runtime(args.model, args.cache_gib, hot_fraction=args.hot_fraction,
                       resident_base=args.resident_base, resident_hot=args.resident_hot, wired_memory=args.wired_memory,
-                          async_refinements=args.async_refinements, memory_limit_gib=args.memory_limit_gib, base_cache_gib=args.base_cache_gib)
+                      async_refinements=args.async_refinements, memory_limit_gib=args.memory_limit_gib,
+                      base_cache_gib=args.base_cache_gib, async_base=args.async_base)
     load_seconds = time.perf_counter() - started
     repository = Path(__file__).resolve().parents[1]
     source = subprocess.run(['git', '-C', str(repository), 'rev-parse', 'HEAD'], capture_output=True, text=True)
@@ -54,7 +56,8 @@ def main():
         expected_model_revision='4023870a6f2c6097e37fa5d2e54040db64b011e9',
         device=mx.device_info(), model=str(args.model.resolve()), load_seconds=load_seconds,
         packages={name: importlib.metadata.version(name) for name in ('mlx', 'torch', 'transformers', 'safetensors')},
-        async_refinements=args.async_refinements, memory_limit_gib=args.memory_limit_gib, base_cache_gib=args.base_cache_gib,
+        async_refinements=args.async_refinements, async_base=args.async_base,
+        memory_limit_gib=args.memory_limit_gib, base_cache_gib=args.base_cache_gib,
         hot_fraction=args.hot_fraction, hot_slots=runtime.hot_slots, cache_gib=args.cache_gib,
         wired_memory=args.wired_memory, resident_base=args.resident_base, resident_hot=args.resident_hot, resident_base_bytes=runtime.store.base_bytes,
         prefill_chunk_size=args.prefill_chunk_size, requested_output_tokens=args.tokens, prompt=args.prompt,
