@@ -2,7 +2,7 @@
 
 This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint directly. Metal kernels decode the expert weights and compute expert projections. PyTorch MPS runs the Transformers text backbone.
 
-**Status, 2026-11-04:** full-checkpoint generation passed three smoke checks at both all-hot and canonical mixed-precision allocations on an Apple M5 Max with 128 GiB memory. Decoder, expert, and matching-chunk backbone checks pass. General quality evaluation and formal tokens-per-second benchmarks remain pending. The unchunked BF16 comparison has a documented tolerance failure below.
+**Status, 2026-11-04:** full-checkpoint generation passed three smoke checks at both all-hot and canonical mixed-precision allocations on an Apple M5 Max with 128 GiB memory. Decoder, expert, and matching-chunk backbone checks pass. The first formal benchmark reached 0.227 tokens/second median. General quality evaluation and hot-set comparisons remain pending. See [performance measurements](PERFORMANCE.md). The unchunked BF16 comparison has a documented tolerance failure below.
 
 ## Requirements
 
@@ -148,7 +148,7 @@ Run the full-model smoke checks after the download and checksum verification fin
 
 The first two commands passed all three cases. The third awaits full-model validation with the complete hot set resident. See the [recorded smoke results](results/2026-11-04-smoke.json) for outputs, resource measurements, and source revision. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
 
-The benchmark driver is implemented but awaits full-checkpoint validation. Its CLI help and Python compilation pass. Full generation must succeed before running the following command:
+The benchmark driver completed the documented baseline measurement. Full generation must succeed before benchmarking a different configuration:
 
 ```sh
 .venv-macos/bin/python macos/benchmark.py \
@@ -180,4 +180,4 @@ Reports separate logical base and refinement tensor bytes from process-attribute
 
 `hot_sync_seconds` measures synchronous hot-set updates. It overlaps the loader's timing and is already included in decode throughput. Do not add these timers together. Request reset restores the predictor policy, while the weight cache can retain tensors. Layer-major prefill can replace cached refinements before the next decode pool is established.
 
-Full-model smoke results are recorded above. Formal throughput, hot-fraction comparisons, and recommended performance settings remain pending.
+Full-model smoke results are recorded above. The first formal throughput result is recorded in [performance measurements](PERFORMANCE.md). Hot-fraction comparisons and recommended performance settings remain pending.
