@@ -28,7 +28,7 @@ HF_HUB_DISABLE_IMPLICIT_TOKEN=1 .venv-macos/bin/hf download \
   --local-dir "$MODEL_ROOT" --max-workers 2
 ```
 
-The download command resumes interrupted transfers. Preserve incomplete files when retrying. Verify the runtime weights before inference:
+The download command reuses completed files. Interrupted files can require data to be downloaded again. Preserve incomplete files when retrying. Verify the runtime weights before inference:
 
 ```sh
 .venv-macos/bin/python macos/verify_checkpoint.py \
