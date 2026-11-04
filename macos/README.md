@@ -86,6 +86,7 @@ Observed results on the tested Mac:
 | Layer-major prefill | Bitwise match to standard execution with matching chunks | A 37-token prompt, sparse attention selection, two chunk sizes, and three subsequent decode tokens |
 | Hot-expert allocation | Slot totals and fixed subsets pass | Minimum allocation through 100% hot experts |
 | Resident base storage | Outputs match the bounded loader exactly | All L3 base experts loaded; three experts checked at both levels; refinement eviction and reload |
+| Resident hot set | Retained refinements survive pool changes; oversized pools are rejected | Real L3 experts, repeated pools, overlapping pools, and subsequent hot/cold reads |
 
 The larger BF16 integration test is bitwise identical to ordinary Transformers execution with matching chunks. Its cached decode differs by 1.3086% from an unchunked run, exceeding the separate 1% check. Ordinary Transformers chunking has the same difference. The failing unchunked comparison remains available through `verify_integration.py --reference unchunked`; `--reference chunked` checks bitwise scheduling equivalence. Trained-model quality remains unverified.
 
@@ -112,7 +113,11 @@ The default allocation is 2,630 hot experts across 42 routed layers. The predict
 
 The default mode uses a bounded least-recently-used cache for selected experts. It does not retain every base expert. Add `--resident-base` to preload and retain all base experts before inference. This uses an estimated 55 GiB outside `--cache-gib`. In this mode, the bounded cache holds refinements and shares base tensors. Evicting a refinement does not evict its base. Layer 3 storage and expert checks pass, but full-model resident memory remains unverified.
 
-Neither mode reserves refinements for every predicted hot expert. Refinements load when a routed expert needs them. A larger hot fraction therefore changes reconstruction precision without guaranteeing a matching increase in resident memory. Measure cache behavior and SSD reads together.
+These two modes load refinements when a routed expert needs them. A larger hot fraction changes reconstruction precision without guaranteeing a matching increase in resident memory. Measure cache behavior and SSD reads together.
+
+Add `--resident-hot` with `--resident-base` to keep every predicted hot expert's refinements resident during decode. Before each decode step, the runtime removes refinements outside the predicted set and loads missing refinements. Refinements that remain hot retain their existing buffers. Cold experts use the resident base tensors. Updates are synchronous and their cost is included in decode timing.
+
+The runtime checks the worst possible refinement allocation for the configured per-layer slot counts before loading the backbone. An insufficient `--cache-gib` fails instead of silently evicting hot experts. The canonical 2,630-slot allocation requires at most 20.314 GiB of refinements. Use a 24 GiB cache for its initial resident-hot test. This requirement excludes base tensors, the backbone, attention caches, and temporary allocations. Full-model memory and performance remain unverified.
 
 Prefill processes every prompt chunk through one layer before advancing. Every selected prefill expert uses its 4-bit reconstruction. The runtime retains that layer's cached tensors between chunks when the cache budget permits. This avoids reducing prefill precision to the decode allocation. It does not imply equality with the unquantized model.
 
@@ -133,9 +138,13 @@ Run the full-model smoke checks after the download and checksum verification fin
 .venv-macos/bin/python macos/verify_generation.py \
   --model "$MODEL_ROOT" --hot-fraction 0.21742724867724866 \
   --output generation-canonical.json
+.venv-macos/bin/python macos/verify_generation.py \
+  --model "$MODEL_ROOT" --hot-fraction 0.21742724867724866 \
+  --resident-base --resident-hot --cache-gib 24 \
+  --output generation-resident-hot.json
 ```
 
-These commands remain unvalidated against the full checkpoint. The first checks 4-bit expert generation. The second checks the canonical mixed-precision allocation. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
+These commands remain unvalidated against the full checkpoint. The first checks 4-bit expert generation. The second checks the canonical mixed-precision allocation. The third checks that allocation with the complete hot set resident. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
 
 The benchmark driver is implemented but awaits full-checkpoint validation. Its CLI help and Python compilation pass. Full generation must succeed before running the following command:
 
@@ -156,11 +165,17 @@ For tuning, use this sequence:
 2. Compare bounded storage with `--resident-base` at the canonical hot fraction and a 4 GiB cache.
 3. Compare hot fractions of 10%, 21.74%, and 35% with the same storage mode and cache budget.
 4. Compare cache budgets of 4, 16, and 32 GiB at the most useful precision setting.
-5. Compare prefill chunks of 128, 256, and 512 tokens using the same longer prompt.
-6. Check each candidate's answers and coding tests before selecting a default.
+5. Compare resident-base storage with and without `--resident-hot`, using the canonical fraction and the same 24 GiB cache.
+6. With `--resident-hot`, compare hot fractions of 10%, 15%, and 21.74% using a 24 GiB cache.
+7. Compare prefill chunks of 128, 256, and 512 tokens using the same longer prompt.
+8. Check each candidate's answers and coding tests before selecting a default.
 
 Keep prompts, output limits, sampling, and warm-up procedures identical within each comparison. Record prefill throughput, decode throughput, peak memory, SSD reads, and output correctness. These candidate settings are a proposed experiment, not measured recommendations.
 
+Increase cache budgets only when measured memory leaves room for runtime allocations. A 35% resident-hot allocation requires at most 32.696 GiB of refinements. On the tested Mac, this approaches the recommended Metal working set after adding the backbone and base tensors. Lower fractions are the initial resident-hot candidates. Prefill still uses its configured bounded cache for selected 4-bit experts, so its memory peak can exceed the subsequent hot-set allocation.
+
 Reports separate logical base and refinement tensor bytes from process-attributed disk reads. Operating-system caching can satisfy tensor reads without physical SSD reads. The expert-forward timer includes expert loading. The process memory peak includes model loading and earlier requests in that process. Warm-up does not guarantee that every expert is cached, and a process restart does not clear the operating-system file cache.
+
+`hot_sync_seconds` measures synchronous hot-set updates. It overlaps the loader's timing and is already included in decode throughput. Do not add these timers together. Request reset restores the predictor policy, while the weight cache can retain tensors. Layer-major prefill can replace cached refinements before the next decode pool is established.
 
 The full-model results and recommended settings will be added after checkpoint validation.
