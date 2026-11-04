@@ -54,6 +54,15 @@ The following checks need all eight layer 3 shards. The policy check also needs 
   --model "$MODEL_ROOT" --output predictor-verification.json
 ```
 
+After the four nonexpert shards arrive, verify their checksums and exercise the trained backbone:
+
+```sh
+.venv-macos/bin/python macos/verify_checkpoint_backbone.py \
+  --model "$MODEL_ROOT" --output trained-backbone-verification.json
+```
+
+This check loads every backbone tensor, then tests the first four trained layers with real layer 3 experts. It does not generate with the full model.
+
 Observed results on the tested Mac:
 
 | Check | Result | Scope |
@@ -64,6 +73,8 @@ Observed results on the tested Mac:
 | Batched multiplication | Relative root-mean-square error below 0.1% | Five-token batches and real checkpoint projections |
 | Complete experts | Relative root-mean-square error below 0.1% | Three experts, all eight shards, both levels, single-token and five-token inputs |
 | Text backbone | CPU and MPS agree within the test tolerance | Random small GLM model, both attention types and cached decode |
+| Trained backbone load | All 1,177 model tensors and the output head are finite on MPS | Four nonexpert shards verified with SHA-256 |
+| Trained prefix | Bitwise match with matching chunks | Four trained layers, real L3 experts, two chunk sizes, and two subsequent decode tokens |
 | Layer-major prefill | Bitwise match to standard execution with matching chunks | A 37-token prompt, sparse attention selection, two chunk sizes, and three subsequent decode tokens |
 | Hot-expert allocation | Slot totals and fixed subsets pass | Minimum allocation through 100% hot experts |
 | Resident base storage | Outputs match the bounded loader exactly | All L3 base experts loaded; three experts checked at both levels; refinement eviction and reload |
