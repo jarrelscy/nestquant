@@ -1,14 +1,39 @@
 # Mac performance measurements
 
-Owner: Andru. Measured: 2026-11-04.
+Owner: Andru. Measured: 2026-11-04 to 2026-11-05.
 
-The bounded Mac runtime generates text within the tested memory budget, but interactive latency remains high. The corrected asynchronous reader completed three 128-token requests at 1.217 tokens/s median and a 59.11 GiB peak process footprint.
+The grouped expert reader completed three 128-token requests at 1.638 tokens/s median and a 59.96 GiB peak process footprint. The first attempt stopped under system memory pressure. Interactive latency remains high.
 
 Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkpoint: GLM-5.3-Flash NestQuant 1.5/4, revision `4023870a6f2c6097e37fa5d2e54040db64b011e9`.
 
+## Grouped expert shard reads
+
+The reader groups adjacent tensor ranges for base loads, synchronous upgrades, and background refinements. All 1,536 sampled expert tensor comparisons matched byte for byte. The test covered three layer 3 experts across eight shards. The sampled read-call counts fell from 408 to 216 for base loads, 360 to 192 for refinements, and 768 to 72 when loading all fields. The separate nine-tensor backbone comparison also matched. The storage and async regression checks passed. See the [real-weight checks](results/grouped-expert-io.json).
+
+The fixed-route microbenchmark delivered all 336 refinements. Summed worker read time fell from 6.55 to 6.01 seconds. Median expert cycle time during delivery rose from 170 to 243 ms. The newer run completed 18 cycles during delivery, versus 31 in the previous run. These are separate runs. The component results show lower read time and slower concurrent cycles in the measured samples. See the [grouped microbenchmark](results/grouped-microbench-42layers.json).
+
+Both full-model comparisons used the same checkpoint, prompt, output length, warm-up, and runtime settings. These settings include a 32 GiB base cache, a 4 GiB refinement budget, and a 2% hot allocation. The grouped comparison used clean source `b5c37f4`. See the [three completed requests](results/2026-11-05-grouped-2pct-128.json).
+
+| Measurement | Individual reads | Grouped reads |
+|---|---:|---:|
+| Decode tokens/s, median | 1.217 | 1.638 |
+| Decode tokens/s, range | 1.110–1.296 | 1.575–1.648 |
+| Time to first token, median | 80.55 s | 61.64 s |
+| Decode base-load time, median | 55.30 s | 34.31 s |
+| Decode base-cache misses, median | 4,496 | 4,358 |
+| Base-load time per miss, median across requests | 12.30 ms | 7.83 ms |
+| Peak process footprint | 59.11 GiB | 59.96 GiB |
+| Minimum reported free memory | 67% | 62% |
+
+Generated sequences differed within both comparisons. Per-miss timing controls for the number of misses, while the expert sequence and storage conditions can still differ. Base loads consumed about 44% of measured decode time in the grouped runs. Subtracting only their time from the observed steps gives a 2.90 tokens/s median, assuming all other timings stay fixed. This calculation has limited predictive value. It shows the size of the remaining gap.
+
+The first grouped attempt completed one request at 1.559 tokens/s. The watchdog stopped the second at pressure level 2, with 39% reported free memory and a 59.96 GiB process peak. DeepSeek recovered after the stop. The retry retained the same guards, ran at normal pressure, and restored DeepSeek. The reported medians use only the three completed retry requests. See the [pressure-stop receipt](results/2026-11-05-grouped-pressure-stop.json).
+
+The 2% allocation delivered 16.25% actual hot-call coverage, 31.44% actual salience coverage, and 98.22% of wanted calls in time. Across 336 overlapping windows, top-budget forecasts assigned 34.98% salience and observed 32.88%. Raw jT rankings covered 49.14% of observed salience, versus 28.61% for EMA and 5.61% for the initial static mask. These are repeated-prompt diagnostics. The [three answer checks](results/2026-11-05-grouped-smoke.json) and 28 unit tests passed. Max-account Fable/high reviewed the reader before testing.
+
 ## Full-model validation after the reader correction
 
-The [latest comparison](results/2026-11-04-preadv-2pct-128.json) used clean source `af4516d`, a 2% hot allocation, 32 GiB base cache, and 4 GiB refinement/staging budget. It retained the 84 GiB process guard, eight-token prefill chunks, and no memory wiring. One 16-token warm-up preceded three measured 128-token requests with the same interval-merging prompt as the earlier comparison.
+The [individual-read comparison](results/2026-11-04-preadv-2pct-128.json) used clean source `af4516d`, a 2% hot allocation, 32 GiB base cache, and 4 GiB refinement/staging budget. It retained the 84 GiB process guard, eight-token prefill chunks, and no memory wiring. One 16-token warm-up preceded three measured 128-token requests with the same interval-merging prompt as the earlier comparison.
 
 | Measurement | Observed result |
 |---|---|
@@ -58,7 +83,7 @@ The base cache stayed within 32 GiB while eviction operated in the full model. S
 
 The [initial microbenchmark](results/microbench-async-42layers.json) used eight real experts in each of 42 layers. It confirmed 336 base fallbacks and identical outputs while the read worker was deliberately blocked. Actual read delivery nevertheless slowed the expert cycles.
 
-[Safetensors 0.8](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs) performs its NumPy `pread` inside a Python-attached section in `get_tensor_pread`. The corrected worker uses bounded `os.preadv` reads, which release the interpreter lock. Synchronous prefill retains its original shared Safetensors handles.
+[Safetensors 0.8](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs) performs its NumPy `pread` inside a Python-attached section in `get_tensor_pread`. The corrected worker uses bounded `os.preadv` reads, which release the interpreter lock. At this stage, synchronous prefill still used the original shared Safetensors handles.
 
 | Reader | Resident base cycle | Resident hot cycle | Median cycle during delivery | Total delivery | Peak process footprint |
 |---|---:|---:|---:|---:|---:|
@@ -105,7 +130,7 @@ Generation reports now include `predictor_diagnostics`. They record per-layer ca
 
 Calibration compares each causal block forecast with the mean normalized squared routing weights over that token and the next 15 decode steps. This matches the shipped predictor's `train.py` block-loss target. The final 15 incomplete windows are excluded. Reports include total variation, cross entropy, probability-bin means, and predicted versus observed top-budget salience. Windows overlap and are not independent samples. A short 16-output-token run contains only 15 decode steps, so it has no full calibration window.
 
-The latest three 128-token requests provide 381 decode steps and 128,016 routed expert calls. The following results pool those calls; they exclude the warm-up.
+The individual-read comparison provides 381 decode steps and 128,016 routed expert calls. The following results pool those calls and exclude the warm-up.
 
 | Measurement | Observed result |
 |---|---:|

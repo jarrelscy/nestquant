@@ -1,6 +1,6 @@
 # Bounded asynchronous decode
 
-The asynchronous decode path is experimental. Bounded-base configurations at 1%, 2%, and 4% passed three full-model answer checks with multi-chunk prefill. Controlled short benchmarks and a 128-token comparison are recorded in [performance measurements](PERFORMANCE.md). A subsequent reader correction reduces interpreter-lock contention in a component microbenchmark. After that correction, three 128-token requests measured 1.217 tokens/s median at a 59.11 GiB peak. The three answer checks and one complete coding task also passed. General coding quality remains unverified.
+The asynchronous decode path is experimental. Bounded-base configurations at 1%, 2%, and 4% passed three full-model answer checks with multi-chunk prefill. The grouped expert reader reached 1.638 tokens/s median across three 128-token requests at 2% and a 59.96 GiB process peak. The first attempt stopped under system memory pressure. The retry used the same guards and completed. See [performance measurements](PERFORMANCE.md).
 
 ## Memory budget
 
@@ -12,11 +12,13 @@ The first guarded 2% trial stopped during base loading when macOS reported press
 
 The [subsequent `pread` trial](results/2026-11-04-async-pread-guard-trip.json) also stopped under system pressure, after loading through layer 43, at 78.55 GiB. It produced no generated answer. The [backbone diagnostic](results/backbone-allocator-diagnostic.json) found no memory reduction from PyTorch cache release or macOS allocator relief. Both diagnostics restored the existing service.
 
-The base-expert and backbone readers use Safetensors 0.8's `pread` backend. Its [macOS implementation](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs) requests `F_NOCACHE` for reads, avoiding retained memory-mapped source pages. File-cache duplication is a plausible contributor to the failed load, not a confirmed sole cause. The memory guards remain unchanged. Exact byte comparisons and bounded full-model checks pass with this backend. The background refinement worker now uses a separate positional reader, described below.
+The backbone uses the Safetensors 0.8 `pread` backend. Expert reads use positional readers. Both request `F_NOCACHE` on macOS to avoid retaining memory-mapped source pages. File-cache duplication may have contributed to the failed load. Exact byte comparisons and bounded full-model checks cover both readers. See the [Safetensors implementation](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs).
 
 `pread` keeps file descriptors open. The serving store and worker can hold 672 expert shard descriptors together. Check `ulimit -n` before launching and use a soft limit of at least 1,024. The tested launcher inherits a limit of 1,048,575 and passed a 700-handle read test. The local supervisor rejects lower limits before stopping the existing service.
 
-The background refinement reader uses `os.preadv` with `F_NOCACHE`. The NumPy `get_tensor_pread` path in [Safetensors 0.8](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs) holds Python's interpreter lock during disk reads. A background thread alone therefore did not prevent execution stalls. The positional reader validates bounded headers, dtypes, shapes, and file ranges. It fills owned byte arrays while releasing the lock. Synchronous upgrades retain the store's original shared handles. Real-weight async and synchronous regression checks pass. See the controlled component results in [performance measurements](PERFORMANCE.md).
+The positional reader validates bounded headers, dtypes, shapes, and file ranges. It groups adjacent tensor ranges before calling `os.preadv`, which releases Python's interpreter lock. Each gap is at most 4 KiB. The reader allows at most 32 KiB of gap bytes per shard request and at most 64 MiB in a single range. Arrays reference the owned read buffers until assembly finishes. Logical tensor-byte counters exclude gap bytes.
+
+The store shares positional readers between synchronous loads and upgrades. The background worker uses a separate set of readers. Both sets keep parsed headers, which add fixed overhead outside the tensor cache. Real-weight async and synchronous regression checks pass. See [performance measurements](PERFORMANCE.md).
 
 The backend change also changes file-cache behavior. Do not attribute differences from the historical `mmap` benchmark solely to asynchronous delivery.
 
@@ -38,7 +40,7 @@ The 67,108,864-byte staging allowance fits beside each allocation. All three can
 
 ## Execution contract
 
-The serving thread obtains the current jT desired set and delivery priorities. The background worker reads missing refinements into owned NumPy arrays through private safetensors handles. It does not call MLX or mutate the serving cache.
+The serving thread obtains the current jT desired set and delivery priorities. The background worker reads missing refinements into owned NumPy arrays through private positional readers. It does not call MLX or mutate the serving cache.
 
 At layer boundaries, the serving thread installs completed refinements. An old resident remains available until a replacement arrives, subject to the configured per-layer slot count. Decode uses the ready level, falling back to the resident 1.5-bit base when a refinement is unavailable. Desired and executed hot shares are reported separately. This follows Spark's readiness behavior rather than its diagnostic wait-for-upgrades mode.
 

@@ -2,9 +2,9 @@
 
 This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint directly. Metal kernels decode the expert weights and compute expert projections. PyTorch MPS runs the Transformers text backbone.
 
-**Status, 2026-11-04:** full-checkpoint generation passed short answer checks at bounded 1%, 2%, and 4% hot allocations. Before the positional-reader correction, their 16-token decode medians were 2.39, 1.96, and 1.33 tokens/s. The longer 2% comparison, also before that correction, reached 1.06 tokens/s at a 58.29 GiB peak. See [measurements and limits](PERFORMANCE.md).
+**Status, 2026-11-05.** Grouped expert reads reached 1.638 tokens/s median across three 128-token requests at a 2% hot allocation. Peak process footprint was 59.96 GiB. The first attempt stopped under system memory pressure, then the same guarded configuration completed on retry. See [measurements and limits](PERFORMANCE.md#grouped-expert-shard-reads).
 
-The [asynchronous path](ASYNC.md) reads refinements in the background and executes the precision that is ready. Its corrected positional reader reduces interpreter-lock contention in the measured expert microbenchmark. The corrected runtime passed full-model answer checks and one complete coding task. Its three 128-token requests measured 1.217 tokens/s median at a 59.11 GiB peak. A 2% allocation delivered 16.20% actual hot-call coverage and 31.67% salience coverage. General quality remains unverified. Accelerator probes remain outside production inference. MTP is not implemented. The unchunked BF16 comparison retains its documented tolerance failure.
+The asynchronous path reads refinements in the background and executes the precision that is ready. The grouped reader passed three full-model answer checks and delivered 16.25% actual hot-call coverage. The earlier reader also passed one complete coding task. General quality remains unverified. Accelerator probes remain outside production inference. MTP is not implemented. The unchunked BF16 comparison retains its documented tolerance failure. See the [asynchronous path](ASYNC.md).
 
 ## Requirements
 
