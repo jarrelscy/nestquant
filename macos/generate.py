@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 from backbone import empty_model, load_backbone
 from experts import ExpertStore, NestQuantExperts
 from predictor import staged_predictor, configure_slots
+from predictor_metrics import PredictorMetrics
 from prefill import layer_major_prefill
 from metrics import snapshot, MemoryGuard
 from checkpoint import validate
@@ -74,6 +75,10 @@ class Runtime:
         self.decode_hot_experts = 0
         self.decode_ready_experts = 0
         self.predictor_seconds = 0.0
+        self.predictor_metrics_seconds = 0.0
+        self.predictor_metrics = PredictorMetrics([self.predictor.budgets[layer] for layer in range(3, 45)],
+                                                  self.predictor.defaults, self.predictor.fixed_ids)
+        self.ready_at_use = np.zeros((42, 288), dtype=bool)
 
     @torch.inference_mode()
     def step(self, token: int):
@@ -89,6 +94,7 @@ class Runtime:
         if self.async_refinements:
             self.store.begin_decode(self.wanted, self.predictor.loading_priority(), self.predictor.budgets)
         self.routing.clear()
+        self.ready_at_use.fill(False)
         ids = torch.tensor([[token]], device=self.device)
         output = self.model(ids, past_key_values=self.cache, use_cache=True)
         self.cache = output.past_key_values
@@ -99,6 +105,10 @@ class Runtime:
         norms = np.array([self.routing[layer][2][0] for layer in range(3, 45)])
         self.decode_routed_experts += selected.size
         self.decode_hot_experts += int(np.take_along_axis(self.wanted, selected, axis=1).sum())
+        metrics_started = time.perf_counter()
+        self.predictor_metrics.observe(self.wanted, self.ready_at_use, selected, weights, self.predictor.block,
+                                       np.stack([policy.state for policy in self.predictor.policies]))
+        self.predictor_metrics_seconds += time.perf_counter() - metrics_started
         predictor_started = time.perf_counter()
         self.predictor.commit([(self.position, token, selected, weights, norms)])
         self.predictor_seconds += time.perf_counter() - predictor_started
@@ -192,6 +202,7 @@ class Runtime:
             first_decode_step_seconds=times[0] if times else None,
             subsequent_decode_tokens_per_second=(len(times) - 1) / sum(times[1:]) if len(times) > 1 else None,
             predictor_seconds=self.predictor_seconds, prefetch_drain_seconds=drain_seconds,
+            predictor_diagnostics=self.predictor_metrics.report(), predictor_metrics_seconds=self.predictor_metrics_seconds,
             prefill_tokens_per_second=len(tokens) / first_seconds,
             expert_metrics={key: value - expert_metrics_before[key] for key, value in self.store.metrics.items()},
             expert_metrics_by_phase=dict(

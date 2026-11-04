@@ -464,6 +464,8 @@ class NestQuantExperts(torch.nn.Module):
                 ready = (self.layer, int(expert), 4) in self.store.cache
                 level = 4 if (ready if self.store.prefetch is not None else desired) else 2
                 self.runtime.decode_ready_experts += int(level == 4)
+                if hasattr(self.runtime, 'ready_at_use'):
+                    self.runtime.ready_at_use[self.layer - 3, int(expert)] = level == 4
                 if self.store.prefetch is not None and desired and not ready:
                     self.store.metrics['async_fallbacks'] += 1
                 outputs.append(self.store.apply(self.layer, int(expert), x[0], level) * float(np.float16(weight)))
