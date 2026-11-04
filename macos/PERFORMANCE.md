@@ -6,6 +6,66 @@ The grouped expert reader completed three 128-token requests at 1.638 tokens/s m
 
 Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkpoint: GLM-5.3-Flash NestQuant 1.5/4, revision `4023870a6f2c6097e37fa5d2e54040db64b011e9`.
 
+## Base cache and native execution
+
+A fixed 128-token replay matched the reference store's 5,641 observed decode base misses at 32 GiB. On the same access trace, a 40 GiB cache would have missed 4,817 times. The trace produced the same miss count at 44, 48, and 56 GiB. This run starts cold. It measures one prompt and holds the observed routes fixed. It does not estimate the memory pressure or routing changes of a live larger cache.
+
+| Fixed-token reference comparison | Synchronous base | Async base after route selection |
+|---|---:|---:|
+| Decode rate | 1.272 tokens/s | 1.268 tokens/s |
+| Decode base misses | 5,641 | 5,677 |
+| Decode base-load wall time | 48.75 s | 50.33 s |
+| Base reads delivered by the worker | 0 | 5,275 |
+| Time waiting for the base worker | 0 s | 40.56 s |
+| Peak physical process footprint | 57.87 GiB | 59.69 GiB |
+| Minimum reported free memory | 49% | 39% |
+
+Both runs used 32 GiB of base cache, the existing asynchronous refinement scheduler, 2% refinement slots, and eight-token layer-major prefill. The input tokens matched. The greedy next token matched at 128 of 129 positions. Refinement readiness and routes can change across runs. Keep synchronous base reads as the reference default. The separate async base worker reserves 64 MiB. It stages required reads once the route is known. The caller waits for a running required read and performs the ordinary synchronous read if it cancels a queued read. The real-weight check matched all tested planes and observed 60.00 MiB of staging.
+
+The synchronous replay spent 13.94 s at the PyTorch-to-host boundary, including upstream Metal synchronization, 0.10 s submitting inputs to MLX, 0.08 s copying evaluated MLX results to host, and 1.50 s returning the output to PyTorch. Those are wall-clock windows. They include work scheduled by the preceding stage where a call synchronizes a stream. The profiling option separates an explicit upstream drain from the host conversion. The existing PyTorch path reports reference causal-convolution and recurrent Kimi Delta Attention fallbacks.
+
+### Memory feasibility on this desktop
+
+The prepared base banks contain 55.46 GiB of packed planes, scales, correction metadata, and low-rank padding. The affine-8 backbone, embedding, and output head contain 9.79 GiB. The native 2% decode refinement bank reserves about 1.87 GiB. The measured short native contexts use about 141 MiB of recurrent cache arrays and less than 2 MiB of sparse attention cache arrays. These logical sizes exclude conversion scratch and framework overhead.
+
+| Load experiment | Observed result |
+|---|---|
+| Direct shared Metal read, base alone | Pressure rose after 47.52 GiB of logical base, at a 47.57 GiB process footprint. |
+| Stock MLX read, base alone | Pressure rose near 50 GiB of process footprint. |
+| Stock MLX read with a 56 GiB process residency request | Layer 43 completed with 54.14 GiB of base. Pressure rose before the last layer finished. |
+| File-backed MLX views, base alone | All banks mapped at 0.67 GiB process footprint. A GPU sweep of the mapped pages raised system pressure. |
+| File-backed base with the prepared backbone | All banks mapped. Both the full forward and one-layer evaluation stopped under system pressure before the first answer. |
+| Bounded native banks, 96 rows per layer | Two 64-token all-base requests completed at 2.58 tokens/s median and a 29.12 GiB sampled process peak. |
+
+The supervisor suspended both active model downloads during these runs and retained the memory they already owned. In the direct-read trial, system compressor occupancy rose from 20.47 to 57.66 GiB as file-backed pages fell from 62.25 to 22.40 GiB. The guard tripped at pressure level 2 while the system reported 45% free memory. The complete base-plus-backbone path did not demonstrate safe residency under this desktop workload. Mapped tensors count towards MLX active bytes and may fault from storage. Process footprint, resident pages, and MLX accounting describe different views of the same allocations. The reference PyTorch driver counter also covers Metal allocations and must not be added to MLX active memory.
+
+The bounded native prototype keeps hidden states, router weights, expert computation, and attention in MLX. It synchronizes and reads router IDs for disk-backed slot selection. The reported forward-to-route interval includes upstream model work. Packed arrays retain fixed storage. A slot may be overwritten only after the previous GPU output has evaluated. The mixed kernel selects base and refinement slots separately and preserves the reference output within 0.000002% relative RMS in the tested projections. Native mixed execution passed the exact reply and arithmetic smoke cases. The same-chunk layer-major check matched logits and all 145 cache arrays in the all-base runtime. See [run receipts](results/2026-11-05-native-memory-replay.json).
+
+The native mixed runtime passed HumanEval/3 in a network-disabled grading container. It generated 149 tokens at 2.04 tokens/s after a 194.49 s prefill on a 135-token prompt. The run used 96 base rows per layer, 64 four-bit prefill rows, eight-token chunks, and 242 decode refinement slots. The peak process footprint was 33.43 GiB. Memory pressure stayed at level 1, with a minimum reported 48% free. The MLX peak was 30.94 GiB and the allocator held 253 MiB at the end. These measurements overlap the process footprint. The predictor retained 474.64 MiB of parameters and buffers and 11.95 MiB of attention history. The prompt and answer used 140.78 MiB of recurrent state and 3.24 MiB of sparse attention state.
+
+The hot policy wanted 5,395 of 50,064 routed calls. It delivered 5,335, or 98.89% of wanted calls. Ready calls covered 10.66% of routed calls and 22.80% of squared routing salience. Across 134 overlapping calibration windows, jT assigned 25.11% of salience to the top budget, compared with 22.45% observed. These are results for one prompt. They measure scheduling and calibration, with one separate answer-quality check.
+
+The chunking diagnosis locates the first BF16 discrepancy in layer-zero attention, before any routed expert. Its relative RMS difference was 0.0282% after attention and 0.7191% after the fourth layer. Cached decode still differed by 1.3086%, above the 1% check. The diagnosis compared ordinary Transformers with and without chunks. Use `verify_integration.py --reference chunked --diagnose-chunking` to reproduce it.
+
+In a separate trained layer-zero component probe, median Torch/MPS attention took 1.225 ms. With synchronization around individual fallbacks, the convolution update took 0.213 ms and the recurrent Kimi Delta Attention function took 0.410 ms. Those component windows do not sum to a single ordinary forward. MLX BF16 took 0.756 ms at 0.884% relative RMS difference. MLX affine-8 took 0.587 ms at 1.824%. Affine-4 took 0.450 ms at 19.588% and was rejected. This probe uses 32 recurrent positions and measures one attention layer.
+
+### Matched native replay
+
+Each run used the same 29 rendered prompt tokens and the same 128 forced decode inputs. Both native runs used the affine-8 backbone, four-bit prefill, eight-token chunks, 160 refinement scratch rows, and 242 decode refinement slots. The tuned run redistributed the same 6,720 base slots using the first half of the earlier reference trace. The two native reservations differed by about 1.3 MiB because packed correction sizes vary by layer.
+
+| Measurement | PyTorch/MLX reference | Native, uniform rows | Native, tuned rows |
+|---|---:|---:|---:|
+| Startup | 7.28 s | 1.85 s | 2.11 s |
+| Prefill to first token | 92.84 s | 55.86 s | 53.59 s |
+| Decode throughput | 1.272 tokens/s | 2.792 tokens/s | 3.519 tokens/s |
+| Base misses | 5,641 | 6,473 | 5,906 |
+| Base read time | 48.75 s | 20.58 s | 17.58 s |
+| Peak process footprint | 57.87 GiB | 45.68 GiB | 45.73 GiB |
+| Minimum reported free memory | 49% | 39% | 37% |
+| Greedy next-token agreement with reference | 129/129 | 129/129 | 128/129 |
+
+The tuned allocation reduced native misses by 8.8%. This comparison holds the token sequence fixed, but it does not hold routing or operating-system storage state fixed. Refinement readiness matched on 17 of 128 decode steps between native runs. Treat the time difference as one measured outcome and the tuned plan as a calibration candidate. The evaluation still needs an independent trace. The reference uses a different backbone representation and reader, so this comparison does not isolate the benefit of the framework change or the banked kernel.
+
 ## Grouped expert shard reads
 
 The reader groups adjacent tensor ranges for base loads, synchronous upgrades, and background refinements. All 1,536 sampled expert tensor comparisons matched byte for byte. The test covered three layer 3 experts across eight shards. The sampled read-call counts fell from 408 to 216 for base loads, 360 to 192 for refinements, and 768 to 72 when loading all fields. The separate nine-tensor backbone comparison also matched. The storage and async regression checks passed. See the [real-weight checks](results/grouped-expert-io.json).

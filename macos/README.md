@@ -135,6 +135,57 @@ Generation uses the repository's `spark/flash/thinking_off.jinja` template by de
 
 If the loader reports a mapping or shape mismatch, stop inference and check the checkpoint revision and dependency versions. Do not ignore missing weights. If memory pressure rises, stop the run and inspect its receipt. Preserve the process guard and bound the separate base cache before another trial.
 
+## Native packed experiment
+
+The native path is an explicit alternative to the PyTorch reference. Install `mlx-vlm==0.7.12` in the Mac environment. Use the verified checkpoint and keep the original files available for refinements. Prepare the two derived weight directories on the internal SSD. The base and backbone files together need about 66 GiB of disk space. The preparation command checks the checkpoint layout and retains a disk reserve.
+
+```sh
+export MODEL="$MODEL_ROOT"
+export BASE_ARCHIVE="$HOME/Models/GLM/resident-banks-v1"
+export BACKBONE_ARCHIVE="$HOME/Models/GLM/backbone-affine8-v1"
+uv pip install --python .venv-macos/bin/python -r macos/requirements.txt 'mlx-vlm==0.7.12'
+.venv-macos/bin/python macos/native_assets.py --model "$MODEL" --output-dir "$BASE_ARCHIVE"
+.venv-macos/bin/python macos/native_backbone.py --model "$MODEL" --output-dir "$BACKBONE_ARCHIVE"
+```
+
+Run one large model at a time. Keep the host memory watchdog active. Test the prefill order before running mixed inference. The verification command compares logits and the contents of each cache array.
+
+```sh
+python macos/native_generate.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
+  --backbone "$BACKBONE_ARCHIVE" --verify-prefill --output "$RESULTS/prefill.json"
+python macos/native_generate.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
+  --backbone "$BACKBONE_ARCHIVE" --rows 96 --chunk-size 4 --refinements \
+  --prompt 'Reply with exactly GLM_RESIDENT_OK and no other text.' \
+  --output "$RESULTS/native-smoke.json"
+```
+
+The native path reads missing base rows from disk into fixed slots. It records row hits, misses, eviction, bytes, and read time separately from the refinement scheduler. It uses four-bit refinements during prefill with `--refinements`. It uses the existing jT predictor during ordinary decode. It keeps hidden states and expert outputs on the device and reads routing IDs for storage selection. Its 4,096-token validation bound includes input and output. A pressure stop means the profile exceeded the live system budget. Inspect the pressure and allocation receipts before another attempt.
+
+Use `--verify-prefill --refinements` to compare both schedules with four-bit prefill and check the committed predictor state. The comparison uses the same chunk size for both schedules. Choose `--prefill-rows` to bound the scratch bank for one layer. Decode slots, this scratch bank, and the asynchronous worker share a 4 GiB refinement limit. The separate base banks have a 32 GiB limit. A configuration that exceeds either limit fails before prefill.
+
+Run the recurrent attention probe with the prepared environment to compare the reference fallbacks with the native backbone kernels.
+
+```sh
+python macos/verify_recurrent.py --model "$MODEL" --profile-components \
+  --output "$RESULTS/recurrent.json"
+```
+
+Replay a fixed sequence with the reference runtime to compare cache capacities and base read modes. Set `$FIXED` to the [run receipts](results/2026-11-05-native-memory-replay.json) to reproduce the recorded token sequence. Use fresh result files. Add `--profile-crossings` to a separate run to split the explicit MPS drain from the host conversion.
+
+```sh
+python macos/replay_cache.py --model "$MODEL" --fixed-json "$FIXED" \
+  --tokens 128 --output "$RESULTS/replay-sync.json"
+python macos/replay_cache.py --model "$MODEL" --fixed-json "$FIXED" \
+  --tokens 128 --async-base --output "$RESULTS/replay-async.json"
+python macos/native_generate.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
+  --backbone "$BACKBONE_ARCHIVE" --rows 160 --chunk-size 8 \
+  --refinements --prefill-rows 160 --fixed-json "$FIXED" --max-tokens 128 \
+  --prompt 'Write a Python function that merges overlapping intervals. Explain its algorithm, edge cases, and time complexity. Include examples.' \
+  --output "$RESULTS/replay-native.json"
+```
+
+See [the measured results](PERFORMANCE.md#base-cache-and-native-execution) for memory accounting, throughput and the constraints on each comparison.
+
 ## Benchmark requirements
 
 Verify the checkpoint and run the short answer checks before benchmarking a configuration:
