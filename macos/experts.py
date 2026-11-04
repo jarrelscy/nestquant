@@ -43,6 +43,7 @@ class ExpertStore:
         self.handles = {}
         self.manifests = {}
         self.metrics = dict(hits=0, misses=0, load_seconds=0.0, expert_forward_seconds=0.0,
+                            base_load_seconds=0.0,
                             base_tensor_bytes=0, refinement_tensor_bytes=0, hot_sync_seconds=0.0,
                             base_hits=0, base_misses=0, refinement_hits=0, refinement_misses=0,
                             async_load_seconds=0.0, async_loaded=0, async_discarded=0,
@@ -138,7 +139,10 @@ class ExpertStore:
             started = time.perf_counter()
             result = self._load(layer, expert, level)
             size = sum(value.nbytes for planes, _ in result.values() for value in planes.values())
-        self.metrics['load_seconds'] += time.perf_counter() - started
+        elapsed = time.perf_counter() - started
+        self.metrics['load_seconds'] += elapsed
+        if level == 2:
+            self.metrics['base_load_seconds'] += elapsed
         if self.resident_base and level == 2:
             if self.base_cache_limit is not None:
                 if size > self.base_cache_limit:

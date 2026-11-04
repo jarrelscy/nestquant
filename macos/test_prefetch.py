@@ -160,6 +160,20 @@ class AsyncStoreTests(unittest.TestCase):
 
 
 class BaseCacheTests(unittest.TestCase):
+    def test_base_load_time_excludes_refinement_loads_and_cache_hits(self):
+        store = ExpertStore(Path('.'), resident_base=True, base_cache_gib=16 / 1024**3)
+        store._load = lambda *args: {'gate': ({'base': np.zeros(8, dtype=np.uint8)}, {})}
+        store._upgrade = lambda layer, expert, base: {'gate': ({**base['gate'][0], 'p4': np.zeros(4, dtype=np.uint8)}, {})}
+        try:
+            with patch('experts.time.perf_counter', side_effect=[0.0, 1.0, 1.0, 3.0]):
+                store.get(3, 0, 4)
+                store.get(3, 0, 4)
+                store.get(3, 0, 2)
+            self.assertEqual(store.metrics['load_seconds'], 3.0)
+            self.assertEqual(store.metrics['base_load_seconds'], 1.0)
+        finally:
+            store.close()
+
     def test_base_eviction_removes_its_refinement_and_honors_recency(self):
         store = ExpertStore(Path('.'), resident_base=True, base_cache_gib=16 / 1024**3)
         store._load = lambda *args: {'gate': ({'base': np.zeros(8, dtype=np.uint8)}, {})}

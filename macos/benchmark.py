@@ -85,6 +85,7 @@ def main():
         async_fallbacks=summary([r['expert_metrics_by_phase']['decode']['async_fallbacks'] for r in reports]),
         decode_base_misses=summary([r['expert_metrics_by_phase']['decode']['base_misses'] for r in reports]),
         decode_base_evictions=summary([r['expert_metrics_by_phase']['decode']['base_evictions'] for r in reports]),
+        decode_base_load_seconds=summary([r['expert_metrics_by_phase']['decode']['base_load_seconds'] for r in reports]),
         time_to_first_token_seconds=summary([r['ttft_seconds'] for r in reports]),
         prefill_tokens_per_second=summary([r['prefill_tokens_per_second'] for r in reports]),
         prefill_disk_read_bytes=summary([r['disk_reads']['prefill'] for r in reports]),
