@@ -15,6 +15,17 @@ CASES = (
 )
 
 
+def answer_matches(text, expected):
+    answer = text.strip()
+    if not isinstance(expected, list):
+        return answer == expected
+    try:
+        answer = json.loads(answer)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(answer, list) and all(type(value) is int for value in answer) and answer == expected
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=Path, required=True)
@@ -36,13 +47,8 @@ def main():
         runtime = Runtime(args.model, args.cache_gib, hot_fraction=args.hot_fraction, resident_base=args.resident_base)
         for name, prompt, expected in CASES:
             result = runtime.generate(prompt, max_tokens=32)
-            answer = result['text'].strip()
-            if isinstance(expected, list):
-                try:
-                    answer = json.loads(answer)
-                except json.JSONDecodeError:
-                    pass
-            report['checks'].append(dict(name=name, passed=answer == expected, expected=expected, generation=result))
+            report['checks'].append(dict(name=name, passed=answer_matches(result['text'], expected),
+                                        expected=expected, generation=result))
             args.output.write_text(json.dumps(report, indent=2) + '\n')
         report['status'] = 'passed' if all(check['passed'] for check in report['checks']) else 'failed'
     except Exception as error:

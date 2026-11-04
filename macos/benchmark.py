@@ -54,8 +54,9 @@ def main():
         for run in range(args.runs):
             report = runtime.generate(args.prompt, args.tokens, prefill_chunk_size=args.prefill_chunk_size)
             (args.output_dir / f'run-{run + 1}.json').write_text(json.dumps(report, indent=2) + '\n')
-            if report['decode_tokens_per_second'] is None or report['generated_tokens'] < 2:
-                raise RuntimeError('Insufficient generated tokens for a decode benchmark')
+            if report['decode_tokens_per_second'] is None or report['generated_tokens'] < args.tokens:
+                raise RuntimeError(f'Run produced {report["generated_tokens"]} tokens; {args.tokens} required. '
+                                   'Use a prompt that produces a longer answer for every compared setting.')
             reports.append(report)
     finally:
         runtime.close()
