@@ -1,6 +1,6 @@
 # Bounded asynchronous decode
 
-The asynchronous decode path is experimental. Unit tests and a three-expert real-weight check pass. Full-model correctness, quality, and throughput have not been established for this path.
+The asynchronous decode path is experimental. The bounded-base configuration passed three full-model answer checks with multi-chunk prefill. Its process peak was 52.78 GiB and the watchdog observed normal pressure. General quality, coding correctness, and formal throughput remain unverified. See the [smoke report](results/2026-11-04-async-base32-smoke.json).
 
 ## Memory budget
 
@@ -22,7 +22,7 @@ The backend change also changes file-cache behavior. Do not attribute difference
 
 Use `--resident-base --base-cache-gib 32` for the next experimental configuration. This bounds base tensors separately and loads missing bases on demand instead of preloading all 55 GiB. Base eviction removes any refinement that references it. The least-recently-used order includes both base and refinement hits. A base miss performs a synchronous SSD read and can reduce speed. The change preserves weight precision; it does not establish full-model quality or performance.
 
-The 32 GiB base cache, roughly 16.8 GiB text backbone, and 4 GiB refinement/staging budget total about 52.8 GiB of tensor storage. This is a capacity estimate, not measured process footprint. The 84 GiB process guard still includes framework overhead, transient tensors, and KV state. The bounded configuration awaits independent review and a full-model check.
+The 32 GiB base cache, roughly 16.8 GiB text backbone, and 4 GiB refinement/staging budget total about 52.8 GiB of tensor storage. This is a capacity estimate, not measured process footprint. The 84 GiB process guard still includes framework overhead, transient tensors, and KV state. Both requested reviewers cleared this configuration before its full-model smoke. The smoke passed, but its base cache did not reach the 32 GiB cap; longer requests remain untested.
 
 The full desired set must fit within the resident portion of the cache. Capacity is checked before loading the backbone. With a 4 GiB budget, initial candidates are:
 
@@ -83,6 +83,6 @@ Begin with the short multi-chunk smoke above. Run a 16-token comparison only aft
 
 Keep inclusive decode throughput as the request-level measurement. The reports also expose the first decode step, throughput after that step, predictor time, reader time, installation time, and final reader-drain time. Reader time overlaps computation and must not be added to wall time. Separating early steps does not prove steady-state performance.
 
-The benchmark summary includes desired and executed hot-expert fractions, asynchronous fallback counts, base misses, and base evictions. Compare these alongside speed because readiness changes the precision actually used. Keep the base budget fixed across hot-fraction comparisons.
+The benchmark summary includes desired and executed hot-expert fractions, asynchronous fallback counts, base misses, base evictions, and synchronous base-load time. Compare these alongside speed because readiness changes the precision actually used. Keep the base budget fixed across hot-fraction comparisons.
 
 Reject candidates that fail the required answer or coding checks. Three short smoke cases do not replace broader quality evaluation or a teacher comparison. Do not increase cache residency to rescue a candidate that exceeds the memory budget.
