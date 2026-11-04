@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--cache-gib', type=float, default=4)
     parser.add_argument('--resident-base', action='store_true')
     parser.add_argument('--resident-hot', action='store_true')
+    parser.add_argument('--wired-memory', action='store_true')
     parser.add_argument('--hot-fraction', type=float, default=2630 / 12096)
     parser.add_argument('--prefill-chunk-size', type=int, default=256)
     args = parser.parse_args()
@@ -37,13 +38,13 @@ def main():
     mx.set_cache_limit(1024**3)
     started = time.perf_counter()
     runtime = Runtime(args.model, args.cache_gib, hot_fraction=args.hot_fraction,
-                      resident_base=args.resident_base, resident_hot=args.resident_hot)
+                      resident_base=args.resident_base, resident_hot=args.resident_hot, wired_memory=args.wired_memory)
     load_seconds = time.perf_counter() - started
     metadata = dict(
         device=mx.device_info(), model=str(args.model.resolve()), load_seconds=load_seconds,
         packages={name: importlib.metadata.version(name) for name in ('mlx', 'torch', 'transformers', 'safetensors')},
         hot_fraction=args.hot_fraction, hot_slots=runtime.hot_slots, cache_gib=args.cache_gib,
-        resident_base=args.resident_base, resident_hot=args.resident_hot, resident_base_bytes=runtime.store.base_bytes,
+        wired_memory=args.wired_memory, resident_base=args.resident_base, resident_hot=args.resident_hot, resident_base_bytes=runtime.store.base_bytes,
         prefill_chunk_size=args.prefill_chunk_size, requested_output_tokens=args.tokens, prompt=args.prompt,
         sampling='greedy', method='One discarded warm-up, then at least three measured requests in one process',
         limitations='Process lifetime peak includes model loading; measurements do not grade answer quality',

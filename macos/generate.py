@@ -20,7 +20,7 @@ from checkpoint import validate
 
 class Runtime:
     def __init__(self, root: Path, cache_gib: float = 4, device: str = 'mps', hot_fraction: float = 2630 / 12096,
-                 resident_base: bool = False, resident_hot: bool = False):
+                 resident_base: bool = False, resident_hot: bool = False, wired_memory: bool = False):
         if device == 'mps' and not torch.backends.mps.is_available():
             raise RuntimeError('PyTorch MPS is unavailable')
         if not 2 / 288 <= hot_fraction <= 1:
@@ -51,6 +51,10 @@ class Runtime:
         self.tokenizer = AutoTokenizer.from_pretrained(root, local_files_only=True, trust_remote_code=False)
         self.thinking_off_template = (Path(__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
         self.reset()
+        self.wired_memory = wired_memory
+        self.previous_wired_limit = None
+        if wired_memory:
+            self.previous_wired_limit = mx.set_wired_limit(mx.device_info()['max_recommended_working_set_size'])
 
     def reset(self):
         self.cache = None
@@ -178,7 +182,8 @@ class Runtime:
             thinking=thinking if not raw else None,
             policy=dict(base_bits=1.5, hot_bits=4, slots=self.hot_slots, fixed=self.predictor.n_fixed, jt_mix=0.75, refresh_tokens=1,
                         prefill_bits=4, prefill_chunk_size=prefill_chunk_size, resident_base=self.store.resident_base,
-                        resident_hot=self.resident_hot, hot_set_capacity_bytes=self.hot_set_capacity_bytes),
+                        resident_hot=self.resident_hot, hot_set_capacity_bytes=self.hot_set_capacity_bytes,
+                        wired_memory=self.wired_memory),
             limitations=['text only', 'single sequence', '4096 token validation ceiling', 'no speculative decoding',
                          'synchronous expert SSD reads', 'greedy sampling', 'unquantized attention cache'],
         )
@@ -186,6 +191,10 @@ class Runtime:
     def close(self):
         self.store.close()
         self.predictor_staging.cleanup()
+        if self.previous_wired_limit is not None:
+            mx.synchronize()
+            mx.set_wired_limit(self.previous_wired_limit)
+            self.previous_wired_limit = None
 
 
 def main():
@@ -196,6 +205,7 @@ def main():
     parser.add_argument('--cache-gib', type=float, default=4)
     parser.add_argument('--resident-base', action='store_true', help='Preload all base experts, about 55 GiB, outside the bounded refinement cache')
     parser.add_argument('--resident-hot', action='store_true', help='Keep every predicted hot refinement resident; requires resident base and sufficient cache')
+    parser.add_argument('--wired-memory', action='store_true', help='Keep MLX allocations resident up to the device recommended working set')
     parser.add_argument('--hot-fraction', type=float, default=2630 / 12096)
     parser.add_argument('--prefill-chunk-size', type=int, default=256)
     parser.add_argument('--device', choices=['cpu', 'mps'], default='mps')
@@ -208,7 +218,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(8)
     mx.set_cache_limit(1024**3)
-    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base, args.resident_hot)
+    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base, args.resident_hot, args.wired_memory)
     try:
         report = runtime.generate(args.prompt, args.max_tokens, args.raw, args.thinking, args.prefill_chunk_size)
         args.output.write_text(json.dumps(report, indent=2) + '\n')
