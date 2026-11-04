@@ -1,0 +1,25 @@
+{
+  "status": "failed",
+  "source_commit": "b7a23745af57ad7160eac575f98a4f056eb35148",
+  "checkpoint_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+  "stage": "resident base loading; last completed layer 18; no generation or benchmark",
+  "configuration": {
+    "hot_fraction": 0.02,
+    "cache_gib": 4,
+    "process_limit_gib": 84,
+    "prefill_chunk_size": 8,
+    "async_refinements": true,
+    "wired_memory": false,
+    "storage_backend": "mmap"
+  },
+  "guard_trip": {
+    "peak_bytes": 46049495664,
+    "free_percent": 38,
+    "pressure_level": 2
+  },
+  "peak_observed_footprint_bytes": 46049495664,
+  "minimum_free_percent": 38,
+  "error": "MemoryError: Memory guard stopped the run to preserve desktop headroom",
+  "baseline_restored": true,
+  "inference": "File-cache duplication is a loading-path hypothesis, not a confirmed sole cause. No throughput or quality result was produced."
+}

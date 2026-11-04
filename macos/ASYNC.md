@@ -8,6 +8,10 @@ The operator's total runtime ceiling is 96 GB, including the KV cache. On the te
 
 The runtime constructs `Glm5NextTextModel`. It does not instantiate or load the vision tower. The original checkpoint files remain intact on disk.
 
+The first guarded 2% trial stopped during base loading when macOS reported pressure level 2. Its observed process peak was 42.89 GiB, below the 84 GiB cap. It produced no generated answer or throughput result. The supervisor restored the existing model service. See the [failed trial](results/2026-11-04-async-mmap-guard-trip.json).
+
+The expert and backbone readers now use Safetensors 0.8's `pread` backend. Its [macOS implementation](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs) requests `F_NOCACHE` for reads, avoiding retained memory-mapped source pages. File-cache duplication is a plausible contributor to the failed load, not a confirmed sole cause. The memory guards remain unchanged. Exact byte comparisons and the asynchronous component check pass with this backend; full-model validation remains pending.
+
 `--cache-gib` covers resident refinements and a fixed 64 MiB staging allowance. The reader reserves three times each expected payload plus 1 MiB for shard copies, merged arrays, and installation. There is one worker and at most two pending reads. Handles and metadata add fixed overhead outside the tensor budget.
 
 The full desired set must fit within the resident portion of the cache. Capacity is checked before loading the backbone. With a 4 GiB budget, initial candidates are:
@@ -39,6 +43,7 @@ Run the bounded component checks first:
 ```sh
 .venv-macos/bin/python -m unittest discover -s macos -p 'test_*.py' -v
 .venv-macos/bin/python macos/verify_async.py --model "$MODEL_ROOT" --output async-experts.json
+.venv-macos/bin/python macos/verify_io.py --model "$MODEL_ROOT" --output pread-io.json
 ```
 
 After code review, run a full-model smoke check with multiple prompt chunks:

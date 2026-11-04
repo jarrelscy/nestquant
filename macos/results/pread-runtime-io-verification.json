@@ -1,0 +1,53 @@
+{
+  "status": "passed",
+  "expert_tensors": 768,
+  "expert_tensor_bytes": 41213952,
+  "backbone": [
+    {
+      "name": "model.language_model.layers.0.hc_attn_base",
+      "dtype": "torch.float32",
+      "bytes": 96
+    },
+    {
+      "name": "model.language_model.layers.0.hc_attn_fn",
+      "dtype": "torch.bfloat16",
+      "bytes": 786432
+    },
+    {
+      "name": "model.language_model.layers.0.hc_attn_scale",
+      "dtype": "torch.float32",
+      "bytes": 12
+    },
+    {
+      "name": "model.language_model.layers.0.hc_ffn_base",
+      "dtype": "torch.float32",
+      "bytes": 96
+    },
+    {
+      "name": "model.language_model.layers.0.hc_ffn_fn",
+      "dtype": "torch.bfloat16",
+      "bytes": 786432
+    },
+    {
+      "name": "model.language_model.layers.0.input_layernorm.weight",
+      "dtype": "torch.bfloat16",
+      "bytes": 8192
+    },
+    {
+      "name": "model.language_model.layers.10.mlp.shared_experts.down_proj.weight",
+      "dtype": "torch.float8_e4m3fn",
+      "bytes": 8388608
+    },
+    {
+      "name": "model.language_model.layers.10.mlp.shared_experts.gate_proj.weight",
+      "dtype": "torch.float8_e4m3fn",
+      "bytes": 8388608
+    },
+    {
+      "name": "model.language_model.layers.10.mlp.shared_experts.up_proj.weight",
+      "dtype": "torch.float8_e4m3fn",
+      "bytes": 8388608
+    }
+  ],
+  "scope": "Exact mmap/pread agreement for three layer 3 experts across eight shards and nine used text-backbone tensors across BF16, FP32, FP8; no memory or throughput claim"
+}
