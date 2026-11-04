@@ -31,7 +31,7 @@ def main():
         print(json.dumps(dict(event='checksum_verified', file=name)), flush=True)
     torch.set_num_threads(8)
     mx.set_cache_limit(1024**3)
-    state = SimpleNamespace(phase='prefill', routing={}, wanted=np.ones((42, 288), dtype=bool))
+    state = SimpleNamespace(phase='prefill', routing={}, decode_ready_experts=0, wanted=np.ones((42, 288), dtype=bool))
     store = ExpertStore(args.model, cache_gib=0.25)
     checks = []
     try:

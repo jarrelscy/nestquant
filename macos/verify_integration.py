@@ -36,7 +36,7 @@ def main():
     config.vocab_size = 64
     config.pad_token_id = 0
     config.eos_token_id = [1]
-    state = SimpleNamespace(phase='prefill', routing={}, wanted=np.ones((42, 288), dtype=bool))
+    state = SimpleNamespace(phase='prefill', routing={}, decode_ready_experts=0, wanted=np.ones((42, 288), dtype=bool))
     store = ExpertStore(args.model, cache_gib=0.25)
     with torch.device('meta'):
         model = Glm5NextTextModel(config)

@@ -30,10 +30,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--prefill-chunk-size', type=int, default=256)
     parser.add_argument('--hot-fraction', type=float, default=1.0)
     parser.add_argument('--cache-gib', type=float, default=4)
     parser.add_argument('--resident-base', action='store_true')
     parser.add_argument('--resident-hot', action='store_true')
+    parser.add_argument('--async-refinements', action='store_true')
+    parser.add_argument('--memory-limit-gib', type=float, default=84)
     parser.add_argument('--wired-memory', action='store_true')
     args = parser.parse_args()
     if args.output.exists():
@@ -41,15 +44,16 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(8)
     mx.set_cache_limit(1024**3)
-    report = dict(status='running', wired_memory=args.wired_memory, hot_fraction=args.hot_fraction, resident_base=args.resident_base, resident_hot=args.resident_hot,
+    report = dict(status='running', async_refinements=args.async_refinements, wired_memory=args.wired_memory, hot_fraction=args.hot_fraction, resident_base=args.resident_base, resident_hot=args.resident_hot,
                   scope='Three short text smoke checks, not a general quality evaluation', checks=[])
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     runtime = None
     try:
         runtime = Runtime(args.model, args.cache_gib, hot_fraction=args.hot_fraction,
-                          resident_base=args.resident_base, resident_hot=args.resident_hot, wired_memory=args.wired_memory)
+                          resident_base=args.resident_base, resident_hot=args.resident_hot, wired_memory=args.wired_memory,
+                          async_refinements=args.async_refinements, memory_limit_gib=args.memory_limit_gib)
         for name, prompt, expected in CASES:
-            result = runtime.generate(prompt, max_tokens=32)
+            result = runtime.generate(prompt, max_tokens=32, prefill_chunk_size=args.prefill_chunk_size)
             report['checks'].append(dict(name=name, passed=answer_matches(result['text'], expected),
                                         expected=expected, generation=result))
             args.output.write_text(json.dumps(report, indent=2) + '\n')

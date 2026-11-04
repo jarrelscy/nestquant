@@ -25,7 +25,7 @@ class AnswerValidationTests(unittest.TestCase):
 
 class BenchmarkValidationTests(unittest.TestCase):
     def run_benchmark(self, tokens):
-        report = dict(generated_tokens=tokens, generated_ids=list(range(tokens)), decode_tokens_per_second=5.0,
+        report = dict(decode_step_seconds=[0.2] * max(0, tokens - 1), generated_tokens=tokens, generated_ids=list(range(tokens)), decode_tokens_per_second=5.0,
                       ttft_seconds=1.0, prefill_tokens_per_second=10.0, disk_reads=dict(prefill=0, decode=0),
                       resources=dict(after_decode=dict(lifetime_peak_physical_footprint_bytes=1024)))
         runtime = MagicMock(hot_slots=2630)

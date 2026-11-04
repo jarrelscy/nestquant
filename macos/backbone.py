@@ -59,7 +59,7 @@ def empty_model(root: Path, experts_factory):
     return model.eval()
 
 
-def load_backbone(root: Path, model, device: str = 'mps', dtype=torch.bfloat16):
+def load_backbone(root: Path, model, device: str = 'mps', dtype=torch.bfloat16, memory_check=None):
     index = json.loads((root / 'model.safetensors.index.json').read_text())['weight_map']
     sources = parameter_sources(root, model.config)
     expected = model.state_dict()
@@ -89,6 +89,8 @@ def load_backbone(root: Path, model, device: str = 'mps', dtype=torch.bfloat16):
 
     try:
         for position, (target, names) in enumerate(sources.items()):
+            if memory_check is not None:
+                memory_check()
             value = read(names[0]) if len(names) == 1 else torch.cat([read(n) for n in names], dim=0)
             if value.shape != expected[target].shape:
                 raise ValueError(f'Shape mismatch {target}: {tuple(value.shape)} != {tuple(expected[target].shape)}')

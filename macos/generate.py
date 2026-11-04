@@ -14,19 +14,23 @@ from backbone import empty_model, load_backbone
 from experts import ExpertStore, NestQuantExperts
 from predictor import staged_predictor, configure_slots
 from prefill import layer_major_prefill
-from metrics import snapshot
+from metrics import snapshot, MemoryGuard
 from checkpoint import validate
 
 
 class Runtime:
     def __init__(self, root: Path, cache_gib: float = 4, device: str = 'mps', hot_fraction: float = 2630 / 12096,
-                 resident_base: bool = False, resident_hot: bool = False, wired_memory: bool = False):
+                 resident_base: bool = False, resident_hot: bool = False, wired_memory: bool = False, async_refinements: bool = False, memory_limit_gib: float = 84):
         if device == 'mps' and not torch.backends.mps.is_available():
             raise RuntimeError('PyTorch MPS is unavailable')
         if not 2 / 288 <= hot_fraction <= 1:
             raise ValueError('hot_fraction must be between 2/288 and 1')
         if resident_hot and not resident_base:
             raise ValueError('Hot-set residency requires --resident-base')
+        if async_refinements and (not resident_base or resident_hot):
+            raise ValueError('Asynchronous refinements require resident base and exclude resident-hot mode')
+        self.memory_guard = MemoryGuard(memory_limit_gib)
+        self.async_refinements = async_refinements
         root = root.expanduser().resolve()
         validate(root)
         self.phase = 'decode'
@@ -35,7 +39,8 @@ class Runtime:
         self.root = root
         self.routing = {}
         self.wanted = np.zeros((42, 288), dtype=bool)
-        self.store = ExpertStore(root, cache_gib, resident_base=resident_base)
+        self.store = ExpertStore(root, cache_gib, resident_base=resident_base, async_refinements=async_refinements)
+        self.store.memory_check = self.memory_guard.check
         predictor_module, self.predictor_staging = staged_predictor()
 
         os.environ['NQ_FLASH_JT_PARAMS'] = json.dumps(dict(mix=0.75, hm=4.0, G=1, half_life=64.0))
@@ -43,9 +48,9 @@ class Runtime:
                                            device='cpu', dtype=torch.float32, fixed_fraction=0.2)
         self.hot_slots = round(hot_fraction * 12096)
         configure_slots(self.predictor, predictor_module, root, hot_fraction)
-        self.hot_set_capacity_bytes = self.store.check_hot_capacity(self.predictor.budgets) if resident_hot else None
+        self.hot_set_capacity_bytes = self.store.check_hot_capacity(self.predictor.budgets) if resident_hot or async_refinements else None
         self.model = empty_model(root, lambda layer: NestQuantExperts(layer, self.store, self))
-        self.head = load_backbone(root, self.model, device=device)
+        self.head = load_backbone(root, self.model, device=device, memory_check=self.memory_guard.check)
         if resident_base:
             self.store.preload_base()
         self.tokenizer = AutoTokenizer.from_pretrained(root, local_files_only=True, trust_remote_code=False)
@@ -63,15 +68,22 @@ class Runtime:
         self.routing.clear()
         self.decode_routed_experts = 0
         self.decode_hot_experts = 0
+        self.decode_ready_experts = 0
+        self.predictor_seconds = 0.0
 
     @torch.inference_mode()
     def step(self, token: int):
         self.phase = 'decode'
+        self.memory_guard.check()
+        predictor_started = time.perf_counter()
         self.wanted = self.predictor.preforward(token, self.position)
+        self.predictor_seconds += time.perf_counter() - predictor_started
         if int(self.wanted.sum()) != self.hot_slots:
             raise RuntimeError('Incorrect hot expert allocation')
         if self.resident_hot:
             self.store.prepare_hot((int(layer) + 3, int(expert)) for layer, expert in np.argwhere(self.wanted))
+        if self.async_refinements:
+            self.store.begin_decode(self.wanted, self.predictor.loading_priority(), self.predictor.budgets)
         self.routing.clear()
         ids = torch.tensor([[token]], device=self.device)
         output = self.model(ids, past_key_values=self.cache, use_cache=True)
@@ -83,7 +95,9 @@ class Runtime:
         norms = np.array([self.routing[layer][2][0] for layer in range(3, 45)])
         self.decode_routed_experts += selected.size
         self.decode_hot_experts += int(np.take_along_axis(self.wanted, selected, axis=1).sum())
+        predictor_started = time.perf_counter()
         self.predictor.commit([(self.position, token, selected, weights, norms)])
+        self.predictor_seconds += time.perf_counter() - predictor_started
         self.position += 1
         logits = torch.nn.functional.linear(output.last_hidden_state[:, -1], self.head).float().cpu()[0]
         if not torch.isfinite(logits).all():
@@ -101,6 +115,7 @@ class Runtime:
         completed = set()
 
         def capture(layer, start, end):
+            self.memory_guard.check()
             if layer >= 3:
                 captured = self.routing.pop(layer)
                 selected[start:end, layer - 3] = captured[0]
@@ -129,6 +144,7 @@ class Runtime:
                  prefill_chunk_size: int = 256):
         if max_tokens < 1:
             raise ValueError('max_tokens must be positive')
+        self.store.finish_decode()
         self.reset()
         tokens = self.tokenizer.encode(prompt) if raw else self.tokenizer.apply_chat_template(
             [dict(role='user', content=prompt)], tokenize=True, return_dict=False, add_generation_prompt=True,
@@ -159,42 +175,56 @@ class Runtime:
             before = time.perf_counter()
             logits = self.step(token)
             times.append(time.perf_counter() - before)
+        drain_started = time.perf_counter()
+        self.store.finish_decode()
+        drain_seconds = time.perf_counter() - drain_started
+        self.memory_guard.check(force=True)
         resources_after_decode = snapshot()
         return dict(
             text=self.tokenizer.decode(result, skip_special_tokens=True), generated_ids=result,
             prompt_tokens=len(tokens), generated_tokens=len(result), ttft_seconds=first_seconds,
             decode_step_seconds=times, decode_tokens_per_second=len(times) / sum(times) if times else None,
             elapsed_seconds=time.perf_counter() - started,
+            first_decode_step_seconds=times[0] if times else None,
+            subsequent_decode_tokens_per_second=(len(times) - 1) / sum(times[1:]) if len(times) > 1 else None,
+            predictor_seconds=self.predictor_seconds, prefetch_drain_seconds=drain_seconds,
             prefill_tokens_per_second=len(tokens) / first_seconds,
             expert_metrics={key: value - expert_metrics_before[key] for key, value in self.store.metrics.items()},
             expert_metrics_by_phase=dict(
                 prefill={key: value - expert_metrics_before[key] for key, value in expert_metrics_after_prefill.items()},
                 decode={key: value - expert_metrics_after_prefill[key] for key, value in self.store.metrics.items()},
             ),
-            expert_cache_bytes=dict(limit=self.store.cache_limit, after_prefill=cache_bytes_after_prefill,
+            expert_cache_bytes=dict(limit=self.store.cache_budget, resident_limit=self.store.cache_limit,
+                                    staging_reserved=self.store.staging_budget,
+                                    peak_staging_reserved=self.store.prefetch.peak_reserved_bytes if self.store.prefetch else 0,
+                                    after_prefill=cache_bytes_after_prefill,
                                     after_decode=self.store.cache_bytes, resident_base=self.store.base_bytes),
             disk_reads=dict(prefill=resources_after_prefill['disk_read_bytes'] - resources_before['disk_read_bytes'],
                             decode=resources_after_decode['disk_read_bytes'] - resources_after_prefill['disk_read_bytes']),
             resources=dict(before=resources_before, after_prefill=resources_after_prefill, after_decode=resources_after_decode),
-            decode_hot_expert_fraction=self.decode_hot_experts / self.decode_routed_experts if self.decode_routed_experts else None,
+            decode_hot_expert_fraction=self.decode_ready_experts / self.decode_routed_experts if self.decode_routed_experts else None,
+            decode_desired_hot_expert_fraction=self.decode_hot_experts / self.decode_routed_experts if self.decode_routed_experts else None,
             runtime=f'NestQuant Metal experts with Transformers {self.device.upper()} backbone',
             backbone_device=self.device,
             thinking=thinking if not raw else None,
             policy=dict(base_bits=1.5, hot_bits=4, slots=self.hot_slots, fixed=self.predictor.n_fixed, jt_mix=0.75, refresh_tokens=1,
                         prefill_bits=4, prefill_chunk_size=prefill_chunk_size, resident_base=self.store.resident_base,
                         resident_hot=self.resident_hot, hot_set_capacity_bytes=self.hot_set_capacity_bytes,
-                        wired_memory=self.wired_memory),
+                        wired_memory=self.wired_memory, async_refinements=self.async_refinements,
+                        process_memory_limit_bytes=self.memory_guard.limit_bytes),
             limitations=['text only', 'single sequence', '4096 token validation ceiling', 'no speculative decoding',
-                         'synchronous expert SSD reads', 'greedy sampling', 'unquantized attention cache'],
+                         'synchronous prefill SSD reads', 'readiness-dependent decode precision' if self.async_refinements else 'synchronous decode SSD reads', 'greedy sampling', 'unquantized attention cache'],
         )
 
     def close(self):
-        self.store.close()
-        self.predictor_staging.cleanup()
-        if self.previous_wired_limit is not None:
-            mx.synchronize()
-            mx.set_wired_limit(self.previous_wired_limit)
-            self.previous_wired_limit = None
+        try:
+            self.store.close()
+        finally:
+            self.predictor_staging.cleanup()
+            if self.previous_wired_limit is not None:
+                mx.synchronize()
+                mx.set_wired_limit(self.previous_wired_limit)
+                self.previous_wired_limit = None
 
 
 def main():
@@ -205,6 +235,8 @@ def main():
     parser.add_argument('--cache-gib', type=float, default=4)
     parser.add_argument('--resident-base', action='store_true', help='Preload all base experts, about 55 GiB, outside the bounded refinement cache')
     parser.add_argument('--resident-hot', action='store_true', help='Keep every predicted hot refinement resident; requires resident base and sufficient cache')
+    parser.add_argument('--async-refinements', action='store_true')
+    parser.add_argument('--memory-limit-gib', type=float, default=84)
     parser.add_argument('--wired-memory', action='store_true', help='Keep MLX allocations resident up to the device recommended working set')
     parser.add_argument('--hot-fraction', type=float, default=2630 / 12096)
     parser.add_argument('--prefill-chunk-size', type=int, default=256)
@@ -218,7 +250,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(8)
     mx.set_cache_limit(1024**3)
-    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base, args.resident_hot, args.wired_memory)
+    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base, args.resident_hot, args.wired_memory, args.async_refinements, args.memory_limit_gib)
     try:
         report = runtime.generate(args.prompt, args.max_tokens, args.raw, args.thinking, args.prefill_chunk_size)
         args.output.write_text(json.dumps(report, indent=2) + '\n')
