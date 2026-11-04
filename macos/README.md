@@ -152,7 +152,7 @@ The driver discards one warm-up and records three measured requests. It preserve
 
 For tuning, use this sequence:
 
-1. Stop other model servers and wait for weight downloads to finish.
+1. Stop other model servers. Wait for this checkpoint's download to finish. Suspend other downloads during measurements. Resume them afterward.
 2. Compare bounded storage with `--resident-base` at the canonical hot fraction and a 4 GiB cache.
 3. Compare hot fractions of 10%, 21.74%, and 35% with the same storage mode and cache budget.
 4. Compare cache budgets of 4, 16, and 32 GiB at the most useful precision setting.
