@@ -1,5 +1,7 @@
 # NestQuant
 
+For the experimental GLM-5.3-Flash port on Apple silicon, see [the Mac runtime documentation](macos/README.md).
+
 Dynamic 2–4 bit quantisation for MoE models, in one artifact. A 2-bit trellis base stays resident in
 VRAM; the 3- and 4-bit refinement planes stream from SSD on demand, so only the experts that matter this
 step are held at 4-bit. Memory stays near the 2-bit size. Running on GLM-5.3 (vision), 4× RTX

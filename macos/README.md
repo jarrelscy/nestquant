@@ -2,7 +2,7 @@
 
 This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint directly. Metal kernels decode the expert weights and compute expert projections. PyTorch MPS runs the Transformers text backbone.
 
-**Status, 2026-11-04:** decoder and expert checks pass on an Apple M5 Max with 128 GiB memory. A BF16 chunking discrepancy remains under investigation. Full-checkpoint generation, quality evaluation, and tokens-per-second benchmarks are pending. Do not treat the component results as a working model deployment.
+**Status, 2026-11-04:** full-checkpoint generation passed three smoke checks at both all-hot and canonical mixed-precision allocations on an Apple M5 Max with 128 GiB memory. Decoder, expert, and matching-chunk backbone checks pass. General quality evaluation and formal tokens-per-second benchmarks remain pending. The unchunked BF16 comparison has a documented tolerance failure below.
 
 ## Requirements
 
@@ -35,7 +35,7 @@ The download command reuses completed files. Interrupted files can require data 
   --model "$MODEL_ROOT" --output checkpoint-verification.json
 ```
 
-This command checks the checkpoint layout and the reviewed predictor code hashes. It verifies 341 expert, backbone, and predictor weight files against their manifest checksums. Its target list matches the pinned Hugging Face metadata. Full checksum execution remains pending until all expert shards arrive. Vision and speculative-decoding weights are outside this runtime check.
+This command checks the checkpoint layout and the reviewed predictor code hashes. It verifies 341 expert, backbone, and predictor weight files against their manifest checksums. Its target list matches the pinned Hugging Face metadata. All 341 runtime weight files passed full checksum verification on the tested Mac. Vision and speculative-decoding weights are outside this runtime check.
 
 ## Component validation
 
@@ -94,7 +94,7 @@ These results do not establish full-model output quality or throughput. The GPU 
 
 ## Generation interface
 
-The following interface is implemented but awaits full-checkpoint validation:
+The generation interface supports the following command. The tested configuration retains base experts:
 
 ```sh
 .venv-macos/bin/python macos/generate.py \
@@ -102,7 +102,7 @@ The following interface is implemented but awaits full-checkpoint validation:
   --prompt 'Reply with exactly: GLM_MAC_OK' \
   --max-tokens 16 \
   --hot-fraction 0.21742724867724866 \
-  --cache-gib 4 \
+  --cache-gib 4 --resident-base \
   --prefill-chunk-size 256 \
   --output generation.json
 ```
@@ -111,13 +111,15 @@ The default allocation is 2,630 hot experts across 42 routed layers. The predict
 
 `--hot-fraction` changes the total hot-expert allocation. Other allocations preserve the canonical layer weighting approximately, with integer counts between two and 288 experts per layer. `--cache-gib` separately bounds cached expert tensors. Cold experts load only the base planes. Hot experts additionally load their refinements.
 
-The default mode uses a bounded least-recently-used cache for selected experts. It does not retain every base expert. Add `--resident-base` to preload and retain all base experts before inference. This uses an estimated 55 GiB outside `--cache-gib`. In this mode, the bounded cache holds refinements and shares base tensors. Evicting a refinement does not evict its base. Layer 3 storage and expert checks pass, but full-model resident memory remains unverified.
+The default mode uses a bounded least-recently-used cache for selected experts. It does not retain every base expert. Add `--resident-base` to preload and retain all base experts before inference. This retains 59,052,758,208 bytes (55.00 GiB) outside `--cache-gib`. In this mode, the bounded cache holds refinements and shares base tensors. Evicting a refinement does not evict its base. The all-hot smoke run with resident base tensors and a 4 GiB refinement cache peaked at 81.62 GiB of process physical footprint.
 
 These two modes load refinements when a routed expert needs them. A larger hot fraction changes reconstruction precision without guaranteeing a matching increase in resident memory. Measure cache behavior and SSD reads together.
 
 Add `--resident-hot` with `--resident-base` to keep every predicted hot expert's refinements resident during decode. Before each decode step, the runtime removes refinements outside the predicted set and loads missing refinements. Refinements that remain hot retain their existing buffers. Cold experts use the resident base tensors. Updates are synchronous and their cost is included in decode timing.
 
 The runtime checks the worst possible refinement allocation for the configured per-layer slot counts before loading the backbone. An insufficient `--cache-gib` fails instead of silently evicting hot experts. The canonical 2,630-slot allocation requires at most 20.314 GiB of refinements. Use a 24 GiB cache for its initial resident-hot test. This requirement excludes base tensors, the backbone, attention caches, and temporary allocations. Full-model memory and performance remain unverified.
+
+Add `--wired-memory` to keep MLX allocations resident during inference up to the device's recommended working set. The runtime restores the previous process limit when it closes. This uses [MLX memory wiring](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html) without changing system limits. Wiring does not reduce the model's memory requirement. Its performance effect remains under measurement.
 
 Prefill processes every prompt chunk through one layer before advancing. Every selected prefill expert uses its 4-bit reconstruction. The runtime retains that layer's cached tensors between chunks when the cache budget permits. This avoids reducing prefill precision to the decode allocation. It does not imply equality with the unquantized model.
 
@@ -133,18 +135,18 @@ Run the full-model smoke checks after the download and checksum verification fin
 
 ```sh
 .venv-macos/bin/python macos/verify_generation.py \
-  --model "$MODEL_ROOT" --hot-fraction 1 \
+  --model "$MODEL_ROOT" --hot-fraction 1 --resident-base --cache-gib 4 \
   --output generation-all-hot.json
 .venv-macos/bin/python macos/verify_generation.py \
   --model "$MODEL_ROOT" --hot-fraction 0.21742724867724866 \
-  --output generation-canonical.json
+  --resident-base --cache-gib 4 --output generation-canonical.json
 .venv-macos/bin/python macos/verify_generation.py \
   --model "$MODEL_ROOT" --hot-fraction 0.21742724867724866 \
   --resident-base --resident-hot --cache-gib 24 \
   --output generation-resident-hot.json
 ```
 
-These commands remain unvalidated against the full checkpoint. The first checks 4-bit expert generation. The second checks the canonical mixed-precision allocation. The third checks that allocation with the complete hot set resident. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
+The first two commands passed all three cases. The third awaits full-model validation with the complete hot set resident. See the [recorded smoke results](results/2026-11-04-smoke.json) for outputs, resource measurements, and source revision. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
 
 The benchmark driver is implemented but awaits full-checkpoint validation. Its CLI help and Python compilation pass. Full generation must succeed before running the following command:
 
@@ -178,4 +180,4 @@ Reports separate logical base and refinement tensor bytes from process-attribute
 
 `hot_sync_seconds` measures synchronous hot-set updates. It overlaps the loader's timing and is already included in decode throughput. Do not add these timers together. Request reset restores the predictor policy, while the weight cache can retain tensors. Layer-major prefill can replace cached refinements before the next decode pool is established.
 
-The full-model results and recommended settings will be added after checkpoint validation.
+Full-model smoke results are recorded above. Formal throughput, hot-fraction comparisons, and recommended performance settings remain pending.
