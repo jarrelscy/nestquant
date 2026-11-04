@@ -2,7 +2,7 @@
 
 Owner: Andru. Measured: 2026-11-04 to 2026-11-05.
 
-The grouped expert reader completed three 128-token requests at 1.638 tokens/s median and a 59.96 GiB peak process footprint. The first attempt stopped under system memory pressure. Interactive latency remains high.
+Native mixed execution passed one held-out coding check at 2.04 tokens/s. A fixed-token replay reached 3.52 tokens/s, compared with 1.27 tokens/s for the reference path. These are separate workloads. Interactive latency remains high, and the 15–30 tokens/s target remains unmet.
 
 Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkpoint: GLM-5.3-Flash NestQuant 1.5/4, revision `4023870a6f2c6097e37fa5d2e54040db64b011e9`.
 
