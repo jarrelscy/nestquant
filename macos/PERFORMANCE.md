@@ -24,6 +24,8 @@ Both runs used 32 GiB of base cache, the existing asynchronous refinement schedu
 
 The synchronous replay spent 13.94 s at the PyTorch-to-host boundary, including upstream Metal synchronization, 0.10 s submitting inputs to MLX, 0.08 s copying evaluated MLX results to host, and 1.50 s returning the output to PyTorch. Those are wall-clock windows. They include work scheduled by the preceding stage where a call synchronizes a stream. The profiling option separates an explicit upstream drain from the host conversion. The existing PyTorch path reports reference causal-convolution and recurrent Kimi Delta Attention fallbacks.
 
+A separate 32-token reference replay used explicit upstream synchronization at each crossing. Across 33.34 s of decode, it measured 3.65 s draining previous Metal work, 0.89 s copying PyTorch tensors to host, 0.025 s submitting to MLX, 0.021 s copying evaluated MLX output to host, and 0.37 s returning output to PyTorch. Required base reads took 18.03 s. The added synchronization changes scheduling, so these timings describe this profiling run.
+
 ### Memory feasibility on this desktop
 
 The prepared base banks contain 55.46 GiB of packed planes, scales, correction metadata, and low-rank padding. The affine-8 backbone, embedding, and output head contain 9.79 GiB. The native 2% decode refinement bank reserves about 1.87 GiB. The measured short native contexts use about 141 MiB of recurrent cache arrays and less than 2 MiB of sparse attention cache arrays. These logical sizes exclude conversion scratch and framework overhead.

@@ -2740,5 +2740,127 @@
       "last_pressure_level": 1,
       "peak_observed_footprint_bytes": 45164806088
     }
+  },
+  "reference_crossing_profile": {
+    "timings": {
+      "prefill": 90.26474991699797,
+      "decode": 33.33509549999144
+    },
+    "metrics": {
+      "prefill": {
+        "hits": 2068,
+        "misses": 8080,
+        "load_seconds": 69.96630616908078,
+        "expert_forward_seconds": 85.24861462591798,
+        "torch_upstream_drain_seconds": 2.9150183741294313,
+        "torch_to_host_seconds": 0.12749966894625686,
+        "route_bookkeeping_seconds": 0.007100745046045631,
+        "mlx_input_submit_seconds": 0.005713506950996816,
+        "mlx_to_host_seconds": 0.004873501020483673,
+        "torch_output_submit_seconds": 0.05714404006721452,
+        "base_async_reads": 0,
+        "base_async_cancelled": 0,
+        "base_async_wasted": 0,
+        "base_async_worker_seconds": 0.0,
+        "base_async_wait_seconds": 0.0,
+        "base_load_seconds": 35.68664845771855,
+        "base_tensor_bytes": 20968210432,
+        "refinement_tensor_bytes": 34258477056,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 0,
+        "base_misses": 4040,
+        "refinement_hits": 2068,
+        "refinement_misses": 4040,
+        "async_load_seconds": 0.0,
+        "async_loaded": 0,
+        "async_discarded": 0,
+        "async_fallbacks": 0,
+        "async_install_seconds": 0.0,
+        "base_evictions": 0
+      },
+      "decode": {
+        "hits": 8903,
+        "misses": 1849,
+        "load_seconds": 18.026149425131734,
+        "expert_forward_seconds": 23.40748311128118,
+        "torch_upstream_drain_seconds": 3.6487462910008617,
+        "torch_to_host_seconds": 0.8857266343839001,
+        "route_bookkeeping_seconds": 0.03736735539860092,
+        "mlx_input_submit_seconds": 0.025102968007558957,
+        "mlx_to_host_seconds": 0.020546061743516475,
+        "torch_output_submit_seconds": 0.3726748658227734,
+        "base_async_reads": 0,
+        "base_async_cancelled": 0,
+        "base_async_wasted": 0,
+        "base_async_worker_seconds": 0.0,
+        "base_async_wait_seconds": 0.0,
+        "base_load_seconds": 18.026149425131734,
+        "base_tensor_bytes": 9585352704,
+        "refinement_tensor_bytes": 2758422528,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 6886,
+        "base_misses": 1849,
+        "refinement_hits": 2017,
+        "refinement_misses": 0,
+        "async_load_seconds": 6.8972837890614755,
+        "async_loaded": 325,
+        "async_discarded": 0,
+        "async_fallbacks": 77,
+        "async_install_seconds": 0.2022627095284406,
+        "base_evictions": 0
+      }
+    },
+    "resources": {
+      "loaded": {
+        "disk_read_bytes": 15718600704,
+        "disk_written_bytes": 73728,
+        "physical_footprint_bytes": 19927730048,
+        "lifetime_peak_physical_footprint_bytes": 23526330640,
+        "mlx_active_bytes": 0,
+        "mlx_peak_bytes": 0,
+        "mlx_cached_bytes": 0,
+        "mps_driver_allocated_bytes": 18825543680,
+        "mps_allocated_bytes": 18034924544
+      },
+      "after_prefill": {
+        "disk_read_bytes": 79948939264,
+        "disk_written_bytes": 73728,
+        "physical_footprint_bytes": 47033438824,
+        "lifetime_peak_physical_footprint_bytes": 47033438824,
+        "mlx_active_bytes": 23954869432,
+        "mlx_peak_bytes": 24409402768,
+        "mlx_cached_bytes": 475313244,
+        "mps_driver_allocated_bytes": 43830640640,
+        "mps_allocated_bytes": 18184708352
+      },
+      "after_decode": {
+        "disk_read_bytes": 94921363456,
+        "disk_written_bytes": 73728,
+        "physical_footprint_bytes": 56221264896,
+        "lifetime_peak_physical_footprint_bytes": 56221264896,
+        "mlx_active_bytes": 30765832463,
+        "mlx_peak_bytes": 30774950591,
+        "mlx_cached_bytes": 473228588,
+        "mps_driver_allocated_bytes": 50989383680,
+        "mps_allocated_bytes": 18185249024
+      }
+    },
+    "predictor_memory": {
+      "model_bytes": 497694208,
+      "attention_history_bytes": 2998272,
+      "policy_array_bytes": 151504
+    },
+    "supervisor": {
+      "state": "complete",
+      "baseline_restored": true,
+      "minimum_free_percent": 54,
+      "last_pressure_level": 1
+    }
+  },
+  "fresh_backbone_archive": {
+    "scope": "Tracked affine-8 preparer versus the loaded benchmark archive",
+    "files": 48,
+    "byte_exact": 48,
+    "tensor_bytes": 10517153016
   }
 }
