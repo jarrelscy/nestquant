@@ -48,6 +48,7 @@ The decoder test needs only `layers/L3/manifest.json` and `layers/L3/tp0.safeten
   --layer "$MODEL_ROOT/layers/L3" --output projection-verification.json
 .venv-macos/bin/python macos/verify_backbone.py
 .venv-macos/bin/python macos/verify_policy.py
+.venv-macos/bin/python -m unittest discover -s macos -p test_validation.py -v
 ```
 
 The following checks need all eight layer 3 shards. The policy check also needs the downloaded predictor files:
@@ -147,7 +148,7 @@ The benchmark driver is implemented but awaits full-checkpoint validation. Its C
   --cache-gib 4 --prefill-chunk-size 256
 ```
 
-The driver discards one warm-up and records three measured requests. It preserves each response and its token IDs. Decode throughput excludes prefill and the first generated token. A fresh output directory prevents earlier measurements from being overwritten.
+The driver discards one warm-up and records three measured requests. It preserves each response and its token IDs. Every measured request must reach the requested output length. An early stop preserves that run's evidence but prevents a successful throughput summary. Choose a prompt that produces a sufficiently long answer at every compared setting. Decode throughput excludes prefill and the first generated token. A fresh output directory prevents earlier measurements from being overwritten.
 
 For tuning, use this sequence:
 
