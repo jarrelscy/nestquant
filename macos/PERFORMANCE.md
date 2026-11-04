@@ -31,6 +31,19 @@ The first grouped attempt completed one request at 1.559 tokens/s. The watchdog 
 
 The 2% allocation delivered 16.25% actual hot-call coverage, 31.44% actual salience coverage, and 98.22% of wanted calls in time. Across 336 overlapping windows, top-budget forecasts assigned 34.98% salience and observed 32.88%. Raw jT rankings covered 49.14% of observed salience, versus 28.61% for EMA and 5.61% for the initial static mask. These are repeated-prompt diagnostics. The [three answer checks](results/2026-11-05-grouped-smoke.json) and 28 unit tests passed. Max-account Fable/high reviewed the reader before testing.
 
+## Banked expert projection prototype
+
+The banked Metal projection dispatches eight routed experts together for each of the gate, up, and down projections. The component benchmark packs the resident tensors before timing. It uses different inputs for each expert and compares against the existing serving implementation. Across four cases, relative RMS error was at most 0.00015%. The existing serial path also passed the independent CPU comparison at both precision levels. See [timings and isolation receipts](results/banked-expert-projections.json).
+
+| Layer | Expert precision | Serial median | Banked median |
+|---|---|---:|---:|
+| 3 | 1.5-bit base | 1.80 ms | 1.29 ms |
+| 3 | 4-bit refined | 2.38 ms | 1.85 ms |
+| 44 | 1.5-bit base | 1.85 ms | 1.33 ms |
+| 44 | 4-bit refined | 2.47 ms | 1.90 ms |
+
+The benchmark excludes SSD reads, packing time, attention, and the predictor. Serving integration still needs a bounded storage layout for resident base and hot experts. These timings measure expert computation and do not establish model tokens/s.
+
 ## Full-model validation after the reader correction
 
 The [individual-read comparison](results/2026-11-04-preadv-2pct-128.json) used clean source `af4516d`, a 2% hot allocation, 32 GiB base cache, and 4 GiB refinement/staging budget. It retained the 84 GiB process guard, eight-token prefill chunks, and no memory wiring. One 16-token warm-up preceded three measured 128-token requests with the same interval-merging prompt as the earlier comparison.
