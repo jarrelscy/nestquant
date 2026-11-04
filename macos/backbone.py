@@ -72,7 +72,7 @@ def load_backbone(root: Path, model, device: str = 'mps', dtype=torch.bfloat16, 
     def read(name):
         file = index[name]
         if file not in handles:
-            handles[file] = safe_open(root / file, framework='pt', device='cpu')
+            handles[file] = safe_open(root / file, framework='pt', device='cpu', backend='pread')
         handle = handles[file]
         tensor = handle.get_tensor(name)
         scale_name = name.removesuffix('.weight') + '.weight_scale_inv'

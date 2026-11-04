@@ -93,7 +93,7 @@ class ExpertStore:
         key = layer, shard
         if key not in self.handles:
             path = self.root / 'layers' / f'L{layer}' / f'tp{shard}.safetensors'
-            handle = safe_open(path, framework='numpy')
+            handle = safe_open(path, framework='numpy', backend='pread')
             if handle.metadata().get('format') != 'nestquant-v1-tp-safetensors':
                 raise ValueError(f'Unsupported checkpoint container: {path}')
             self.handles[key] = handle, set(handle.keys())
