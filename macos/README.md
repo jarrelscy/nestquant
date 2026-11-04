@@ -28,7 +28,14 @@ HF_HUB_DISABLE_IMPLICIT_TOKEN=1 .venv-macos/bin/hf download \
   --local-dir "$MODEL_ROOT" --max-workers 2
 ```
 
-The download command resumes interrupted transfers. Preserve incomplete files when retrying. Verify shard sizes and SHA-256 hashes against each layer manifest before inference.
+The download command resumes interrupted transfers. Preserve incomplete files when retrying. Verify the runtime weights before inference:
+
+```sh
+.venv-macos/bin/python macos/verify_checkpoint.py \
+  --model "$MODEL_ROOT" --output checkpoint-verification.json
+```
+
+This command checks the checkpoint layout and the reviewed predictor code hashes. It verifies 341 expert, backbone, and predictor weight files against their manifest checksums. Its target list matches the pinned Hugging Face metadata. Full checksum execution remains pending until all expert shards arrive. Vision and speculative-decoding weights are outside this runtime check.
 
 ## Component validation
 
