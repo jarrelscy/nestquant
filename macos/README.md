@@ -4,7 +4,7 @@ This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 chec
 
 **Status, 2026-11-04:** full-checkpoint generation passed three smoke checks at both all-hot and canonical mixed-precision allocations on an Apple M5 Max with 128 GiB memory. Decoder, expert, and matching-chunk backbone checks pass. The first formal benchmark reached 0.227 tokens/second median. General quality evaluation and hot-set comparisons remain pending. See [performance measurements](PERFORMANCE.md). The unchunked BF16 comparison has a documented tolerance failure below.
 
-The [bounded asynchronous decode path](ASYNC.md) is implemented and awaiting review before full-model testing. It reads refinements in the background and executes the precision that is ready.
+The [bounded asynchronous decode path](ASYNC.md) reads refinements in the background and executes the precision that is ready. Two guarded full-base trials stopped under system memory pressure before generation. A separate base-cache budget now avoids the full preload; that addition awaits review and full-model validation.
 
 ## Requirements
 
@@ -116,6 +116,8 @@ The default allocation is 2,630 hot experts across 42 routed layers. The predict
 `--hot-fraction` changes the total hot-expert allocation. Other allocations preserve the canonical layer weighting approximately, with integer counts between two and 288 experts per layer. `--cache-gib` separately bounds cached expert tensors. Cold experts load only the base planes. Hot experts additionally load their refinements.
 
 The default mode uses a bounded least-recently-used cache for selected experts. It does not retain every base expert. Add `--resident-base` to preload and retain all base experts before inference. This retains 59,052,758,208 bytes (55.00 GiB) outside `--cache-gib`. In this mode, the bounded cache holds refinements and shares base tensors. Evicting a refinement does not evict its base. The all-hot smoke run with resident base tensors and a 4 GiB refinement cache peaked at 81.62 GiB of process physical footprint.
+
+To bound the separate base cache, add `--base-cache-gib 32` alongside `--resident-base`. This skips full base preloading and evicts least-recently-used bases with their refinements. Base misses are synchronous. This experimental mode preserves stored precision but needs full-model validation. Use the [guarded validation procedure](ASYNC.md) before benchmarking; the historical full-base command above is not a desktop memory recommendation.
 
 These two modes load refinements when a routed expert needs them. A larger hot fraction changes reconstruction precision without guaranteeing a matching increase in resident memory. Measure cache behavior and SSD reads together.
 

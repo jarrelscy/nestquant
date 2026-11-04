@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "checks": [
+    "Decode completed with base weights while the SSD worker was blocked",
+    "Background-loaded tensors exactly match the independent synchronous loader",
+    "Decode uses installed refinements and stays within cache and staging budgets"
+  ],
+  "metrics": {
+    "hits": 9,
+    "misses": 3,
+    "load_seconds": 0.08192283302196302,
+    "expert_forward_seconds": 0.0069510010071098804,
+    "base_tensor_bytes": 15773696,
+    "refinement_tensor_bytes": 25636864,
+    "hot_sync_seconds": 0.0,
+    "base_hits": 3,
+    "base_misses": 3,
+    "refinement_hits": 6,
+    "refinement_misses": 0,
+    "async_load_seconds": 0.07510925095994025,
+    "async_loaded": 3,
+    "async_discarded": 0,
+    "async_fallbacks": 3,
+    "async_install_seconds": 0.0019890829862561077,
+    "base_evictions": 0
+  },
+  "cache_bytes": 24891392,
+  "staging_budget": 67108864,
+  "peak_staging_reserved": 51888128,
+  "scope": "Three real layer 3 experts; asynchronous fallback and installation, not a full-model benchmark"
+}

@@ -1,0 +1,66 @@
+{
+  "status": "passed",
+  "checks": [
+    {
+      "expert": 0,
+      "base_bytes": 4890639,
+      "refinement_bytes": 8294400,
+      "resident_experts": [
+        0
+      ]
+    },
+    {
+      "expert": 7,
+      "base_bytes": 9781278,
+      "refinement_bytes": 16588800,
+      "resident_experts": [
+        0,
+        7
+      ]
+    },
+    {
+      "expert": 287,
+      "base_bytes": 9793566,
+      "refinement_bytes": 16596992,
+      "resident_experts": [
+        7,
+        287
+      ]
+    },
+    {
+      "expert": 0,
+      "base_bytes": 9793566,
+      "refinement_bytes": 16596992,
+      "resident_experts": [
+        0,
+        287
+      ]
+    },
+    {
+      "check": "Real async completion discarded after its base was evicted",
+      "passed": true
+    }
+  ],
+  "metrics": {
+    "hits": 0,
+    "misses": 10,
+    "load_seconds": 0.1719538319739513,
+    "expert_forward_seconds": 0.0,
+    "base_tensor_bytes": 31547392,
+    "refinement_tensor_bytes": 42684416,
+    "hot_sync_seconds": 0.0,
+    "base_hits": 0,
+    "base_misses": 6,
+    "refinement_hits": 0,
+    "refinement_misses": 4,
+    "async_load_seconds": 0.05106454199994914,
+    "async_loaded": 0,
+    "async_discarded": 1,
+    "async_fallbacks": 0,
+    "async_install_seconds": 0.0,
+    "base_evictions": 4
+  },
+  "base_limit_bytes": 11811160,
+  "refinement_limit_bytes": 147639500,
+  "scope": "Real L3 base eviction and reloading; base and 4-bit outputs exactly equal the uncached loader; no full-model quality or speed claim"
+}
