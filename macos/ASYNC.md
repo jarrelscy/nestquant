@@ -1,6 +1,6 @@
 # Bounded asynchronous decode
 
-The asynchronous decode path is experimental. Bounded-base configurations at 1%, 2%, and 4% passed three full-model answer checks with multi-chunk prefill. Controlled short benchmarks and a 128-token comparison are recorded in [performance measurements](PERFORMANCE.md). A subsequent reader correction reduces interpreter-lock contention in a component microbenchmark. Full-model throughput after that correction and general coding quality remain unverified.
+The asynchronous decode path is experimental. Bounded-base configurations at 1%, 2%, and 4% passed three full-model answer checks with multi-chunk prefill. Controlled short benchmarks and a 128-token comparison are recorded in [performance measurements](PERFORMANCE.md). A subsequent reader correction reduces interpreter-lock contention in a component microbenchmark. After that correction, three 128-token requests measured 1.217 tokens/s median at a 59.11 GiB peak. The three answer checks and one complete coding task also passed. General coding quality remains unverified.
 
 ## Memory budget
 

@@ -2,9 +2,26 @@
 
 Owner: Andru. Measured: 2026-11-04.
 
-The bounded Mac runtime generates text within the tested memory budget, but interactive latency remains high. A corrected background reader improves a component measurement; full-model throughput after that correction is pending.
+The bounded Mac runtime generates text within the tested memory budget, but interactive latency remains high. The corrected asynchronous reader completed three 128-token requests at 1.217 tokens/s median and a 59.11 GiB peak process footprint.
 
 Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkpoint: GLM-5.3-Flash NestQuant 1.5/4, revision `4023870a6f2c6097e37fa5d2e54040db64b011e9`.
+
+## Full-model validation after the reader correction
+
+The [latest comparison](results/2026-11-04-preadv-2pct-128.json) used clean source `af4516d`, a 2% hot allocation, 32 GiB base cache, and 4 GiB refinement/staging budget. It retained the 84 GiB process guard, eight-token prefill chunks, and no memory wiring. One 16-token warm-up preceded three measured 128-token requests with the same interval-merging prompt as the earlier comparison.
+
+| Measurement | Observed result |
+|---|---|
+| Decode throughput | 1.217 tokens/s median, 1.110-1.296 range |
+| First-token latency | 80.55 seconds median, excluding startup |
+| Peak process footprint | 59.11 GiB |
+| System pressure | Normal throughout; minimum reported free memory 67% |
+| Base-load time during decode | 51.23-60.23 seconds per request |
+| Predictor diagnostic overhead | 0.18 seconds in the first request, included in decode timing |
+
+The earlier same-configuration comparison measured 1.063 tokens/s median. Generated sequences differ within both comparisons because precision depends on readiness. These observations are not a fixed-token replay or a controlled estimate of the reader's speedup. Synchronous base loads still consume about half of decode time. Runtime logs also report reference PyTorch fallbacks for `causal_conv1d_update` and `fused_recurrent_kda`.
+
+The corrected runtime passed [all three answer checks](results/2026-11-04-preadv-2pct-smoke.json), with a 53.55 GiB peak. It generated a complete [palindrome function](results/2026-11-04-preadv-2pct-coding.json) that passed 12 explicit cases and 200 seeded ASCII cases. That request generated 32 tokens, took 246.60 seconds to the first token, and peaked at 57.31 GiB. This validates one small coding task, not a general coding evaluation. All isolated runs restored the existing service.
 
 ## Controlled hot-pool comparison
 
@@ -88,4 +105,24 @@ Generation reports now include `predictor_diagnostics`. They record per-layer ca
 
 Calibration compares each causal block forecast with the mean normalized squared routing weights over that token and the next 15 decode steps. This matches the shipped predictor's `train.py` block-loss target. The final 15 incomplete windows are excluded. Reports include total variation, cross entropy, probability-bin means, and predicted versus observed top-budget salience. Windows overlap and are not independent samples. A short 16-output-token run contains only 15 decode steps, so it has no full calibration window.
 
-These diagnostics measure routing prediction on the mixed-precision execution. They do not establish answer accuracy or agreement with an FP8/BF16 reference. No predictor parameters are fitted on these requests. Full-model observations with these diagnostics remain pending.
+The latest three 128-token requests provide 381 decode steps and 128,016 routed expert calls. The following results pool those calls; they exclude the warm-up.
+
+| Measurement | Observed result |
+|---|---:|
+| Allocated slots | 242 / 12,096, or 2.0007% |
+| Desired hot-call coverage | 16.37% |
+| Actual hot-call coverage | 16.20% |
+| Wanted calls delivered in time | 97.60% |
+| Desired salience coverage | 32.21% |
+| Actual salience coverage | 31.67% |
+| Raw jT top-budget salience coverage | 49.85% |
+| EMA top-budget salience coverage | 28.87% |
+| Static initial-pool salience coverage | 5.58% |
+
+Of 20,954 wanted calls, 20,451 received their refinement and 503 fell back. Another 282 calls used cached refinements outside the wanted set. Every per-layer total agrees with the existing global counters. The fixed subset occupies 48 of 242 slots. Its mask covered 0.93% of observed salience before accounting for readiness.
+
+The 336 complete, overlapping calibration windows forecast 34.74% salience in their top-budget experts and observed 33.14%, a 1.59 percentage-point overestimate. Mean cross entropy was 4.387 nats, versus 5.663 for a uniform distribution. Mean total variation was 0.549, so the near aggregate top-budget match must not be mistaken for accurate forecasts for every expert and window.
+
+These measurements support useful jT rankings on this prompt. The final policy captures less salience than raw jT ranking because it also applies EMA, fixed slots, and retention hysteresis. Removing those constraints could increase SSD churn; the ranking comparison does not measure that counterfactual. Confidence is high in the recorded counts and moderate in this policy-tuning lead.
+
+These diagnostics measure routing prediction on mixed-precision execution. Three repeated-prompt requests are not a held-out quality suite. They do not establish answer accuracy, general calibration, or agreement with an FP8/BF16 reference. No predictor parameters were fitted on these requests. The complete palindrome request supplies a second prompt, with only 16 overlapping calibration windows.
