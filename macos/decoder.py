@@ -138,19 +138,23 @@ def _matvec_kernel(base_k: float, residual_k: float):
     rka, rmask = PATTERNS[residual_k]
     source = f"""
     uint unit = threadgroup_position_in_grid.x;
+    uint row = threadgroup_position_in_grid.y;
+    uint expert = BANKED ? expert_ids[row] : 0;
     uint g = simdgroup_index_in_threadgroup;
     uint lane = thread_index_in_simdgroup;
     uint flat = order[unit];
     uint chunk = flat / TN;
     uint strip = flat % TN;
     uint ring = unit * 8 + g;
+    uint expert_units = expert * TK * TN;
+    ring += expert_units * 8;
     float sign = variants[ring] ? -1.0f : 1.0f;
     float a = float(as_type<half>(ushort(0x1eee))) * sign;
     float b = float(as_type<half>(ushort(0xc931))) * sign;
     uint mb = 0, n = 0;
     if (LEVEL == 4) {{
-        mb = words[unit] & 255;
-        n = (words[unit] >> 8) & 255;
+        mb = words[expert_units + unit] & 255;
+        n = (words[expert_units + unit] >> 8) & 255;
         volatile float rcp = 1.0f / float(mb);
         half ah = half(1.732421875f * rcp);
         volatile float nr = float(n) * rcp;
@@ -174,20 +178,20 @@ def _matvec_kernel(base_k: float, residual_k: float):
         uint pair = (p % 64) / 2;
         uint r = pair % 4;
         uint k = 16 * (pair / 4) + 2 * local_lane + 8 * (r >> 1) + (p % 2);
-        float value = weight * x[chunk * 128 + k];
+        float value = weight * x[(row * TK + chunk) * 128 + k];
         if (r & 1) s1 += value; else s0 += value;
     }}
     s0 = simd_sum(s0);
     s1 = simd_sum(s1);
     if (lane == 0) {{
-        uint offset = (strip * TK + chunk) * 16 + g;
+        uint offset = ((row * TN + strip) * TK + chunk) * 16 + g;
         partial[offset] = s0;
         partial[offset + 8] = s1;
     }}
     """
     return mx.fast.metal_kernel(
         name=f'nq_matvec_{int(base_k * 10000)}_{int(residual_k * 10000)}',
-        input_names=['base', 'residual', 'words', 'variants', 'order', 'x'],
+        input_names=['base', 'residual', 'words', 'variants', 'order', 'x', 'expert_ids'],
         output_names=['partial'], source=source, header=HEADER,
         compile_options={'math_mode': 'safe'},
     )
@@ -200,8 +204,8 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
     _, _, order = _matrix_indices(tk, tn, meta['shard_axis'])
     rotated = mx.hadamard_transform((x.astype(mx.float32) * planes[f'suh{level}'].astype(mx.float32)).reshape(-1, 128)).astype(mx.float16).astype(mx.float32).reshape(-1)
     partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'])(
-        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated],
-        template=[('LEVEL', level), ('TK', tk), ('TN', tn)],
+        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, order],
+        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', False)],
         grid=(tk * tn * 256, 1, 1), threadgroup=(256, 1, 1),
         output_shapes=[(tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]
@@ -212,6 +216,45 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
         result = result + low @ planes['lrU2'].astype(mx.float32)
         if level == 4:
             result = result + low @ planes['lrU4'].astype(mx.float32)
+    return result
+
+
+def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
+                             route: tuple[int, ...], level: int) -> mx.array:
+    rows = len(route)
+    tk, tn = meta['tk'], meta['tn']
+    if (level not in (2, 4) or rows == 0 or x.shape != (rows, tk * 128)
+            or meta['k'] != tk * 128):
+        raise ValueError('Expected one input vector per routed expert')
+    depth = planes['base'].shape[0]
+    if any(type(index) is not int or not 0 <= index < depth for index in route):
+        raise ValueError('Expert route is outside the resident bank')
+    units = tk * tn
+    if (planes['base'].shape != (depth, units * int(meta['base_K'] * 256))
+            or planes['var'].shape != (depth, units * 8)
+            or (level == 4 and (
+                planes['p4'].shape != (depth, units * int(meta['res_rule']['K'] * 256))
+                or planes['word'].shape != (depth, units)))):
+        raise ValueError('Packed bank dimensions do not match the projection')
+    expert_ids = mx.array(route, dtype=mx.uint32)
+    _, _, order = _matrix_indices(tk, tn, meta['shard_axis'])
+    x = x.astype(mx.float32)
+    scaled = x * planes[f'suh{level}'][expert_ids].astype(mx.float32)
+    rotated = mx.hadamard_transform(scaled.reshape(rows, -1, 128)).astype(mx.float16).astype(mx.float32)
+    partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'])(
+        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, expert_ids],
+        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True)],
+        grid=(tk * tn * 256, rows, 1), threadgroup=(256, 1, 1),
+        output_shapes=[(rows, tn, tk, 16)], output_dtypes=[mx.float32],
+    )[0]
+    projected = partial.sum(axis=2).reshape(rows, -1, 128)
+    result = mx.hadamard_transform(projected).reshape(rows, -1) * planes[f'svh{level}'][expert_ids].astype(mx.float32)
+    if 'lrV' in planes:
+        v = planes['lrV'][expert_ids].astype(mx.float32).transpose(0, 2, 1)
+        low = x[:, None, :] @ v
+        result = result + (low @ planes['lrU2'][expert_ids].astype(mx.float32))[:, 0, :]
+        if level == 4:
+            result = result + (low @ planes['lrU4'][expert_ids].astype(mx.float32))[:, 0, :]
     return result
 
 
