@@ -20,23 +20,22 @@ from checkpoint import validate
 
 class Runtime:
     def __init__(self, root: Path, cache_gib: float = 4, device: str = 'mps', hot_fraction: float = 2630 / 12096,
-                 resident_base: bool = False):
+                 resident_base: bool = False, resident_hot: bool = False):
         if device == 'mps' and not torch.backends.mps.is_available():
             raise RuntimeError('PyTorch MPS is unavailable')
         if not 2 / 288 <= hot_fraction <= 1:
             raise ValueError('hot_fraction must be between 2/288 and 1')
+        if resident_hot and not resident_base:
+            raise ValueError('Hot-set residency requires --resident-base')
         root = root.expanduser().resolve()
         validate(root)
         self.phase = 'decode'
         self.device = device
+        self.resident_hot = resident_hot
         self.root = root
         self.routing = {}
         self.wanted = np.zeros((42, 288), dtype=bool)
         self.store = ExpertStore(root, cache_gib, resident_base=resident_base)
-        self.model = empty_model(root, lambda layer: NestQuantExperts(layer, self.store, self))
-        self.head = load_backbone(root, self.model, device=device)
-        if resident_base:
-            self.store.preload_base()
         predictor_module, self.predictor_staging = staged_predictor()
 
         os.environ['NQ_FLASH_JT_PARAMS'] = json.dumps(dict(mix=0.75, hm=4.0, G=1, half_life=64.0))
@@ -44,6 +43,11 @@ class Runtime:
                                            device='cpu', dtype=torch.float32, fixed_fraction=0.2)
         self.hot_slots = round(hot_fraction * 12096)
         configure_slots(self.predictor, predictor_module, root, hot_fraction)
+        self.hot_set_capacity_bytes = self.store.check_hot_capacity(self.predictor.budgets) if resident_hot else None
+        self.model = empty_model(root, lambda layer: NestQuantExperts(layer, self.store, self))
+        self.head = load_backbone(root, self.model, device=device)
+        if resident_base:
+            self.store.preload_base()
         self.tokenizer = AutoTokenizer.from_pretrained(root, local_files_only=True, trust_remote_code=False)
         self.thinking_off_template = (Path(__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
         self.reset()
@@ -62,6 +66,8 @@ class Runtime:
         self.wanted = self.predictor.preforward(token, self.position)
         if int(self.wanted.sum()) != self.hot_slots:
             raise RuntimeError('Incorrect hot expert allocation')
+        if self.resident_hot:
+            self.store.prepare_hot((int(layer) + 3, int(expert)) for layer, expert in np.argwhere(self.wanted))
         self.routing.clear()
         ids = torch.tensor([[token]], device=self.device)
         output = self.model(ids, past_key_values=self.cache, use_cache=True)
@@ -171,9 +177,10 @@ class Runtime:
             backbone_device=self.device,
             thinking=thinking if not raw else None,
             policy=dict(base_bits=1.5, hot_bits=4, slots=self.hot_slots, fixed=self.predictor.n_fixed, jt_mix=0.75, refresh_tokens=1,
-                        prefill_bits=4, prefill_chunk_size=prefill_chunk_size, resident_base=self.store.resident_base),
+                        prefill_bits=4, prefill_chunk_size=prefill_chunk_size, resident_base=self.store.resident_base,
+                        resident_hot=self.resident_hot, hot_set_capacity_bytes=self.hot_set_capacity_bytes),
             limitations=['text only', 'single sequence', '4096 token validation ceiling', 'no speculative decoding',
-                         'synchronous selected-expert SSD reads', 'greedy sampling', 'unquantized attention cache'],
+                         'synchronous expert SSD reads', 'greedy sampling', 'unquantized attention cache'],
         )
 
     def close(self):
@@ -188,6 +195,7 @@ def main():
     parser.add_argument('--max-tokens', type=int, default=16)
     parser.add_argument('--cache-gib', type=float, default=4)
     parser.add_argument('--resident-base', action='store_true', help='Preload all base experts, about 55 GiB, outside the bounded refinement cache')
+    parser.add_argument('--resident-hot', action='store_true', help='Keep every predicted hot refinement resident; requires resident base and sufficient cache')
     parser.add_argument('--hot-fraction', type=float, default=2630 / 12096)
     parser.add_argument('--prefill-chunk-size', type=int, default=256)
     parser.add_argument('--device', choices=['cpu', 'mps'], default='mps')
@@ -200,7 +208,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(8)
     mx.set_cache_limit(1024**3)
-    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base)
+    runtime = Runtime(args.model, args.cache_gib, args.device, args.hot_fraction, args.resident_base, args.resident_hot)
     try:
         report = runtime.generate(args.prompt, args.max_tokens, args.raw, args.thinking, args.prefill_chunk_size)
         args.output.write_text(json.dumps(report, indent=2) + '\n')

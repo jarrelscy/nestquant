@@ -25,7 +25,52 @@ class ExpertStore:
         self.handles = {}
         self.manifests = {}
         self.metrics = dict(hits=0, misses=0, load_seconds=0.0, expert_forward_seconds=0.0,
-                            base_tensor_bytes=0, refinement_tensor_bytes=0)
+                            base_tensor_bytes=0, refinement_tensor_bytes=0, hot_sync_seconds=0.0)
+
+    def _manifest(self, layer):
+        if layer not in self.manifests:
+            path = self.root / 'layers' / f'L{layer}' / 'manifest.json'
+            self.manifests[layer] = json.loads(path.read_text())
+        return self.manifests[layer]
+
+    def refinement_bytes(self, layer, expert):
+        manifest = self._manifest(layer)
+        size = 0
+        for projection, meta in manifest['proj_meta'].items():
+            units = meta['tk'] * meta['tn']
+            rank = manifest['per_expert'][str(expert)]['lr_rank'][projection]
+            size += units * (8 * int(meta['res_rule']['K'] * 32) + 4)
+            size += 2 * (meta['k'] + meta['n']) + 2 * rank * meta['n']
+        return size
+
+    def check_hot_capacity(self, budgets):
+        if not self.resident_base:
+            raise ValueError('Hot-set residency requires resident-base mode')
+        required = sum(sum(sorted((self.refinement_bytes(layer, expert) for expert in range(288)),
+                                  reverse=True)[:count]) for layer, count in budgets.items())
+        if required > self.cache_limit:
+            raise ValueError(f'Hot-set residency requires at least {required / 1024**3:.3f} GiB of refinement cache')
+        return required
+
+    def prepare_hot(self, experts):
+        if not self.resident_base:
+            raise ValueError('Hot-set residency requires resident-base mode')
+        wanted = {(layer, expert, 4) for layer, expert in experts}
+        if any(not 3 <= layer <= 44 or not 0 <= expert < 288 for layer, expert, _ in wanted):
+            raise ValueError('Invalid Flash expert coordinates')
+        required = sum(self.refinement_bytes(layer, expert) for layer, expert, _ in wanted)
+        if required > self.cache_limit:
+            raise ValueError('The predicted hot set exceeds the refinement cache budget')
+        started = time.perf_counter()
+        for key in list(self.cache):
+            if key not in wanted:
+                _, removed = self.cache.pop(key)
+                self.cache_bytes -= removed
+        for key in sorted(wanted - self.cache.keys()):
+            self.get(*key)
+        if set(self.cache) != wanted or self.cache_bytes != required:
+            raise RuntimeError('Resident hot-set storage does not match the requested allocation')
+        self.metrics['hot_sync_seconds'] += time.perf_counter() - started
 
     def _handle(self, layer: int, shard: int):
         key = layer, shard
@@ -80,10 +125,7 @@ class ExpertStore:
         return value
 
     def _load(self, layer, expert, level):
-        if layer not in self.manifests:
-            path = self.root / 'layers' / f'L{layer}' / 'manifest.json'
-            self.manifests[layer] = json.loads(path.read_text())
-        manifest = self.manifests[layer]
+        manifest = self._manifest(layer)
         result = {}
 
         for projection in ('gate', 'up', 'down'):

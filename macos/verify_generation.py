@@ -33,18 +33,20 @@ def main():
     parser.add_argument('--hot-fraction', type=float, default=1.0)
     parser.add_argument('--cache-gib', type=float, default=4)
     parser.add_argument('--resident-base', action='store_true')
+    parser.add_argument('--resident-hot', action='store_true')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('Use a fresh output file to preserve earlier results')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(8)
     mx.set_cache_limit(1024**3)
-    report = dict(status='running', hot_fraction=args.hot_fraction, resident_base=args.resident_base,
+    report = dict(status='running', hot_fraction=args.hot_fraction, resident_base=args.resident_base, resident_hot=args.resident_hot,
                   scope='Three short text smoke checks, not a general quality evaluation', checks=[])
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     runtime = None
     try:
-        runtime = Runtime(args.model, args.cache_gib, hot_fraction=args.hot_fraction, resident_base=args.resident_base)
+        runtime = Runtime(args.model, args.cache_gib, hot_fraction=args.hot_fraction,
+                          resident_base=args.resident_base, resident_hot=args.resident_hot)
         for name, prompt, expected in CASES:
             result = runtime.generate(prompt, max_tokens=32)
             report['checks'].append(dict(name=name, passed=answer_matches(result['text'], expected),
