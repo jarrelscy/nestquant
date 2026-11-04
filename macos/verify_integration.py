@@ -24,6 +24,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--reference', choices=['unchunked', 'chunked'], default='unchunked')
+    parser.add_argument('--diagnose-chunking', action='store_true')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     torch.set_num_threads(8)
@@ -43,6 +44,19 @@ def main():
     model.layers[3].mlp.experts = NestQuantExperts(3, store, state)
     model.layers[3].mlp.gate = FixedRouter()
     model = model.to_empty(device='mps').to(dtype=torch.bfloat16).eval()
+    diagnostics = {}
+    capture = None
+    if args.diagnose_chunking:
+        def observer(key):
+            def record(_, __, output):
+                if capture is not None:
+                    value = output[0] if isinstance(output, tuple) else output
+                    diagnostics.setdefault(capture, {}).setdefault(key, []).append(value.detach().clone())
+            return record
+
+        for index, layer in enumerate(model.layers):
+            layer.register_forward_hook(observer(f'{index}.block'))
+            layer.self_attn.register_forward_hook(observer(f'{index}.attention'))
     with torch.inference_mode():
         model.apply(model._init_weights)
         for layer in model.layers:
@@ -53,10 +67,22 @@ def main():
                 layer.self_attn.forget_gate.A_log.data = layer.self_attn.forget_gate.A_log.data.float()
                 layer.self_attn.forget_gate.dt_bias.data = layer.self_attn.forget_gate.dt_bias.data.float()
         tokens = torch.tensor([[5, 12, 25]], device='mps')
+        capture = 'unchunked' if args.diagnose_chunking else None
         normal = model(tokens, use_cache=True)
+        capture = None
         layered = layer_major_prefill(model, tokens, chunk_size=2)
+        capture = 'chunked' if args.diagnose_chunking else None
         standard_first = model(tokens[:, :2], use_cache=True)
         standard_second = model(tokens[:, 2:], past_key_values=standard_first.past_key_values, use_cache=True)
+        capture = None
+        chunking = {}
+        if args.diagnose_chunking:
+            for name, full in diagnostics['unchunked'].items():
+                expected = full[0].float()
+                actual = torch.cat(diagnostics['chunked'][name], dim=1).float()
+                error = ((actual - expected).norm() / expected.norm().clamp_min(1e-30)).item()
+                chunking[name] = error
+            print(json.dumps(dict(diagnostic='unchunked_vs_standard_chunked_layers', relative_rms=chunking)), flush=True)
         standard_hidden = torch.cat((standard_first.last_hidden_state, standard_second.last_hidden_state), dim=1)
         standard_diff = ((layered.last_hidden_state.float()-standard_hidden.float()).norm() / standard_hidden.float().norm()).item()
         print(json.dumps(dict(diagnostic='layer_major_vs_standard_chunked_prefill', relative_rms=standard_diff)), flush=True)
@@ -88,6 +114,8 @@ def main():
         checks.append(dict(phase='cached_decode', relative_rms=error))
     store.close()
     report = dict(status='passed', reference=args.reference, unchunked_decode_relative_rms=full_difference, unchunked_1_percent_check_passed=full_difference < 0.01, scope='Four random BF16 backbone layers at real Flash dimensions, real L3 NestQuant experts, fixed routing; no model quality claim', tolerance_relative_rms=0 if args.reference == 'chunked' else 0.01, checks=checks)
+    if args.diagnose_chunking:
+        report['unchunked_vs_standard_chunked_layers'] = chunking
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report), flush=True)
 
