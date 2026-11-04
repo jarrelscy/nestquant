@@ -8,6 +8,7 @@ import mlx.core as mx
 
 from decoder import projection_matvec, projection_matvec_banked
 from experts import ExpertStore
+from packed_expert_bank import pack
 
 
 EXPERTS = (0, 7, 98, 177, 218, 241, 277, 287)
@@ -22,29 +23,6 @@ def timed(call):
         mx.eval(call())
         samples.append(time.perf_counter() - start)
     return dict(median_ms=1000 * statistics.median(samples), samples_ms=[1000 * s for s in samples])
-
-
-def pack(projections):
-    low_rank = {'lrV', 'lrU2', 'lrU4'}
-    packed = {}
-    for key in sorted(set().union(*(planes.keys() for planes in projections))):
-        if key not in low_rank:
-            packed[key] = mx.stack([planes[key] for planes in projections])
-            continue
-        present = [planes[key] for planes in projections if key in planes]
-        rank = max(array.shape[0] for array in present)
-        _, width = present[0].shape
-        dtype = present[0].dtype
-        padded = []
-        for planes in projections:
-            value = planes.get(key)
-            if value is None:
-                value = mx.zeros((rank, width), dtype=dtype)
-            else:
-                value = mx.pad(value, [(0, rank - value.shape[0]), (0, 0)])
-            padded.append(value)
-        packed[key] = mx.stack(padded)
-    return packed
 
 
 def compare(store, layer, level):

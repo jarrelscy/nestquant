@@ -140,6 +140,8 @@ def _matvec_kernel(base_k: float, residual_k: float):
     uint unit = threadgroup_position_in_grid.x;
     uint row = threadgroup_position_in_grid.y;
     uint expert = BANKED ? expert_ids[row] : 0;
+    uint hot = MIXED ? refined_ids[row] : expert;
+    bool refined = LEVEL == 4 || (MIXED && hot != 0xffffffffu);
     uint g = simdgroup_index_in_threadgroup;
     uint lane = thread_index_in_simdgroup;
     uint flat = order[unit];
@@ -152,9 +154,12 @@ def _matvec_kernel(base_k: float, residual_k: float):
     float a = float(as_type<half>(ushort(0x1eee))) * sign;
     float b = float(as_type<half>(ushort(0xc931))) * sign;
     uint mb = 0, n = 0;
-    if (LEVEL == 4) {{
-        mb = words[expert_units + unit] & 255;
-        n = (words[expert_units + unit] >> 8) & 255;
+    uint refined_ring = 0;
+    if (refined) {{
+        uint refined_unit = hot * TK * TN + unit;
+        refined_ring = refined_unit * 8 + g;
+        mb = words[refined_unit] & 255;
+        n = (words[refined_unit] >> 8) & 255;
         volatile float rcp = 1.0f / float(mb);
         half ah = half(1.732421875f * rcp);
         volatile float nr = float(n) * rcp;
@@ -169,8 +174,8 @@ def _matvec_kernel(base_k: float, residual_k: float):
         uint p = lane + j * 32;
         uint sb = nq_sum(nq_state(base, ring, p, {bka}, {bmask}));
         uint code = sb;
-        if (LEVEL == 4) {{
-            uint sr = nq_sum(nq_state(residual, ring, p, {rka}, {rmask}));
+        if (refined) {{
+            uint sr = nq_sum(nq_state(residual, refined_ring, p, {rka}, {rmask}));
             code = (mb * sb + n * sr + 128) >> 8;
         }}
         float weight = float(half(fma(a, float(1024 + code), b)));
@@ -191,7 +196,7 @@ def _matvec_kernel(base_k: float, residual_k: float):
     """
     return mx.fast.metal_kernel(
         name=f'nq_matvec_{int(base_k * 10000)}_{int(residual_k * 10000)}',
-        input_names=['base', 'residual', 'words', 'variants', 'order', 'x', 'expert_ids'],
+        input_names=['base', 'residual', 'words', 'variants', 'order', 'x', 'expert_ids', 'refined_ids'],
         output_names=['partial'], source=source, header=HEADER,
         compile_options={'math_mode': 'safe'},
     )
@@ -204,8 +209,8 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
     _, _, order = _matrix_indices(tk, tn, meta['shard_axis'])
     rotated = mx.hadamard_transform((x.astype(mx.float32) * planes[f'suh{level}'].astype(mx.float32)).reshape(-1, 128)).astype(mx.float16).astype(mx.float32).reshape(-1)
     partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'])(
-        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, order],
-        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', False)],
+        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, order, order],
+        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', False), ('MIXED', False)],
         grid=(tk * tn * 256, 1, 1), threadgroup=(256, 1, 1),
         output_shapes=[(tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]
@@ -220,7 +225,8 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
 
 
 def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
-                             route: tuple[int, ...] | mx.array, level: int) -> mx.array:
+                             route: tuple[int, ...] | mx.array, level: int, *,
+                             refinements: dict | None = None, refined_route: mx.array | None = None) -> mx.array:
     if isinstance(route, mx.array) and (route.ndim != 1 or route.dtype != mx.uint32):
         raise ValueError('Device routes require a vector of uint32 expert IDs')
     rows = len(route)
@@ -240,6 +246,9 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
             raise ValueError('Expert route is outside the resident bank')
         expert_ids = mx.array(route, dtype=mx.uint32)
     units = tk * tn
+    mixed = refinements is not None
+    if mixed != (refined_route is not None) or (mixed and level != 2):
+        raise ValueError('Mixed precision requires a base level and a refinement route')
     if (planes['base'].shape != (depth, units * int(meta['base_K'] * 256))
             or planes['var'].shape != (depth, units * 8)
             or (level == 4 and (
@@ -248,22 +257,47 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
         raise ValueError('Packed bank dimensions do not match the projection')
     _, _, order = _matrix_indices(tk, tn, meta['shard_axis'])
     x = x.astype(mx.float32)
-    scaled = x * planes[f'suh{level}'][expert_ids].astype(mx.float32)
+    su = planes[f'suh{level}'][expert_ids]
+    sv = planes[f'svh{level}'][expert_ids]
+    residual, words = planes['p4'], planes['word']
+    refinement_ids = expert_ids
+    if mixed:
+        if refined_route.shape != (rows,) or refined_route.dtype != mx.uint32:
+            raise ValueError('Expected one uint32 refinement slot per row')
+        residual, words = refinements['p4'], refinements['word']
+        hot = residual.shape[0]
+        if (hot == 0 or residual.shape != (hot, units * int(meta['res_rule']['K'] * 256))
+                or words.shape != (hot, units) or refinements['suh4'].shape != (hot, meta['k'])
+                or refinements['svh4'].shape != (hot, meta['n'])):
+            raise ValueError('Refinement bank dimensions do not match the projection')
+        cold = refined_route == 0xffffffff
+        ready = refined_route < hot
+        bounded = mx.minimum(refined_route, hot - 1)
+        refinement_ids = mx.where(ready, bounded, mx.array(0xffffffff, dtype=mx.uint32))
+        su = mx.where(ready[:, None], refinements['suh4'][bounded], su)
+        sv = mx.where(ready[:, None], refinements['svh4'][bounded], sv)
+        valid = (cold | ready) if valid is None else valid & (cold | ready)
+    scaled = x * su.astype(mx.float32)
     rotated = mx.hadamard_transform(scaled.reshape(rows, -1, 128)).astype(mx.float16).astype(mx.float32)
     partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'])(
-        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, expert_ids],
-        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True)],
+        inputs=[planes['base'], residual, words, planes['var'], order, rotated, expert_ids, refinement_ids],
+        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed)],
         grid=(tk * tn * 256, rows, 1), threadgroup=(256, 1, 1),
         output_shapes=[(rows, tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]
     projected = partial.sum(axis=2).reshape(rows, -1, 128)
-    result = mx.hadamard_transform(projected).reshape(rows, -1) * planes[f'svh{level}'][expert_ids].astype(mx.float32)
+    result = mx.hadamard_transform(projected).reshape(rows, -1) * sv.astype(mx.float32)
     if 'lrV' in planes:
         v = planes['lrV'][expert_ids].astype(mx.float32).transpose(0, 2, 1)
         low = x[:, None, :] @ v
         result = result + (low @ planes['lrU2'][expert_ids].astype(mx.float32))[:, 0, :]
         if level == 4:
             result = result + (low @ planes['lrU4'][expert_ids].astype(mx.float32))[:, 0, :]
+        if mixed:
+            if refinements['lrU4'].shape != (hot, v.shape[-1], meta['n']):
+                raise ValueError('Refinement bank low-rank dimensions do not match the base')
+            update = (low @ refinements['lrU4'][bounded].astype(mx.float32))[:, 0, :]
+            result = result + mx.where(ready[:, None], update, 0)
     return mx.where(valid[:, None], result, mx.nan) if valid is not None else result
 
 

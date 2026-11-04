@@ -2,13 +2,14 @@ import math
 import time
 
 import mlx.core as mx
-import torch
 
 from resources import process_usage, system_pressure
 
 
 
 def snapshot():
+    import torch
+
     usage = process_usage()
     return dict(
         disk_read_bytes=usage.diskio_bytesread,
