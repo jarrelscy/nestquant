@@ -8,8 +8,8 @@ HEADER = r'''
 template <typename Buffer>
 uint nq_state(Buffer buf, uint ring, uint pos, uint ka, uint mask) {
     uint ring_bits = ka * 256 + popcount(mask) * 16;
-    uint bit = ka * pos + (pos / 16) * popcount(mask)
-        + popcount(mask & ((1u << (pos % 16)) - 1));
+    uint bit = ka * pos + (mask == 0xAAAA ? pos / 2 :
+        (pos / 16) * popcount(mask) + popcount(mask & ((1u << (pos % 16)) - 1)));
     uint bytes = ring_bits / 8;
     uint off = bit / 8;
     uint start = ring * bytes;
@@ -220,15 +220,25 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
 
 
 def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
-                             route: tuple[int, ...], level: int) -> mx.array:
+                             route: tuple[int, ...] | mx.array, level: int) -> mx.array:
+    if isinstance(route, mx.array) and (route.ndim != 1 or route.dtype != mx.uint32):
+        raise ValueError('Device routes require a vector of uint32 expert IDs')
     rows = len(route)
     tk, tn = meta['tk'], meta['tn']
     if (level not in (2, 4) or rows == 0 or x.shape != (rows, tk * 128)
             or meta['k'] != tk * 128):
         raise ValueError('Expected one input vector per routed expert')
     depth = planes['base'].shape[0]
-    if any(type(index) is not int or not 0 <= index < depth for index in route):
-        raise ValueError('Expert route is outside the resident bank')
+    if depth == 0:
+        raise ValueError('Resident bank is empty')
+    valid = None
+    if isinstance(route, mx.array):
+        valid = route < depth
+        expert_ids = mx.minimum(route, depth - 1)
+    else:
+        if any(type(index) is not int or not 0 <= index < depth for index in route):
+            raise ValueError('Expert route is outside the resident bank')
+        expert_ids = mx.array(route, dtype=mx.uint32)
     units = tk * tn
     if (planes['base'].shape != (depth, units * int(meta['base_K'] * 256))
             or planes['var'].shape != (depth, units * 8)
@@ -236,7 +246,6 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
                 planes['p4'].shape != (depth, units * int(meta['res_rule']['K'] * 256))
                 or planes['word'].shape != (depth, units)))):
         raise ValueError('Packed bank dimensions do not match the projection')
-    expert_ids = mx.array(route, dtype=mx.uint32)
     _, _, order = _matrix_indices(tk, tn, meta['shard_axis'])
     x = x.astype(mx.float32)
     scaled = x * planes[f'suh{level}'][expert_ids].astype(mx.float32)
@@ -255,7 +264,7 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
         result = result + (low @ planes['lrU2'][expert_ids].astype(mx.float32))[:, 0, :]
         if level == 4:
             result = result + (low @ planes['lrU4'][expert_ids].astype(mx.float32))[:, 0, :]
-    return result
+    return mx.where(valid[:, None], result, mx.nan) if valid is not None else result
 
 
 def projection_matmul(planes: dict, meta: dict, x: mx.array, level: int) -> mx.array:

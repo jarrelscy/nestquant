@@ -73,20 +73,28 @@ def compare(store, layer, level):
             results.append(projection_matvec(*expert['down'], activation(gate, up), level))
         return mx.stack(results)
 
-    def batched():
-        gate = projection_matvec_banked(*bank['gate'], rows, route, level)
-        up = projection_matvec_banked(*bank['up'], rows, route, level)
-        return projection_matvec_banked(*bank['down'], activation(gate, up), route, level)
+    def batched(indices):
+        gate = projection_matvec_banked(*bank['gate'], rows, indices, level)
+        up = projection_matvec_banked(*bank['up'], rows, indices, level)
+        return projection_matvec_banked(*bank['down'], activation(gate, up), indices, level)
 
     expected = mx.stack([store.apply(layer, EXPERTS[index], rows[row], level) for row, index in enumerate(route)])
-    actual = batched()
-    mx.eval(expected, actual)
+    device_route = mx.array(route, dtype=mx.uint32)
+    actual = batched(route)
+    on_device = batched(device_route)
+    mx.eval(expected, actual, on_device)
     relative_rms = (mx.linalg.norm(actual - expected) / mx.linalg.norm(expected)).item()
     if not relative_rms < 0.001:
         raise RuntimeError(f'Banked expert parity failed at layer {layer}, level {level}: {relative_rms}')
+    if not mx.array_equal(actual, on_device).item():
+        raise RuntimeError('Device routes changed the banked result')
+    invalid = batched(mx.array((*route[:-1], len(EXPERTS)), dtype=mx.uint32))
+    if not mx.isfinite(invalid[:-1]).all().item() or not mx.isnan(invalid[-1]).all().item():
+        raise RuntimeError('Invalid device route did not fail in its own row')
     return dict(layer=layer, level=level, relative_rms=relative_rms,
                 serial=timed(lambda: (serial() * scores[:, None]).sum(axis=0)),
-                banked=timed(lambda: (batched() * scores[:, None]).sum(axis=0)))
+                banked=timed(lambda: (batched(route) * scores[:, None]).sum(axis=0)),
+                device=timed(lambda: (batched(device_route) * scores[:, None]).sum(axis=0)))
 
 
 def main():
