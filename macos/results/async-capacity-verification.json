@@ -1,0 +1,23 @@
+[
+  {
+    "fraction": 0.01,
+    "slots": 121,
+    "max_refinement_bytes": 1004744704,
+    "staging_bytes": 67108864,
+    "cache_budget_bytes": 4294967296
+  },
+  {
+    "fraction": 0.02,
+    "slots": 242,
+    "max_refinement_bytes": 2008899584,
+    "staging_bytes": 67108864,
+    "cache_budget_bytes": 4294967296
+  },
+  {
+    "fraction": 0.04,
+    "slots": 484,
+    "max_refinement_bytes": 4016562176,
+    "staging_bytes": 67108864,
+    "cache_budget_bytes": 4294967296
+  }
+]

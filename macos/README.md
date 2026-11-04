@@ -4,6 +4,8 @@ This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 chec
 
 **Status, 2026-11-04:** full-checkpoint generation passed three smoke checks at both all-hot and canonical mixed-precision allocations on an Apple M5 Max with 128 GiB memory. Decoder, expert, and matching-chunk backbone checks pass. The first formal benchmark reached 0.227 tokens/second median. General quality evaluation and hot-set comparisons remain pending. See [performance measurements](PERFORMANCE.md). The unchunked BF16 comparison has a documented tolerance failure below.
 
+The [bounded asynchronous decode path](ASYNC.md) is implemented and awaiting review before full-model testing. It reads refinements in the background and executes the precision that is ready.
+
 ## Requirements
 
 You need an Apple silicon Mac, Python 3.12, and the packages in [requirements.txt](requirements.txt). The tested machine runs macOS 27.2. Other Apple silicon models are untested.
@@ -71,6 +73,8 @@ After the four nonexpert shards arrive, verify their checksums and exercise the 
 
 This check loads every backbone tensor, then tests the first four trained layers with real layer 3 experts. It does not generate with the full model.
 
+Historical component evidence: [complete layer 3 decoding](results/decoder-layer3-summary.json) and [runtime checksums](results/checkpoint-verification.json). To reproduce the complete decoder scope, run each `--shard` from 0 through 7 with `--experts` containing all integers from 0 through 287. The short command above uses the smaller default sample.
+
 Observed results on the tested Mac:
 
 | Check | Result | Scope |
@@ -117,7 +121,7 @@ These two modes load refinements when a routed expert needs them. A larger hot f
 
 Add `--resident-hot` with `--resident-base` to keep every predicted hot expert's refinements resident during decode. Before each decode step, the runtime removes refinements outside the predicted set and loads missing refinements. Refinements that remain hot retain their existing buffers. Cold experts use the resident base tensors. Updates are synchronous and their cost is included in decode timing.
 
-The runtime checks the worst possible refinement allocation for the configured per-layer slot counts before loading the backbone. An insufficient `--cache-gib` fails instead of silently evicting hot experts. The canonical 2,630-slot allocation requires at most 20.314 GiB of refinements. Use a 24 GiB cache for its initial resident-hot test. This requirement excludes base tensors, the backbone, attention caches, and temporary allocations. Full-model memory and performance remain unverified.
+The runtime checks the worst possible refinement allocation for the configured per-layer slot counts before loading the backbone. An insufficient `--cache-gib` fails instead of silently evicting hot experts. The canonical 2,630-slot allocation requires at most 20.314 GiB of refinements. A 24 GiB test was stopped under memory pressure on this Mac. Do not use it as an initial recommendation. This requirement excludes base tensors, the backbone, attention caches, and temporary allocations. Full-model memory and performance remain unverified.
 
 Add `--wired-memory` to keep MLX allocations resident during inference up to the device's recommended working set. The runtime restores the previous process limit when it closes. This uses [MLX memory wiring](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html) without changing system limits. Wiring does not reduce the model's memory requirement. Its performance effect remains under measurement.
 
@@ -146,22 +150,24 @@ Run the full-model smoke checks after the download and checksum verification fin
   --output generation-resident-hot.json
 ```
 
-The first two commands passed all three cases. The third awaits full-model validation with the complete hot set resident. See the [recorded smoke results](results/2026-11-04-smoke.json) for outputs, resource measurements, and source revision. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
+The first two commands passed all three cases at source revision `1df6588`, before optional memory wiring was added. Each full-model prompt fit within one chunk; full-model multi-chunk validation remains pending. The third awaits full-model validation with the complete hot set resident. See the [recorded smoke results](results/2026-11-04-smoke.json) for outputs, resource measurements, and source revision. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
 
-The benchmark driver completed the documented baseline measurement. Full generation must succeed before benchmarking a different configuration:
+The benchmark driver completed the 16-token baseline measurement recorded in PERFORMANCE.md. Full generation must succeed before benchmarking a different configuration:
 
 ```sh
 .venv-macos/bin/python macos/benchmark.py \
   --model "$MODEL_ROOT" \
   --output-dir benchmark-canonical-cache4 \
-  --tokens 128 --runs 3 \
+  --tokens 16 --runs 3 \
   --hot-fraction 0.21742724867724866 \
-  --cache-gib 4 --prefill-chunk-size 256
+  --cache-gib 4 --resident-base --wired-memory --prefill-chunk-size 256
 ```
 
 The driver discards one warm-up and records three measured requests. It preserves each response and its token IDs. Every measured request must reach the requested output length. An early stop preserves that run's evidence but prevents a successful throughput summary. Choose a prompt that produces a sufficiently long answer at every compared setting. Decode throughput excludes prefill and the first generated token. A fresh output directory prevents earlier measurements from being overwritten.
 
-For tuning, use this sequence:
+For the historical synchronous path, the following was the proposed experiment. The 24 GiB trial was stopped under pressure. Use the smaller reviewed candidates in [bounded asynchronous decode](ASYNC.md) for further Mac tuning.
+
+Historical proposals, not instructions to run oversized configurations:
 
 1. Stop other model servers. Wait for this checkpoint's download to finish. Suspend other downloads during measurements. Resume them afterward.
 2. Compare bounded storage with `--resident-base` at the canonical hot fraction and a 4 GiB cache.
