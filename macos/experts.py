@@ -1,4 +1,5 @@
 import json
+import math
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -49,7 +50,8 @@ class ExpertStore:
         required = sum(sum(sorted((self.refinement_bytes(layer, expert) for expert in range(288)),
                                   reverse=True)[:count]) for layer, count in budgets.items())
         if required > self.cache_limit:
-            raise ValueError(f'Hot-set residency requires at least {required / 1024**3:.3f} GiB of refinement cache')
+            minimum_gib = math.ceil(required / 1024**3 * 1000) / 1000
+            raise ValueError(f'Hot-set residency requires at least {minimum_gib:.3f} GiB of refinement cache')
         return required
 
     def prepare_hot(self, experts):
