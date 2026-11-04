@@ -17,7 +17,7 @@ def summary(values):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--prompt', default='Write a Python function that merges overlapping intervals. Explain its algorithm, edge cases, and time complexity. Include examples.')
@@ -79,6 +79,9 @@ def main():
         first_decode_step_seconds=summary([r['decode_step_seconds'][0] for r in reports]),
         subsequent_decode_tokens_per_second=summary([(len(r['decode_step_seconds']) - 1) / sum(r['decode_step_seconds'][1:]) for r in reports]),
         decode_tokens_per_second=summary([r['decode_tokens_per_second'] for r in reports]),
+        decode_hot_expert_fraction=summary([r['decode_hot_expert_fraction'] for r in reports]),
+        decode_desired_hot_expert_fraction=summary([r['decode_desired_hot_expert_fraction'] for r in reports]),
+        async_fallbacks=summary([r['expert_metrics_by_phase']['decode']['async_fallbacks'] for r in reports]),
         time_to_first_token_seconds=summary([r['ttft_seconds'] for r in reports]),
         prefill_tokens_per_second=summary([r['prefill_tokens_per_second'] for r in reports]),
         prefill_disk_read_bytes=summary([r['disk_reads']['prefill'] for r in reports]),

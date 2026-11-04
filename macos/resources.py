@@ -31,14 +31,15 @@ def process_usage(pid=None):
 
 
 
-_LIBPROC.sysctlbyname.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
-_LIBPROC.sysctlbyname.restype = ctypes.c_int
+_LIBSYSTEM = ctypes.CDLL(None, use_errno=True)
+_LIBSYSTEM.sysctlbyname.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+_LIBSYSTEM.sysctlbyname.restype = ctypes.c_int
 
 
 def system_pressure():
     value = ctypes.c_int()
     size = ctypes.c_size_t(ctypes.sizeof(value))
-    if _LIBPROC.sysctlbyname(b'kern.memorystatus_vm_pressure_level', ctypes.byref(value),
+    if _LIBSYSTEM.sysctlbyname(b'kern.memorystatus_vm_pressure_level', ctypes.byref(value),
                            ctypes.byref(size), None, 0) != 0:
         raise OSError(ctypes.get_errno(), 'Cannot read macOS memory pressure')
     return value.value

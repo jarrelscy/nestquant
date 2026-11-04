@@ -228,7 +228,7 @@ class Runtime:
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--prompt', default='Reply with exactly: GLM_MAC_OK')
     parser.add_argument('--max-tokens', type=int, default=16)

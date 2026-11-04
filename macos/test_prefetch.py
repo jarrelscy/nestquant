@@ -144,6 +144,11 @@ class AsyncStoreTests(unittest.TestCase):
 
 
 class MemoryGuardTests(unittest.TestCase):
+    def test_native_resource_probes(self):
+        from resources import process_usage, system_pressure
+        self.assertGreater(process_usage().phys_footprint, 0)
+        self.assertIn(system_pressure(), (1, 2, 4))
+
     def test_footprint_and_system_pressure_fail_closed(self):
         with patch('metrics.mx.device_info', return_value={'memory_size': 128 * 1024**3}), \
              patch('metrics.process_usage', return_value=SimpleNamespace(phys_footprint=1)) as usage, \
