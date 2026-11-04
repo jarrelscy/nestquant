@@ -61,6 +61,12 @@ Stop other model servers and downloads before measuring throughput. Use the same
 
 Record peak process footprint and system headroom. Include a separate process watchdog when testing on an active desktop. The local test supervisor stops at 84 GiB footprint, a macOS pressure warning, or less than 20% reported free memory. It restores the normal model service afterward.
 
+The local watchdog passed a live stop-and-restore test with a 128 MiB allocation and a 64 MiB limit. The test exercised native memory probes and terminated the child. It restored the existing service and preserved previously paused workers. This proves the supervisor lifecycle, not full-model memory safety. Its launch validation rejects resident-hot mode, caches above 4 GiB, and runtime limits above the watchdog limit.
+
+Begin with the short multi-chunk smoke above. Run a 16-token comparison only after the smoke passes and its recorded memory peak leaves headroom. Extend to 128 tokens after inspecting the short comparison. Keep the same prompt and generation length across compared candidates. A guard trip is a failed trial and must remain in the results.
+
 Keep inclusive decode throughput as the request-level measurement. The reports also expose the first decode step, throughput after that step, predictor time, reader time, installation time, and final reader-drain time. Reader time overlaps computation and must not be added to wall time. Separating early steps does not prove steady-state performance.
+
+The benchmark summary includes desired and executed hot-expert fractions plus asynchronous fallback counts. Compare these alongside speed because readiness changes the precision actually used.
 
 Reject candidates that fail the required answer or coding checks. Three short smoke cases do not replace broader quality evaluation or a teacher comparison. Do not increase cache residency to rescue a candidate that exceeds the memory budget.
