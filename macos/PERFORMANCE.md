@@ -39,6 +39,17 @@ The prepared base banks contain 55.46 GiB of packed planes, scales, correction m
 
 The supervisor suspended both active model downloads during these runs and retained the memory they already owned. In the direct-read trial, system compressor occupancy rose from 20.47 to 57.66 GiB as file-backed pages fell from 62.25 to 22.40 GiB. The guard tripped at pressure level 2 while the system reported 45% free memory. The complete base-plus-backbone path did not demonstrate safe residency under this desktop workload. Mapped tensors count towards MLX active bytes and may fault from storage. Process footprint, resident pages, and MLX accounting describe different views of the same allocations. The reference PyTorch driver counter also covers Metal allocations and must not be added to MLX active memory.
 
+The native tuned replay reserved 30.81 GiB of base banks and 1.87 GiB of decode refinement banks. Its largest one-layer prefill bank reserved 1.24 GiB. The async refinement worker reserved at most 49.53 MiB in this run. The affine-8 backbone uses 9.79 GiB, including 1.18 GiB of embeddings and 0.63 GiB of output weights. The CPU predictor retained 474.64 MiB of weights and buffers, 7.36 MiB of attention history, and 148 KiB of policy arrays. The model cache used 140.78 MiB for recurrent state and 1.80 MiB for sparse attention. These tensor and staging figures overlap with the framework and process measurements below.
+
+| Native tuned replay memory | After model load | After prefill | After decode |
+|---|---:|---:|---:|
+| Physical process footprint | 10.68 GiB | 32.30 GiB | 45.73 GiB |
+| Resident process pages | 10.85 GiB | 31.99 GiB | 45.40 GiB |
+| MLX active allocation | 42.48 GiB | 43.86 GiB | 42.62 GiB |
+| MLX allocator cache | <0.01 GiB | 0.20 GiB | 0.22 GiB |
+
+The native banks reserve pageable storage before their rows are filled. In the reference replay, after decode, PyTorch MPS reported 16.94 GiB of tensor allocation and 52.94 GiB in its driver. MLX reported 33.85 GiB active and 0.47 GiB cached. The 57.87 GiB physical footprint measures the whole reference process. During the native tuned run the reported minimum system free memory was 37%. System-wide file-backed pages fell from 66.85 GiB before launch to 25.13 GiB after the child exited. Compressor occupancy rose from 19.56 to 22.56 GiB across those samples.
+
 The bounded native prototype keeps hidden states, router weights, expert computation, and attention in MLX. It synchronizes and reads router IDs for disk-backed slot selection. The reported forward-to-route interval includes upstream model work. Packed arrays retain fixed storage. A slot may be overwritten only after the previous GPU output has evaluated. The mixed kernel selects base and refinement slots separately and preserves the reference output within 0.000002% relative RMS in the tested projections. Native mixed execution passed the exact reply and arithmetic smoke cases. The same-chunk layer-major check matched logits and all 145 cache arrays in the all-base runtime. See [run receipts](results/2026-11-05-native-memory-replay.json).
 
 The native mixed runtime passed HumanEval/3 in a network-disabled grading container. It generated 149 tokens at 2.04 tokens/s after a 194.49 s prefill on a 135-token prompt. The run used 96 base rows per layer, 64 four-bit prefill rows, eight-token chunks, and 242 decode refinement slots. The peak process footprint was 33.43 GiB. Memory pressure stayed at level 1, with a minimum reported 48% free. The MLX peak was 30.94 GiB and the allocator held 253 MiB at the end. These measurements overlap the process footprint. The predictor retained 474.64 MiB of parameters and buffers and 11.95 MiB of attention history. The prompt and answer used 140.78 MiB of recurrent state and 3.24 MiB of sparse attention state.
@@ -65,6 +76,16 @@ Each run used the same 29 rendered prompt tokens and the same 128 forced decode 
 | Greedy next-token agreement with reference | 129/129 | 129/129 | 128/129 |
 
 The tuned allocation reduced native misses by 8.8%. This comparison holds the token sequence fixed, but it does not hold routing or operating-system storage state fixed. Refinement readiness matched on 17 of 128 decode steps between native runs. Treat the time difference as one measured outcome and the tuned plan as a calibration candidate. The evaluation still needs an independent trace. The reference uses a different backbone representation and reader, so this comparison does not isolate the benefit of the framework change or the banked kernel.
+
+### Mixed prefill chunk widths
+
+Each row uses the same 34-token prompt, 160 base rows, and a 160-row four-bit scratch bank. Standard prefill runs first. Layer-major prefill runs in the same process after predictor reset, with the base banks already populated. The times include that difference in base residency. Within each width, logits, every cache array, and committed predictor state matched exactly between schedules. The table does not compare logits across widths.
+
+| Chunk width | Standard prefill | Layer-major prefill | Identical cache arrays |
+|---|---:|---:|---:|
+| 4 | 105.98 s | 45.85 s | 145 |
+| 8 | 92.54 s | 45.80 s | 145 |
+| 16 | 79.18 s | 44.70 s | 167 |
 
 ## Grouped expert shard reads
 

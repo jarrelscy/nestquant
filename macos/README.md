@@ -1,8 +1,8 @@
 # Apple silicon runtime
 
-This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint directly. Metal kernels decode the expert weights and compute expert projections. PyTorch MPS runs the Transformers text backbone.
+This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint. The native path uses a prepared MLX backbone and bounded Metal expert banks. The reference path uses the Transformers text backbone on PyTorch MPS.
 
-**Status, 2026-11-05.** Grouped expert reads reached 1.638 tokens/s median across three 128-token requests at a 2% hot allocation. Peak process footprint was 59.96 GiB. The first attempt stopped under system memory pressure, then the same guarded configuration completed on retry. See [measurements and limits](PERFORMANCE.md#grouped-expert-shard-reads).
+**Status, 2026-11-05.** The native path reached 3.52 tokens/s on a fixed 128-token replay at 45.73 GiB peak process footprint. The reference reached 1.27 tokens/s on the same inputs at 57.87 GiB. A separate native mixed run passed HumanEval/3 at 2.04 tokens/s. See [measurements and limits](PERFORMANCE.md#matched-native-replay).
 
 The asynchronous path reads refinements in the background and executes the precision that is ready. The grouped reader passed three full-model answer checks and delivered 16.25% actual hot-call coverage. The earlier reader also passed one complete coding task. General quality remains unverified. Accelerator probes remain outside production inference. MTP is not implemented. The unchunked BF16 comparison retains its documented tolerance failure. See the [asynchronous path](ASYNC.md).
 
