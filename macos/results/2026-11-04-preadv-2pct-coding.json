@@ -1,0 +1,1299 @@
+{
+  "source_commit": "af4516dcde7d63e313a4eda02dcd9ac62f2f48ca",
+  "checkpoint_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+  "report": {
+    "text": "def is_palindrome(text):\n    s = ''.join(c.lower() for c in text if c.isalnum())\n    return s == s[::-1]",
+    "generated_ids": [
+      750,
+      374,
+      72742,
+      35876,
+      7235,
+      982,
+      262,
+      274,
+      284,
+      42618,
+      5987,
+      1337,
+      18045,
+      368,
+      369,
+      272,
+      304,
+      1467,
+      421,
+      272,
+      2079,
+      92579,
+      2398,
+      262,
+      470,
+      274,
+      621,
+      274,
+      61718,
+      16,
+      60,
+      154827
+    ],
+    "prompt_tokens": 102,
+    "generated_tokens": 32,
+    "ttft_seconds": 246.60004370799288,
+    "decode_step_seconds": [
+      2.599505833000876,
+      2.054083166993223,
+      1.0783947920135688,
+      1.3814720840018708,
+      1.3543308329826687,
+      1.4175990840012673,
+      1.3258663749729749,
+      1.5008949160110205,
+      1.609497208002722,
+      1.691668709012447,
+      1.2686100410064682,
+      1.4775943330023438,
+      1.390638292010408,
+      1.335428457998205,
+      1.7113679999893066,
+      1.492210750002414,
+      1.145410458004335,
+      1.3634082920034416,
+      1.314692665997427,
+      1.4432080420083366,
+      0.7962841249827761,
+      0.95423195901094,
+      1.3163448330014944,
+      0.9202524999855086,
+      1.390599915990606,
+      0.71876741698361,
+      1.0539608749968465,
+      0.8950085830001626,
+      1.1934383749903645,
+      1.2863873750029597,
+      1.0274772499979008
+    ],
+    "decode_tokens_per_second": 0.7468325469145056,
+    "elapsed_seconds": 288.11522866701125,
+    "first_decode_step_seconds": 2.599505833000876,
+    "subsequent_decode_tokens_per_second": 0.7710272685401252,
+    "predictor_seconds": 0.21143233208567835,
+    "prefetch_drain_seconds": 1.95419997908175e-05,
+    "predictor_diagnostics": {
+      "decode_steps": 31,
+      "routed_calls": 10416,
+      "allocated_slots": 242,
+      "allocated_fraction": 0.020006613756613757,
+      "counts": {
+        "wanted": 1465,
+        "ready": 1330,
+        "wanted_ready": 1325,
+        "late": 140,
+        "cached_outside_wanted": 5,
+        "fixed": 70
+      },
+      "call_fractions": {
+        "wanted": 0.1406490015360983,
+        "ready": 0.12768817204301075,
+        "wanted_ready": 0.12720814132104455,
+        "late": 0.013440860215053764,
+        "cached_outside_wanted": 0.00048003072196620584,
+        "fixed": 0.006720430107526882
+      },
+      "wanted_delivery_fraction": 0.9044368600682594,
+      "mean_salience_coverage": {
+        "wanted": 0.31620510832758203,
+        "ready": 0.28571256065034245,
+        "fixed": 0.011034496271621147,
+        "jt_top_budget": 0.4985118559126966,
+        "ema_top_budget": 0.24618310336561994,
+        "static": 0.04982137628116037
+      },
+      "per_layer": [
+        {
+          "layer": 3,
+          "slots": 11,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 22,
+            "ready": 12,
+            "wanted_ready": 11,
+            "late": 11,
+            "cached_outside_wanted": 1,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3259768350579685,
+            "ready": 0.16423618187379738,
+            "fixed": 0.0013360558073050454,
+            "jt_top_budget": 0.647808658395418,
+            "ema_top_budget": 0.0896597922400517,
+            "static": 0.044046932898289815
+          }
+        },
+        {
+          "layer": 4,
+          "slots": 9,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 16,
+            "ready": 9,
+            "wanted_ready": 9,
+            "late": 7,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.21775157814333954,
+            "ready": 0.10603915567992642,
+            "fixed": 0.005914427793843024,
+            "jt_top_budget": 0.5082141148825535,
+            "ema_top_budget": 0.14670248565970948,
+            "static": 0.088928538105067
+          }
+        },
+        {
+          "layer": 5,
+          "slots": 9,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 13,
+            "ready": 7,
+            "wanted_ready": 7,
+            "late": 6,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.15508024971939102,
+            "ready": 0.05522196008928063,
+            "fixed": 0.0,
+            "jt_top_budget": 0.48151179009232953,
+            "ema_top_budget": 0.10254296569302722,
+            "static": 0.03125320689687004
+          }
+        },
+        {
+          "layer": 6,
+          "slots": 7,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 16,
+            "ready": 8,
+            "wanted_ready": 7,
+            "late": 9,
+            "cached_outside_wanted": 1,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.17656415489322272,
+            "ready": 0.05618382830808661,
+            "fixed": 0.0005605354840473078,
+            "jt_top_budget": 0.41739317483100163,
+            "ema_top_budget": 0.07801345158132432,
+            "static": 0.012741244976852726
+          }
+        },
+        {
+          "layer": 7,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 30,
+            "ready": 25,
+            "wanted_ready": 25,
+            "late": 5,
+            "cached_outside_wanted": 0,
+            "fixed": 5
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2684399017362126,
+            "ready": 0.2403308989161377,
+            "fixed": 0.02447587377195881,
+            "jt_top_budget": 0.3780977045721401,
+            "ema_top_budget": 0.20353757846841986,
+            "static": 0.19854190945432462
+          }
+        },
+        {
+          "layer": 8,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 24,
+            "ready": 15,
+            "wanted_ready": 15,
+            "late": 9,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2579470977952971,
+            "ready": 0.18830528906338248,
+            "fixed": 0.003809232931758264,
+            "jt_top_budget": 0.41047289004911763,
+            "ema_top_budget": 0.15863619089075934,
+            "static": 0.07016947858719348
+          }
+        },
+        {
+          "layer": 9,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 14,
+            "ready": 9,
+            "wanted_ready": 9,
+            "late": 5,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.17224305836441986,
+            "ready": 0.1253969112072219,
+            "fixed": 0.0,
+            "jt_top_budget": 0.3615745917310957,
+            "ema_top_budget": 0.10966856992909672,
+            "static": 0.027682597999851326
+          }
+        },
+        {
+          "layer": 10,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 32,
+            "ready": 28,
+            "wanted_ready": 28,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.28878051434767815,
+            "ready": 0.23547076483610518,
+            "fixed": 0.0015241080142043306,
+            "jt_top_budget": 0.45229915871604187,
+            "ema_top_budget": 0.18349652400317784,
+            "static": 0.0015241080142043306
+          }
+        },
+        {
+          "layer": 11,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 35,
+            "ready": 28,
+            "wanted_ready": 28,
+            "late": 7,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3419418758649323,
+            "ready": 0.28352461314346195,
+            "fixed": 0.00404046512469298,
+            "jt_top_budget": 0.4654262877375178,
+            "ema_top_budget": 0.2542255436439871,
+            "static": 0.08607956933452444
+          }
+        },
+        {
+          "layer": 12,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 28,
+            "ready": 24,
+            "wanted_ready": 24,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2849442138580797,
+            "ready": 0.22477152639596026,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4101178567317379,
+            "ema_top_budget": 0.23716626382211645,
+            "static": 0.004749906523022964
+          }
+        },
+        {
+          "layer": 13,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 32,
+            "ready": 28,
+            "wanted_ready": 28,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.30563547778434286,
+            "ready": 0.2629747784228651,
+            "fixed": 0.004730358898811304,
+            "jt_top_budget": 0.47824173852935975,
+            "ema_top_budget": 0.1585206649157429,
+            "static": 0.08053073791376285
+          }
+        },
+        {
+          "layer": 14,
+          "slots": 7,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 78,
+            "ready": 72,
+            "wanted_ready": 71,
+            "late": 7,
+            "cached_outside_wanted": 1,
+            "fixed": 5
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.4336726617707264,
+            "ready": 0.37950380687937085,
+            "fixed": 0.03718699455686799,
+            "jt_top_budget": 0.5518874538841076,
+            "ema_top_budget": 0.3648952230299479,
+            "static": 0.0998572798323404
+          }
+        },
+        {
+          "layer": 15,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 50,
+            "ready": 43,
+            "wanted_ready": 43,
+            "late": 7,
+            "cached_outside_wanted": 0,
+            "fixed": 24
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.5081511686857345,
+            "ready": 0.45657847762566905,
+            "fixed": 0.28203599925427764,
+            "jt_top_budget": 0.5828024785248608,
+            "ema_top_budget": 0.39483596309346713,
+            "static": 0.3324246475274383
+          }
+        },
+        {
+          "layer": 16,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 26,
+            "ready": 22,
+            "wanted_ready": 22,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2104681656914498,
+            "ready": 0.19245500966198323,
+            "fixed": 0.00048317149263421815,
+            "jt_top_budget": 0.42480794185885506,
+            "ema_top_budget": 0.22957143697825472,
+            "static": 0.05775731159524328
+          }
+        },
+        {
+          "layer": 17,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 38,
+            "ready": 38,
+            "wanted_ready": 38,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2148230117366708,
+            "ready": 0.2148230117366708,
+            "fixed": 0.0,
+            "jt_top_budget": 0.42696484462539985,
+            "ema_top_budget": 0.2301361947814991,
+            "static": 0.18923582743425466
+          }
+        },
+        {
+          "layer": 18,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 75,
+            "ready": 73,
+            "wanted_ready": 73,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3984725753595659,
+            "ready": 0.3889421772896081,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5754437067243002,
+            "ema_top_budget": 0.45753100896087256,
+            "static": 0.1143873475161326
+          }
+        },
+        {
+          "layer": 19,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 56,
+            "ready": 52,
+            "wanted_ready": 52,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.37180657994349114,
+            "ready": 0.35140639979800736,
+            "fixed": 0.0,
+            "jt_top_budget": 0.6057433598335284,
+            "ema_top_budget": 0.4978929421064409,
+            "static": 0.06131066927679666
+          }
+        },
+        {
+          "layer": 20,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 52,
+            "ready": 48,
+            "wanted_ready": 48,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3469288615604115,
+            "ready": 0.3271255194297229,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5131717928575886,
+            "ema_top_budget": 0.24742635588129983,
+            "static": 0.05208999655690438
+          }
+        },
+        {
+          "layer": 21,
+          "slots": 7,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 44,
+            "ready": 40,
+            "wanted_ready": 40,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.38282623633840934,
+            "ready": 0.3553964451545635,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5107699013631685,
+            "ema_top_budget": 0.1926208375018742,
+            "static": 0.11020962283696235
+          }
+        },
+        {
+          "layer": 22,
+          "slots": 8,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 42,
+            "ready": 34,
+            "wanted_ready": 34,
+            "late": 8,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3347372942838697,
+            "ready": 0.30109014240549575,
+            "fixed": 0.0017418491023150472,
+            "jt_top_budget": 0.5161708041420053,
+            "ema_top_budget": 0.13757501762786908,
+            "static": 0.012090262078214876
+          }
+        },
+        {
+          "layer": 23,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 24,
+            "ready": 21,
+            "wanted_ready": 21,
+            "late": 3,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.1675097933667438,
+            "ready": 0.14448770245230294,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4165923608520018,
+            "ema_top_budget": 0.14033923263296852,
+            "static": 0.026134461019035687
+          }
+        },
+        {
+          "layer": 24,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 39,
+            "ready": 33,
+            "wanted_ready": 33,
+            "late": 6,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.1816320334190305,
+            "ready": 0.15226600260123654,
+            "fixed": 0.0,
+            "jt_top_budget": 0.41439531503313776,
+            "ema_top_budget": 0.1655474992081684,
+            "static": 0.0028375157745271135
+          }
+        },
+        {
+          "layer": 25,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 34,
+            "ready": 32,
+            "wanted_ready": 32,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2687781017094891,
+            "ready": 0.25472942426962736,
+            "fixed": 0.0021055212041033947,
+            "jt_top_budget": 0.47929067728613123,
+            "ema_top_budget": 0.21298895657524375,
+            "static": 0.09568009822039367
+          }
+        },
+        {
+          "layer": 26,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 56,
+            "ready": 54,
+            "wanted_ready": 54,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 3
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.5420522191780303,
+            "ready": 0.5317584047872258,
+            "fixed": 0.011233870796943025,
+            "jt_top_budget": 0.650330425874913,
+            "ema_top_budget": 0.4557764555232687,
+            "static": 0.01276523026256553
+          }
+        },
+        {
+          "layer": 27,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 43,
+            "ready": 41,
+            "wanted_ready": 40,
+            "late": 3,
+            "cached_outside_wanted": 1,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.47513799753111424,
+            "ready": 0.4528716211392591,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5313030027941217,
+            "ema_top_budget": 0.4544615439448392,
+            "static": 0.013292279939533556
+          }
+        },
+        {
+          "layer": 28,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 32,
+            "ready": 32,
+            "wanted_ready": 32,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.39270295195734933,
+            "ready": 0.39270295195734933,
+            "fixed": 0.0,
+            "jt_top_budget": 0.6014585137081905,
+            "ema_top_budget": 0.3656110709485278,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 29,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 39,
+            "ready": 38,
+            "wanted_ready": 38,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.39761417413044425,
+            "ready": 0.3850432267437356,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5764561765550584,
+            "ema_top_budget": 0.29719282160559873,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 30,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 20,
+            "ready": 20,
+            "wanted_ready": 20,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.1812442525630554,
+            "ready": 0.1812442525630554,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4654781235105592,
+            "ema_top_budget": 0.13925639629582334,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 31,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 30,
+            "ready": 29,
+            "wanted_ready": 29,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.41304268584038945,
+            "ready": 0.3974432531059247,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5975580569055755,
+            "ema_top_budget": 0.4569402579272824,
+            "static": 0.003738761594264837
+          }
+        },
+        {
+          "layer": 32,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 39,
+            "ready": 38,
+            "wanted_ready": 38,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 12
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3826501156107839,
+            "ready": 0.3808877845996637,
+            "fixed": 0.053476973162851146,
+            "jt_top_budget": 0.589353824357104,
+            "ema_top_budget": 0.24626736674533756,
+            "static": 0.05460859503766043
+          }
+        },
+        {
+          "layer": 33,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 32,
+            "ready": 32,
+            "wanted_ready": 32,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2782658829533561,
+            "ready": 0.2782658829533561,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5658541704374936,
+            "ema_top_budget": 0.2159474353442201,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 34,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 30,
+            "ready": 30,
+            "wanted_ready": 30,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.32093188222598806,
+            "ready": 0.32093188222598806,
+            "fixed": 0.0005496239468457304,
+            "jt_top_budget": 0.5345602892192228,
+            "ema_top_budget": 0.20298787331221038,
+            "static": 0.001423991024571046
+          }
+        },
+        {
+          "layer": 35,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 50,
+            "ready": 49,
+            "wanted_ready": 49,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.513445752950125,
+            "ready": 0.5070082822838218,
+            "fixed": 0.0,
+            "jt_top_budget": 0.6956814632504444,
+            "ema_top_budget": 0.5295764762527747,
+            "static": 0.0015214583997586865
+          }
+        },
+        {
+          "layer": 36,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 31,
+            "ready": 31,
+            "wanted_ready": 31,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3579568251832086,
+            "ready": 0.3579568251832086,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4395464531801231,
+            "ema_top_budget": 0.29330131144766725,
+            "static": 0.0069426550437251995
+          }
+        },
+        {
+          "layer": 37,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 29,
+            "ready": 29,
+            "wanted_ready": 29,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3245121011002541,
+            "ready": 0.3245121011002541,
+            "fixed": 0.0,
+            "jt_top_budget": 0.42008386347561155,
+            "ema_top_budget": 0.3501960528891518,
+            "static": 0.00737300801056419
+          }
+        },
+        {
+          "layer": 38,
+          "slots": 4,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 24,
+            "ready": 23,
+            "wanted_ready": 23,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.21323125438254023,
+            "ready": 0.21122979258106836,
+            "fixed": 0.016754484628570362,
+            "jt_top_budget": 0.5249638411936159,
+            "ema_top_budget": 0.209902840870076,
+            "static": 0.01858625103644324
+          }
+        },
+        {
+          "layer": 39,
+          "slots": 5,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 24,
+            "ready": 22,
+            "wanted_ready": 22,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2707498677966993,
+            "ready": 0.26640210993165975,
+            "fixed": 0.0,
+            "jt_top_budget": 0.43647331776902776,
+            "ema_top_budget": 0.16694924696009517,
+            "static": 0.0028952480919854817
+          }
+        },
+        {
+          "layer": 40,
+          "slots": 6,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 42,
+            "ready": 40,
+            "wanted_ready": 40,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 3
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.46611416543818385,
+            "ready": 0.4487498338934128,
+            "fixed": 0.01107383874602685,
+            "jt_top_budget": 0.5211150870146833,
+            "ema_top_budget": 0.2927276587276477,
+            "static": 0.03961411837770585
+          }
+        },
+        {
+          "layer": 41,
+          "slots": 7,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 28,
+            "ready": 26,
+            "wanted_ready": 26,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3031923390086635,
+            "ready": 0.28733333933714933,
+            "fixed": 0.0,
+            "jt_top_budget": 0.39366425613150124,
+            "ema_top_budget": 0.15504124623261953,
+            "static": 0.005806941587572559
+          }
+        },
+        {
+          "layer": 42,
+          "slots": 8,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 28,
+            "ready": 29,
+            "wanted_ready": 28,
+            "late": 0,
+            "cached_outside_wanted": 1,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.20018400601258313,
+            "ready": 0.2027635620986969,
+            "fixed": 0.0,
+            "jt_top_budget": 0.418314495737481,
+            "ema_top_budget": 0.1626346867755198,
+            "static": 0.06198559058675763
+          }
+        },
+        {
+          "layer": 43,
+          "slots": 8,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 44,
+            "ready": 43,
+            "wanted_ready": 43,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.38704025555145977,
+            "ready": 0.37973412395612866,
+            "fixed": 0.00041545869003166186,
+            "jt_top_budget": 0.5062841577450419,
+            "ema_top_budget": 0.23468989174388818,
+            "static": 0.05528117038763764
+          }
+        },
+        {
+          "layer": 44,
+          "slots": 7,
+          "routed_calls": 248,
+          "counts": {
+            "wanted": 24,
+            "ready": 23,
+            "wanted_ready": 23,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.24543437891373995,
+            "ready": 0.23182828963294064,
+            "fixed": 0.0,
+            "jt_top_budget": 0.439819826220093,
+            "ema_top_budget": 0.11669900858416966,
+            "static": 0.006399234055782455
+          }
+        }
+      ],
+      "block_calibration": {
+        "full_windows": 16,
+        "excluded_tail_predictions": 15,
+        "target": "Mean per-token normalized squared routing weights over t..t+15, matching shipped train.py block_loss",
+        "scope": "Decode-only overlapping windows on observed mixed-precision routing; not independent samples or output-quality validation",
+        "mean_total_variation": 0.4960191673570649,
+        "mean_cross_entropy_nats": 4.166471151818444,
+        "uniform_cross_entropy_nats": 5.662960480135946,
+        "top_budget_predicted_salience_share": 0.3777467545518275,
+        "top_budget_observed_salience_share": 0.38958317722893254,
+        "soft_share_bin_error": 0.0002489594702933468,
+        "bins": [
+          {
+            "lower": 0.0,
+            "upper": 0.001,
+            "count": 92319,
+            "predicted_mean": 0.00046450216254101433,
+            "observed_mean": 0.0003723214329049954
+          },
+          {
+            "lower": 0.001,
+            "upper": 0.005,
+            "count": 78790,
+            "predicted_mean": 0.0021692198918386372,
+            "observed_mean": 0.0020394210374722736
+          },
+          {
+            "lower": 0.005,
+            "upper": 0.01,
+            "count": 11356,
+            "predicted_mean": 0.0068910052270689855,
+            "observed_mean": 0.006792401974896555
+          },
+          {
+            "lower": 0.01,
+            "upper": 0.025,
+            "count": 6732,
+            "predicted_mean": 0.015332230626297223,
+            "observed_mean": 0.016509116402207764
+          },
+          {
+            "lower": 0.025,
+            "upper": 0.05,
+            "count": 2530,
+            "predicted_mean": 0.034539467054364004,
+            "observed_mean": 0.0387020783681398
+          },
+          {
+            "lower": 0.05,
+            "upper": 0.1,
+            "count": 1189,
+            "predicted_mean": 0.06812266937454675,
+            "observed_mean": 0.07286371957621733
+          },
+          {
+            "lower": 0.1,
+            "upper": 0.25,
+            "count": 539,
+            "predicted_mean": 0.1479622852990269,
+            "observed_mean": 0.14643024733200607
+          },
+          {
+            "lower": 0.25,
+            "upper": 0.5,
+            "count": 74,
+            "predicted_mean": 0.33194424695259817,
+            "observed_mean": 0.3033830394028315
+          },
+          {
+            "lower": 0.5,
+            "upper": 1.0,
+            "count": 7,
+            "predicted_mean": 0.5765293410846165,
+            "observed_mean": 0.3914737959054991
+          }
+        ]
+      },
+      "limitations": [
+        "Top-budget jT, EMA and static comparisons rescore the same observed routing, not alternative model executions",
+        "Salience coverage is not answer accuracy",
+        "No predictor parameters fitted on this request"
+      ]
+    },
+    "predictor_metrics_seconds": 0.041786335001233965,
+    "prefill_tokens_per_second": 0.41362523082429586,
+    "expert_metrics": {
+      "hits": 23279,
+      "misses": 17140,
+      "load_seconds": 211.25126063689822,
+      "expert_forward_seconds": 263.25836414130754,
+      "base_load_seconds": 122.95307816271088,
+      "base_tensor_bytes": 48826732544,
+      "refinement_tensor_bytes": 68097875968,
+      "hot_sync_seconds": 0.0,
+      "base_hits": 7400,
+      "base_misses": 9413,
+      "refinement_hits": 15879,
+      "refinement_misses": 7727,
+      "async_load_seconds": 14.20718128918088,
+      "async_loaded": 305,
+      "async_discarded": 0,
+      "async_fallbacks": 140,
+      "async_install_seconds": 0.15915927925379947,
+      "base_evictions": 2376
+    },
+    "expert_metrics_by_phase": {
+      "prefill": {
+        "hits": 14549,
+        "misses": 15454,
+        "load_seconds": 188.60971714285552,
+        "expert_forward_seconds": 234.65168933349196,
+        "base_load_seconds": 100.31153466866817,
+        "base_tensor_bytes": 40084885504,
+        "refinement_tensor_bytes": 65509502976,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 0,
+        "base_misses": 7727,
+        "refinement_hits": 14549,
+        "refinement_misses": 7727,
+        "async_load_seconds": 0.0,
+        "async_loaded": 0,
+        "async_discarded": 0,
+        "async_fallbacks": 0,
+        "async_install_seconds": 0.0,
+        "base_evictions": 690
+      },
+      "decode": {
+        "hits": 8730,
+        "misses": 1686,
+        "load_seconds": 22.641543494042708,
+        "expert_forward_seconds": 28.60667480781558,
+        "base_load_seconds": 22.641543494042708,
+        "base_tensor_bytes": 8741847040,
+        "refinement_tensor_bytes": 2588372992,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 7400,
+        "base_misses": 1686,
+        "refinement_hits": 1330,
+        "refinement_misses": 0,
+        "async_load_seconds": 14.20718128918088,
+        "async_loaded": 305,
+        "async_discarded": 0,
+        "async_fallbacks": 140,
+        "async_install_seconds": 0.15915927925379947,
+        "base_evictions": 1686
+      }
+    },
+    "expert_cache_bytes": {
+      "limit": 4294967296,
+      "resident_limit": 4227858432,
+      "staging_reserved": 67108864,
+      "peak_staging_reserved": 51937280,
+      "after_prefill": 4222947328,
+      "after_decode": 1948487680,
+      "resident_base": 34357390419,
+      "base_limit": 34359738368
+    },
+    "disk_reads": {
+      "prefill": 136888500224,
+      "decode": 15547412480
+    },
+    "resources": {
+      "before": {
+        "disk_read_bytes": 15628120064,
+        "disk_written_bytes": 73728,
+        "physical_footprint_bytes": 19925288808,
+        "lifetime_peak_physical_footprint_bytes": 23521890600,
+        "mlx_active_bytes": 0,
+        "mlx_peak_bytes": 0,
+        "mlx_cached_bytes": 0,
+        "mps_driver_allocated_bytes": 18825543680,
+        "mps_allocated_bytes": 18034924544
+      },
+      "after_prefill": {
+        "disk_read_bytes": 152516620288,
+        "disk_written_bytes": 1024000,
+        "physical_footprint_bytes": 61533993776,
+        "lifetime_peak_physical_footprint_bytes": 61533993776,
+        "mlx_active_bytes": 38589828179,
+        "mlx_peak_bytes": 39053581593,
+        "mlx_cached_bytes": 489854147,
+        "mps_driver_allocated_bytes": 59089747968,
+        "mps_allocated_bytes": 18185941760
+      },
+      "after_decode": {
+        "disk_read_bytes": 168064032768,
+        "disk_written_bytes": 1024000,
+        "physical_footprint_bytes": 61205674968,
+        "lifetime_peak_physical_footprint_bytes": 61535271728,
+        "mlx_active_bytes": 36317449299,
+        "mlx_peak_bytes": 39053581593,
+        "mlx_cached_bytes": 478729151,
+        "mps_driver_allocated_bytes": 56808980480,
+        "mps_allocated_bytes": 18186468352
+      }
+    },
+    "decode_hot_expert_fraction": 0.12768817204301075,
+    "decode_desired_hot_expert_fraction": 0.1406490015360983,
+    "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+    "backbone_device": "mps",
+    "thinking": false,
+    "policy": {
+      "base_bits": 1.5,
+      "hot_bits": 4,
+      "slots": 242,
+      "fixed": 48,
+      "jt_mix": 0.75,
+      "refresh_tokens": 1,
+      "prefill_bits": 4,
+      "prefill_chunk_size": 8,
+      "resident_base": true,
+      "resident_hot": false,
+      "hot_set_capacity_bytes": 2008899584,
+      "wired_memory": false,
+      "async_refinements": true,
+      "base_cache_gib": 32.0,
+      "process_memory_limit_bytes": 90194313216
+    },
+    "limitations": [
+      "text only",
+      "single sequence",
+      "4096 token validation ceiling",
+      "no speculative decoding",
+      "synchronous prefill SSD reads",
+      "readiness-dependent decode precision",
+      "greedy sampling",
+      "unquantized attention cache",
+      "synchronous base-cache misses"
+    ]
+  },
+  "tests": {
+    "status": "passed",
+    "cases": 212,
+    "hand_checked_cases": 12,
+    "seeded_ascii_cases": 200,
+    "seed": 42,
+    "generated_source_sha256": "cf9d69c77b421a7b5b7cfa21fb6227cbde90df79f9b1b134411ad690b4910ea1",
+    "scope": "One complete generated palindrome function, not a coding benchmark suite"
+  },
+  "test_source": "import hashlib\nimport json\nfrom pathlib import Path\nimport random\nimport re\n\nfrom generated_palindrome import is_palindrome\n\ncases = [('A man, a plan, a canal: Panama!', True), ('race a car', False), ('', True),\n         ('!!! ', True), ('a', True), ('Abba', True), ('abc', False), ('12321', True),\n         ('12341', False), ('No lemon, no melon', True), ('\u00c0b\u00e0', True), ('ab', False)]\nrng = random.Random(42)\nfor _ in range(200):\n    value = ''.join(rng.choice('abcABC0123 ,.!') for _ in range(rng.randrange(60)))\n    cleaned = re.sub('[^a-z0-9]', '', value.lower())\n    left, right = 0, len(cleaned) - 1\n    expected = True\n    while left < right:\n        if cleaned[left] != cleaned[right]:\n            expected = False\n            break\n        left += 1\n        right -= 1\n    cases.append((value, expected))\nfor index, (value, expected) in enumerate(cases):\n    actual = is_palindrome(value)\n    assert type(actual) is bool and actual == expected, (index, value, expected, actual)\nroot = Path(__file__).resolve().parent\nreport = dict(status='passed', cases=len(cases), hand_checked_cases=12, seeded_ascii_cases=200, seed=42,\n              generated_source_sha256=hashlib.sha256((root/'generated_palindrome.py').read_bytes()).hexdigest(),\n              scope='One complete generated palindrome function, not a coding benchmark suite')\n(root/'coding-preadv-calibration-2pct-tests.json').write_text(json.dumps(report, indent=2)+'\\n')\nprint(json.dumps(report))\n",
+  "isolation": {
+    "state": "complete",
+    "started_at": 1793794703.194485,
+    "command": [
+      "generate.py",
+      "--model",
+      "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+      "--output",
+      "/Users/codeninja/Models/GLM/coding-preadv-calibration-2pct.json",
+      "--prompt",
+      "Return only Python code, without Markdown fences or explanation. Define a function named is_palindrome(text). Ignore case and non-alphanumeric characters. Treat empty input as a palindrome. Do not import modules. Do not modify the input. Use only ordinary Python string operations. Examples: is_palindrome(\"A man, a plan, a canal: Panama!\") is True; is_palindrome(\"race a car\") is False; is_palindrome(\"\") is True. Keep the function concise.\n",
+      "--max-tokens",
+      "128",
+      "--resident-base",
+      "--base-cache-gib",
+      "32",
+      "--async-refinements",
+      "--cache-gib",
+      "4",
+      "--memory-limit-gib",
+      "84",
+      "--prefill-chunk-size",
+      "8",
+      "--hot-fraction",
+      "0.02"
+    ],
+    "baseline_pid": 82858,
+    "paused_jobs": [],
+    "preserved_pauses": [
+      75012,
+      8419
+    ],
+    "baseline_restored": true,
+    "memory_limit_bytes": 90194313216,
+    "peak_observed_footprint_bytes": 61535271728,
+    "minimum_free_percent": 68,
+    "configuration": {
+      "resident_base": true,
+      "resident_hot": false,
+      "cache_gib": 4.0,
+      "base_cache_gib": 32.0,
+      "memory_limit_gib": 84.0
+    },
+    "preflight": {
+      "pressure_level": 1,
+      "free_percent": 37,
+      "supervisor_footprint_bytes": 17826272,
+      "open_file_limit": [
+        1048575,
+        9223372036854775807
+      ]
+    },
+    "before_child": {
+      "pressure_level": 1,
+      "free_percent": 84
+    },
+    "child_pid": 85420,
+    "last_pressure_level": 1,
+    "model_exit_code": 0,
+    "resumed_jobs": [],
+    "finished_at": 1793795006.670623,
+    "error": null
+  }
+}
