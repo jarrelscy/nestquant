@@ -7,7 +7,6 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 import torch
-from safetensors import safe_open
 
 from decoder import projection_matvec, projection_matmul
 from prefetch import BoundedReader
@@ -26,7 +25,7 @@ class ExpertStore:
         if async_refinements and (not resident_base or self.cache_budget <= self.staging_budget):
             raise ValueError('Asynchronous refinements require resident base and more than 64 MiB of cache')
         self.cache_limit = self.cache_budget - self.staging_budget
-        self.reader = RefinementReader(root, use_preadv=True) if async_refinements else None
+        self.reader = RefinementReader(root) if async_refinements else None
         self.prefetch = BoundedReader(self.reader.read, self.staging_budget) if self.reader else None
         self.async_targets = set()
         self.async_order = []
@@ -100,10 +99,7 @@ class ExpertStore:
         key = layer, shard
         if key not in self.handles:
             path = self.root / 'layers' / f'L{layer}' / f'tp{shard}.safetensors'
-            handle = safe_open(path, framework='numpy', backend='pread')
-            if handle.metadata().get('format') != 'nestquant-v1-tp-safetensors':
-                raise ValueError(f'Unsupported checkpoint container: {path}')
-            self.handles[key] = handle, set(handle.keys())
+            self.handles[key] = PositionalTensorReader(path)
         return self.handles[key]
 
     def get(self, layer: int, expert: int, level: int):
@@ -167,39 +163,42 @@ class ExpertStore:
             self.cache_bytes += size
         return result
 
-    def _read(self, handle, name):
-        value = handle.get_tensor(name)
-        field = name.rsplit('.', 1)[-1]
-        category = 'refinement_tensor_bytes' if field in ('p4', 'word', 'suh4', 'svh4', 'lrU4') else 'base_tensor_bytes'
-        self.metrics[category] += value.nbytes
-        return value
-
     def _load(self, layer, expert, level):
         manifest = self._manifest(layer)
-        result = {}
+        projections = ('gate', 'up', 'down')
+        fields = ('base', 'var', 'suh2', 'svh2')
+        if level == 4:
+            fields += ('p4', 'word', 'suh4', 'svh4')
+        parts_by_projection = {projection: [] for projection in projections}
+        for shard in range(8):
+            handle = self._handle(layer, shard)
+            names = {}
+            for projection in projections:
+                prefix = f'E{expert}.{projection}.'
+                part = {name: prefix + name for name in fields}
+                if prefix + 'lrU2' in handle.header:
+                    vkey = prefix + 'lrV'
+                    if vkey not in handle.header:
+                        if projection != 'up' or not manifest['proj_meta'][projection]['lr']['shared_V']:
+                            raise ValueError('Missing low-rank input directions')
+                        vkey = f'E{expert}.gate.lrV'
+                    part.update(lrV=vkey, lrU2=prefix + 'lrU2')
+                    if level == 4:
+                        part['lrU4'] = prefix + 'lrU4'
+                names[projection] = part
+            tensors = handle.get_tensors(key for part in names.values() for key in part.values())
+            for projection, part in names.items():
+                values = {name: tensors[key] for name, key in part.items()}
+                for name, value in values.items():
+                    category = 'refinement_tensor_bytes' if name in ('p4', 'word', 'suh4', 'svh4', 'lrU4') else 'base_tensor_bytes'
+                    self.metrics[category] += value.nbytes
+                parts_by_projection[projection].append(values)
 
-        for projection in ('gate', 'up', 'down'):
+        result = {}
+        for projection, parts in parts_by_projection.items():
             meta = manifest['proj_meta'][projection]
             if meta['base_K'] != 1.5 or meta['base_var'] != 'sign' or meta['res_rule']['kind'] != 'uniform':
                 raise ValueError('Unsupported NestQuant Flash projection format')
-            parts = []
-            for shard in range(8):
-                handle, keys = self._handle(layer, shard)
-                prefix = f'E{expert}.{projection}.'
-                fields = ('base', 'var', 'suh2', 'svh2')
-                if level == 4:
-                    fields += ('p4', 'word', 'suh4', 'svh4')
-                part = {name: self._read(handle, prefix + name) for name in fields}
-                if prefix + 'lrU2' in keys:
-                    vkey = prefix + 'lrV'
-                    if vkey not in keys:
-                        if projection != 'up' or not meta['lr']['shared_V']:
-                            raise ValueError('Missing low-rank input directions')
-                        vkey = f'E{expert}.gate.lrV'
-                    part.update(lrV=self._read(handle, vkey), lrU2=self._read(handle, prefix + 'lrU2'))
-                    if level == 4:
-                        part['lrU4'] = self._read(handle, prefix + 'lrU4')
-                parts.append(part)
             merged = {name: np.concatenate([p[name] for p in parts]) for name in (('base', 'var') if level == 2 else ('base', 'p4', 'word', 'var'))}
             for scale_level in ((2,) if level == 2 else (2, 4)):
                 for axis in ('su', 'sv'):
@@ -357,45 +356,43 @@ class ExpertStore:
         self.base_cache.clear()
         self.base_sizes.clear()
         self.base_bytes = 0
-        for handle, _ in self.handles.values():
-            handle.__exit__(None, None, None)
+        for handle in self.handles.values():
+            handle.close()
         self.handles.clear()
 
 
 class RefinementReader:
-    def __init__(self, root, use_preadv=False):
+    def __init__(self, root):
         self.root = root
-        self.use_preadv = use_preadv
         self.handles = {}
         self.manifests = {}
 
     _manifest = ExpertStore._manifest
 
-    def _handle(self, layer, shard):
-        if not self.use_preadv:
-            return ExpertStore._handle(self, layer, shard)[0]
-        key = layer, shard
-        if key not in self.handles:
-            self.handles[key] = PositionalTensorReader(self.root / 'layers' / f'L{layer}' / f'tp{shard}.safetensors')
-        return self.handles[key]
+    _handle = ExpertStore._handle
 
     def read(self, layer, expert):
         started = time.perf_counter()
         bytes_read = 0
         manifest = self._manifest(layer)
-        result = {}
-        for projection in ('gate', 'up', 'down'):
-            meta = manifest['proj_meta'][projection]
-            rank = manifest['per_expert'][str(expert)]['lr_rank'][projection]
+        projections = ('gate', 'up', 'down')
+        ranks = manifest['per_expert'][str(expert)]['lr_rank']
+        names = {}
+        for projection in projections:
             fields = ('p4', 'word', 'suh4', 'svh4')
-            if rank:
+            if ranks[projection]:
                 fields += ('lrU4',)
-            parts = []
-            for shard in range(8):
-                handle = self._handle(layer, shard)
-                part = {name: handle.get_tensor(f'E{expert}.{projection}.{name}') for name in fields}
-                bytes_read += sum(value.nbytes for value in part.values())
-                parts.append(part)
+            names[projection] = {name: f'E{expert}.{projection}.{name}' for name in fields}
+        parts_by_projection = {projection: [] for projection in projections}
+        for shard in range(8):
+            tensors = self._handle(layer, shard).get_tensors(key for part in names.values() for key in part.values())
+            bytes_read += sum(value.nbytes for value in tensors.values())
+            for projection, part in names.items():
+                parts_by_projection[projection].append({name: tensors[key] for name, key in part.items()})
+        result = {}
+        for projection, parts in parts_by_projection.items():
+            meta = manifest['proj_meta'][projection]
+            rank = ranks[projection]
             merged = {name: np.concatenate([p[name] for p in parts]) for name in ('p4', 'word')}
             for axis in ('su', 'sv'):
                 name = f'{axis}h4'
@@ -420,10 +417,7 @@ class RefinementReader:
 
     def close(self):
         for handle in self.handles.values():
-            if self.use_preadv:
-                handle.close()
-            else:
-                handle[0].__exit__(None, None, None)
+            handle.close()
         self.handles.clear()
 
 

@@ -34,6 +34,29 @@ class PositionalReaderTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             reader.get_tensor('a')
 
+    def test_grouped_reads_share_storage_and_leave_large_gaps(self):
+        values = {'a': np.arange(8, dtype=np.uint8), 'b': np.zeros(3, dtype=np.uint8),
+                  'c': np.arange(9, dtype=np.uint8), 'd': np.zeros(8192, dtype=np.uint8),
+                  'e': np.arange(10, dtype=np.uint8)}
+        save_file(values, self.path, metadata={'format': 'nestquant-v1-tp-safetensors'})
+        with closing(PositionalTensorReader(self.path)) as reader, \
+                patch('positional_reader.os.preadv', wraps=os.preadv) as read:
+            grouped = reader.get_tensors(('e', 'a', 'c', 'a'))
+            self.assertEqual(read.call_count, 2)
+        for name, value in grouped.items():
+            np.testing.assert_array_equal(value, values[name])
+        grouped['a'].fill(0)
+        np.testing.assert_array_equal(grouped['c'], values['c'])
+
+    def test_grouped_gap_budget_is_cumulative(self):
+        with closing(PositionalTensorReader(self.path)) as reader, \
+                patch.object(reader, 'MAX_GAP_BYTES', 9), patch.object(reader, 'MAX_EXTRA_BYTES', 10):
+            reader.header = {name: {'dtype': 'U8', 'shape': [1], 'data_offsets': [offset, offset + 1]}
+                             for name, offset in zip('abc', (0, 10, 20))}
+            with patch('positional_reader.os.preadv', wraps=os.preadv) as read:
+                reader.get_tensors('abc')
+                self.assertEqual(read.call_count, 2)
+
     def test_short_reads_fill_the_original_buffer(self):
         original = os.preadv
         with closing(PositionalTensorReader(self.path)) as reader:
@@ -61,7 +84,7 @@ class PositionalReaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             PositionalTensorReader(self.path)
 
-    def test_synchronous_upgrade_preserves_shared_safetensors_handles(self):
+    def test_synchronous_upgrade_reuses_open_shard_handles(self):
         root = Path(self.directory.name)
         layer = root / 'layers/L3'
         layer.mkdir(parents=True)
@@ -82,17 +105,19 @@ class PositionalReaderTests(unittest.TestCase):
         try:
             base = {p: ({'base': mx.zeros(1, dtype=mx.uint8)}, meta) for p in projections}
             store.base_cache[3, 0] = base
-            store._handle(3, 0)
+            first_handle = store._handle(3, 0)
             result = store.get(3, 0, 4)
             for p in projections:
                 self.assertEqual(result[p][0]['p4'].shape, (5120,))
                 self.assertIs(result[p][0]['base'], base[p][0]['base'])
             self.assertEqual(len(store.handles), 8)
-            self.assertTrue(all(isinstance(value, tuple) for value in store.handles.values()))
+            self.assertIs(store.handles[3, 0], first_handle)
+            self.assertIsNotNone(first_handle.fd)
             self.assertIs(store.get(3, 0, 2), base)
         finally:
             store.close()
         self.assertFalse(store.handles)
+        self.assertIsNone(first_handle.fd)
 
 
 if __name__ == '__main__':
