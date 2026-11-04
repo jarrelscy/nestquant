@@ -2,9 +2,9 @@
 
 This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint directly. Metal kernels decode the expert weights and compute expert projections. PyTorch MPS runs the Transformers text backbone.
 
-**Status, 2026-11-04:** full-checkpoint generation passed three smoke checks at both all-hot and canonical mixed-precision allocations on an Apple M5 Max with 128 GiB memory. Decoder, expert, and matching-chunk backbone checks pass. The first formal benchmark reached 0.227 tokens/second median. General quality evaluation and hot-set comparisons remain pending. See [performance measurements](PERFORMANCE.md). The unchunked BF16 comparison has a documented tolerance failure below.
+**Status, 2026-11-04:** full-checkpoint generation passed short answer checks at bounded 1%, 2%, and 4% hot allocations. Before the positional-reader correction, their 16-token decode medians were 2.39, 1.96, and 1.33 tokens/s. The longer 2% comparison reached 1.06 tokens/s at a 58.29 GiB peak. See [measurements and limits](PERFORMANCE.md).
 
-The [bounded asynchronous decode path](ASYNC.md) reads refinements in the background and executes the precision that is ready. Two guarded full-base trials stopped under system memory pressure before generation. With a separate 32 GiB base-cache budget, the 2% hot configuration passed all three multi-chunk answer checks at a 52.78 GiB process peak. Formal async throughput and general quality remain unverified.
+The [asynchronous path](ASYNC.md) reads refinements in the background and executes the precision that is ready. Its corrected positional reader reduces interpreter-lock contention in the measured expert microbenchmark. Full-model validation after that correction, general quality, and accelerator experiments remain pending. MTP is not implemented. The unchunked BF16 comparison retains its documented tolerance failure.
 
 ## Requirements
 
@@ -98,16 +98,16 @@ These results do not establish full-model output quality or throughput. The GPU 
 
 ## Generation interface
 
-The generation interface supports the following command. The tested configuration retains base experts:
+The following experimental command uses bounded base storage. Stop other model workloads and use the external watchdog described in [the validation procedure](ASYNC.md).
 
 ```sh
 .venv-macos/bin/python macos/generate.py \
   --model "$MODEL_ROOT" \
   --prompt 'Reply with exactly: GLM_MAC_OK' \
   --max-tokens 16 \
-  --hot-fraction 0.21742724867724866 \
-  --cache-gib 4 --resident-base \
-  --prefill-chunk-size 256 \
+  --hot-fraction 0.02 --async-refinements \
+  --cache-gib 4 --resident-base --base-cache-gib 32 \
+  --memory-limit-gib 84 --prefill-chunk-size 8 \
   --output generation.json
 ```
 
@@ -117,13 +117,13 @@ The default allocation is 2,630 hot experts across 42 routed layers. The predict
 
 The default mode uses a bounded least-recently-used cache for selected experts. It does not retain every base expert. Add `--resident-base` to preload and retain all base experts before inference. This retains 59,052,758,208 bytes (55.00 GiB) outside `--cache-gib`. In this mode, the bounded cache holds refinements and shares base tensors. Evicting a refinement does not evict its base. The all-hot smoke run with resident base tensors and a 4 GiB refinement cache peaked at 81.62 GiB of process physical footprint.
 
-To bound the separate base cache, add `--base-cache-gib 32` alongside `--resident-base`. This skips full base preloading and evicts least-recently-used bases with their refinements. Base misses are synchronous. This experimental mode preserves stored precision and passed the documented short full-model smoke. Use the [guarded validation procedure](ASYNC.md) before benchmarking; the historical full-base command above is not a desktop memory recommendation.
+To bound the separate base cache, add `--base-cache-gib 32` alongside `--resident-base`. This skips full base preloading and evicts least-recently-used bases with their refinements. Base misses are synchronous. This experimental mode preserves stored precision and passed the documented short full-model smoke. Use the [guarded validation procedure](ASYNC.md) before benchmarking; full base preloading is not a desktop memory recommendation.
 
 These two modes load refinements when a routed expert needs them. A larger hot fraction changes reconstruction precision without guaranteeing a matching increase in resident memory. Measure cache behavior and SSD reads together.
 
 Add `--resident-hot` with `--resident-base` to keep every predicted hot expert's refinements resident during decode. Before each decode step, the runtime removes refinements outside the predicted set and loads missing refinements. Refinements that remain hot retain their existing buffers. Cold experts use the resident base tensors. Updates are synchronous and their cost is included in decode timing.
 
-The runtime checks the worst possible refinement allocation for the configured per-layer slot counts before loading the backbone. An insufficient `--cache-gib` fails instead of silently evicting hot experts. The canonical 2,630-slot allocation requires at most 20.314 GiB of refinements. A 24 GiB test was stopped under memory pressure on this Mac. Do not use it as an initial recommendation. This requirement excludes base tensors, the backbone, attention caches, and temporary allocations. Full-model memory and performance remain unverified.
+The runtime checks the worst possible refinement allocation for the configured per-layer slot counts before loading the backbone. An insufficient `--cache-gib` fails instead of silently evicting hot experts. The canonical 2,630-slot allocation requires at most 20.314 GiB of refinements. A 24 GiB test was stopped under memory pressure on this Mac. Do not use it as an initial recommendation. This requirement excludes base tensors, the backbone, attention caches, and temporary allocations. Full-model memory and performance of resident-hot mode remain unverified.
 
 Add `--wired-memory` to keep MLX allocations resident during inference up to the device's recommended working set. The runtime restores the previous process limit when it closes. This uses [MLX memory wiring](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html) without changing system limits. Wiring does not reduce the model's memory requirement. Its performance effect remains under measurement.
 
@@ -133,59 +133,27 @@ The initial interface supports one text sequence, greedy sampling, and a 4,096-t
 
 Generation uses the repository's `spark/flash/thinking_off.jinja` template by default. Add `--thinking` to use the checkpoint's reasoning template. The checkpoint template ignores `enable_thinking=false`, so passing that keyword alone does not disable reasoning.
 
-If the loader reports a mapping or shape mismatch, stop inference and check the checkpoint revision and dependency versions. Do not ignore missing weights. If memory pressure rises, reduce the expert cache and prefill chunk size before retrying. Remove `--resident-base` when the base allocation leaves insufficient memory.
+If the loader reports a mapping or shape mismatch, stop inference and check the checkpoint revision and dependency versions. Do not ignore missing weights. If memory pressure rises, stop the run and inspect its receipt. Preserve the process guard and bound the separate base cache before another trial.
 
 ## Benchmark requirements
 
-Run the full-model smoke checks after the download and checksum verification finish:
+Verify the checkpoint and run the short answer checks before benchmarking a configuration:
 
 ```sh
 .venv-macos/bin/python macos/verify_generation.py \
-  --model "$MODEL_ROOT" --hot-fraction 1 --resident-base --cache-gib 4 \
-  --output generation-all-hot.json
-.venv-macos/bin/python macos/verify_generation.py \
-  --model "$MODEL_ROOT" --hot-fraction 0.21742724867724866 \
-  --resident-base --cache-gib 4 --output generation-canonical.json
-.venv-macos/bin/python macos/verify_generation.py \
-  --model "$MODEL_ROOT" --hot-fraction 0.21742724867724866 \
-  --resident-base --resident-hot --cache-gib 24 \
-  --output generation-resident-hot.json
+  --model "$MODEL_ROOT" --output generation-async-2pct.json \
+  --resident-base --base-cache-gib 32 --async-refinements --hot-fraction 0.02 \
+  --cache-gib 4 --memory-limit-gib 84 --prefill-chunk-size 8
 ```
 
-The first two commands passed all three cases at source revision `1df6588`, before optional memory wiring was added. Each full-model prompt fit within one chunk; full-model multi-chunk validation remains pending. The third awaits full-model validation with the complete hot set resident. See the [recorded smoke results](results/2026-11-04-smoke.json) for outputs, resource measurements, and source revision. They test an exact reply, integer arithmetic, and JSON ordering. They do not establish general model quality. The driver saves generated text and reports a failed check without changing its expected answer.
+After a passing smoke and recorded memory headroom, run the same configuration through the [guarded benchmark procedure](ASYNC.md). Start with 16 tokens and three measured requests. Extend the length only after inspecting actual memory use. Use fresh output files and directories.
 
-The benchmark driver completed the 16-token baseline measurement recorded in PERFORMANCE.md. Full generation must succeed before benchmarking a different configuration:
+The driver discards one warm-up and preserves all measured responses and token IDs. Every measured request must reach its requested length. An early end preserves evidence but prevents a successful throughput summary. Decode throughput excludes prefill and the first generated token.
 
-```sh
-.venv-macos/bin/python macos/benchmark.py \
-  --model "$MODEL_ROOT" \
-  --output-dir benchmark-canonical-cache4 \
-  --tokens 16 --runs 3 \
-  --hot-fraction 0.21742724867724866 \
-  --cache-gib 4 --resident-base --wired-memory --prefill-chunk-size 256
-```
+The [historical all-hot and canonical checks](results/2026-11-04-smoke.json) passed three cases at source `1df6588`. The 24 GiB resident-hot experiment was stopped under memory pressure. Do not repeat it as a recommended configuration. Bounded 1%, 2%, and 4% results are in [performance measurements](PERFORMANCE.md).
 
-The driver discards one warm-up and records three measured requests. It preserves each response and its token IDs. Every measured request must reach the requested output length. An early stop preserves that run's evidence but prevents a successful throughput summary. Choose a prompt that produces a sufficiently long answer at every compared setting. Decode throughput excludes prefill and the first generated token. A fresh output directory prevents earlier measurements from being overwritten.
+Keep prompts, output limits, sampling, chunking, cache budgets, and warm-up procedures fixed within a comparison. Record desired and executed precision, synchronous base misses, evictions, SSD reads, and peak process memory. Reject candidates that fail answer or coding checks. Short smoke tests do not establish general quality.
 
-For the historical synchronous path, the following was the proposed experiment. The 24 GiB trial was stopped under pressure. Use the smaller reviewed candidates in [bounded asynchronous decode](ASYNC.md) for further Mac tuning.
+Reports separate logical tensor reads from process-attributed disk reads. The expert-forward timer includes loading. Reader time can overlap execution and must not be added to elapsed time. Process peaks include model loading and earlier requests. A process restart does not clear the operating-system file cache.
 
-Historical proposals, not instructions to run oversized configurations:
-
-1. Stop other model servers. Wait for this checkpoint's download to finish. Suspend other downloads during measurements. Resume them afterward.
-2. Compare bounded storage with `--resident-base` at the canonical hot fraction and a 4 GiB cache.
-3. Compare hot fractions of 10%, 21.74%, and 35% with the same storage mode and cache budget.
-4. Compare cache budgets of 4, 16, and 32 GiB at the most useful precision setting.
-5. Compare resident-base storage with and without `--resident-hot`, using the canonical fraction and the same 24 GiB cache.
-6. With `--resident-hot`, compare hot fractions of 10%, 15%, and 21.74% using a 24 GiB cache.
-7. Compare prefill chunks of 128, 256, and 512 tokens using the same longer prompt.
-8. Check each candidate's answers and coding tests before selecting a default.
-
-Keep prompts, output limits, sampling, and warm-up procedures identical within each comparison. Record prefill throughput, decode throughput, peak memory, SSD reads, and output correctness. These candidate settings are a proposed experiment, not measured recommendations.
-
-Increase cache budgets only when measured memory leaves room for runtime allocations. A 35% resident-hot allocation requires at most 32.696 GiB of refinements. On the tested Mac, this approaches the recommended Metal working set after adding the backbone and base tensors. Lower fractions are the initial resident-hot candidates. Prefill still uses its configured bounded cache for selected 4-bit experts, so its memory peak can exceed the subsequent hot-set allocation.
-
-Reports separate logical base and refinement tensor bytes from process-attributed disk reads. Operating-system caching can satisfy tensor reads without physical SSD reads. The expert-forward timer includes expert loading. The process memory peak includes model loading and earlier requests in that process. Warm-up does not guarantee that every expert is cached, and a process restart does not clear the operating-system file cache.
-
-`hot_sync_seconds` measures synchronous hot-set updates. It overlaps the loader's timing and is already included in decode throughput. Do not add these timers together. Request reset restores the predictor policy, while the weight cache can retain tensors. Layer-major prefill can replace cached refinements before the next decode pool is established.
-
-Full-model smoke results are recorded above. The first formal throughput result is recorded in [performance measurements](PERFORMANCE.md). Hot-fraction comparisons and recommended performance settings remain pending.
+The interface supports one text sequence and greedy generation, with a 4,096-token validation ceiling. Long-context operation, an HTTP endpoint, MTP, vision, audio, and quantized attention caches are not implemented or validated by these benchmarks.
