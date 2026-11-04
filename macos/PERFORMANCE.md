@@ -44,6 +44,8 @@ The banked Metal projection dispatches eight routed experts together for each of
 
 The benchmark excludes SSD reads, packing time, attention, and the predictor. Serving integration still needs a bounded storage layout for resident base and hot experts. These timings measure expert computation and do not establish model tokens/s.
 
+The device route variant produced identical results to the host route in all four component cases. An out-of-range device ID produced a nonfinite result in its own row while valid rows stayed finite. The check uses a bounded gather without waiting for the host to read the IDs. The serial path passed its independent CPU comparison after the alternating-mask offset change. See [device-route results](results/device-expert-projections.json).
+
 ## Full-model validation after the reader correction
 
 The [individual-read comparison](results/2026-11-04-preadv-2pct-128.json) used clean source `af4516d`, a 2% hot allocation, 32 GiB base cache, and 4 GiB refinement/staging budget. It retained the 84 GiB process guard, eight-token prefill chunks, and no memory wiring. One 16-token warm-up preceded three measured 128-token requests with the same interval-merging prompt as the earlier comparison.
