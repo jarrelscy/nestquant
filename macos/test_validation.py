@@ -28,7 +28,7 @@ class BenchmarkValidationTests(unittest.TestCase):
         report = dict(decode_step_seconds=[0.2] * max(0, tokens - 1), generated_tokens=tokens, generated_ids=list(range(tokens)), decode_tokens_per_second=5.0,
                       ttft_seconds=1.0, prefill_tokens_per_second=10.0, disk_reads=dict(prefill=0, decode=0),
                       decode_hot_expert_fraction=0.1, decode_desired_hot_expert_fraction=0.2,
-                      expert_metrics_by_phase=dict(decode=dict(async_fallbacks=123)),
+                      expert_metrics_by_phase=dict(decode=dict(async_fallbacks=123, base_misses=4, base_evictions=2)),
                       resources=dict(after_decode=dict(lifetime_peak_physical_footprint_bytes=1024)))
         runtime = MagicMock(hot_slots=2630)
         runtime.store.base_bytes = 0
@@ -53,6 +53,8 @@ class BenchmarkValidationTests(unittest.TestCase):
                     self.assertEqual(summary['decode_hot_expert_fraction']['median'], 0.1)
                     self.assertEqual(summary['decode_desired_hot_expert_fraction']['median'], 0.2)
                     self.assertEqual(summary['async_fallbacks']['median'], 123)
+                    self.assertEqual(summary['decode_base_misses']['median'], 4)
+                    self.assertEqual(summary['decode_base_evictions']['median'], 2)
             runtime.close.assert_called_once()
 
     def test_early_eos_does_not_produce_throughput_summary(self):

@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--hot-fraction', type=float, default=1.0)
     parser.add_argument('--cache-gib', type=float, default=4)
     parser.add_argument('--resident-base', action='store_true')
+    parser.add_argument('--base-cache-gib', type=float)
     parser.add_argument('--resident-hot', action='store_true')
     parser.add_argument('--async-refinements', action='store_true')
     parser.add_argument('--memory-limit-gib', type=float, default=84)
@@ -51,7 +52,7 @@ def main():
     try:
         runtime = Runtime(args.model, args.cache_gib, hot_fraction=args.hot_fraction,
                           resident_base=args.resident_base, resident_hot=args.resident_hot, wired_memory=args.wired_memory,
-                          async_refinements=args.async_refinements, memory_limit_gib=args.memory_limit_gib)
+                          async_refinements=args.async_refinements, memory_limit_gib=args.memory_limit_gib, base_cache_gib=args.base_cache_gib)
         for name, prompt, expected in CASES:
             result = runtime.generate(prompt, max_tokens=32, prefill_chunk_size=args.prefill_chunk_size)
             report['checks'].append(dict(name=name, passed=answer_matches(result['text'], expected),

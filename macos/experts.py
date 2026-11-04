@@ -14,7 +14,8 @@ from prefetch import BoundedReader
 
 
 class ExpertStore:
-    def __init__(self, root: Path, cache_gib: float = 4.0, resident_base: bool = False, async_refinements: bool = False):
+    def __init__(self, root: Path, cache_gib: float = 4.0, resident_base: bool = False, async_refinements: bool = False,
+                 base_cache_gib: float | None = None):
         if cache_gib < 0:
             raise ValueError('Expert cache size must be nonnegative')
         self.root = root
@@ -33,7 +34,11 @@ class ExpertStore:
         self.cache = OrderedDict()
         self.cache_bytes = 0
         self.resident_base = resident_base
-        self.base_cache = {}
+        if base_cache_gib is not None and (not resident_base or not math.isfinite(base_cache_gib) or base_cache_gib <= 0):
+            raise ValueError('A bounded base cache requires resident-base mode and a positive finite budget')
+        self.base_cache_limit = int(base_cache_gib * 1024**3) if base_cache_gib is not None else None
+        self.base_cache = OrderedDict()
+        self.base_sizes = {}
         self.base_bytes = 0
         self.handles = {}
         self.manifests = {}
@@ -41,7 +46,7 @@ class ExpertStore:
                             base_tensor_bytes=0, refinement_tensor_bytes=0, hot_sync_seconds=0.0,
                             base_hits=0, base_misses=0, refinement_hits=0, refinement_misses=0,
                             async_load_seconds=0.0, async_loaded=0, async_discarded=0,
-                            async_fallbacks=0, async_install_seconds=0.0)
+                            async_fallbacks=0, async_install_seconds=0.0, base_evictions=0)
 
     def _manifest(self, layer):
         if layer not in self.manifests:
@@ -106,10 +111,13 @@ class ExpertStore:
             raise ValueError('Invalid Flash expert coordinates')
         key = layer, expert, level
         if self.resident_base and level == 2 and (layer, expert) in self.base_cache:
+            self.base_cache.move_to_end((layer, expert))
             self.metrics['hits'] += 1
             self.metrics['base_hits'] += 1
             return self.base_cache[layer, expert]
         if key in self.cache:
+            if self.resident_base:
+                self.base_cache.move_to_end((layer, expert))
             self.metrics['hits'] += 1
             self.metrics['refinement_hits' if level == 4 else 'base_hits'] += 1
             self.cache.move_to_end(key)
@@ -120,6 +128,8 @@ class ExpertStore:
             base = self.base_cache.get((layer, expert))
             if base is None:
                 base = self.get(layer, expert, 2)
+            else:
+                self.base_cache.move_to_end((layer, expert))
             started = time.perf_counter()
             result = self._upgrade(layer, expert, base)
             size = sum(value.nbytes for projection, (planes, _) in result.items()
@@ -130,7 +140,18 @@ class ExpertStore:
             size = sum(value.nbytes for planes, _ in result.values() for value in planes.values())
         self.metrics['load_seconds'] += time.perf_counter() - started
         if self.resident_base and level == 2:
+            if self.base_cache_limit is not None:
+                if size > self.base_cache_limit:
+                    raise ValueError('One base expert exceeds the base cache budget')
+                while self.base_cache and self.base_bytes + size > self.base_cache_limit:
+                    removed_key, _ = self.base_cache.popitem(last=False)
+                    self.base_bytes -= self.base_sizes.pop(removed_key)
+                    refinement = self.cache.pop((*removed_key, 4), None)
+                    if refinement is not None:
+                        self.cache_bytes -= refinement[1]
+                    self.metrics['base_evictions'] += 1
             self.base_cache[layer, expert] = result
+            self.base_sizes[layer, expert] = size
             self.base_bytes += size
             return result
         while self.cache and self.cache_bytes + size > self.cache_limit:
@@ -251,7 +272,7 @@ class ExpertStore:
             payload, count, elapsed = completed
             self.metrics['refinement_tensor_bytes'] += count
             self.metrics['async_load_seconds'] += elapsed
-            if key not in self.async_targets:
+            if key not in self.async_targets or key not in self.base_cache:
                 self.metrics['async_discarded'] += 1
                 return
             layer, expert = key
@@ -278,7 +299,7 @@ class ExpertStore:
 
         self.prefetch.poll(accept)
         for key in self.async_order:
-            if (*key, 4) not in self.cache and key not in self.prefetch.pending:
+            if key in self.base_cache and (*key, 4) not in self.cache and key not in self.prefetch.pending:
                 if not self.prefetch.submit(key, self.refinement_bytes(*key)):
                     break
 
@@ -296,6 +317,8 @@ class ExpertStore:
     def preload_base(self):
         if not self.resident_base:
             raise ValueError('Base preloading requires resident-base mode')
+        if self.base_cache_limit is not None:
+            raise ValueError('A bounded base cache loads experts on demand')
         for layer in range(3, 45):
             for expert in range(288):
                 self.get(layer, expert, 2)
@@ -327,6 +350,7 @@ class ExpertStore:
         self.cache.clear()
         self.cache_bytes = 0
         self.base_cache.clear()
+        self.base_sizes.clear()
         self.base_bytes = 0
         for handle, _ in self.handles.values():
             handle.__exit__(None, None, None)

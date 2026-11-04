@@ -80,6 +80,7 @@ class AsyncStoreTests(unittest.TestCase):
     def setUp(self):
         self.entered, self.release = threading.Event(), threading.Event()
         self.store = ExpertStore(Path('.'), cache_gib=0.1, resident_base=True, async_refinements=True)
+        self.store.base_cache.update({(3, expert): {} for expert in (0, 1, 7)})
         def read(layer, expert):
             self.entered.set()
             if not self.release.wait(5):
@@ -141,6 +142,60 @@ class AsyncStoreTests(unittest.TestCase):
         self.assertFalse(self.store.cache)
         self.assertEqual(self.store.prefetch.reserved_bytes, 0)
         self.assertFalse(self.installed_threads)
+
+    def test_completion_for_evicted_base_is_discarded(self):
+        self.store.begin_decode(self.wanted(0), self.priorities, self.budgets)
+        self.assertTrue(self.entered.wait(5))
+        del self.store.base_cache[3, 0]
+        self.ready()
+        self.assertFalse(self.store.cache)
+        self.assertFalse(self.store.prefetch.pending)
+        self.assertFalse(self.installed_threads)
+        self.assertEqual(self.store.metrics['async_discarded'], 1)
+
+    def test_missing_base_does_not_schedule_refinement(self):
+        del self.store.base_cache[3, 0]
+        self.store.begin_decode(self.wanted(0), self.priorities, self.budgets)
+        self.assertFalse(self.store.prefetch.pending)
+
+
+class BaseCacheTests(unittest.TestCase):
+    def test_base_eviction_removes_its_refinement_and_honors_recency(self):
+        store = ExpertStore(Path('.'), resident_base=True, base_cache_gib=16 / 1024**3)
+        store._load = lambda *args: {'gate': ({'base': np.zeros(8, dtype=np.uint8)}, {})}
+        try:
+            store.get(3, 0, 2)
+            store.get(3, 1, 2)
+            store.get(3, 0, 2)
+            store.cache[3, 1, 4] = {'refined': True}, 4
+            store.cache_bytes = 4
+            store.get(3, 2, 2)
+            self.assertEqual(set(store.base_cache), {(3, 0), (3, 2)})
+            self.assertEqual(store.base_bytes, 16)
+            self.assertFalse(store.cache)
+            self.assertEqual(store.cache_bytes, 0)
+            self.assertEqual(store.metrics['base_evictions'], 1)
+            with self.assertRaisesRegex(ValueError, 'on demand'):
+                store.preload_base()
+        finally:
+            store.close()
+        self.assertFalse(store.base_sizes)
+
+    def test_refinement_hit_keeps_its_base_recent(self):
+        store = ExpertStore(Path('.'), resident_base=True, base_cache_gib=16 / 1024**3)
+        store._load = lambda *args: {'gate': ({'base': np.zeros(8, dtype=np.uint8)}, {})}
+        try:
+            store.get(3, 0, 2)
+            store.get(3, 1, 2)
+            store.cache[3, 0, 4] = {'refined': True}, 4
+            store.cache_bytes = 4
+            store.get(3, 0, 4)
+            store.get(3, 2, 2)
+            self.assertIn((3, 0), store.base_cache)
+            self.assertIn((3, 0, 4), store.cache)
+            self.assertNotIn((3, 1), store.base_cache)
+        finally:
+            store.close()
 
 
 class MemoryGuardTests(unittest.TestCase):
