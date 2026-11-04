@@ -12,6 +12,10 @@ The first guarded 2% trial stopped during base loading when macOS reported press
 
 The expert and backbone readers now use Safetensors 0.8's `pread` backend. Its [macOS implementation](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs) requests `F_NOCACHE` for reads, avoiding retained memory-mapped source pages. File-cache duplication is a plausible contributor to the failed load, not a confirmed sole cause. The memory guards remain unchanged. Exact byte comparisons and the asynchronous component check pass with this backend; full-model validation remains pending.
 
+`pread` keeps file descriptors open. The serving store and worker can hold 672 expert shard descriptors together. Check `ulimit -n` before launching and use a soft limit of at least 1,024. The tested launcher inherits a limit of 1,048,575 and passed a 700-handle read test. The local supervisor rejects lower limits before stopping the existing service.
+
+The backend change also changes file-cache behavior. Do not attribute differences from the historical `mmap` benchmark solely to asynchronous delivery.
+
 `--cache-gib` covers resident refinements and a fixed 64 MiB staging allowance. The reader reserves three times each expected payload plus 1 MiB for shard copies, merged arrays, and installation. There is one worker and at most two pending reads. Handles and metadata add fixed overhead outside the tensor budget.
 
 The full desired set must fit within the resident portion of the cache. Capacity is checked before loading the backbone. With a 4 GiB budget, initial candidates are:
