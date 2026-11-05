@@ -1,13 +1,18 @@
 import unittest
+from unittest.mock import patch
 
 import mlx.core as mx
 import numpy as np
 
-from decoder import HEADER, PATTERNS, _sum_table, projection_matvec_banked
+from decoder import HEADER, PATTERNS, _matvec_kernel, _sum_table, projection_matvec_banked
 from test_compact_base import compact, fixture
 
 
 class DecoderVariantsTest(unittest.TestCase):
+    def test_shuffle_rejects_more_words_than_lanes(self):
+        with patch.dict(PATTERNS, {5.0: (5, 0)}), self.assertRaisesRegex(ValueError, 'cooperative ring layout'):
+            _matvec_kernel(5.0, 2.5, state_load='shuffle')
+
     def test_wide_reads_match_circular_bit_reference(self):
         kernel = mx.fast.metal_kernel(
             name='test_nq_packed_states', input_names=['buffer'], output_names=['ordinary', 'wide', 'shuffled'], header=HEADER,

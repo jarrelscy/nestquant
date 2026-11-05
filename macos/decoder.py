@@ -186,6 +186,12 @@ def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256, state
         raise ValueError('Use bytes, u32, or shuffle packed state reads')
     bka, bmask = PATTERNS[base_k]
     rka, rmask = PATTERNS[residual_k]
+    if state_load == 'shuffle':
+        for ka, mask in ((bka, bmask), (rka, rmask)):
+            bits = ka * 256 + mask.bit_count() * 16
+            last = ka * 255 + 15 * mask.bit_count() + (mask & 0x7fff).bit_count()
+            if bits > 1024 or (bits % 32 and last % 32 > 16):
+                raise ValueError('Packed pattern exceeds the cooperative ring layout')
     unit = ('threadgroup_position_in_grid.x' if threadgroup_size == 256 else
             f'(threadgroup_position_in_grid.x * {threadgroup_size // 32} + simdgroup_index_in_threadgroup) / 8')
     group = ('simdgroup_index_in_threadgroup' if threadgroup_size == 256 else
