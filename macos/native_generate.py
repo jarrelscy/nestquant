@@ -304,7 +304,7 @@ def main():
     parser.add_argument('--row-plan', type=Path)
     parser.add_argument('--refinements', action='store_true')
     parser.add_argument('--refinement-budget-gib', type=int, choices=(4, 6), default=4)
-    parser.add_argument('--hot-fraction', type=float, choices=(0.01, 0.02, 0.03), default=0.02)
+    parser.add_argument('--hot-fraction', type=float, choices=(0.01, 0.02, 0.03, 0.05), default=0.02)
     parser.add_argument('--prefill-rows', type=int, choices=(64, 128, 160, 192, 240), default=64)
     parser.add_argument('--token-major', action='store_true')
     parser.add_argument('--verify-prefill', action='store_true')
@@ -326,6 +326,8 @@ def main():
         parser.error('Residency and preload pacing controls require --full-base')
     if args.refinement_budget_gib != 4 and not args.refinements:
         parser.error('A refinement budget requires --refinements')
+    if args.hot_fraction == 0.05 and (not args.refinements or args.refinement_budget_gib != 6):
+        parser.error('Five-percent hot allocation requires --refinements --refinement-budget-gib 6')
     if args.base_prefetch and (not args.refinements or args.verify_prefill or args.full_base):
         parser.error('Base prediction requires the committed refinement predictor during generation')
     if args.cold_fastpath and not args.refinements:
