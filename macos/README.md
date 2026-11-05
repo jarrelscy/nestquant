@@ -167,7 +167,13 @@ The native path reads missing base rows from disk into fixed slots. It records r
 
 The opt-in `--base-prefetch 1` experiment predicts base reads from the committed jT/EMA scores. It requires `--refinements` and uses a separate 128 MiB staging reservation inside the process and pressure guards. One worker reads private CPU buffers up to four layers ahead. Only actually routed rows can enter the persistent GPU bank. Missing predictions still trigger required reads. Speculative I/O failures receive one synchronous fallback when required. Allocation failures and malformed payloads stop the run. The first controlled replay measured 3.45 tokens/s versus 3.56 without prediction, so the option remains disabled by default. See [the read-ahead comparison](PERFORMANCE.md#anticipatory-base-reads).
 
-Use `--verify-prefill --refinements` to compare both schedules with four-bit prefill and check the committed predictor state. The comparison uses the same chunk size for both schedules. Choose `--prefill-rows` to bound the scratch bank for one layer. Decode slots, this scratch bank, and the asynchronous worker share a 4 GiB refinement limit. The separate base banks default to 32 GiB. Explicit paged budgets of 40 or 44 GiB allow 192 or 224 rows per layer. The process and system-pressure guards remain active. Larger budgets require their own measured headroom.
+Use `--verify-prefill --refinements` to compare both schedules with four-bit prefill and check the committed predictor state. The comparison uses the same chunk size for both schedules. Choose `--prefill-rows` to bound the scratch bank for one layer. Decode slots, this scratch bank, and the asynchronous worker share a default 4 GiB refinement limit. The separate base banks default to 32 GiB. Explicit paged budgets of 40 or 44 GiB allow 192 or 224 rows per layer. The process and system-pressure guards remain active. Larger budgets require their own measured headroom.
+
+The optional `--refinement-budget-gib 6` admits a separately bounded allocation for supervised experiments. It requires `--refinements` and does not change process or system guards. `--hot-fraction 0.05` requires this six-GiB budget. Five-percent hot allocation with 128 prefill rows reserves 5.737 GiB, including the worker. This profile has no model benchmark or quality result. Keep the default until its review and runtime checks pass.
+
+The optional `--cold-fastpath` uses base-only projection operations when every selected decode expert lacks a ready refinement. It still publishes completed reads, records predictor inputs, and retains both banks' output lifetimes. Prefill keeps the existing mixed projection path. The flag requires `--refinements` and remains disabled by default. Real-weight all-cold comparisons matched the reference projection at layers 3 and 44. No model speedup is established.
+
+Refinement reports separate `prefill_reader_seconds`, `prefill_install_seconds`, and `decode_publication_seconds`. Reader time includes positional reads, assembly, validation, and payload copies. Installation can include waiting for the bank's previous GPU use. Publication measures the eligibility check and installation. Background worker time can overlap these windows, so do not add all counters to estimate elapsed time.
 
 The experimental complete-base mode requires `--full-base --rows 288 --base-budget-gib 56`. It loads every prepared base plane directly into persistent storage before prefill. It requests 68 GiB of process residency for the base and backbone. Base-only routing then uses GPU expert IDs without extracting them on the CPU. This mode rejects refinements until combined memory use is validated. Full-model generation with this mode has not yet passed the guarded benchmark gate.
 
@@ -215,6 +221,37 @@ python macos/native_generate.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
 ```
 
 See [the measured results](PERFORMANCE.md#base-cache-and-native-execution) for memory accounting, throughput and the constraints on each comparison.
+
+### Contiguous base archive
+
+The optional expert-major archive stores each base expert's packed planes together on disk. Required fills use one positional scatter read into the existing bank buffers when the operating system completes the read. Partial reads continue from the remaining buffers. This preserves tensor bytes and the GPU bank layout. It adds no prediction and never skips required weights. Private asynchronous payloads remain compatible with the existing base-read worker.
+
+Preparation needs another 55.46 GiB of disk space and preserves a 100 GiB free-space reserve. It retains the original base archive. Preparation and validation enforce a 4 GiB inner memory guard. Keep the external host watchdog active. The tested wrapper used an 8 GiB limit for these component operations.
+
+1. Select a fresh destination for the derived archive.
+
+   ```sh
+   export EXPERT_ARCHIVE="$HOME/Models/GLM/expert-major-banks-v1"
+   ```
+
+2. Prepare the contiguous archive from the verified base archive.
+
+   ```sh
+   python macos/expert_major_base.py --source "$BASE_ARCHIVE" --output-dir "$EXPERT_ARCHIVE"
+   ```
+
+3. Verify every expert's bytes and the sampled projections, including eviction and reload.
+
+   ```sh
+   python macos/verify_expert_major.py --source "$BASE_ARCHIVE" --archive "$EXPERT_ARCHIVE" \
+     --output "$RESULTS/expert-major-parity.json"
+   ```
+
+Both commands accept `--layers` for an explicit subset. Preparation refuses existing destination files. After interruption, preserve completed file/sidecar pairs. Remove only the incomplete derived files for the failed layer before retrying that layer. A completed archive needs both its Safetensors file and matching sidecar. The sidecar records the file hash, source hash, revision, and file fingerprint.
+
+Use `--archive "$EXPERT_ARCHIVE"` with the native paged generator to select this format after validation and review. The expert-major format explicitly rejects full-base preload. The original archive remains available for that separate experiment. No model-level performance result is established for the contiguous layout.
+
+All 42 converted layers passed byte-for-byte checks over 59,553,531,072 bytes and 756 sampled projection comparisons. Validation included eviction and reload. The check peaked at 519,078,944 bytes of process footprint, retained normal pressure, and restored Qwen. System swap-outs increased by 393,216 bytes during the check and cleanup. These system counters do not attribute swaps to the verifier. See [the component evidence](results/2026-11-05-native-storage-validation.json).
 
 ### Loopback chat and prefix reuse
 
