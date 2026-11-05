@@ -1,0 +1,276 @@
+{
+  "measured": "2026-11-05",
+  "source_commit": "c7412f5",
+  "preparation": {
+    "status": "complete",
+    "source_commit": "c7412f5",
+    "layers": 42,
+    "original_bytes": 59553531072,
+    "stored_bytes": 58326697152,
+    "compared_bytes": 59553531072,
+    "peak_bytes": 3495021232,
+    "minimum_free_percent": 69,
+    "pressure": 1,
+    "system_swapout_bytes": 0,
+    "baseline_restored": true,
+    "manifest_sha256": "7290c69894d1be3499b50723ad3f69c82f6f89524cf394be5779f35bac83c052",
+    "disk_free_bytes": 120870174720
+  },
+  "gpu": {
+    "status": "passed",
+    "checks": [
+      {
+        "layer": 3,
+        "compared_bytes": 1426198752,
+        "projections": [
+          {
+            "projection": "gate",
+            "mode": "base",
+            "identical": true,
+            "serial_relative_rms": 6.243694450347448e-09
+          },
+          {
+            "projection": "gate",
+            "mode": "mixed",
+            "identical": true,
+            "serial_relative_rms": 6.9279968428759275e-09
+          },
+          {
+            "projection": "gate",
+            "mode": "refined",
+            "identical": true,
+            "serial_relative_rms": 8.610581581081078e-09
+          },
+          {
+            "projection": "gate",
+            "mode": "cold",
+            "identical": true,
+            "serial_relative_rms": 6.243694450347448e-09
+          },
+          {
+            "projection": "up",
+            "mode": "base",
+            "identical": true,
+            "serial_relative_rms": 6.266766217066788e-09
+          },
+          {
+            "projection": "up",
+            "mode": "mixed",
+            "identical": true,
+            "serial_relative_rms": 7.182289873952641e-09
+          },
+          {
+            "projection": "up",
+            "mode": "refined",
+            "identical": true,
+            "serial_relative_rms": 7.6448998242995e-09
+          },
+          {
+            "projection": "up",
+            "mode": "cold",
+            "identical": true,
+            "serial_relative_rms": 6.266766217066788e-09
+          },
+          {
+            "projection": "down",
+            "mode": "base",
+            "identical": true,
+            "serial_relative_rms": 5.317976281560277e-09
+          },
+          {
+            "projection": "down",
+            "mode": "mixed",
+            "identical": true,
+            "serial_relative_rms": 5.623792542763795e-09
+          },
+          {
+            "projection": "down",
+            "mode": "refined",
+            "identical": true,
+            "serial_relative_rms": 6.784374395607529e-09
+          },
+          {
+            "projection": "down",
+            "mode": "cold",
+            "identical": true,
+            "serial_relative_rms": 5.317976281560277e-09
+          }
+        ]
+      },
+      {
+        "layer": 44,
+        "compared_bytes": 1426198752,
+        "projections": [
+          {
+            "projection": "gate",
+            "mode": "base",
+            "identical": true,
+            "serial_relative_rms": 7.749888730756993e-09
+          },
+          {
+            "projection": "gate",
+            "mode": "mixed",
+            "identical": true,
+            "serial_relative_rms": 9.230616271338477e-09
+          },
+          {
+            "projection": "gate",
+            "mode": "refined",
+            "identical": true,
+            "serial_relative_rms": 9.756879748579195e-09
+          },
+          {
+            "projection": "gate",
+            "mode": "cold",
+            "identical": true,
+            "serial_relative_rms": 7.749888730756993e-09
+          },
+          {
+            "projection": "up",
+            "mode": "base",
+            "identical": true,
+            "serial_relative_rms": 5.650738099660657e-09
+          },
+          {
+            "projection": "up",
+            "mode": "mixed",
+            "identical": true,
+            "serial_relative_rms": 5.939996938764125e-09
+          },
+          {
+            "projection": "up",
+            "mode": "refined",
+            "identical": true,
+            "serial_relative_rms": 7.037560312284086e-09
+          },
+          {
+            "projection": "up",
+            "mode": "cold",
+            "identical": true,
+            "serial_relative_rms": 5.650738099660657e-09
+          },
+          {
+            "projection": "down",
+            "mode": "base",
+            "identical": true,
+            "serial_relative_rms": 6.902562077470975e-09
+          },
+          {
+            "projection": "down",
+            "mode": "mixed",
+            "identical": true,
+            "serial_relative_rms": 8.126034956035255e-09
+          },
+          {
+            "projection": "down",
+            "mode": "refined",
+            "identical": true,
+            "serial_relative_rms": 9.32526589281224e-09
+          },
+          {
+            "projection": "down",
+            "mode": "cold",
+            "identical": true,
+            "serial_relative_rms": 6.902562077470975e-09
+          }
+        ]
+      }
+    ]
+  },
+  "gpu_memory": {
+    "peak_bytes": 3616803768,
+    "minimum_free_percent": 72,
+    "pressure": 1,
+    "baseline_restored": true,
+    "system_swapout_bytes": 0
+  },
+  "fullbase": {
+    "status": "stopped",
+    "source_commit": "c7412f5",
+    "layer": 42,
+    "reason": "MemoryError: Resident bank load crossed the inner memory guard",
+    "pressure": 2,
+    "peak_bytes": 61937086504,
+    "outer_observed_peak_bytes": 60704812352,
+    "minimum_free_percent": 24,
+    "logical_base_bytes": 55536820992,
+    "logical_backbone_bytes": 5918754040,
+    "remaining_base_bytes": 2789876160,
+    "system_swapout_bytes": 0,
+    "baseline_restored": true,
+    "last_layer": {
+      "event": "layer",
+      "logical_bank_bytes": 55536820992,
+      "physical_bytes": 61936857128,
+      "lifetime_physical_peak_bytes": 61937086504,
+      "resident_bytes": 61115219968,
+      "wired_bytes": 61594533888,
+      "mlx_active_bytes": 61456154304,
+      "mlx_cache_bytes": 1603801,
+      "mlx_peak_bytes": 61456967095,
+      "read_bytes": 61573521408,
+      "pressure": 2,
+      "system_vm": {
+        "page_size_bytes": 16384,
+        "counters": {
+          "Pages free": 7513,
+          "Pages active": 965495,
+          "Pages inactive": 963230,
+          "Pages speculative": 184,
+          "Pages throttled": 0,
+          "Pages wired down": 4452967,
+          "Pages purgeable": 26,
+          "\"Translation faults\"": 12674289463,
+          "Pages copy-on-write": 1400747827,
+          "Pages zero filled": 7120583957,
+          "Pages reactivated": 546685753,
+          "Pages purged": 94454244,
+          "File-backed pages": 1077844,
+          "Anonymous pages": 851065,
+          "Pages stored in compressor": 3813990,
+          "Pages occupied by compressor": 1947357,
+          "Decompressions": 478518598,
+          "Compressions": 584561692,
+          "Pageins": 1304229568,
+          "Pageouts": 184799,
+          "Swapins": 13966358,
+          "Swapouts": 17248384,
+          "Pages tagged": 262624,
+          "Pages tagged resident": 192148,
+          "Pages tagged compressed": 70476,
+          "Pages tag-storage": 262144,
+          "Pages tag-storage holding tags": 16160,
+          "Pages tag-storage free": 317,
+          "Pages tag-storage non-tag pageable": 244942,
+          "Pages tag-storage non-tag wired": 11,
+          "Bytes of compressed tags": 10607488,
+          "Tagged compressions": 4505036,
+          "Tagged decompressions": 4096826
+        }
+      },
+      "layer": 42,
+      "logical_backbone_bytes": 5918754040,
+      "checks": 23,
+      "sample_sum": 10716941.0
+    },
+    "guards": {
+      "outer_gib": 84,
+      "inner_gib": 82,
+      "pressure": 1,
+      "minimum_free_percent": 20,
+      "wired_request_gib": 56
+    },
+    "receipt_sha256": "e97c5ea79b53adc89bee48bb48736eaf4b8a6a64839a430505dd8dc374867e21"
+  },
+  "tests": {
+    "runtime_passed": 88,
+    "supervisor_passed": 5,
+    "initial_failure": "Four imports failed: ModuleNotFoundError: No module named 'mlx_vlm'. Existing optional dependency path restored; no package changes."
+  },
+  "limitations": [
+    "Byte equivalence and sampled GPU equality validate storage conversion, not compact-backbone answer quality.",
+    "Full-base inference still does not fit safely in the observed desktop state.",
+    "The inner stop preceded the next outer sample. Use the child lifetime peak, not only the outer sample.",
+    "The changing stop layer is not a fixed physical capacity. No TPS or accuracy claim from this memory probe."
+  ]
+}

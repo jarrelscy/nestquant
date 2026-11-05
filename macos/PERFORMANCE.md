@@ -1,5 +1,7 @@
 # Mac performance measurements
 
+The lossless archive experiment reduced base storage from 59,553,531,072 to 58,326,697,152 bytes, saving 1.143 GiB. All 42 layers passed full byte reconstruction, and 24 real GPU comparisons matched exactly. Conversion and GPU verification peaked at 3.26 and 3.37 GiB, retained normal pressure, added no swap-outs, and restored Qwen. The subsequent full-base probe stopped at pressure level 2 on layer 42. Its child recorded a 57.68 GiB lifetime peak, versus 56.54 GiB sampled by the outer watchdog. Another 2.60 GiB of base remained unloaded. No refinements or generation were included. Qwen recovered with zero added swap-outs. Confidence is high in this failure and low in treating its stopping point as a fixed capacity. See [the lossless archive evidence](results/2026-11-05-native-lossless-base.json).
+
 The compact-backbone full-base probe stopped at pressure level 2 on layer 44. It peaked at 61.43 GiB, retained at least 22% reported free memory, added no system swap-outs, and restored Qwen. The final layer loaded, but the final page sweeps did not complete. The existing 84/82 GiB guards and 56 GiB residency request were unchanged. Confidence is high that this configuration did not fit safely in the observed desktop state. This does not prove that every compact layout is infeasible. See [the stopped probe](results/2026-11-05-native-compact-fullbase-stop.json).
 
 Owner: Andru. Measured: 2026-11-04 to 2026-11-05.
