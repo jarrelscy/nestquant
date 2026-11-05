@@ -51,28 +51,50 @@ def compare(store, layer, level):
             results.append(projection_matvec(*expert['down'], activation(gate, up), level))
         return mx.stack(results)
 
-    def batched(indices):
-        gate = projection_matvec_banked(*bank['gate'], rows, indices, level)
-        up = projection_matvec_banked(*bank['up'], rows, indices, level)
-        return projection_matvec_banked(*bank['down'], activation(gate, up), indices, level)
+    def batched(planes, inputs, indices):
+        gate = projection_matvec_banked(planes['gate'], bank['gate'][1], inputs, indices, level)
+        up = projection_matvec_banked(planes['up'], bank['up'][1], inputs, indices, level)
+        return projection_matvec_banked(planes['down'], bank['down'][1], activation(gate, up), indices, level)
 
+    planes = {name: tensors for name, (tensors, _) in bank.items()}
     expected = mx.stack([store.apply(layer, EXPERTS[index], rows[row], level) for row, index in enumerate(route)])
     device_route = mx.array(route, dtype=mx.uint32)
-    actual = batched(route)
-    on_device = batched(device_route)
+    actual = batched(planes, rows, route)
+    on_device = batched(planes, rows, device_route)
     mx.eval(expected, actual, on_device)
     relative_rms = (mx.linalg.norm(actual - expected) / mx.linalg.norm(expected)).item()
     if not relative_rms < 0.001:
         raise RuntimeError(f'Banked expert parity failed at layer {layer}, level {level}: {relative_rms}')
     if not mx.array_equal(actual, on_device).item():
         raise RuntimeError('Device routes changed the banked result')
-    invalid = batched(mx.array((*route[:-1], len(EXPERTS)), dtype=mx.uint32))
+    invalid = batched(planes, rows, mx.array((*route[:-1], len(EXPERTS)), dtype=mx.uint32))
     if not mx.isfinite(invalid[:-1]).all().item() or not mx.isnan(invalid[-1]).all().item():
         raise RuntimeError('Invalid device route did not fail in its own row')
+    compiled = mx.compile(batched)
+    start = time.perf_counter()
+    fused = compiled(planes, rows, device_route)
+    mx.eval(fused)
+    compile_first_call_seconds = time.perf_counter() - start
+    compiled_rms = (mx.linalg.norm(fused - on_device) / mx.linalg.norm(on_device)).item()
+    invalid = compiled(planes, rows, mx.array((*route[:-1], len(EXPERTS)), dtype=mx.uint32))
+    if not mx.isfinite(invalid[:-1]).all().item() or not mx.isnan(invalid[-1]).all().item():
+        raise RuntimeError('Compiled invalid device route did not fail in its own row')
+    altered = {name: dict(values) for name, values in planes.items()}
+    altered['gate'][f'suh{level}'] = planes['gate'][f'suh{level}'] * .9
+    altered['gate']['var'] = mx.bitwise_xor(planes['gate']['var'], 1)
+    changed_rows = rows * .5
+    changed = compiled(altered, changed_rows, device_route)
+    changed_reference = batched(altered, changed_rows, device_route)
+    changed_rms = (mx.linalg.norm(changed - changed_reference) / mx.linalg.norm(changed_reference)).item()
+    if not all(value < 1e-5 for value in (compiled_rms, changed_rms)):
+        raise RuntimeError(f'Compiled expert parity failed: {compiled_rms}, {changed_rms}')
     return dict(layer=layer, level=level, relative_rms=relative_rms,
+                compiled_relative_rms=compiled_rms, changed_input_relative_rms=changed_rms,
+                compiled_relative_rms_limit=1e-5, compile_first_call_seconds=compile_first_call_seconds,
                 serial=timed(lambda: (serial() * scores[:, None]).sum(axis=0)),
-                banked=timed(lambda: (batched(route) * scores[:, None]).sum(axis=0)),
-                device=timed(lambda: (batched(device_route) * scores[:, None]).sum(axis=0)))
+                banked=timed(lambda: (batched(planes, rows, route) * scores[:, None]).sum(axis=0)),
+                device=timed(lambda: (batched(planes, rows, device_route) * scores[:, None]).sum(axis=0)),
+                compiled=timed(lambda: (compiled(planes, rows, device_route) * scores[:, None]).sum(axis=0)))
 
 
 def main():
