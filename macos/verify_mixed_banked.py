@@ -6,7 +6,9 @@ import mlx.core as mx
 
 from decoder import projection_matvec, projection_matvec_banked
 from experts import ExpertStore
+from metrics import MemoryGuard
 from microbench_banked import EXPERTS, pack
+from resources import process_usage, system_pressure
 
 
 def compare(store, layer):
@@ -58,9 +60,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
     mx.random.seed(42)
     mx.set_cache_limit(256 * 1024**2)
+    guard = MemoryGuard(4)
     store = ExpertStore(args.model, cache_gib=0.5)
+    store.memory_check = lambda: guard.check(force=True)
     try:
         checks = [compare(store, layer) for layer in (3, 44)]
+        guard.check(force=True)
     finally:
         store.close()
-    print(json.dumps(dict(status='passed', checks=checks)))
+    usage = process_usage()
+    print(json.dumps(dict(status='passed', checks=checks,
+                          memory=dict(physical_bytes=usage.phys_footprint,
+                                      lifetime_peak_physical_bytes=usage.lifetime_max_phys_footprint,
+                                      mlx_peak_bytes=mx.get_peak_memory(), pressure_level=system_pressure()))))

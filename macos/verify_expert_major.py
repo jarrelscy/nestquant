@@ -8,6 +8,7 @@ from decoder import projection_matvec_banked
 from metrics import MemoryGuard
 from native_assets import REVISION, fingerprint, paths
 from packed_expert_bank import PackedExpertBank
+from resources import process_usage, system_pressure
 
 
 def verify(source, archive, layer, guard):
@@ -74,7 +75,11 @@ if __name__ == '__main__':
     mx.set_memory_limit(3 * 1024**3)
     guard = MemoryGuard(4)
     checks = [verify(args.source, args.archive, layer, guard) for layer in args.layers]
+    usage = process_usage()
+    memory = dict(physical_bytes=usage.phys_footprint,
+                  lifetime_peak_physical_bytes=usage.lifetime_max_phys_footprint,
+                  mlx_peak_bytes=mx.get_peak_memory(), pressure_level=system_pressure())
     with args.output.open('x') as stream:
-        json.dump(dict(status='passed', checks=checks), stream, indent=2)
+        json.dump(dict(status='passed', checks=checks, memory=memory), stream, indent=2)
         stream.write('\n')
     print(json.dumps(dict(status='passed', checked_bytes=sum(row['checked_bytes'] for row in checks))))
