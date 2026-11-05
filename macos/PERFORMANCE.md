@@ -1,5 +1,24 @@
 # Mac performance measurements
 
+## Split-loop model trial remains experimental
+
+The [four-run model comparison](results/2026-11-06-native-split-model.json) measured a 4.38 tokens/s split-loop median, versus 3.81 for inline controls. That is a 15.2% gain on one fixed-input replay. Both split runs were faster than both controls. The predeclared screening rule passed, but the two controls differed by 0.54 tokens/s. Confidence is moderate in generalizing this result. The 15-30 tokens/s target remains unmet.
+
+| Trial order | Decoder | Decode tokens/s | Peak footprint |
+|---|---|---:|---:|
+| 1 | inline | 4.076 | 30.27 GB |
+| 2 | split | 4.602 | 30.26 GB |
+| 3 | split | 4.164 | 30.25 GB |
+| 4 | inline | 3.534 | 30.26 GB |
+
+Each fresh process replayed the same 128 inputs with 64 base rows, eight-token chunks, staged required reads, and a 3% refinement allocation. The predictor retained `mix=0.75`, `hm=4`, `G=1`, and a 64-token half-life. Diagnostics stayed disabled. Every replay retained normal pressure, added no swap-outs, and restored Qwen under the unchanged 40 GiB guard.
+
+Ready refinements covered 19.79-19.94% of expert calls and 38.18-38.65% of routing salience. The split runs matched 126 and 127 of the first control's 129 greedy predictions. The second control matched 128. Async refinement availability can change effective precision between runs. Fixed inputs and salience coverage do not establish answer accuracy.
+
+A subsequent HumanEval/3 answer passed the restricted Docker grader at 4.05 decode tokens/s. It generated 149 tokens after 127.91 seconds to the first token. Peak footprint was 30.30 GB and pressure stayed normal. However, system-wide swap-outs increased by 1 MiB, failing the predeclared zero-swap acceptance rule. The counter does not identify the responsible process. Further model trials stopped. The other 11 coding cases were not run, and inline remains the generation default.
+
+All 95 native runtime tests and 18 service/isolation tests passed. Two Max-account Fable/high reviewers checked the kernel, benchmark, runtime wiring, and trial plan. Required source-equivalence and distinct-name checks passed before GPU trials. These native trials retain the 4096-token validation bound. They do not validate the separate daily llama.cpp service's 512K context.
+
 ## Split loops reduce mixed component time
 
 The optional split-loop decoder passed the [component criteria](results/2026-11-06-native-split-loops.json) in all 48 comparisons. At eight rows, mixed precision improved by about 16% and all-cold mixed execution by about 20%. These percentages compare medians across six layer/projection medians. The generation default remains the inline decoder.
