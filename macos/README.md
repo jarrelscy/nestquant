@@ -183,6 +183,8 @@ MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS=250 python macos/probe_resident_memory.p
 
 The residency probe requires the external host watchdog. Add `--model "$MODEL" --backbone "$BACKBONE_ARCHIVE" --wired-gib 68` to measure the backbone with the base. The refresh option repeats process residency requests; it does not change a system memory limit. Its implementation is in [MLX 0.32.4](https://github.com/ml-explore/mlx/blob/v0.32.4/mlx/backend/metal/resident.cpp).
 
+Use `--reader mlx-nocache` to measure MLX-owned storage loaded through an uncached file handle. The reader evaluates all arrays before closing the handle. This combined probe also stopped under pressure on the test machine. The mode is a diagnostic option, not a validated full-model serving profile.
+
 The complete-base loader records pressure and system VM counters after each layer. It also samples these counters after loading, prefill, and decode. Shared imported storage appears in MLX active-memory accounting and its residency set. These measurements overlap with the process footprint. The complete-base route timer measures graph construction without the paged path's synchronization, so compare complete decode time between modes.
 
 Run the recurrent attention probe with the prepared environment to compare the reference fallbacks with the native backbone kernels.
