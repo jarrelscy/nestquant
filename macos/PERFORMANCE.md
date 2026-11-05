@@ -324,6 +324,8 @@ All four trials retained pressure level 1, at least 35% reported free memory, an
 
 Both staged trials agreed with the first control on 128/129 greedy predictions. The second control agreed on 127/129. Readiness masks agreed on only 6/128, 9/128, and 10/128 steps respectively. The replay does not score autoregressive answer quality or establish identical precision schedules. The 15–30 tokens/s target remains unmet. See [the protocol, results, validation, and review evidence](results/2026-11-05-native-staged-base.json).
 
+The subsequent twelve-case autoregressive quality suite stopped during its first case at pressure level 2. Its peak was 40,699,623,736 bytes (37.90 GiB), below the 48 GiB watchdog. System compressor occupancy rose from 19.43 to 56.91 GiB, while reported free memory remained at least 44%. No system swap-outs were added. Qwen recovered, and the remaining eleven cases did not launch. There is no completed answer or quality score from this attempt. The existing log does not identify the last model phase or layer. These system counters cannot attribute all compressed pages to the model. The unchanged profile will not be repeated. See [the failure receipt](results/2026-11-05-native-staged-quality-stop.json).
+
 ### Anticipatory base reads
 
 Source `0c30ab1` adds an opt-in native worker for predicted base rows. It reuses committed jT/EMA scores without changing the refinement policy. The worker reads private CPU buffers. The main thread installs only required rows after the previous GPU use completes. Missing predictions retain the synchronous fallback. Two independent Max-account Fable/high reviews approved the corrected implementation before testing. All 44 runtime unit tests and six server boundary tests passed.
