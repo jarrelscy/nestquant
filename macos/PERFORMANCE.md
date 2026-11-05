@@ -2,7 +2,7 @@
 
 Owner: Andru. Measured: 2026-11-04 to 2026-11-05.
 
-Native mixed execution passed one held-out coding check at 2.04 tokens/s. A fixed-token replay reached 3.52 tokens/s, compared with 1.27 tokens/s for the reference path. These are separate workloads. Interactive latency remains high, and the 15–30 tokens/s target remains unmet.
+Native mixed execution passed one coding check at 4.62 tokens/s. A fixed-token replay reached 3.94 tokens/s, compared with 1.27 tokens/s for the reference path. These are separate workloads. Interactive latency remains high, and the 15–30 tokens/s target remains unmet.
 
 Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkpoint: GLM-5.3-Flash NestQuant 1.5/4, revision `4023870a6f2c6097e37fa5d2e54040db64b011e9`.
 
@@ -41,6 +41,28 @@ The prepared base banks contain 55.46 GiB of packed planes, scales, correction m
 
 The supervisor suspended both active model downloads during these runs and retained the memory they already owned. In the direct-read trial, system compressor occupancy rose from 20.47 to 57.66 GiB as file-backed pages fell from 62.25 to 22.40 GiB. The guard tripped at pressure level 2 while the system reported 45% free memory. The complete base-plus-backbone path did not demonstrate safe residency under this desktop workload. Mapped tensors count towards MLX active bytes and may fault from storage. Process footprint, resident pages, and MLX accounting describe different views of the same allocations. The reference PyTorch driver counter also covers Metal allocations and must not be added to MLX active memory.
 
+### Later full-base residency checks
+
+After both model downloads exited, the complete 55.46 GiB base passed GPU page sweeps under the unchanged external guards. The stock MLX reader with a 56 GiB process residency request reached a 55.65 GiB peak footprint. macOS pressure remained normal, and reported free memory stayed at or above 29%. System swap-outs increased by 52.63 MiB during this run. This changes the earlier feasibility result: the complete packed base can fit by itself under the observed workload.
+
+Touching each layer on the GPU before loading the next, with a 250 ms residency refresh, completed without additional system swap-outs. Its final resident-page count was 55.50 GiB, compared with 32.34 GiB in the preceding control. Both ultimately reported about 55.47 GiB wired. These runs changed loading behavior and occurred sequentially; they do not isolate refresh from page touching or background workload changes.
+
+| Residency probe | Peak process footprint | Minimum reported free | Pressure | Result |
+|---|---:|---:|---|---|
+| Complete base, original loading mode | 55.65 GiB | 29% | Normal | Passed both GPU sweeps |
+| Complete base, incremental GPU touches and refresh | 55.65 GiB | 29% | Normal | Passed both GPU sweeps |
+| Same incremental probe from the tracked script | 55.65 GiB | 25% | Normal | Passed both GPU sweeps |
+| Complete base plus affine-8 backbone, stock MLX reader | 64.38 GiB | 23% | Level 2 | Guard stopped at layer 43 |
+| Direct persistent preload plus affine-8 backbone | 53.81 GiB | 26% | Level 2 | Guard stopped after layer 35 |
+
+The combined probe's last normal-pressure layer contained 52.81 GiB of base and the 9.79 GiB backbone. Another 2.66 GiB of base remained at that point. The next layer triggered pressure before the final layer loaded. Refinements, predictor state, and generation caches were absent. A larger process cap would not solve this stop because system pressure triggered first.
+
+The direct loader subsequently stopped after loading 43.56 GiB of base alongside the backbone. Another 11.90 GiB of base remained. The external supervisor detected pressure level 2, stopped the child, and restored Qwen. System swap-outs did not increase. Compressor occupancy increased from 16.09 to 30.02 GiB, while file-backed pages fell from 59.21 to 27.82 GiB. The process wired counter remained near 9.92 GiB, while the system wired counter increased with the imported base. These counters do not attribute wired pages in the same way. The run did not generate tokens and supplies no throughput result. Full-model residency under these guards remains unproven.
+
+The direct loader passed real eight-expert comparisons at layers 3 and 44. Relative RMS error was at most 9.60e-9 against the per-expert reference. The check forbade further base reads during computation. It does not establish zero misses during full-model generation. All 35 runtime unit tests and six server boundary tests passed. See the [logical byte inventory, memory samples, guard receipts, and parity results](results/2026-11-05-full-base-residency.json).
+
+A separate 64 MiB imported-buffer probe increased MLX active allocation by exactly 64 MiB. The [MLX allocator](https://github.com/ml-explore/mlx/blob/v0.32.4/mlx/backend/metal/allocator.cpp) also registers imported buffers in its residency sets. The probe's wired counter includes driver overhead and does not attribute every byte to the imported buffer. Logical bytes, MLX allocation, resident pages, and physical footprint remain overlapping measures.
+
 The native tuned replay reserved 30.81 GiB of base banks and 1.87 GiB of decode refinement banks. Its largest one-layer prefill bank reserved 1.24 GiB. The async refinement worker reserved at most 49.53 MiB in this run. The affine-8 backbone uses 9.79 GiB, including 1.18 GiB of embeddings and 0.63 GiB of output weights. The CPU predictor retained 474.64 MiB of weights and buffers, 7.36 MiB of attention history, and 148 KiB of policy arrays. The model cache used 140.78 MiB for recurrent state and 1.80 MiB for sparse attention. These tensor and staging figures overlap with the framework and process measurements below.
 
 | Native tuned replay memory | After model load | After prefill | After decode |
@@ -78,6 +100,27 @@ Each run used the same 29 rendered prompt tokens and the same 128 forced decode 
 | Greedy next-token agreement with reference | 129/129 | 129/129 | 128/129 |
 
 The tuned allocation reduced native misses by 8.8%. This comparison holds the token sequence fixed, but it does not hold routing or operating-system storage state fixed. Refinement readiness matched on 17 of 128 decode steps between native runs. Treat the time difference as one measured outcome and the tuned plan as a calibration candidate. The evaluation still needs an independent trace. The reference uses a different backbone representation and reader, so this comparison does not isolate the benefit of the framework change or the banked kernel.
+
+### Larger bounded caches
+
+The larger-cache runs retain the same 29-token prompt, 128 forced tokens, 2% hot allocation, and eight-token chunks. The four-bit prefill scratch bank holds 160 rows. Each profile ran once. Background activity and asynchronous refinement readiness differ between runs.
+
+| Native base layout | Logical base | Decode tokens/s | Base misses | Base read time | Peak process footprint | Minimum reported free |
+|---|---:|---:|---:|---:|---:|---:|
+| Uniform 160, 32 GiB limit | 30.81 GiB | 2.792 | 6,473 | 20.58 s | 45.68 GiB | 39% |
+| Tuned 160, 32 GiB limit | 30.81 GiB | 3.519 | 5,906 | 17.58 s | 45.73 GiB | 37% |
+| Uniform 192, 40 GiB limit | 36.98 GiB | 3.816 | 5,431 | 16.00 s | 51.34 GiB | 32% |
+| Uniform 224, 44 GiB limit | 43.14 GiB | 3.941 | 5,001 | 15.09 s | 54.23 GiB | 27% |
+
+Both larger profiles completed at normal pressure without additional system swap-outs and restored Qwen. The 44 GiB profile gained 3.3% over 40 GiB while reserving another 6.16 GiB of base tensors. The 40 GiB profile is a provisional option for further supervised tests, with moderate confidence. Longer contexts and broader quality checks remain untested. The default stays at 32 GiB.
+
+Each larger profile matched 126 of 129 greedy next-token predictions from the tuned baseline. Their forced input tokens were identical. At 40 GiB, refinements covered 15.67% of expert calls and 30.95% of salience. The scheduler delivered 98.62% of wanted calls. These are coverage measurements, not answer-accuracy scores.
+
+An autoregressive HumanEval/3 check at 40 GiB passed the network-disabled grader. It emitted the same 149 tokens as the earlier 96-row run. Decode increased from 2.04 to 4.62 tokens/s, and prefill fell from 194.49 to 130.66 seconds. This comparison also increased the prefill scratch bank from 64 to 160 rows. Its 51.92 GiB peak stayed at normal pressure with at least 33% reported free memory and no additional system swap-outs. One passing case does not establish general accuracy.
+
+On that coding request, the 2% allocation delivered 10.60% refined calls and 22.75% salience coverage. Delivery of wanted calls was 98.22%. The predictor's top-budget forecasts assigned 24.99% salience versus 22.45% observed across overlapping windows. No predictor parameters were fitted on this request.
+
+The later route timer accidentally included base selection and reads. Those windows must not be added to base-read time or compared with the earlier route-only timer. Complete decode rates and separate read times remain valid. Source `c56076c` restores the original timing boundary. See [the complete replay, coding, and isolation evidence](results/2026-11-05-native-cache-sweep.json).
 
 ### Mixed prefill chunk widths
 
@@ -149,7 +192,7 @@ The banked Metal projection dispatches eight routed experts together for each of
 | 44 | 1.5-bit base | 1.85 ms | 1.33 ms |
 | 44 | 4-bit refined | 2.47 ms | 1.90 ms |
 
-The benchmark excludes SSD reads, packing time, attention, and the predictor. Serving integration still needs a bounded storage layout for resident base and hot experts. These timings measure expert computation and do not establish model tokens/s.
+The benchmark excludes SSD reads, packing time, attention, and the predictor. The native generator uses persistent bounded base and refinement banks. These component timings measure expert computation and do not establish model tokens/s.
 
 The device route variant produced identical results to the host route in all four component cases. An out-of-range device ID produced a nonfinite result in its own row while valid rows stayed finite. The check uses a bounded gather without waiting for the host to read the IDs. The serial path passed its independent CPU comparison after the alternating-mask offset change. See [device-route results](results/device-expert-projections.json).
 

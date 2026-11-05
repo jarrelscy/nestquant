@@ -163,7 +163,27 @@ python macos/native_generate.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
 
 The native path reads missing base rows from disk into fixed slots. It records row hits, misses, eviction, bytes, and read time separately from the refinement scheduler. It uses four-bit refinements during prefill with `--refinements`. It uses the existing jT predictor during ordinary decode. It keeps hidden states and expert outputs on the device and reads routing IDs for storage selection. Its 4,096-token validation bound includes input and output. A pressure stop means the profile exceeded the live system budget. Inspect the pressure and allocation receipts before another attempt.
 
-Use `--verify-prefill --refinements` to compare both schedules with four-bit prefill and check the committed predictor state. The comparison uses the same chunk size for both schedules. Choose `--prefill-rows` to bound the scratch bank for one layer. Decode slots, this scratch bank, and the asynchronous worker share a 4 GiB refinement limit. The separate base banks have a 32 GiB limit. A configuration that exceeds either limit fails before prefill.
+Use `--verify-prefill --refinements` to compare both schedules with four-bit prefill and check the committed predictor state. The comparison uses the same chunk size for both schedules. Choose `--prefill-rows` to bound the scratch bank for one layer. Decode slots, this scratch bank, and the asynchronous worker share a 4 GiB refinement limit. The separate base banks default to 32 GiB. Explicit paged budgets of 40 or 44 GiB allow 192 or 224 rows per layer. The process and system-pressure guards remain active. Larger budgets require their own measured headroom.
+
+The experimental complete-base mode requires `--full-base --rows 288 --base-budget-gib 56`. It loads every prepared base plane directly into persistent storage before prefill. It requests 68 GiB of process residency for the base and backbone. Base-only routing then uses GPU expert IDs without extracting them on the CPU. This mode rejects refinements until combined memory use is validated. Full-model generation with this mode has not yet passed the guarded benchmark gate.
+
+The complete base contains 55.46 GiB. Base-only residency passed on the 128 GiB test machine. Adding the 9.79 GiB backbone triggered pressure with both the stock MLX reader and the direct persistent loader. These are workload-dependent results, not a fixed hardware capacity limit. See the [residency measurements](PERFORMANCE.md#later-full-base-residency-checks).
+
+The guarded `--rows 192 --base-budget-gib 40 --chunk-size 8 --refinements --prefill-rows 160` profile passed one coding check at 4.62 tokens/s. A 224-row profile reached 3.94 tokens/s on a separate fixed-token replay. Both retain the process and system guards. Keep these profiles supervised until longer-context memory use and broader quality are measured. See the [cache comparison](PERFORMANCE.md#larger-bounded-caches).
+
+Run the real-weight comparison before testing complete-base generation. It loads one full layer at a time and rejects additional base reads during device-routed computation.
+
+```sh
+python macos/verify_resident.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
+  --output "$RESULTS/resident-parity.json"
+MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS=250 python macos/probe_resident_memory.py \
+  --archive "$BASE_ARCHIVE" --reader mlx --wire-base --touch-each-layer \
+  --output "$RESULTS/base-residency.json"
+```
+
+The residency probe requires the external host watchdog. Add `--model "$MODEL" --backbone "$BACKBONE_ARCHIVE" --wired-gib 68` to measure the backbone with the base. The refresh option repeats process residency requests; it does not change a system memory limit. Its implementation is in [MLX 0.32.4](https://github.com/ml-explore/mlx/blob/v0.32.4/mlx/backend/metal/resident.cpp).
+
+The complete-base loader records pressure and system VM counters after each layer. It also samples these counters after loading, prefill, and decode. Shared imported storage appears in MLX active-memory accounting and its residency set. These measurements overlap with the process footprint. The complete-base route timer measures graph construction without the paged path's synchronization, so compare complete decode time between modes.
 
 Run the recurrent attention probe with the prepared environment to compare the reference fallbacks with the native backbone kernels.
 
@@ -204,6 +224,8 @@ curl --fail http://127.0.0.1:18085/v1/chat/completions \
 ```
 
 Send the same request again to verify prefix reuse. Check `usage.prompt_tokens_details.cached_tokens` and `timings.computed_prompt_tokens`. Time to first token is measured inside the model. The HTTP server returns the complete response after decode. The cache uses exact rendered token prefixes and keeps attention, recurrent, pooling, and committed predictor state together. Its 512 MiB budget covers retained checkpoints. Requests can still need memory for the active model state.
+
+The server rejects unsupported stop sequences, probability output, response formats, sampling controls, and penalties. An integer seed has no effect on greedy sampling. An inference failure terminates the process because model state may be incomplete. Restart it through the supervised launcher. Run `python macos/verify_native_server.py` with the native serving dependencies to verify these request boundaries.
 
 Add `--refinements` for four-bit prefill and asynchronous mixed decode. Run the state checks with the same model and both prepared directories.
 
