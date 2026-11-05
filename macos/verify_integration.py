@@ -1,4 +1,5 @@
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,7 @@ def main():
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--reference', choices=['unchunked', 'chunked'], default='unchunked')
     parser.add_argument('--diagnose-chunking', action='store_true')
+    parser.add_argument('--compute-dtype', choices=('bfloat16', 'float32'), default='bfloat16')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     torch.set_num_threads(8)
@@ -66,6 +68,9 @@ def main():
                 layer.self_attn.conv1d.float()
                 layer.self_attn.forget_gate.A_log.data = layer.self_attn.forget_gate.A_log.data.float()
                 layer.self_attn.forget_gate.dt_bias.data = layer.self_attn.forget_gate.dt_bias.data.float()
+        if args.compute_dtype == 'float32':
+            model.float()
+        dtypes = dict(Counter(str(value.dtype) for value in model.parameters()))
         tokens = torch.tensor([[5, 12, 25]], device='mps')
         capture = 'unchunked' if args.diagnose_chunking else None
         normal = model(tokens, use_cache=True)
@@ -93,8 +98,6 @@ def main():
             assert torch.isfinite(actual).all()
             if args.reference == 'chunked':
                 torch.testing.assert_close(actual, expected, atol=0, rtol=0)
-            else:
-                assert error < 0.01, error
             checks.append(dict(phase=phase, relative_rms=error))
         state.phase = 'decode'
         normal_decode = model(torch.tensor([[33]], device='mps'), past_key_values=normal.past_key_values, use_cache=True)
@@ -109,15 +112,19 @@ def main():
         assert torch.isfinite(actual).all()
         if args.reference == 'chunked':
             torch.testing.assert_close(actual, expected, atol=0, rtol=0)
-        else:
-            assert error < 0.01, error
         checks.append(dict(phase='cached_decode', relative_rms=error))
     store.close()
     report = dict(status='passed', reference=args.reference, unchunked_decode_relative_rms=full_difference, unchunked_1_percent_check_passed=full_difference < 0.01, scope='Four random BF16 backbone layers at real Flash dimensions, real L3 NestQuant experts, fixed routing; no model quality claim', tolerance_relative_rms=0 if args.reference == 'chunked' else 0.01, checks=checks)
+    passed = args.reference == 'chunked' or all(check['relative_rms'] < 0.01 for check in checks)
+    report.update(status='passed' if passed else 'failed', backbone_compute_dtype=args.compute_dtype,
+                  initialization_dtype='bfloat16', parameter_dtype_counts=dtypes,
+                  scope='Four random backbone layers initialized in BF16, optionally upcast for backbone computation; real L3 NestQuant experts retain their existing float16 boundaries; fixed routing; no model quality claim')
     if args.diagnose_chunking:
         report['unchunked_vs_standard_chunked_layers'] = chunking
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report), flush=True)
+    if not passed:
+        raise AssertionError(max(check['relative_rms'] for check in checks))
 
 
 if __name__ == '__main__':
