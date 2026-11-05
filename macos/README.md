@@ -303,6 +303,14 @@ Add `--paged-wired-gib 32` to request up to 32 GiB of resident MLX allocations d
 
 This setting changes residency, not expert allocation or process guards. It can increase system memory pressure. Keep the external watchdog and normal-pressure requirement active. The option passed 80 runtime tests. A guarded four-run comparison measured a 4.65 tokens/s median with 32 GiB residency, versus 4.09 without residency. The 13.7% gain applies to this fixed-input replay. A subsequent coding answer passed HumanEval/3 at 4.22 tokens/s. All five runs retained normal pressure, added no swap-outs, stayed below 28.23 GiB peak, and restored Qwen. Broader quality remains unmeasured. See [the residency evidence](results/2026-11-05-native-paged-residency.json). See [MLX residency semantics](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html).
 
+A later exploratory screen measured 5.77 tokens/s with 96 base rows and the existing cold fast path. Its coding check passed HumanEval/3 at 5.13 tokens/s, but system swap-outs increased by 556.80 MiB during prefill. Pressure remained normal and Qwen recovered. System counters cannot attribute all paging to GLM. This profile is not promoted and will not be repeated unchanged. See [the screen and coding evidence](results/2026-11-05-native-profile-screen.json).
+
+### Compact backbone experiment
+
+The backbone preparer accepts `--bits 4` for eligible linear weights and `--embedding-bits 8` for embeddings. Use a separate, empty output directory. Both options are experimental. The default remains eight-bit linears and original embeddings. Protected float32 parameters retain their representation.
+
+The archive records its precision. The loader accepts legacy eight-bit archives and rejects unsupported precision metadata. All 85 runtime tests passed, including parameter and output round trips for compact fixtures. These tests validate serialization and loading, not model quality. The header inventory estimates that four-bit linears reduce logical backbone storage from 9.79 to 6.07 GiB before embedding savings. Real conversion, answer quality, and full-base feasibility remain unverified. The AI-proposed experiment must pass guarded conversion and answer checks before use.
+
 ### Banked threadgroup probe
 
 Add `--threadgroups` to the supervised `microbench_banked.py` command to compare 64, 128, 256, and 512 threads per Metal group. Use a 4 GiB external watchdog. The probe checks layers 3 and 44 with eight cached experts. It covers base, refined, mixed, and all-cold mixed projections. Every candidate must match the 256-thread output exactly before timing and after each timed evaluation. Each scenario warms every candidate three times and measures 25 samples per candidate in a shuffled order. Guard checks and equality checks are outside timing.
