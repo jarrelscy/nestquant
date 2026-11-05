@@ -15,9 +15,9 @@ The [four-variant component probe](results/2026-11-05-native-decoder-variants.js
 | 44, mixed | 1.818 ms | 2.981 ms | 1.770 ms | 2.954 ms |
 | 44, mixed-cold | 1.470 ms | 2.236 ms | 1.421 ms | 2.236 ms |
 
-The probe peaked at 733.94 MiB, retained normal pressure, added no swap-outs, and restored Qwen. Confidence is high in these component observations and low in any projected model gain. Fable/high identified an alignment hazard in the earlier uint-pointer draft. The measured commit already replaced it with byte-aligned packed vectors and offset tests. Follow-up review confirmation remains pending.
+The probe peaked at 733.94 MiB, retained normal pressure, added no swap-outs, and restored Qwen. Confidence is high in these component observations and low in any projected model gain. Fable/high identified an alignment hazard in the earlier uint-pointer draft. The measured commit already replaced it with byte-aligned packed vectors and offset tests. The follow-up Max-account Fable/high review confirmed that the alignment fix resolves the finding. It also checked the cooperative ring plan and requested a construction-time layout guard. That guard is implemented and tested. These are static reviews, not independent benchmark execution.
 
-The next optional variant loads each compressed ring once across a SIMD group. Uniform lane shuffles extract subsequent states from those loaded words. The 90-byte residual tail includes the first two ring bytes in its final word. Independent bit references, all threadgroup sizes, both sign layouts, and mixed GPU outputs passed in the 92-test suite. This remains a component experiment until real weights and measured timing pass.
+The next optional variant loads each compressed ring once across a SIMD group. Uniform lane shuffles extract subsequent states from those loaded words. The 90-byte residual tail includes the first two ring bytes in its final word. Independent bit references, all threadgroup sizes, both sign layouts, and mixed GPU outputs passed in the 93-test suite. This remains a component experiment until real weights and measured timing pass.
 
 ## Projection cost probe
 
