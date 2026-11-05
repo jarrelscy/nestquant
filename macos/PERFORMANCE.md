@@ -245,6 +245,31 @@ The controls measured 3.496 and 3.328 tokens/s. Lower retention increased ready 
 
 All four runs completed at normal pressure and restored Qwen. The first control and `hm=1` added no swap-outs. The `hm=0` run added 1,113,636,864 bytes (1.04 GiB), and the final control added 589,824 bytes. Both increases were already present after prefill, before measured decode, and did not increase during decode. These are system-wide counters, so the experiment cannot attribute them solely to the retention setting or GLM. The [retention report](results/2026-11-05-native-retention.json) preserves the phase counters, commands, prediction changes, and evidence hashes. This replay supplies no answer-quality score.
 
+### Contiguous required base reads
+
+Source `58f8e74` compared the original field-major archive with an expert-major archive. The latter stores each expert's 24 packed planes contiguously. Both independent Max-account Fable/high reviewers cleared the comparison and the corrected local runner before launch. All 42 converted layers passed byte equality and 756 projection checks beforehand. The GPU bank layout and quantization did not change.
+
+Four isolated trials used ABBA order: original, contiguous, contiguous, original. Each used 160 base rows, a 32 GiB base limit, 16-token chunks, 128 prefill rows, and the same 128 forced inputs. Refinements used 3% allocation, the 4 GiB budget, and the unchanged `hm=4` policy. Base prediction and the cold fast path remained off.
+
+| Measurement | Original archive | Contiguous archive |
+|---|---:|---:|
+| Decode rates, two trials | 3.006, 3.434 tokens/s | 3.775, 3.655 tokens/s |
+| Median decode rate | 3.220 tokens/s | 3.715 tokens/s |
+| Median blocking base-read time | 19.533 s | 16.376 s |
+| Read time per miss, two trials | 3.096, 2.959 ms | 2.537, 2.539 ms |
+| Median requested base bytes | 31.756 GB | 31.765 GB |
+| Median first-token latency | 52.190 s | 50.058 s |
+| Peak process footprint | 46.80 GiB | 46.78 GiB |
+| Minimum reported free memory | 36% | 34% |
+
+Median decode increased by 15.4%, and blocking base-read time decreased by 16.2%. Per-miss latency improved in both contiguous trials beyond the spread between controls. Confidence is high in the measured I/O reduction and moderate in generalizing the model speed gain. There were only two trials per layout. The first control's forward-to-route interval was 18.59 seconds, versus 13.89–14.87 seconds in the other trials. That interval includes pending GPU work, so the complete speed difference cannot be attributed solely to storage.
+
+All four trials began and remained at pressure level 1. They added zero system swap-outs and restored Qwen. The 84 GiB external cap, 82 GiB inner cap, and 20% reported-free floor remained unchanged. Process disk reads were 40.11–40.61 GB per decode. Requested base reads were about 31.8 GB, with another 7.86–8.01 GB reported by the refinement reader. The process counter covers both readers, so comparing it only with base bytes would misstate cache effects.
+
+Actual refined-call coverage stayed between 19.90% and 20.11%. Salience coverage stayed between 38.56% and 38.88%. Greedy predictions agreed with the first control on 127/129 and 128/129 positions for the contiguous trials. The second control agreed on 128/129. Readiness digests agreed on only 3/128, 1/128, and 5/128 steps respectively. Fixed inputs therefore did not establish identical executed precision or outputs. This experiment supplies no answer-quality score.
+
+The timing counters attribute about 33.5 seconds of the roughly 50-second prefill to refinement reads. Installation adds about 2.1 seconds and may include waiting for prior GPU work. Publication timing has the same synchronization caveat. These counters can overlap background activity and must not be summed indiscriminately. The 15–30 tokens/s target remains unmet. See [the full comparison](results/2026-11-05-native-storage.json) and [archive validation](results/2026-11-05-native-storage-validation.json).
+
 ### Anticipatory base reads
 
 Source `0c30ab1` adds an opt-in native worker for predicted base rows. It reuses committed jT/EMA scores without changing the refinement policy. The worker reads private CPU buffers. The main thread installs only required rows after the previous GPU use completes. Missing predictions retain the synchronous fallback. Two independent Max-account Fable/high reviews approved the corrected implementation before testing. All 44 runtime unit tests and six server boundary tests passed.
