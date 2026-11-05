@@ -156,7 +156,8 @@ def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256):
     uint ring = unit * 8 + g;
     uint expert_units = expert * TK * TN;
     ring += expert_units * 8;
-    float sign = variants[ring] ? -1.0f : 1.0f;
+    uint variant = PACKED_VAR ? ((uint(variants[ring >> 3]) >> (ring & 7)) & 1u) : uint(variants[ring]);
+    float sign = variant ? -1.0f : 1.0f;
     float a = float(as_type<half>(ushort(0x1eee))) * sign;
     float b = float(as_type<half>(ushort(0xc931))) * sign;
     uint mb = 0, n = 0;
@@ -209,6 +210,8 @@ def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256):
 
 
 def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.array:
+    if meta.get('var_bits', 8) != 8:
+        raise ValueError('Packed signs require the banked projection')
     if level not in (2, 4) or x.shape != (meta['k'],):
         raise ValueError('Expected one input vector and a NestQuant level of 2 or 4')
     tk, tn = meta['tk'], meta['tn']
@@ -216,7 +219,8 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
     rotated = mx.hadamard_transform((x.astype(mx.float32) * planes[f'suh{level}'].astype(mx.float32)).reshape(-1, 128)).astype(mx.float16).astype(mx.float32).reshape(-1)
     partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'])(
         inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, order, order],
-        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', False), ('MIXED', False)],
+        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', False), ('MIXED', False),
+                  ('PACKED_VAR', False)],
         grid=(tk * tn * 256, 1, 1), threadgroup=(256, 1, 1),
         output_shapes=[(tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]
@@ -255,11 +259,14 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
             raise ValueError('Expert route is outside the resident bank')
         expert_ids = mx.array(route, dtype=mx.uint32)
     units = tk * tn
+    var_bits = meta.get('var_bits', 8)
+    if type(var_bits) is not int or var_bits not in (1, 8) or planes['var'].dtype != mx.uint8:
+        raise ValueError('Unsupported sign packing')
     mixed = refinements is not None
     if mixed != (refined_route is not None) or (mixed and level != 2):
         raise ValueError('Mixed precision requires a base level and a refinement route')
     if (planes['base'].shape != (depth, units * int(meta['base_K'] * 256))
-            or planes['var'].shape != (depth, units * 8)
+            or planes['var'].shape != (depth, units * var_bits)
             or (level == 4 and (
                 planes['p4'].shape != (depth, units * int(meta['res_rule']['K'] * 256))
                 or planes['word'].shape != (depth, units)))):
@@ -290,7 +297,8 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
     rotated = mx.hadamard_transform(scaled.reshape(rows, -1, 128)).astype(mx.float16).astype(mx.float32)
     partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'], threadgroup_size)(
         inputs=[planes['base'], residual, words, planes['var'], order, rotated, expert_ids, refinement_ids],
-        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed)],
+        template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
+                  ('PACKED_VAR', var_bits == 1)],
         grid=(tk * tn * 256, rows, 1), threadgroup=(threadgroup_size, 1, 1),
         output_shapes=[(rows, tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]
@@ -311,6 +319,8 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
 
 
 def projection_matmul(planes: dict, meta: dict, x: mx.array, level: int) -> mx.array:
+    if meta.get('var_bits', 8) != 8:
+        raise ValueError('Packed signs require the banked projection')
     if x.ndim != 2 or x.shape[1] != meta['k'] or level not in (2, 4):
         raise ValueError('Expected a token matrix and a NestQuant level of 2 or 4')
     if level == 2 and x.shape[0] > 1:

@@ -9,7 +9,7 @@ import time
 import mlx.core as mx
 from mlx.utils import tree_flatten
 
-from native_assets import read_bank
+from native_assets import bank_storage_bytes, read_bank
 from resources import process_usage, system_pressure, vm_snapshot
 
 
@@ -27,9 +27,13 @@ def sample(event, bank_bytes, **fields):
 
 def touch_pages(banks):
     checks = []
+    seen = set()
     for bank in banks:
         for tensors, _ in bank.values():
             for array in tensors.values():
+                if id(array) in seen:
+                    continue
+                seen.add(id(array))
                 indices = mx.arange(0, array.size, 16384 // array.itemsize)
                 checks.append(array.reshape(-1)[indices].astype(mx.float32).sum())
     mx.eval(checks)
@@ -79,7 +83,7 @@ def main():
     for layer in range(3, 45):
         bank = read_bank(args.archive, layer, reader=args.reader)
         banks.append(bank)
-        bank_bytes += sum(value.nbytes for tensors, _ in bank.values() for value in tensors.values())
+        bank_bytes += bank_storage_bytes(bank)
         touched = touch_pages([bank]) if args.touch_each_layer else {}
         record = sample('layer', bank_bytes, layer=layer, logical_backbone_bytes=backbone_bytes, **touched)
         records.append(record)

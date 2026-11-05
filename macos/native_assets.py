@@ -10,6 +10,7 @@ import shutil
 import mlx.core as mx
 
 FORMAT = 'nestquant-resident-base-v1'
+COMPACT_FORMAT = 'nestquant-resident-base-v2'
 REVISION = '4023870a6f2c6097e37fa5d2e54040db64b011e9'
 
 
@@ -20,6 +21,31 @@ def fingerprint(path):
 
 def paths(directory, layer):
     return directory / f'L{layer}.safetensors', directory / f'L{layer}.json'
+
+
+def bank_storage_bytes(bank):
+    arrays = {id(value): value for planes, _ in bank.values() for value in planes.values()}
+    return sum(value.nbytes for value in arrays.values())
+
+
+def restore_compact_alias(values, geometry, aliases):
+    if (aliases != {'up.lrV': 'gate.lrV'} or set(geometry) != {'gate', 'up', 'down'}
+            or 'up.lrV' in values or 'gate.lrV' not in values):
+        raise ValueError('Invalid compact base alias')
+    for name, meta in geometry.items():
+        bits = meta.get('var_bits')
+        array = values.get(f'{name}.var')
+        tk, tn = meta.get('tk'), meta.get('tn')
+        if (type(bits) is not int or bits != 1 or type(tk) is not int or type(tn) is not int
+                or tk <= 0 or tn <= 0 or array is None or array.dtype != mx.uint8
+                or array.ndim != 2 or array.shape != (values[f'{name}.base'].shape[0], tk * tn)):
+            raise ValueError('Invalid packed sign plane')
+    gate, up = geometry['gate'], geometry['up']
+    correction = values['gate.lrV']
+    if (gate['k'] != up['k'] or correction.ndim != 3 or correction.shape[-1] != gate['k']
+            or correction.shape[0] != values['up.base'].shape[0]):
+        raise ValueError('Incompatible compact correction alias')
+    values['up.lrV'] = correction
 
 
 def build(model, directory):
@@ -100,9 +126,15 @@ def read_bank(directory, layer, reader='mlx'):
                 mx.eval(values[key])
     else:
         raise ValueError('Unsupported resident bank reader')
-    if (meta['format'], meta['revision'], meta['layer']) != (FORMAT, REVISION, str(layer)):
+    if (meta['format'] not in (FORMAT, COMPACT_FORMAT)
+            or (meta['revision'], meta['layer']) != (REVISION, str(layer))):
         raise RuntimeError(f'Resident archive metadata mismatch: {file.name}')
-    bank = {name: ({}, geometry) for name, geometry in json.loads(meta['geometry']).items()}
+    geometry = json.loads(meta['geometry'])
+    if meta['format'] == COMPACT_FORMAT:
+        restore_compact_alias(values, geometry, json.loads(meta.get('aliases', '{}')))
+    elif any('var_bits' in item for item in geometry.values()):
+        raise ValueError('Packed signs require the compact base format')
+    bank = {name: ({}, item) for name, item in geometry.items()}
     for key, value in values.items():
         name, field = key.split('.', 1)
         mx.eval(value)
