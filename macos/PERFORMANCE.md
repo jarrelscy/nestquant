@@ -6,6 +6,23 @@ Native mixed execution passed 10 of 12 coding cases at a median 3.55 decode toke
 
 Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkpoint: GLM-5.3-Flash NestQuant 1.5/4, revision `4023870a6f2c6097e37fa5d2e54040db64b011e9`.
 
+## Bounded paged residency
+
+A four-run zero/32/32/zero GiB comparison used source `6c36385`, 64 base rows, eight-token chunks, 3% hot allocation, and staged required reads. The outer watchdog stayed at 40 GiB. All runs retained normal pressure and added no system swap-outs. Qwen recovered after each trial.
+
+| Requested residency | Decode tokens/s | First token | Required base read, copy, and lock wait |
+|---|---:|---:|---:|
+| Zero, first control | 4.065 | 45.58 s | 11.49 s |
+| 32 GiB, first candidate | 4.594 | 44.38 s | 10.37 s |
+| 32 GiB, second candidate | 4.705 | 43.59 s | 10.43 s |
+| Zero, second control | 4.115 | 44.99 s | 11.25 s |
+
+The candidate median was 4.65 tokens/s, versus 4.09 for controls, a 13.7% increase on this replay. Confidence is high in these measurements and moderate in generalizing the gain. Every peak stayed below 28.20 GiB. Reported free memory stayed at or above 46%. Both candidates retained approximately 27.8 GiB of resident pages after decode. Resident, wired, framework, and physical counters overlap.
+
+The 3% allocation contained 363 slots. Candidate ready-call coverage was 19.54-19.70%, with 38.06-38.23% salience coverage. Wanted-call delivery fell to 95.23-96.10%, versus 97.41-97.48% in controls. One candidate matched the first control on 126/129 greedy predictions, and the other matched 129/129. Fixed inputs do not freeze refinement readiness or establish answer quality.
+
+A subsequent autoregressive HumanEval/3 answer passed the pinned restricted grader at 4.22 decode tokens/s and 128.03 seconds to first token. It peaked at 28.22 GiB, retained normal pressure, added no swap-outs, and restored Qwen. This is one coding case. The owner waived Fable review before these trials. The 15-30 tokens/s target remains unmet. See [the results and protocol](results/2026-11-05-native-paged-residency.json).
+
 ## Base cache and native execution
 
 A fixed 128-token replay matched the reference store's 5,641 observed decode base misses at 32 GiB. On the same access trace, a 40 GiB cache would have missed 4,817 times. The trace produced the same miss count at 44, 48, and 56 GiB. This run starts cold. It measures one prompt and holds the observed routes fixed. It does not estimate the memory pressure or routing changes of a live larger cache.

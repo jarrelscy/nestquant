@@ -301,7 +301,7 @@ The default path adds no layer evaluation or diagnostic file. Existing memory gu
 
 Add `--paged-wired-gib 32` to request up to 32 GiB of resident MLX allocations during paged generation. Use `--paged-wired-gib 0` for an explicit zero-residency control. Omit the option to preserve existing allocator behavior. Full-base generation uses its separate residency option and rejects this setting.
 
-This setting changes residency, not expert allocation or process guards. It can increase system memory pressure. Keep the external watchdog and normal-pressure requirement active. The option passed 80 runtime tests. A guarded throughput comparison remains pending. The AI-proposed hypothesis is that residency can reduce compression costs observed during prefill. It is not a demonstrated speed improvement. See [MLX residency semantics](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html).
+This setting changes residency, not expert allocation or process guards. It can increase system memory pressure. Keep the external watchdog and normal-pressure requirement active. The option passed 80 runtime tests. A guarded four-run comparison measured a 4.65 tokens/s median with 32 GiB residency, versus 4.09 without residency. The 13.7% gain applies to this fixed-input replay. A subsequent coding answer passed HumanEval/3 at 4.22 tokens/s. All five runs retained normal pressure, added no swap-outs, stayed below 28.23 GiB peak, and restored Qwen. Broader quality remains unmeasured. See [the residency evidence](results/2026-11-05-native-paged-residency.json). See [MLX residency semantics](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html).
 
 ### Loopback chat and prefix reuse
 
