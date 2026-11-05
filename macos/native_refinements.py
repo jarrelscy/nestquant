@@ -61,7 +61,8 @@ class NativeHotRefinements:
         self.chunk_index = 0
         self.traces = {}
         self.seconds = 0.0
-        self.reads = dict(prefill_bytes=0, decode_bytes=0, installed=0, discarded=0, decode_worker_seconds=0.0)
+        self.reads = dict(prefill_bytes=0, decode_bytes=0, installed=0, discarded=0, decode_worker_seconds=0.0,
+                          prefill_reader_seconds=0.0, prefill_install_seconds=0.0, decode_publication_seconds=0.0)
         self.metrics = PredictorMetrics([self.predictor.budgets[layer] for layer in range(3, 45)],
                                         self.predictor.defaults, self.predictor.fixed_ids)
 
@@ -104,9 +105,13 @@ class NativeHotRefinements:
             for expert in unique:
                 if expert in bank.slots:
                     continue
-                payload, count, _ = self.reader.read(layer, expert)
+                payload, count, seconds = self.reader.read(layer, expert)
                 self.reads['prefill_bytes'] += count
-                if not bank.install(expert, payload, required):
+                self.reads['prefill_reader_seconds'] += seconds
+                started = time.perf_counter()
+                installed = bank.install(expert, payload, required)
+                self.reads['prefill_install_seconds'] += time.perf_counter() - started
+                if not installed:
                     raise RuntimeError('Required prefill refinement could not be installed')
         else:
             def publish(key, value):
@@ -115,7 +120,10 @@ class NativeHotRefinements:
                 self.reads['decode_bytes'] += count
                 self.reads['decode_worker_seconds'] += elapsed
                 wanted = set(np.flatnonzero(self.wanted[target - 3]))
-                if expert in wanted and self.banks[target].install(expert, payload, wanted):
+                started = time.perf_counter()
+                installed = expert in wanted and self.banks[target].install(expert, payload, wanted)
+                self.reads['decode_publication_seconds'] += time.perf_counter() - started
+                if installed:
                     self.reads['installed'] += 1
                 else:
                     self.reads['discarded'] += 1
