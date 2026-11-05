@@ -22,6 +22,15 @@ class NativeCliTest(unittest.TestCase):
                 self.assertEqual(failure.exception.code, 2)
                 load.assert_not_called()
 
+    def test_staged_reads_reject_full_residency_before_loading(self):
+        options = ['--base-read-mode', 'staged', '--full-base', '--rows', '288', '--base-budget-gib', '56']
+        with patch('sys.argv', self.arguments(*options)), patch.object(Path, 'exists', return_value=False), \
+                patch.object(native_generate, 'validate') as load, redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as failure:
+                native_generate.main()
+            self.assertEqual(failure.exception.code, 2)
+            load.assert_not_called()
+
     def test_five_percent_with_six_gib_reaches_checkpoint_validation(self):
         options = ['--refinements', '--hot-fraction', '0.05', '--refinement-budget-gib', '6']
         with patch('sys.argv', self.arguments(*options)), patch.object(Path, 'exists', return_value=False), \

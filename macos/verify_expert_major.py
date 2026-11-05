@@ -7,19 +7,20 @@ import mlx.core as mx
 from decoder import projection_matvec_banked
 from metrics import MemoryGuard
 from native_assets import REVISION, fingerprint, paths
-from packed_expert_bank import PackedExpertBank
+from packed_expert_bank import BaseReadStaging, PackedExpertBank
 from resources import process_usage, system_pressure
 
 
-def verify(source, archive, layer, guard):
+def verify(source, archive, layer, guard, staging=None):
     banks = []
     try:
-        for directory in (source, archive):
+        for index, directory in enumerate((source, archive)):
             file, sidecar = paths(directory, layer)
             evidence = json.loads(sidecar.read_text())
             if evidence['revision'] != REVISION or evidence['state'] != fingerprint(file):
                 raise RuntimeError('Prepared archive fingerprint changed')
-            banks.append(PackedExpertBank(file, layer, 32, REVISION, 512 * 1024**2))
+            banks.append(PackedExpertBank(file, layer, 32, REVISION, 512 * 1024**2,
+                                          staging if index == 1 else None))
         reference, candidate = banks
         if reference.expert_row_bytes is not None or candidate.expert_row_bytes is None:
             raise ValueError('Expected a field-major reference and expert-major candidate')
@@ -55,7 +56,8 @@ def verify(source, archive, layer, guard):
                 bank.retain(mx.stack(output))
             guard.check(force=True)
         return dict(layer=layer, experts=288, tensors=tensors, checked_bytes=checked_bytes,
-                    projections=projections, evictions=[bank.stats['evictions'] for bank in banks])
+                    projections=projections, evictions=[bank.stats['evictions'] for bank in banks],
+                    candidate_stats=dict(candidate.stats))
     finally:
         for bank in banks:
             bank.close()
@@ -67,6 +69,7 @@ if __name__ == '__main__':
     parser.add_argument('--archive', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--layers', type=int, nargs='+', choices=range(3, 45), default=list(range(3, 45)))
+    parser.add_argument('--base-read-mode', choices=('scatter', 'staged'), default='scatter')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('Use a fresh output path')
@@ -74,12 +77,14 @@ if __name__ == '__main__':
     mx.set_cache_limit(128 * 1024**2)
     mx.set_memory_limit(3 * 1024**3)
     guard = MemoryGuard(4)
-    checks = [verify(args.source, args.archive, layer, guard) for layer in args.layers]
+    staging = BaseReadStaging() if args.base_read_mode == 'staged' else None
+    checks = [verify(args.source, args.archive, layer, guard, staging) for layer in args.layers]
     usage = process_usage()
     memory = dict(physical_bytes=usage.phys_footprint,
                   lifetime_peak_physical_bytes=usage.lifetime_max_phys_footprint,
                   mlx_peak_bytes=mx.get_peak_memory(), pressure_level=system_pressure())
     with args.output.open('x') as stream:
-        json.dump(dict(status='passed', checks=checks, memory=memory), stream, indent=2)
+        json.dump(dict(status='passed', checks=checks, memory=memory, base_read_mode=args.base_read_mode,
+                       base_staging_bytes=len(staging.storage) if staging is not None else 0), stream, indent=2)
         stream.write('\n')
     print(json.dumps(dict(status='passed', checked_bytes=sum(row['checked_bytes'] for row in checks))))

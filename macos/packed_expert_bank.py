@@ -5,13 +5,14 @@ import math
 import mmap
 import os
 from pathlib import Path
+import threading
 import time
 
 import mlx.core as mx
 import numpy as np
 
 from mapped_weights import read_layouts
-from expert_major_base import FORMAT as EXPERT_MAJOR_FORMAT, plane_layouts, read_into
+from expert_major_base import FORMAT as EXPERT_MAJOR_FORMAT, MAX_ROW_BYTES, plane_layouts, read_into
 
 
 def pack(projections):
@@ -47,8 +48,14 @@ def _shared_plane(rows, shape, dtype):
     return mapping, raw, array
 
 
+class BaseReadStaging:
+    def __init__(self):
+        self.storage = bytearray(MAX_ROW_BYTES)
+        self.lock = threading.Lock()
+
+
 class PackedExpertBank:
-    def __init__(self, path: Path, layer, rows, revision, remaining_bytes=None):
+    def __init__(self, path: Path, layer, rows, revision, remaining_bytes=None, staging=None):
         if not 32 <= rows <= 288:
             raise ValueError('Expected between 32 and 288 packed rows')
         self.layer = layer
@@ -62,11 +69,13 @@ class PackedExpertBank:
         self.selection_pending = False
         self.fully_resident = False
         self.prefetch = None
+        self.staging = staging
         self.expert_row_bytes = None
         self.stats = dict(hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0, resident_routes=0,
                           prefetch_hits=0, prefetch_wait_seconds=0.0, prefetch_copy_seconds=0.0,
                           prefetch_read_bytes=0, prefetch_read_seconds=0.0, prefetch_discarded=0,
-                          prefetch_cancelled=0, prefetch_errors=0, preload_sleep_seconds=0.0)
+                          prefetch_cancelled=0, prefetch_errors=0, preload_sleep_seconds=0.0,
+                          read_copy_seconds=0.0, read_staging_wait_seconds=0.0)
         for bucket in (*range(9), 'ge9'):
             self.stats[f'miss_batch_{bucket}_calls'] = 0
             self.stats[f'miss_batch_{bucket}_read_seconds'] = 0.0
@@ -81,6 +90,9 @@ class PackedExpertBank:
             self.data_offset = offset
             if metadata['format'] == EXPERT_MAJOR_FORMAT:
                 layouts, self.expert_row_bytes = plane_layouts(layouts, metadata)
+            if staging is not None and (self.expert_row_bytes is None
+                                        or len(staging.storage) < self.expert_row_bytes):
+                raise ValueError('Staged reads require an expert-major archive and a complete row buffer')
             geometry = json.loads(metadata['geometry'])
             self.planes = {name: ({}, meta) for name, meta in geometry.items()}
             if any(not shape or shape[0] != 288 for _, _, _, shape in layouts.values()):
@@ -103,6 +115,25 @@ class PackedExpertBank:
 
     def _fill(self, slot, expert):
         start = time.perf_counter()
+        if self.staging is not None:
+            with self.staging.lock:
+                self.stats['read_staging_wait_seconds'] += time.perf_counter() - start
+                with memoryview(self.staging.storage)[:self.expert_row_bytes] as storage:
+                    start = time.perf_counter()
+                    count = read_into(self.fd.fileno(), [storage],
+                                      self.data_offset + expert * self.expert_row_bytes)
+                    self.stats['read_seconds'] += time.perf_counter() - start
+                    self.stats['read_bytes'] += count
+                    start = time.perf_counter()
+                    payload = {name: storage[offset - self.data_offset:offset - self.data_offset + size]
+                               for name, (_, offset, size) in self.host.items()}
+                    try:
+                        self._install_payload(slot, payload)
+                    finally:
+                        for view in payload.values():
+                            view.release()
+                    self.stats['read_copy_seconds'] += time.perf_counter() - start
+            return
         if self.expert_row_bytes is not None:
             count = read_into(self.fd.fileno(), [target[slot] for target, _, _ in self.host.values()],
                               self.data_offset + expert * self.expert_row_bytes)
@@ -254,6 +285,7 @@ class PackedExpertBank:
             mx.synchronize()
         finally:
             self.fully_resident = False
+            self.staging = None
             self.fd.close()
             self.planes.clear()
             self.host.clear()

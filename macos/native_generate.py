@@ -17,7 +17,7 @@ from decoder import projection_matvec_banked
 from metrics import MemoryGuard
 from native_assets import REVISION, fingerprint, paths
 from native_backbone import RoutedPlaceholder, load_prepared
-from packed_expert_bank import PackedExpertBank
+from packed_expert_bank import BaseReadStaging, PackedExpertBank
 from resources import process_usage, system_pressure, vm_snapshot
 
 
@@ -78,7 +78,9 @@ class PagedExperts(nn.Module):
 
 
 def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0,
-                 cold_fastpath=False):
+                 cold_fastpath=False, base_read_mode='scatter'):
+    if base_read_mode not in ('scatter', 'staged') or (full_base and base_read_mode != 'scatter'):
+        raise ValueError('Staged required reads support paged expert-major execution only')
     if base_budget_gib not in ((56,) if full_base else (32, 40, 44)):
         raise ValueError('Use a 32, 40, or 44 GiB paged budget, or 56 GiB for the full base')
     if full_base and (len(rows) != 42 or any(row != 288 for row in rows)):
@@ -89,6 +91,7 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
         raise ValueError('Preload pacing requires a supported full-base loading rate')
     model = load_prepared(root, backbone, lambda name, size: guard.check(force=True))
     banks = []
+    staging = BaseReadStaging() if base_read_mode == 'staged' else None
     remaining = base_budget_gib * 1024**3
     try:
         for number, layer in enumerate(model.layers):
@@ -98,7 +101,7 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
             evidence = json.loads(sidecar.read_text())
             if evidence['revision'] != REVISION or evidence['state'] != fingerprint(file):
                 raise RuntimeError(f'Packed layer changed: {file.name}')
-            bank = PackedExpertBank(file, number, rows[number - 3], REVISION, remaining)
+            bank = PackedExpertBank(file, number, rows[number - 3], REVISION, remaining, staging)
             banks.append(bank)
             remaining -= bank.bytes
             if full_base:
@@ -310,6 +313,7 @@ def main():
     parser.add_argument('--verify-prefill', action='store_true')
     parser.add_argument('--fixed-json', type=Path)
     parser.add_argument('--base-prefetch', type=int, choices=(1, 2, 4))
+    parser.add_argument('--base-read-mode', choices=('scatter', 'staged'), default='scatter')
     parser.add_argument('--cold-fastpath', action='store_true')
     args = parser.parse_args()
     if args.output.exists() or not 0 < args.max_tokens <= 4096:
@@ -322,6 +326,8 @@ def main():
         parser.error('The full base requires a 56 GiB base budget; paged banks allow at most 44 GiB')
     if args.full_base and args.refinements:
         parser.error('Full base residency currently supports base-only execution')
+    if args.full_base and args.base_read_mode != 'scatter':
+        parser.error('Staged required reads support paged expert-major execution only')
     if not args.full_base and (args.full_base_wired_gib is not None or args.preload_mib_s):
         parser.error('Residency and preload pacing controls require --full-base')
     if args.refinement_budget_gib != 4 and not args.refinements:
@@ -363,7 +369,8 @@ def main():
     try:
         start = time.perf_counter()
         model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
-                                    args.full_base, args.base_budget_gib, args.preload_mib_s, args.cold_fastpath)
+                                    args.full_base, args.base_budget_gib, args.preload_mib_s, args.cold_fastpath,
+                                    args.base_read_mode)
         if args.base_prefetch:
             from native_base_prefetch import NativeBasePrefetch
 
@@ -392,6 +399,8 @@ def main():
                           backbone_bytes=sum(a.nbytes for _, a in tree_flatten(model.parameters())),
                           base_bytes=sum(bank.bytes for bank in banks),
                           base_limit_bytes=args.base_budget_gib * 1024**3,
+                          base_read_mode=args.base_read_mode,
+                          base_staging_bytes=len(banks[0].staging.storage) if banks[0].staging is not None else 0,
                           full_base=args.full_base, startup_stats=startup_stats,
                           requested_wired_bytes=wired_gib * 1024**3, preload_mib_s=args.preload_mib_s,
                           residency_refresh_interval_ms=os.environ.get('MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS'),

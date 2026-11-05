@@ -103,6 +103,7 @@ class ExpertMajorTest(unittest.TestCase):
                     actual = os.pread(handle.fileno(), stride, offset + expert * stride)
                     self.assertEqual(actual, b''.join(array[expert].tobytes() for array in fields.values()))
                 bank = PackedExpertBank.__new__(PackedExpertBank)
+                bank.staging = None
                 bank.expert_row_bytes, bank.data_offset, bank.fd = stride, offset, handle
                 bank.host = {name: (np.zeros((2, end - start), dtype=np.uint8), offset + start, end - start)
                              for name, (start, end, _, _) in planes.items()}
