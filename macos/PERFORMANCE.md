@@ -297,7 +297,32 @@ The staged copy itself took 0.095 ms median. Medians of separate intervals do no
 
 Confidence is high in the observed component layout difference and moderate in attributing the model's remaining read delay to the same mechanism. The shared-buffer control stayed near the private-buffer control, which supports scatter overhead as a contributor. Staged reads reuse one private buffer, while the private control uses eight. Bank-slot alignment also differs. These limits matter for small differences, and the probe does not measure contention with GPU execution or refinement reads.
 
-Both independent Max-account Fable/high reviewers approved the probe and a test-only follow-up before launch. All 69 runtime tests and five supervisor tests passed. A proposed cleanup error was not reproduced by the requested OS-read failure fixture; the reviewer withdrew it. No runtime cleanup change was made. The probe's lifetime peak was 197,886,816 bytes (188.72 MiB). Pressure remained at level 1 with at least 70% reported free memory. System swap-outs increased by 512 KiB, and Qwen recovered. The model still uses scattered required reads; this result justifies a bounded staged-read implementation as the next experiment. See [the full layout evidence](results/2026-11-05-required-read-layout.json).
+Both independent Max-account Fable/high reviewers approved the probe and a test-only follow-up before launch. All 69 runtime tests and five supervisor tests passed. A proposed cleanup error was not reproduced by the requested OS-read failure fixture; the reviewer withdrew it. No runtime cleanup change was made. The probe's lifetime peak was 197,886,816 bytes (188.72 MiB). Pressure remained at level 1 with at least 70% reported free memory. System swap-outs increased by 512 KiB, and Qwen recovered. This result motivated the optional staged-read implementation below. See [the full layout evidence](results/2026-11-05-required-read-layout.json).
+
+### Staged required base reads
+
+Source `c2142ed` adds optional staged required reads without changing quantized bytes or GPU bank layout. All 42 banks share one 16 MiB CPU buffer. A lock protects the entire read-and-copy interval. The bank still completes previous GPU use before replacing a slot and publishes the slot only after copying succeeds. Required reads remain synchronous; the existing refinement worker remains asynchronous. The default stays `scatter`.
+
+Both independent Max-account Fable/high reviewers approved real-weight verification followed by the guarded comparison. All 73 runtime tests, six HTTP checks, four cold-dispatch checks, and five supervisor tests passed. The HTTP check initially failed because its optional dependency directory was absent from `PYTHONPATH`; it passed with the existing dependencies. No packages changed. Real-weight verification matched 36 finite GPU projections on layers 3 and 44, including eviction and reload. This exercises 48 routed visits, or 40 unique experts, per layer through staged fill. The separate 2,852,397,504-byte archive comparison uses `read_payload`, not staged fill. Verification peaked at 525,075,464 bytes, retained normal pressure, added no swap-outs, and restored Qwen.
+
+The four model trials used ABBA order and identical 128-token forced input sequences. Every trial used 128 base rows, a 32 GiB upper budget, 16-token chunks, 128 prefill rows, and 3% hot allocation within 4 GiB. The predictor retained `hm=4`. Base prefetch and the cold fast path stayed off. Reducing the banks from 160 to 128 rows removed about 6.16 GiB of logical base storage. The external cap tightened to 48 GiB. The inner cap remained 82 GiB, so the external watchdog provided the lower footprint limit.
+
+| Trial | Decode rate | First token | Required blocking | Blocking per miss |
+|---|---:|---:|---:|---:|
+| Scatter 1 | 3.319 tokens/s | 50.37 s | 20.223 s | 2.452 ms |
+| Staged 1 | 5.390 tokens/s | 42.52 s | 6.699 s | 0.813 ms |
+| Staged 2 | 5.229 tokens/s | 42.48 s | 6.715 s | 0.820 ms |
+| Scatter 2 | 0.711 tokens/s | 133.04 s | 89.010 s | 10.851 ms |
+
+The staged median was 5.309 tokens/s. Confidence is high in the recorded results and moderate in generalizing the gain. The second control is a substantial outlier: its forward-to-route interval also increased to 83.43 seconds, versus 13.63–14.78 seconds in the other runs. Normal pressure and zero swap do not explain that slowdown. Saved workload inventories and VM counters do not establish its cause. Do not present the aggregate percentage difference as a reliable speedup estimate or discard the second control.
+
+Required blocking includes read, copy, and lock wait. Staged copies took 1.499–1.529 seconds per decode, and lock waits totalled 7–8 ms. Both completed histograms passed call-count, miss-count, and read-time identities. These identities also passed for both controls. Histograms contain read time only, so they are not cross-mode blocking totals. The first control spent 79.2% of read time in selections with at least two misses.
+
+Requested base traffic remained 40.33–40.60 GB, with another 7.58–7.99 GB of published refinements. Decode process disk reads measured about 36.5 GB in staged mode versus 46.5 GB in scattered mode. Cache effects therefore also contribute to the comparison. The process and asynchronous publication counters have slightly different boundaries. Do not attribute the entire model improvement to scatter-call overhead alone.
+
+All four trials retained pressure level 1, at least 35% reported free memory, and peaks below 40.71 GiB. They added zero system swap-outs and restored Qwen. Staged actual refined-call coverage was 19.68–19.73%, versus 19.94–20.02% in the controls. Ready salience was 38.27–38.30%, versus 38.61–38.80%. Wanted-call delivery fell to about 96.5%, versus 97.9–98.2%. Faster execution can change refinement readiness, so the next quality check must use the staged profile.
+
+Both staged trials agreed with the first control on 128/129 greedy predictions. The second control agreed on 127/129. Readiness masks agreed on only 6/128, 9/128, and 10/128 steps respectively. The replay does not score autoregressive answer quality or establish identical precision schedules. The 15–30 tokens/s target remains unmet. See [the protocol, results, validation, and review evidence](results/2026-11-05-native-staged-base.json).
 
 ### Anticipatory base reads
 

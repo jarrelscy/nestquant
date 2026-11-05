@@ -4,6 +4,8 @@ This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 chec
 
 **Status, 2026-11-05.** The native 32 GiB base profile passed 10/12 coding cases at 3.55 median decode tokens/s with 2% hot allocation. A 3% profile also passed 10/12, at 3.47 tokens/s and 46.87 GiB peak footprint. Both retained normal pressure and restored the daily model service. These results remain below the 15-30 tokens/s target. See [coding evidence](PERFORMANCE.md#twelve-case-coding-subset) and [the allocation comparison](PERFORMANCE.md#native-hot-allocation-comparison). A separate 40 GiB run passed one coding case at 4.62 tokens/s, but broader safety at that size remains unproven.
 
+The optional staged-read path later measured 5.23 and 5.39 tokens/s with 128 base rows, near 40.7 GiB peak footprint. Both retained normal pressure and added no swap-outs. The scattered controls varied from 3.32 to 0.71 tokens/s, so aggregate percentage improvements are unreliable. This fixed-input replay does not establish answer quality for the faster profile. See [the staged-read results](PERFORMANCE.md#staged-required-base-reads).
+
 The asynchronous path reads refinements in the background and executes the precision that is ready. The grouped reader passed three full-model answer checks and delivered 16.25% actual hot-call coverage. The earlier reader also passed one complete coding task. The unchunked BF16 comparison retains its documented tolerance failure. See the [asynchronous path](ASYNC.md) and [the separate greedy MTP experiment](#greedy-mtp-experiment).
 
 ## Requirements
@@ -279,7 +281,7 @@ Use the same 8 GiB external watchdog and 4 GiB inner guard. Logical buffers tota
 
 The native generator accepts experimental `--base-read-mode staged` with an expert-major archive. The default remains `scatter`. Staged mode reads each required row into one shared 16 MiB CPU buffer, then copies its planes into the existing bank. A lock protects the complete read-and-copy interval across banks. Previous GPU use still completes before slot replacement. Required reads remain synchronous, and asynchronous refinements retain their existing worker.
 
-The base-row budget excludes this separate 16 MiB reservation. The whole-process guards still cover it. Output records `base_read_mode`, `base_staging_bytes`, `read_copy_seconds`, and `read_staging_wait_seconds`. Required-read timers exclude copying and lock waits. Staged mode rejects field-major archives and full-base preload. The runtime candidate has not received a real-weight validation or model benchmark yet.
+The base-row budget excludes this separate 16 MiB reservation. The whole-process guards still cover it. Output records `base_read_mode`, `base_staging_bytes`, `read_copy_seconds`, and `read_staging_wait_seconds`. Required-read timers exclude copying and lock waits. Staged mode rejects field-major archives and full-base preload. Real-weight projection checks and the reviewed 128-row replay passed. Answer-quality confirmation for this profile remains pending.
 
 Use `--base-read-mode staged` with `verify_expert_major.py` to compare the candidate's GPU projections against the original archive. This verification retains eviction and reload checks. It reports candidate read, copy, and wait counters.
 
