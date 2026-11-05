@@ -60,7 +60,11 @@ class PackedExpertBank:
         self.previous_output = None
         self.selection_pending = False
         self.fully_resident = False
-        self.stats = dict(hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0, resident_routes=0)
+        self.prefetch = None
+        self.stats = dict(hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0, resident_routes=0,
+                          prefetch_hits=0, prefetch_wait_seconds=0.0, prefetch_copy_seconds=0.0,
+                          prefetch_read_bytes=0, prefetch_read_seconds=0.0, prefetch_discarded=0,
+                          prefetch_cancelled=0, prefetch_errors=0)
         self.fd = path.open('rb')
         try:
             fcntl.fcntl(self.fd, fcntl.F_NOCACHE, 1)
@@ -102,6 +106,26 @@ class PackedExpertBank:
                     written += count
             self.stats['read_bytes'] += row_bytes
         self.stats['read_seconds'] += time.perf_counter() - start
+
+    def read_payload(self, expert):
+        start = time.perf_counter()
+        payload = {}
+        for name, (_, offset, row_bytes) in self.host.items():
+            payload[name] = bytearray(row_bytes)
+            with memoryview(payload[name]) as row:
+                written = 0
+                while written < row_bytes:
+                    count = os.preadv(self.fd.fileno(), [row[written:]], offset + expert * row_bytes + written)
+                    if count == 0:
+                        raise EOFError('Packed expert read-ahead ended early')
+                    written += count
+        return payload, sum(len(value) for value in payload.values()), time.perf_counter() - start
+
+    def _install_payload(self, slot, payload):
+        if set(payload) != set(self.host) or any(len(payload[name]) != size for name, (_, _, size) in self.host.items()):
+            raise ValueError('Missing or malformed packed base payload')
+        for name, (target, _, _) in self.host.items():
+            target[slot] = np.frombuffer(payload[name], dtype=np.uint8)
 
     def preload(self, check):
         if self.rows != 288 or self.slots or self.selection_pending:
@@ -162,12 +186,15 @@ class PackedExpertBank:
                 slot = self.slots.pop(evict)
                 self.stats['evictions'] += 1
             try:
-                self._fill(slot, expert)
+                if self.prefetch is None or not self.prefetch.consume(self.layer, expert, slot):
+                    self._fill(slot, expert)
             except BaseException:
                 self.free_slots.append(slot)
                 raise
             self.slots[expert] = slot
             self.stats['misses'] += 1
+        if self.prefetch is not None:
+            self.prefetch.advance(self.layer)
         self.selection_pending = True
         return tuple(self.slots[expert] for expert in experts)
 

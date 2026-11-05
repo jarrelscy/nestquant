@@ -45,19 +45,49 @@ class BoundedReader:
                 del self.pending[key]
                 self.reserved_bytes -= reservation
 
-    def consume(self, key, accept):
+    def consume(self, key, accept, on_error=None, on_cancel=None):
         entry = self.pending.get(key)
         if entry is None:
             return False
         future, reservation = entry
         try:
             if future.cancel():
+                if on_cancel is not None:
+                    on_cancel(key)
                 return False
-            accept(future.result())
+            try:
+                value = future.result()
+            except Exception as failure:
+                if on_error is None:
+                    raise
+                on_error(key, failure)
+                return False
+            accept(value)
             return True
         finally:
             del self.pending[key]
             self.reserved_bytes -= reservation
+
+    def retire(self, predicate, accept, on_error=None, on_cancel=None):
+        for key, (future, reservation) in list(self.pending.items()):
+            if not predicate(key) or (not future.done() and not future.cancel()):
+                continue
+            try:
+                if future.cancelled():
+                    if on_cancel is not None:
+                        on_cancel(key)
+                else:
+                    try:
+                        value = future.result()
+                    except Exception as failure:
+                        if on_error is None:
+                            raise
+                        on_error(key, failure)
+                    else:
+                        accept(key, value)
+            finally:
+                del self.pending[key]
+                self.reserved_bytes -= reservation
 
     def discard(self, accept=None):
         error = None

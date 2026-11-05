@@ -140,14 +140,15 @@ def token_major_prefill(model, chunks, cache, guard, hot):
 
 
 def stats(model):
-    result = dict(forward_to_route_seconds=0.0, hits=0, misses=0, evictions=0, read_bytes=0,
-                  read_seconds=0.0, resident_routes=0)
+    result = dict(forward_to_route_seconds=0.0)
     for layer in model.layers:
         if isinstance(layer.mlp, PagedExperts):
             result['forward_to_route_seconds'] += layer.mlp._forward_to_route_seconds
             for name, value in layer.mlp._bank.stats.items():
-                result[name] += value
+                result[name] = result.get(name, 0) + value
     result['process_disk_read_bytes'] = process_usage().diskio_bytesread
+    result['sync_reads'] = result['misses'] - result['prefetch_hits']
+    result['total_base_read_bytes'] = result['read_bytes'] + result['prefetch_read_bytes']
     return result
 
 
@@ -174,7 +175,9 @@ def top_margin(logits):
     return float((pair.max() - pair.min()).item())
 
 
-def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard, forced=None):
+def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard, forced=None, base_prefetch=None):
+    if base_prefetch is not None and hot is None:
+        raise ValueError('Base read-ahead requires a committed predictor')
     cache = model.make_cache()
     if hot is not None:
         hot.reset()
@@ -200,10 +203,14 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
         start = time.perf_counter()
         if hot is not None:
             hot.begin_decode(token)
+        if base_prefetch is not None:
+            base_prefetch.begin(hot.predictor.loading_priority())
         logits = model(mx.array([[token]]), cache=cache).logits
         mx.eval(logits, [entry.state for entry in cache])
         if hot is not None:
             hot.commit([token])
+        if base_prefetch is not None:
+            base_prefetch.drain()
         greedy_ids.append(greedy(logits))
         times.append(time.perf_counter() - start)
         if forced is not None:
@@ -278,6 +285,7 @@ def main():
     parser.add_argument('--token-major', action='store_true')
     parser.add_argument('--verify-prefill', action='store_true')
     parser.add_argument('--fixed-json', type=Path)
+    parser.add_argument('--base-prefetch', type=int, choices=(1, 2, 4))
     args = parser.parse_args()
     if args.output.exists() or not 0 < args.max_tokens <= 4096:
         parser.error('Use a fresh output and a positive token budget of at most 4096')
@@ -289,6 +297,8 @@ def main():
         parser.error('The full base requires a 56 GiB base budget; paged banks allow at most 44 GiB')
     if args.full_base and args.refinements:
         parser.error('Full base residency currently supports base-only execution')
+    if args.base_prefetch and (not args.refinements or args.verify_prefill or args.full_base):
+        parser.error('Base prediction requires the committed refinement predictor during generation')
     if args.chunk_size * 8 > args.rows or (args.refinements and args.chunk_size * 8 > args.prefill_rows):
         parser.error('The packed row budget must cover the full prefill chunk')
     rows = [args.rows] * 42
@@ -315,10 +325,15 @@ def main():
 
         hot = NativeHotRefinements(args.model, args.hot_fraction, args.prefill_rows)
     banks = []
+    base_prefetch = None
     try:
         start = time.perf_counter()
         model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
                                     args.full_base, args.base_budget_gib)
+        if args.base_prefetch:
+            from native_base_prefetch import NativeBasePrefetch
+
+            base_prefetch = NativeBasePrefetch(banks, args.base_prefetch)
         startup_stats = stats(model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True, trust_remote_code=False)
         template = (Path(__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
@@ -336,7 +351,8 @@ def main():
                     parser.error('The fixed token trace is invalid or too short')
             prefill = token_major_prefill if args.token_major else layer_major_prefill
             startup = time.perf_counter() - start
-            result = generate(model, tokenizer, ids, args.max_tokens, eos, prefill, args.chunk_size, hot, guard, forced)
+            result = generate(model, tokenizer, ids, args.max_tokens, eos, prefill, args.chunk_size, hot, guard, forced,
+                              base_prefetch)
             result.update(startup_seconds=startup, rows=args.rows, chunk_size=args.chunk_size,
                           rows_by_layer=rows, prefill_order=prefill.__name__, checkpoint_revision=REVISION,
                           backbone_bytes=sum(a.nbytes for _, a in tree_flatten(model.parameters())),
@@ -347,6 +363,7 @@ def main():
                           residency_refresh_interval_ms=os.environ.get('MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS'),
                           route_timing_includes_device_sync=not args.full_base,
                           route_timing_includes_base_load=False,
+                          base_prefetch=base_prefetch.report() if base_prefetch is not None else None,
                           hot_fraction=args.hot_fraction if hot is not None else None)
         with args.output.open('x') as output:
             json.dump(result, output, indent=2)
@@ -354,8 +371,12 @@ def main():
         print(json.dumps({key: result[key] for key in ('status', 'text', 'decode_tps', 'ttft_seconds') if key in result}), flush=True)
     finally:
         try:
-            if hot is not None:
-                hot.close()
+            try:
+                if base_prefetch is not None:
+                    base_prefetch.close()
+            finally:
+                if hot is not None:
+                    hot.close()
         finally:
             for bank in banks:
                 bank.close()
