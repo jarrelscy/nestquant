@@ -11,6 +11,7 @@ import mlx.core as mx
 import numpy as np
 
 from mapped_weights import read_layouts
+from expert_major_base import FORMAT as EXPERT_MAJOR_FORMAT, plane_layouts, read_into
 
 
 def pack(projections):
@@ -61,6 +62,7 @@ class PackedExpertBank:
         self.selection_pending = False
         self.fully_resident = False
         self.prefetch = None
+        self.expert_row_bytes = None
         self.stats = dict(hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0, resident_routes=0,
                           prefetch_hits=0, prefetch_wait_seconds=0.0, prefetch_copy_seconds=0.0,
                           prefetch_read_bytes=0, prefetch_read_seconds=0.0, prefetch_discarded=0,
@@ -70,9 +72,12 @@ class PackedExpertBank:
             fcntl.fcntl(self.fd, fcntl.F_NOCACHE, 1)
             size = os.fstat(self.fd.fileno()).st_size
             layouts, metadata, offset = read_layouts(self.fd, size)
-            if (metadata['format'], metadata['revision'], metadata['layer']) != (
-                    'nestquant-resident-base-v1', revision, str(layer)):
+            if (metadata['format'] not in ('nestquant-resident-base-v1', EXPERT_MAJOR_FORMAT)
+                    or (metadata['revision'], metadata['layer']) != (revision, str(layer))):
                 raise ValueError('Unexpected packed expert archive metadata')
+            self.data_offset = offset
+            if metadata['format'] == EXPERT_MAJOR_FORMAT:
+                layouts, self.expert_row_bytes = plane_layouts(layouts, metadata)
             geometry = json.loads(metadata['geometry'])
             self.planes = {name: ({}, meta) for name, meta in geometry.items()}
             if any(not shape or shape[0] != 288 for _, _, _, shape in layouts.values()):
@@ -95,6 +100,12 @@ class PackedExpertBank:
 
     def _fill(self, slot, expert):
         start = time.perf_counter()
+        if self.expert_row_bytes is not None:
+            count = read_into(self.fd.fileno(), [target[slot] for target, _, _ in self.host.values()],
+                              self.data_offset + expert * self.expert_row_bytes)
+            self.stats['read_bytes'] += count
+            self.stats['read_seconds'] += time.perf_counter() - start
+            return
         for target, offset, row_bytes in self.host.values():
             position = offset + expert * row_bytes
             with memoryview(target[slot]) as row:
@@ -109,6 +120,12 @@ class PackedExpertBank:
 
     def read_payload(self, expert):
         start = time.perf_counter()
+        if self.expert_row_bytes is not None:
+            storage = bytearray(self.expert_row_bytes)
+            read_into(self.fd.fileno(), [storage], self.data_offset + expert * self.expert_row_bytes)
+            payload = {name: memoryview(storage)[offset - self.data_offset:offset - self.data_offset + size]
+                       for name, (_, offset, size) in self.host.items()}
+            return payload, self.expert_row_bytes, time.perf_counter() - start
         payload = {}
         for name, (_, offset, row_bytes) in self.host.items():
             payload[name] = bytearray(row_bytes)
@@ -128,6 +145,8 @@ class PackedExpertBank:
             target[slot] = np.frombuffer(payload[name], dtype=np.uint8)
 
     def preload(self, check, bytes_per_second=0):
+        if self.expert_row_bytes is not None:
+            raise ValueError('Expert-major archives currently support paged execution only')
         if self.rows != 288 or self.slots or self.selection_pending:
             raise RuntimeError('Preload requires an unused bank with all 288 expert rows')
         if not math.isfinite(bytes_per_second) or bytes_per_second < 0:
