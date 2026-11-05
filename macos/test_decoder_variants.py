@@ -71,24 +71,24 @@ class DecoderVariantsTest(unittest.TestCase):
                     for compacted in (False, True):
                         selected = dict(planes, var=arrays[f'{name}.var']) if compacted else planes
                         metadata = geometry[name] if compacted else meta
-                        for state_load, lookup, group in [(load, table, group) for load, table in (
-                                ('u32', False), ('bytes', True), ('u32', True), ('shuffle', False), ('shuffle', True))
-                                for group in (64, 128, 256, 512)]:
+                        for state_load, lookup, group, loop_mode in [(load, table, group, loop_mode) for load, table in (
+                                ('bytes', False), ('u32', False), ('bytes', True), ('u32', True), ('shuffle', False), ('shuffle', True))
+                                for group in (64, 128, 256, 512) for loop_mode in ('inline', 'split')]:
                             with self.subTest(residual=residual, name=name, level=level, mask=mask,
-                                              compacted=compacted, state_load=state_load, lookup=lookup, group=group):
+                                              compacted=compacted, state_load=state_load, lookup=lookup, group=group, loop_mode=loop_mode):
                                 actual = projection_matvec_banked(selected, metadata, inputs, route, level,
                                                                  state_load=state_load, sum_lookup=lookup,
-                                                                 threadgroup_size=group, **extra)
+                                                                 threadgroup_size=group, loop_mode=loop_mode, **extra)
                                 self.assertTrue(mx.array_equal(actual, expected).item())
                                 invalid = projection_matvec_banked(selected, metadata, inputs,
                                                                   mx.array((4, 0, 2, 1), dtype=mx.uint32), level,
                                                                   state_load=state_load, sum_lookup=lookup,
-                                                                  threadgroup_size=group, **extra)
+                                                                  threadgroup_size=group, loop_mode=loop_mode, **extra)
                                 self.assertTrue(mx.isnan(invalid[0]).all().item())
                                 self.assertTrue(mx.array_equal(invalid[1:], expected[1:]).item())
 
     def test_invalid_variants_fail_before_reading_planes(self):
-        for options in (dict(state_load='u64'), dict(sum_lookup=1), dict(sum_lookup='yes')):
+        for options in (dict(state_load='u64'), dict(sum_lookup=1), dict(sum_lookup='yes'), dict(loop_mode='other')):
             with self.subTest(options=options), self.assertRaisesRegex(ValueError, 'decoder variant'):
                 projection_matvec_banked({}, {}, mx.zeros((1, 128)), (0,), 2, **options)
 

@@ -234,7 +234,7 @@ def compare_stages(store, layer, guard):
     return dict(layer=layer, projections=records)
 
 
-def compare_row_scaling(store, layer, guard):
+def compare_row_scaling(store, layer, guard, branch_variants=False):
     from unittest.mock import patch
 
     import decoder
@@ -258,9 +258,9 @@ def compare_row_scaling(store, layer, guard):
                        if mode == 'mixed' else mx.full((32,), 0xffffffff, dtype=mx.uint32))
             mx.eval(refined)
 
-            def project(count):
+            def project(count, loop_mode='inline'):
                 extra = dict(refinements=planes, refined_route=refined[:count]) if mode.startswith('mixed') else {}
-                return projection_matvec_banked(planes, meta, inputs[:count], route[:count], level, **extra)
+                return projection_matvec_banked(planes, meta, inputs[:count], route[:count], level, loop_mode=loop_mode, **extra)
 
             captured = []
             factory = decoder._matvec_kernel
@@ -309,6 +309,28 @@ def compare_row_scaling(store, layer, guard):
             if not relative < 0.001:
                 raise RuntimeError('Eight-row full projection exceeds the existing relative-error bound')
             calls['full8'] = lambda: project(8)
+            if branch_variants:
+                separate = mx.stack([
+                    projection_matvec(*weights[index][name], inputs[row],
+                                      4 if mode == 'refined' or (mode == 'mixed' and row % 2 == 0) else 2)
+                    for row, index in enumerate(routes)])
+                mx.eval(separate)
+                separate_rms = (mx.linalg.norm(full_reference - separate) / mx.linalg.norm(separate)).item()
+                if not separate_rms < 0.001:
+                    raise RuntimeError('Banked projection exceeds the per-expert relative-error bound')
+                split_kernel = factory(meta['base_K'], meta['res_rule']['K'], loop_mode='split')
+                for count in counts:
+                    options = dict(arguments)
+                    options['inputs'] = list(arguments['inputs'])
+                    for index in (5, 6, 7):
+                        options['inputs'][index] = options['inputs'][index][:count]
+                    options['grid'] = (arguments['grid'][0], count, 1)
+                    options['output_shapes'] = [(count, meta['tn'], meta['tk'], 16)]
+                    mx.eval(options['inputs'])
+                    calls[f'split-{count}'] = lambda options=options: split_kernel(**options)[0]
+                    expected[f'split-{count}'] = expected[str(count)]
+                calls['split-full8'] = lambda: project(8, loop_mode='split')
+                expected['split-full8'] = expected['full8']
             for kind, call in calls.items():
                 for _ in range(5):
                     actual = call()
@@ -334,6 +356,7 @@ def compare_row_scaling(store, layer, guard):
                                 bank_logical_bytes=sum(array.nbytes for array in planes.values()),
                                 partial_bytes_32_rows=reference.nbytes,
                                 full8_relative_rms=relative, raw_prefix_identical=True,
+                                separate_expert_relative_rms=separate_rms if branch_variants else None,
                                 mixed_pattern='Even rows refined; one-row mixed case is entirely refined.',
                                 variants={kind: dict(median_ms=statistics.median(values), samples_ms=values)
                                           for kind, values in samples.items()}))
@@ -349,13 +372,14 @@ def main():
     probes.add_argument('--stages', action='store_true')
     probes.add_argument('--decoder-variants', action='store_true')
     probes.add_argument('--row-scaling', action='store_true')
+    probes.add_argument('--branch-variants', action='store_true')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('Use a fresh output file')
     mx.set_cache_limit(256 * 1024**2)
     mx.random.seed(42)
     store = ExpertStore(args.model, cache_gib=0.5)
-    if args.threadgroups or args.stages or args.decoder_variants or args.row_scaling:
+    if args.threadgroups or args.stages or args.decoder_variants or args.row_scaling or args.branch_variants:
         from metrics import MemoryGuard
 
         guard = MemoryGuard(4)
@@ -363,8 +387,8 @@ def main():
     try:
         checks = []
         for layer in (3, 44):
-            if args.row_scaling:
-                check = compare_row_scaling(store, layer, guard)
+            if args.row_scaling or args.branch_variants:
+                check = compare_row_scaling(store, layer, guard, args.branch_variants)
                 checks.append(check)
                 print(json.dumps(check), flush=True)
                 continue
@@ -391,10 +415,11 @@ def main():
         store.close()
     with args.output.open('x') as output:
         json.dump(dict(scope=('Thirty-two distinct cached experts per layer; raw kernel rows vary independently.'
-                              if args.row_scaling else 'Eight cached experts per layer, with a bank packed before timing'),
+                              if args.row_scaling or args.branch_variants else 'Eight cached experts per layer, with a bank packed before timing'),
                        threadgroup_probe=args.threadgroups, stages_probe=args.stages,
                        decoder_variants_probe=args.decoder_variants,
-                       row_scaling_probe=args.row_scaling,
+                       row_scaling_probe=args.row_scaling or args.branch_variants,
+                       branch_variants_probe=args.branch_variants,
                        raw_scope='Matvec only, with already evaluated rotated inputs; timings are not additive',
                        checks=checks), output, indent=2)
         output.write('\n')
