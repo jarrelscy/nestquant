@@ -1,5 +1,22 @@
 # Mac performance measurements
 
+## Split loops reduce mixed component time
+
+The optional split-loop decoder passed the [component criteria](results/2026-11-06-native-split-loops.json) in all 48 comparisons. At eight rows, mixed precision improved by about 16% and all-cold mixed execution by about 20%. These percentages compare medians across six layer/projection medians. The generation default remains the inline decoder.
+
+| Mode | Inline, eight rows | Split, eight rows | Inline, 32 rows | Split, 32 rows |
+|---|---:|---:|---:|---:|
+| base | 0.385 ms | 0.381 ms | 1.153 ms | 1.152 ms |
+| refined | 0.612 ms | 0.613 ms | 1.990 ms | 1.975 ms |
+| mixed | 0.621 ms | 0.523 ms | 2.037 ms | 1.690 ms |
+| mixed-cold | 0.507 ms | 0.404 ms | 1.608 ms | 1.225 ms |
+
+Each of 24 scenarios used five warm-ups and 25 shuffled samples for each variant. All 8,400 timed outputs matched the inline reference exactly. The separate unbanked reference stayed below 8.83e-9 relative root-mean-square error. That reference shares the inline decoder arithmetic. It checks banking independently, but does not independently validate the decoder.
+
+The predeclared timing gate required mixed gains above the larger interquartile range at both eight and 32 rows. Base and refined regressions could not exceed that range. All comparisons passed. Peak physical footprint was 1.42 GB under the 4 GiB guard. Pressure stayed normal, free memory stayed at least 69%, and no swap-outs were added.
+
+Two Fable/high reviews cleared the component experiment after source and kernel-name checks. The default generated source matched the preceding version across 24 parameter combinations. All 48 variant kernel names were distinct. Five expanded decoder tests passed across both residual patterns, both sign layouts, four threadgroup sizes, and all supported load/lookup variants. Confidence is high in the measured component gain. Its compiler cause and model throughput effect remain unverified.
+
 ## Distinct expert row scaling
 
 The [row-scaling probe](results/2026-11-06-native-row-scaling.json) passed every raw output comparison across layers 3 and 44, three projections, and four precision modes. The full eight-row outputs also matched their 32-row prefixes exactly. The production kernel remained unchanged.
