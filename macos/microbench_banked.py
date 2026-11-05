@@ -234,6 +234,112 @@ def compare_stages(store, layer, guard):
     return dict(layer=layer, projections=records)
 
 
+def compare_row_scaling(store, layer, guard):
+    from unittest.mock import patch
+
+    import decoder
+
+    experts = EXPERTS + tuple(index for index in range(288) if index not in EXPERTS)[:24]
+    weights = [store.get(layer, expert, 4) for expert in experts]
+    routes = (7, 2, 3, 0, 5, 1, 6, 4) + tuple(range(8, 32))
+    route = mx.array(routes, dtype=mx.uint32)
+    counts = (1, 2, 4, 8, 16, 32)
+    records = []
+    for name, (_, meta) in weights[0].items():
+        if any(weight[name][1] != meta for weight in weights):
+            raise RuntimeError(f'Mismatched row-scaling bank layout for {name}')
+        planes = pack([weight[name][0] for weight in weights])
+        inputs = mx.random.normal((32, meta['k'])).astype(mx.float16).astype(mx.float32)
+        mx.eval(planes, inputs, route)
+        guard.check(force=True)
+        for mode in ('base', 'refined', 'mixed', 'mixed-cold'):
+            level = 4 if mode == 'refined' else 2
+            refined = (mx.where(mx.arange(32) % 2 == 0, route, mx.array(0xffffffff, dtype=mx.uint32))
+                       if mode == 'mixed' else mx.full((32,), 0xffffffff, dtype=mx.uint32))
+            mx.eval(refined)
+
+            def project(count):
+                extra = dict(refinements=planes, refined_route=refined[:count]) if mode.startswith('mixed') else {}
+                return projection_matvec_banked(planes, meta, inputs[:count], route[:count], level, **extra)
+
+            captured = []
+            factory = decoder._matvec_kernel
+
+            def capture(*args):
+                kernel = factory(*args)
+
+                def invoke(**kwargs):
+                    output = kernel(**kwargs)
+                    captured.append((kernel, kwargs, output[0]))
+                    return output
+
+                return invoke
+
+            with patch.object(decoder, '_matvec_kernel', capture):
+                full_reference = project(32)
+                mx.eval(full_reference)
+            if len(captured) != 1 or not mx.isfinite(full_reference).all().item():
+                raise RuntimeError('Row scaling did not capture one finite production projection')
+            kernel, arguments, reference = captured.pop()
+            mx.eval(arguments['inputs'], reference)
+            if (arguments['threadgroup'] != (256, 1, 1)
+                    or arguments['grid'] != (meta['tk'] * meta['tn'] * 256, 32, 1)
+                    or arguments['output_shapes'] != [(32, meta['tn'], meta['tk'], 16)]):
+                raise RuntimeError('Unexpected production kernel geometry')
+            if not mx.isfinite(reference).all().item():
+                raise RuntimeError('Nonfinite production partial output')
+            calls = {}
+            expected = {}
+            for count in counts:
+                options = dict(arguments)
+                options['inputs'] = list(arguments['inputs'])
+                for index in (5, 6, 7):
+                    if options['inputs'][index].shape[0] != 32:
+                        raise RuntimeError('Unexpected row-dependent kernel argument')
+                    options['inputs'][index] = options['inputs'][index][:count]
+                options['grid'] = (arguments['grid'][0], count, 1)
+                options['output_shapes'] = [(count, meta['tn'], meta['tk'], 16)]
+                mx.eval(options['inputs'])
+                calls[str(count)] = lambda options=options: kernel(**options)[0]
+                expected[str(count)] = reference[:count]
+            expected['full8'] = project(8)
+            mx.eval(expected)
+            relative = (mx.linalg.norm(expected['full8'] - full_reference[:8])
+                        / mx.linalg.norm(full_reference[:8])).item()
+            if not relative < 0.001:
+                raise RuntimeError('Eight-row full projection exceeds the existing relative-error bound')
+            calls['full8'] = lambda: project(8)
+            for kind, call in calls.items():
+                for _ in range(5):
+                    actual = call()
+                    mx.eval(actual)
+                    if not mx.array_equal(actual, expected[kind]).item():
+                        raise RuntimeError(f'Row-scaling warmup changed output: {kind}')
+                guard.check(force=True)
+            samples = {kind: [] for kind in calls}
+            schedule = random.Random(42)
+            for _ in range(25):
+                order = list(calls)
+                schedule.shuffle(order)
+                for kind in order:
+                    started = time.perf_counter()
+                    actual = calls[kind]()
+                    mx.eval(actual)
+                    samples[kind].append((time.perf_counter() - started) * 1000)
+                    if not mx.array_equal(actual, expected[kind]).item():
+                        raise RuntimeError(f'Timed row-scaling output changed: {kind}')
+                guard.check(force=True)
+            records.append(dict(projection=name, mode=mode, expert_ids=list(experts), route=list(routes),
+                                geometry=dict(k=meta['k'], n=meta['n'], tk=meta['tk'], tn=meta['tn']),
+                                bank_logical_bytes=sum(array.nbytes for array in planes.values()),
+                                partial_bytes_32_rows=reference.nbytes,
+                                full8_relative_rms=relative, raw_prefix_identical=True,
+                                mixed_pattern='Even rows refined; one-row mixed case is entirely refined.',
+                                variants={kind: dict(median_ms=statistics.median(values), samples_ms=values)
+                                          for kind, values in samples.items()}))
+    return dict(layer=layer, projections=records)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=Path, required=True)
@@ -242,13 +348,14 @@ def main():
     probes.add_argument('--threadgroups', action='store_true')
     probes.add_argument('--stages', action='store_true')
     probes.add_argument('--decoder-variants', action='store_true')
+    probes.add_argument('--row-scaling', action='store_true')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('Use a fresh output file')
     mx.set_cache_limit(256 * 1024**2)
     mx.random.seed(42)
     store = ExpertStore(args.model, cache_gib=0.5)
-    if args.threadgroups or args.stages or args.decoder_variants:
+    if args.threadgroups or args.stages or args.decoder_variants or args.row_scaling:
         from metrics import MemoryGuard
 
         guard = MemoryGuard(4)
@@ -256,6 +363,11 @@ def main():
     try:
         checks = []
         for layer in (3, 44):
+            if args.row_scaling:
+                check = compare_row_scaling(store, layer, guard)
+                checks.append(check)
+                print(json.dumps(check), flush=True)
+                continue
             if args.stages:
                 check = compare_stages(store, layer, guard)
                 checks.append(check)
@@ -278,9 +390,11 @@ def main():
     finally:
         store.close()
     with args.output.open('x') as output:
-        json.dump(dict(scope='Eight cached experts per layer, with a bank packed before timing',
+        json.dump(dict(scope=('Thirty-two distinct cached experts per layer; raw kernel rows vary independently.'
+                              if args.row_scaling else 'Eight cached experts per layer, with a bank packed before timing'),
                        threadgroup_probe=args.threadgroups, stages_probe=args.stages,
                        decoder_variants_probe=args.decoder_variants,
+                       row_scaling_probe=args.row_scaling,
                        raw_scope='Matvec only, with already evaluated rotated inputs; timings are not additive',
                        checks=checks), output, indent=2)
         output.write('\n')
