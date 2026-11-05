@@ -88,6 +88,8 @@ The hot policy wanted 5,395 of 50,064 routed calls. It delivered 5,335, or 98.89
 
 The chunking diagnosis locates the first BF16 discrepancy in layer-zero attention, before any routed expert. Its relative RMS difference was 0.0282% after attention and 0.7191% after the fourth layer. Cached decode still differed by 1.3086%, above the 1% check. The diagnosis compared ordinary Transformers with and without chunks. Use `verify_integration.py --reference chunked --diagnose-chunking` to reproduce it.
 
+A precision control reproduced the 1.3086% failure with identical BF16 initialization. Upcasting the backbone after initialization reduced cached-decode error to 0.00427%, a 306.8-fold reduction. Prefill error fell from 0.67655% to 0.00336%. The real NestQuant expert path retained its float16 boundaries. This supports backbone rounding sensitivity as the dominant cause in this fixture, with high confidence. It does not prove trained-model accuracy or justify changing the original 1% threshold. The BF16 arm still exits nonzero and now preserves a failed JSON report. Both arms peaked below 7.10 GiB, retained normal pressure, recorded no additional swap-outs, and restored Qwen. See [the precision controls and complete receipts](results/2026-11-05-chunk-precision-control.json).
+
 In a separate trained layer-zero component probe, median Torch/MPS attention took 1.225 ms. With synchronization around individual fallbacks, the convolution update took 0.213 ms and the recurrent Kimi Delta Attention function took 0.410 ms. Those component windows do not sum to a single ordinary forward. MLX BF16 took 0.756 ms at 0.884% relative RMS difference. MLX affine-8 took 0.587 ms at 1.824%. Affine-4 took 0.450 ms at 19.588% and was rejected. This probe uses 32 recurrent positions and measures one attention layer.
 
 ### Matched native replay
@@ -127,6 +129,37 @@ An autoregressive HumanEval/3 check at 40 GiB passed the network-disabled grader
 On that coding request, the 2% allocation delivered 10.60% refined calls and 22.75% salience coverage. Delivery of wanted calls was 98.22%. The predictor's top-budget forecasts assigned 24.99% salience versus 22.45% observed across overlapping windows. No predictor parameters were fitted on this request.
 
 The later route timer accidentally included base selection and reads. Those windows must not be added to base-read time or compared with the earlier route-only timer. Complete decode rates and separate read times remain valid. Source `c56076c` restores the original timing boundary. See [the complete replay, coding, and isolation evidence](results/2026-11-05-native-cache-sweep.json).
+
+### Anticipatory base reads
+
+Source `0c30ab1` adds an opt-in native worker for predicted base rows. It reuses committed jT/EMA scores without changing the refinement policy. The worker reads private CPU buffers. The main thread installs only required rows after the previous GPU use completes. Missing predictions retain the synchronous fallback. Two independent Max-account Fable/high reviews approved the corrected implementation before testing. All 44 runtime unit tests and six server boundary tests passed.
+
+The fresh control and `--base-prefetch 1` trial used 192 rows, a 40 GiB limit, the same 29-token prompt, and 128 identical forced inputs. Both used eight-token chunks, 160 prefill scratch rows, and 2% hot allocation. Each profile ran once.
+
+| Measurement | Synchronous control | One predicted base per layer |
+|---|---:|---:|
+| Decode tokens/s | 3.558 | 3.452 |
+| Prefill to first token | 52.13 s | 53.10 s |
+| Required base misses | 5,437 | 5,454 |
+| Required misses served by prediction | 0 | 576 |
+| Synchronous base reads | 5,437 | 4,878 |
+| Synchronous base read time | 16.79 s | 14.44 s |
+| Worker base read time, overlapping | 0 s | 16.29 s |
+| Required wait for predictions | 0 s | 0.027 s |
+| Copy into GPU bank | 0 s | 0.135 s |
+| All base-read traffic | 24.93 GiB | 47.01 GiB |
+| Peak process footprint | 51.31 GiB | 51.37 GiB |
+| Minimum reported free memory | 32% | 32% |
+
+The prediction worker completed 5,375 reads: 576 were useful and 4,799 were discarded. One queued prediction was cancelled, and no predictive read failed. Completed prediction precision was 10.72%, covering 10.56% of required misses. Peak staging reservation was 75.63 MiB under the 128 MiB limit. This reservation overstates the private payload allocation and is not an additional process-footprint measurement. End-of-token draining took 0.00066 seconds in total. No prediction crosses a token boundary.
+
+This trial reduced blocking read time but nearly doubled base traffic and lowered throughput by 3.0%. The feature remains disabled by default. Widening this predictor's base-read window is not supported by these results. Refinement salience priorities are not demonstrated to predict imminent base misses well. The route window also rose from 15.70 to 18.56 seconds, but it includes upstream GPU work and does not isolate CPU cost.
+
+Both runs retained normal pressure, added no system swap-outs, and restored Qwen. They agreed on 127 of 129 greedy next-token predictions under teacher forcing. Readiness-dependent refinement precision and desktop activity remain confounders, so this is not a deterministic numerical-equivalence claim. Refined-call coverage was 15.75% versus 15.72%; salience coverage was 31.05% versus 30.98%. See [the complete results, cancellation accounting, and isolation receipts](results/2026-11-05-native-base-prefetch.json).
+
+The autoregressive HumanEval/3 check passed the network-disabled grader and emitted the same 149 tokens as the earlier synchronous run. Prediction measured 3.86 tokens/s versus the earlier 4.62 tokens/s, with a 51.96 GiB peak. Only 407 of 6,248 completed predictions were used, or 6.51%. The other 5,841 were discarded; ten queued reads were cancelled. This is a single coding case and a comparison across different runs. Pressure remained normal with at least 31% reported free memory, and Qwen recovered. System swap-outs increased by 32 pages, or 0.5 MiB, across the run and cleanup.
+
+Reproduce the comparison with the same `--fixed-json` trace and fresh output paths. Run the 192-row profile once without `--base-prefetch`, then once with `--base-prefetch 1`. Keep the host watchdog active. `read_seconds` and `read_bytes` remain synchronous counters. `prefetch_read_seconds` overlaps computation. Do not add it to wall time or the synchronous read duration.
 
 ### Mixed prefill chunk widths
 

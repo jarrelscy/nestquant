@@ -1,0 +1,262 @@
+{
+  "source_commit": "0c30ab159a7865c426f9b26c7953f14db9245956",
+  "hardware": "Apple M5 Max, 40 GPU cores, 128 GiB unified RAM",
+  "scope": "Random four-layer backbone with real L3 NestQuant experts and fixed routes; identical BF16 initialization in both controls; float32 control upcasts only after initialization.",
+  "runs": [
+    {
+      "name": "glm-chunk-precision-bf16-control",
+      "result": {
+        "status": "failed",
+        "reference": "unchunked",
+        "unchunked_decode_relative_rms": 0.013085956685245037,
+        "unchunked_1_percent_check_passed": false,
+        "scope": "Four random backbone layers initialized in BF16, optionally upcast for backbone computation; real L3 NestQuant experts retain their existing float16 boundaries; fixed routing; no model quality claim",
+        "tolerance_relative_rms": 0.01,
+        "checks": [
+          {
+            "phase": "prefill",
+            "relative_rms": 0.0067655108869075775
+          },
+          {
+            "phase": "cached_decode",
+            "relative_rms": 0.013085956685245037
+          }
+        ],
+        "backbone_compute_dtype": "bfloat16",
+        "initialization_dtype": "bfloat16",
+        "parameter_dtype_counts": {
+          "torch.bfloat16": 66,
+          "torch.float32": 33
+        },
+        "unchunked_vs_standard_chunked_layers": {
+          "0.attention": 0.0002820650697685778,
+          "0.block": 0.002326014917343855,
+          "1.attention": 0.004933855962008238,
+          "1.block": 0.0050439368933439255,
+          "2.attention": 0.00671054283156991,
+          "2.block": 0.006186553742736578,
+          "3.attention": 0.00395195372402668,
+          "3.block": 0.0071906233206391335
+        }
+      },
+      "isolation": {
+        "state": "failed",
+        "started_at": 1793842392.4390662,
+        "command": [
+          "verify_integration.py",
+          "--model",
+          "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+          "--compute-dtype",
+          "bfloat16",
+          "--reference",
+          "unchunked",
+          "--diagnose-chunking",
+          "--output",
+          "/Users/codeninja/Models/GLM/glm-chunk-precision-bf16-control.json"
+        ],
+        "baseline": "Qwen",
+        "baseline_port": 18084,
+        "baseline_pid": 78185,
+        "paused_jobs": [],
+        "preserved_pauses": [
+          75012,
+          8419
+        ],
+        "baseline_restored": true,
+        "memory_limit_bytes": 21474836480,
+        "peak_observed_footprint_bytes": 7611614720,
+        "minimum_free_percent": 69,
+        "configuration": {
+          "resident_base": false,
+          "resident_hot": false,
+          "cache_gib": 4,
+          "base_cache_gib": null,
+          "memory_limit_gib": 84
+        },
+        "preflight": {
+          "pressure_level": 1,
+          "free_percent": 34,
+          "supervisor_footprint_bytes": 20709880,
+          "open_file_limit": [
+            1048575,
+            9223372036854775807
+          ]
+        },
+        "forwarded_ports": [
+          18080
+        ],
+        "before_isolation_owners": [
+          {
+            "pid": 78185,
+            "physical_bytes": 1289955016,
+            "resident_bytes": 55363321856,
+            "wired_bytes": 0
+          }
+        ],
+        "before_child": {
+          "pressure_level": 1,
+          "free_percent": 75,
+          "vm_pages": {
+            "page_size": 16384,
+            "File-backed pages": 3929805,
+            "Anonymous pages": 2303250,
+            "Pages wired down": 830850,
+            "Pages occupied by compressor": 1172608,
+            "Compressions": 505739021,
+            "Decompressions": 417206764,
+            "Pageouts": 155077,
+            "Swapins": 13725618,
+            "Swapouts": 17112072
+          }
+        },
+        "child_pid": 63358,
+        "last_pressure_level": 1,
+        "model_exit_code": 1,
+        "after_child_vm_pages": {
+          "page_size": 16384,
+          "File-backed pages": 3828262,
+          "Anonymous pages": 1947182,
+          "Pages wired down": 821733,
+          "Pages occupied by compressor": 1244630,
+          "Compressions": 505918374,
+          "Decompressions": 417208648,
+          "Pageouts": 155104,
+          "Swapins": 13725630,
+          "Swapouts": 17112072
+        },
+        "resumed_jobs": [],
+        "finished_at": 1793842402.548722,
+        "error": "RuntimeError: GLM check exited 1; see glm-chunk-precision-bf16-control.log"
+      },
+      "swapout_delta_bytes": 0
+    },
+    {
+      "name": "glm-chunk-precision-fp32-control",
+      "result": {
+        "status": "passed",
+        "reference": "unchunked",
+        "unchunked_decode_relative_rms": 4.265290772309527e-05,
+        "unchunked_1_percent_check_passed": true,
+        "scope": "Four random backbone layers initialized in BF16, optionally upcast for backbone computation; real L3 NestQuant experts retain their existing float16 boundaries; fixed routing; no model quality claim",
+        "tolerance_relative_rms": 0.01,
+        "checks": [
+          {
+            "phase": "prefill",
+            "relative_rms": 3.3567481295904145e-05
+          },
+          {
+            "phase": "cached_decode",
+            "relative_rms": 4.265290772309527e-05
+          }
+        ],
+        "backbone_compute_dtype": "float32",
+        "initialization_dtype": "bfloat16",
+        "parameter_dtype_counts": {
+          "torch.float32": 99
+        },
+        "unchunked_vs_standard_chunked_layers": {
+          "0.attention": 3.7108341643943277e-07,
+          "0.block": 7.720162784607965e-07,
+          "1.attention": 6.334653903650178e-07,
+          "1.block": 9.472584565628495e-07,
+          "2.attention": 8.732764626984135e-07,
+          "2.block": 1.0408109574200353e-06,
+          "3.attention": 5.126159976498457e-07,
+          "3.block": 3.507768633426167e-05
+        }
+      },
+      "isolation": {
+        "state": "complete",
+        "started_at": 1793842402.951597,
+        "command": [
+          "verify_integration.py",
+          "--model",
+          "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+          "--compute-dtype",
+          "float32",
+          "--reference",
+          "unchunked",
+          "--diagnose-chunking",
+          "--output",
+          "/Users/codeninja/Models/GLM/glm-chunk-precision-fp32-control.json"
+        ],
+        "baseline": "Qwen",
+        "baseline_port": 18084,
+        "baseline_pid": 63903,
+        "paused_jobs": [],
+        "preserved_pauses": [
+          75012,
+          8419
+        ],
+        "baseline_restored": true,
+        "memory_limit_bytes": 21474836480,
+        "peak_observed_footprint_bytes": 7603930600,
+        "minimum_free_percent": 69,
+        "configuration": {
+          "resident_base": false,
+          "resident_hot": false,
+          "cache_gib": 4,
+          "base_cache_gib": null,
+          "memory_limit_gib": 84
+        },
+        "preflight": {
+          "pressure_level": 1,
+          "free_percent": 33,
+          "supervisor_footprint_bytes": 20709856,
+          "open_file_limit": [
+            1048575,
+            9223372036854775807
+          ]
+        },
+        "forwarded_ports": [
+          18080
+        ],
+        "before_isolation_owners": [
+          {
+            "pid": 63903,
+            "physical_bytes": 1289905840,
+            "resident_bytes": 56114282496,
+            "wired_bytes": 0
+          }
+        ],
+        "before_child": {
+          "pressure_level": 1,
+          "free_percent": 74,
+          "vm_pages": {
+            "page_size": 16384,
+            "File-backed pages": 3875498,
+            "Anonymous pages": 1981344,
+            "Pages wired down": 881134,
+            "Pages occupied by compressor": 1234614,
+            "Compressions": 505918374,
+            "Decompressions": 417228993,
+            "Pageouts": 155104,
+            "Swapins": 13725638,
+            "Swapouts": 17112072
+          }
+        },
+        "child_pid": 64433,
+        "last_pressure_level": 1,
+        "model_exit_code": 0,
+        "after_child_vm_pages": {
+          "page_size": 16384,
+          "File-backed pages": 3802703,
+          "Anonymous pages": 1915283,
+          "Pages wired down": 901109,
+          "Pages occupied by compressor": 1256533,
+          "Compressions": 506024856,
+          "Decompressions": 417251710,
+          "Pageouts": 155105,
+          "Swapins": 13725642,
+          "Swapouts": 17112072
+        },
+        "resumed_jobs": [],
+        "finished_at": 1793842412.0577128,
+        "error": null
+      },
+      "swapout_delta_bytes": 0
+    }
+  ],
+  "relative_error_reduction_factor": 306.801045551213,
+  "interpretation": "The 306.8-fold reduction supports backbone rounding sensitivity as the dominant source of this fixture discrepancy. It does not prove trained-model accuracy or permit changing the BF16 one-percent threshold."
+}

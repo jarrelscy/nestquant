@@ -2,7 +2,7 @@
 
 This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint. The native path uses a prepared MLX backbone and bounded Metal expert banks. The reference path uses the Transformers text backbone on PyTorch MPS.
 
-**Status, 2026-11-05.** The native path reached 3.52 tokens/s on a fixed 128-token replay at 45.73 GiB peak process footprint. The reference reached 1.27 tokens/s on the same inputs at 57.87 GiB. A separate native mixed run passed HumanEval/3 at 2.04 tokens/s. See [measurements and limits](PERFORMANCE.md#matched-native-replay).
+**Status, 2026-11-05.** The native path reached 3.82 tokens/s on a fixed 128-token replay with a 40 GiB base budget. A separate native mixed run passed HumanEval/3 at 4.62 tokens/s and 51.92 GiB peak process footprint. Its 149 generated tokens matched the earlier 2.04 tokens/s result. These results remain below the 15-30 tokens/s target. See [measurements and limits](PERFORMANCE.md#larger-bounded-caches).
 
 The asynchronous path reads refinements in the background and executes the precision that is ready. The grouped reader passed three full-model answer checks and delivered 16.25% actual hot-call coverage. The earlier reader also passed one complete coding task. The unchunked BF16 comparison retains its documented tolerance failure. See the [asynchronous path](ASYNC.md) and [the separate greedy MTP experiment](#greedy-mtp-experiment).
 
@@ -94,6 +94,8 @@ Observed results on the tested Mac:
 
 The larger BF16 integration test is bitwise identical to ordinary Transformers execution with matching chunks. Its cached decode differs by 1.3086% from an unchunked run, exceeding the separate 1% check. Ordinary Transformers chunking has the same difference. The failing unchunked comparison remains available through `verify_integration.py --reference unchunked`; `--reference chunked` checks bitwise scheduling equivalence. Trained-model quality remains unverified.
 
+The optional `--compute-dtype float32` control upcasts the backbone after identical BF16 initialization. Cached-decode error falls to 0.00427%, supporting rounding sensitivity in this fixture. It leaves the expert path's float16 boundaries unchanged. The original BF16 criterion still fails. See [the precision comparison](results/2026-11-05-chunk-precision-control.json).
+
 These results do not establish full-model output quality or throughput. The GPU timings in the decoder report measure a component, not generation speed.
 
 ## Generation interface
@@ -162,6 +164,8 @@ python macos/native_generate.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
 ```
 
 The native path reads missing base rows from disk into fixed slots. It records row hits, misses, eviction, bytes, and read time separately from the refinement scheduler. It uses four-bit refinements during prefill with `--refinements`. It uses the existing jT predictor during ordinary decode. It keeps hidden states and expert outputs on the device and reads routing IDs for storage selection. Its 4,096-token validation bound includes input and output. A pressure stop means the profile exceeded the live system budget. Inspect the pressure and allocation receipts before another attempt.
+
+The opt-in `--base-prefetch 1` experiment predicts base reads from the committed jT/EMA scores. It requires `--refinements` and uses a separate 128 MiB staging reservation inside the process and pressure guards. One worker reads private CPU buffers up to four layers ahead. Only actually routed rows can enter the persistent GPU bank. Missing predictions still trigger required reads. Speculative I/O failures receive one synchronous fallback when required. Allocation failures and malformed payloads stop the run. The first controlled replay measured 3.45 tokens/s versus 3.56 without prediction, so the option remains disabled by default. See [the read-ahead comparison](PERFORMANCE.md#anticipatory-base-reads).
 
 Use `--verify-prefill --refinements` to compare both schedules with four-bit prefill and check the committed predictor state. The comparison uses the same chunk size for both schedules. Choose `--prefill-rows` to bound the scratch bank for one layer. Decode slots, this scratch bank, and the asynchronous worker share a 4 GiB refinement limit. The separate base banks default to 32 GiB. Explicit paged budgets of 40 or 44 GiB allow 192 or 224 rows per layer. The process and system-pressure guards remain active. Larger budgets require their own measured headroom.
 
