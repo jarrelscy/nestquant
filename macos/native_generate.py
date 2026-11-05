@@ -37,10 +37,11 @@ class PagedExperts(nn.Module):
         started = time.perf_counter()
         if self._bank.fully_resident and self._hot is None:
             route = self._bank.select_device(ids.reshape(-1).astype(mx.uint32))
+            self._forward_to_route_seconds += time.perf_counter() - started
         else:
             experts = tuple(ids.reshape(-1).tolist())
+            self._forward_to_route_seconds += time.perf_counter() - started
             route = mx.array(self._bank.select(experts), dtype=mx.uint32)
-        self._forward_to_route_seconds += time.perf_counter() - started
         planes = self._bank.planes
         hot, hot_route = None, None
         if self._hot is not None:
@@ -345,6 +346,7 @@ def main():
                           requested_wired_bytes=68 * 1024**3 if args.full_base else 0,
                           residency_refresh_interval_ms=os.environ.get('MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS'),
                           route_timing_includes_device_sync=not args.full_base,
+                          route_timing_includes_base_load=False,
                           hot_fraction=args.hot_fraction if hot is not None else None)
         with args.output.open('x') as output:
             json.dump(result, output, indent=2)
