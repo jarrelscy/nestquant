@@ -22,7 +22,34 @@ uint nq_sum(uint state) {
     uint h = state * 0x83DCD12Du;
     return (h & 255) + ((h >> 8) & 255) + ((h >> 16) & 255) + (h >> 24);
 }
+template <typename Buffer>
+uint nq_state_wide(Buffer buf, uint ring, uint pos, uint ka, uint mask) {
+    uint ring_bits = ka * 256 + popcount(mask) * 16;
+    uint bit = ka * pos + (mask == 0xAAAA ? pos / 2 :
+        (pos / 16) * popcount(mask) + popcount(mask & ((1u << (pos % 16)) - 1)));
+    uint bytes = ring_bits / 8;
+    uint off = bit / 8;
+    if (off + 2 >= bytes) return nq_state(buf, ring, pos, ka, mask);
+    uint absolute = ring * bytes + off;
+    uint shift = (absolute % 4) * 8 + bit % 8;
+    uint end = (ring + 1) * bytes;
+    if ((absolute / 4 + 1) * 4 > end || (shift > 16 && (absolute / 4 + 2) * 4 > end))
+        return nq_state(buf, ring, pos, ka, mask);
+    // Imported byte views can start at an address with only byte alignment.
+    device const packed_uchar4* words = reinterpret_cast<device const packed_uchar4*>(buf);
+    uint value = as_type<uint>(uchar4(words[absolute / 4])) >> shift;
+    if (shift > 16) value |= as_type<uint>(uchar4(words[absolute / 4 + 1])) << (32 - shift);
+    return value & 65535;
+}
 '''
+
+
+@lru_cache(maxsize=1)
+def _sum_table():
+    values = mx.arange(65536, dtype=mx.uint32) * mx.array(0x83DCD12D, dtype=mx.uint32)
+    result = ((values & 255) + ((values >> 8) & 255) + ((values >> 16) & 255) + (values >> 24)).astype(mx.uint16)
+    mx.eval(result)
+    return result
 
 
 @lru_cache(maxsize=None)
@@ -133,15 +160,18 @@ def dense_projection(rings: mx.array, meta: dict, su: mx.array, sv: mx.array,
 
 
 @lru_cache(maxsize=None)
-def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256):
+def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256, state_load='bytes'):
     if type(threadgroup_size) is not int or threadgroup_size not in (64, 128, 256, 512):
         raise ValueError('Use 64, 128, 256, or 512 threads per banked matvec group')
+    if state_load not in ('bytes', 'u32'):
+        raise ValueError('Use bytes or u32 packed state reads')
     bka, bmask = PATTERNS[base_k]
     rka, rmask = PATTERNS[residual_k]
     unit = ('threadgroup_position_in_grid.x' if threadgroup_size == 256 else
             f'(threadgroup_position_in_grid.x * {threadgroup_size // 32} + simdgroup_index_in_threadgroup) / 8')
     group = ('simdgroup_index_in_threadgroup' if threadgroup_size == 256 else
              f'(threadgroup_position_in_grid.x * {threadgroup_size // 32} + simdgroup_index_in_threadgroup) % 8')
+    state = 'nq_state_wide' if state_load == 'u32' else 'nq_state'
     source = f"""
     uint unit = {unit};
     uint row = threadgroup_position_in_grid.y;
@@ -179,10 +209,12 @@ def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256):
     float s0 = 0.0f, s1 = 0.0f;
     for (uint j = 0; j < 8; ++j) {{
         uint p = lane + j * 32;
-        uint sb = nq_sum(nq_state(base, ring, p, {bka}, {bmask}));
+        uint bs = {state}(base, ring, p, {bka}, {bmask});
+        uint sb = SUM_LOOKUP ? uint(sum_table[bs]) : nq_sum(bs);
         uint code = sb;
         if (refined) {{
-            uint sr = nq_sum(nq_state(residual, refined_ring, p, {rka}, {rmask}));
+            uint rs = {state}(residual, refined_ring, p, {rka}, {rmask});
+            uint sr = SUM_LOOKUP ? uint(sum_table[rs]) : nq_sum(rs);
             code = (mb * sb + n * sr + 128) >> 8;
         }}
         float weight = float(half(fma(a, float(1024 + code), b)));
@@ -202,8 +234,8 @@ def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256):
     }}
     """
     return mx.fast.metal_kernel(
-        name=f'nq_matvec_{int(base_k * 10000)}_{int(residual_k * 10000)}_g{threadgroup_size}',
-        input_names=['base', 'residual', 'words', 'variants', 'order', 'x', 'expert_ids', 'refined_ids'],
+        name=f'nq_matvec_{int(base_k * 10000)}_{int(residual_k * 10000)}_g{threadgroup_size}_{state_load}',
+        input_names=['base', 'residual', 'words', 'variants', 'order', 'x', 'expert_ids', 'refined_ids', 'sum_table'],
         output_names=['partial'], source=source, header=HEADER,
         compile_options={'math_mode': 'safe'},
     )
@@ -218,9 +250,9 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
     _, _, order = _matrix_indices(tk, tn, meta['shard_axis'])
     rotated = mx.hadamard_transform((x.astype(mx.float32) * planes[f'suh{level}'].astype(mx.float32)).reshape(-1, 128)).astype(mx.float16).astype(mx.float32).reshape(-1)
     partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'])(
-        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, order, order],
+        inputs=[planes['base'], planes['p4'], planes['word'], planes['var'], order, rotated, order, order, order],
         template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', False), ('MIXED', False),
-                  ('PACKED_VAR', False)],
+                  ('PACKED_VAR', False), ('SUM_LOOKUP', False)],
         grid=(tk * tn * 256, 1, 1), threadgroup=(256, 1, 1),
         output_shapes=[(tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]
@@ -237,9 +269,11 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
 def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
                              route: tuple[int, ...] | mx.array, level: int, *,
                              refinements: dict | None = None, refined_route: mx.array | None = None,
-                             threadgroup_size=256) -> mx.array:
+                             threadgroup_size=256, state_load='bytes', sum_lookup=False) -> mx.array:
     if type(threadgroup_size) is not int or threadgroup_size not in (64, 128, 256, 512):
         raise ValueError('Use 64, 128, 256, or 512 threads per banked matvec group')
+    if state_load not in ('bytes', 'u32') or type(sum_lookup) is not bool:
+        raise ValueError('Unsupported packed decoder variant')
     if isinstance(route, mx.array) and (route.ndim != 1 or route.dtype != mx.uint32):
         raise ValueError('Device routes require a vector of uint32 expert IDs')
     rows = len(route)
@@ -295,10 +329,11 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
         valid = (cold | ready) if valid is None else valid & (cold | ready)
     scaled = x * su.astype(mx.float32)
     rotated = mx.hadamard_transform(scaled.reshape(rows, -1, 128)).astype(mx.float16).astype(mx.float32)
-    partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'], threadgroup_size)(
-        inputs=[planes['base'], residual, words, planes['var'], order, rotated, expert_ids, refinement_ids],
+    partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'], threadgroup_size, state_load)(
+        inputs=[planes['base'], residual, words, planes['var'], order, rotated, expert_ids, refinement_ids,
+                _sum_table() if sum_lookup else order],
         template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
-                  ('PACKED_VAR', var_bits == 1)],
+                  ('PACKED_VAR', var_bits == 1), ('SUM_LOOKUP', sum_lookup)],
         grid=(tk * tn * 256, rows, 1), threadgroup=(threadgroup_size, 1, 1),
         output_shapes=[(rows, tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]

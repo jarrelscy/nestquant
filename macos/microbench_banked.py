@@ -98,7 +98,7 @@ def compare(store, layer, level):
                 compiled=timed(lambda: (compiled(planes, rows, device_route) * scores[:, None]).sum(axis=0)))
 
 
-def compare_threadgroups(store, layer, guard):
+def compare_variants(store, layer, guard, variants):
     weights = [store.get(layer, expert, 4) for expert in EXPERTS]
     bank = {}
     for name, (_, meta) in weights[0].items():
@@ -110,7 +110,6 @@ def compare_threadgroups(store, layer, guard):
     rows = mx.random.normal((8, 4096)).astype(mx.float16).astype(mx.float32)
     mx.eval(route, rows)
     guard.check(force=True)
-    groups = (64, 128, 256, 512)
     results = []
     for mode in ('base', 'refined', 'mixed', 'mixed-cold'):
         level = 4 if mode == 'refined' else 2
@@ -118,44 +117,44 @@ def compare_threadgroups(store, layer, guard):
                    if mode == 'mixed' else mx.full((8,), 0xffffffff, dtype=mx.uint32))
         mx.eval(refined)
 
-        def run(size):
+        def run(options):
             def project(name, value):
                 planes, meta = bank[name]
                 extra = dict(refinements=planes, refined_route=refined) if mode.startswith('mixed') else {}
                 return projection_matvec_banked(planes, meta, value, route, level,
-                                                 threadgroup_size=size, **extra)
+                                                 **options, **extra)
 
             gate = mx.minimum(project('gate', rows), 10.0)
             up = mx.clip(project('up', rows), -10.0, 10.0)
             return project('down', gate * mx.sigmoid(gate) * up)
 
-        expected = run(256)
+        expected = run({})
         mx.eval(expected)
         if not mx.isfinite(expected).all().item():
-            raise RuntimeError('Nonfinite threadgroup reference')
-        for size in groups:
-            for _ in range(3):
-                actual = run(size)
+            raise RuntimeError('Nonfinite banked reference')
+        for name, options in variants.items():
+            for _ in range(5):
+                actual = run(options)
                 mx.eval(actual)
                 if not mx.array_equal(actual, expected).item():
-                    raise RuntimeError(f'Threadgroup output changed: layer {layer}, {mode}, {size}')
+                    raise RuntimeError(f'Banked output changed: layer {layer}, {mode}, {name}')
             guard.check(force=True)
-        samples = {size: [] for size in groups}
+        samples = {name: [] for name in variants}
         schedule = random.Random(42)
         for _ in range(25):
-            order = list(groups)
+            order = list(variants)
             schedule.shuffle(order)
-            for size in order:
+            for name in order:
                 started = time.perf_counter()
-                actual = run(size)
+                actual = run(variants[name])
                 mx.eval(actual)
-                samples[size].append((time.perf_counter() - started) * 1000)
+                samples[name].append((time.perf_counter() - started) * 1000)
                 if not mx.array_equal(actual, expected).item():
-                    raise RuntimeError('Timed threadgroup output changed')
+                    raise RuntimeError('Timed banked output changed')
             guard.check(force=True)
         results.append(dict(mode=mode, identical=True,
-                            variants=[dict(threadgroup_size=size, median_ms=statistics.median(values),
-                                           samples_ms=values) for size, values in samples.items()]))
+                            variants=[dict(**variants[name], median_ms=statistics.median(values),
+                                           samples_ms=values) for name, values in samples.items()]))
     return dict(layer=layer, scenarios=results)
 
 
@@ -242,13 +241,14 @@ def main():
     probes = parser.add_mutually_exclusive_group()
     probes.add_argument('--threadgroups', action='store_true')
     probes.add_argument('--stages', action='store_true')
+    probes.add_argument('--decoder-variants', action='store_true')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('Use a fresh output file')
     mx.set_cache_limit(256 * 1024**2)
     mx.random.seed(42)
     store = ExpertStore(args.model, cache_gib=0.5)
-    if args.threadgroups or args.stages:
+    if args.threadgroups or args.stages or args.decoder_variants:
         from metrics import MemoryGuard
 
         guard = MemoryGuard(4)
@@ -261,8 +261,12 @@ def main():
                 checks.append(check)
                 print(json.dumps(check), flush=True)
                 continue
-            if args.threadgroups:
-                check = compare_threadgroups(store, layer, guard)
+            if args.threadgroups or args.decoder_variants:
+                variants = ({str(size): dict(threadgroup_size=size) for size in (64, 128, 256, 512)}
+                            if args.threadgroups else
+                            {f'{load}-{lookup}': dict(state_load=load, sum_lookup=lookup)
+                             for load, lookup in (('bytes', False), ('u32', False), ('bytes', True), ('u32', True))})
+                check = compare_variants(store, layer, guard, variants)
                 checks.append(check)
                 print(json.dumps(check), flush=True)
                 continue
@@ -275,6 +279,7 @@ def main():
     with args.output.open('x') as output:
         json.dump(dict(scope='Eight cached experts per layer, with a bank packed before timing',
                        threadgroup_probe=args.threadgroups, stages_probe=args.stages,
+                       decoder_variants_probe=args.decoder_variants,
                        raw_scope='Matvec only, with already evaluated rotated inputs; timings are not additive',
                        checks=checks), output, indent=2)
         output.write('\n')
