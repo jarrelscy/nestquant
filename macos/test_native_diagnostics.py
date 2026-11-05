@@ -33,7 +33,7 @@ class NativeDiagnosticsTest(unittest.TestCase):
             finally:
                 trace.close()
 
-    def run_routed(self, trace):
+    def run_routed(self, trace, decoder_loop='inline'):
         planes = {name: ({}, {}) for name in ('gate', 'up', 'down')}
         bank = SimpleNamespace(fully_resident=False, layer=3, select=Mock(return_value=(0, 1)),
                                planes=planes, retain=Mock())
@@ -42,17 +42,25 @@ class NativeDiagnosticsTest(unittest.TestCase):
         hot = SimpleNamespace(phase='decode', route=Mock(return_value=(hot_bank, route)))
         layer = SimpleNamespace(gate=lambda x: (mx.array([[[2, 5]]]), mx.array([[[.25, .75]]])),
                                 shared_experts=lambda x: x * .5)
-        module = PagedExperts(layer, bank, hot, diagnostics=trace)
+        module = PagedExperts(layer, bank, hot, diagnostics=trace, decoder_loop=decoder_loop)
         project = lambda base, meta, x, route, level, **kw: x + 1
-        with patch('native_generate.projection_matvec_banked', side_effect=project), \
+        with patch('native_generate.projection_matvec_banked', side_effect=project) as projection, \
                 patch('native_generate.mx.eval', wraps=mx.eval) as evaluate:
             output = module(mx.ones((1, 1, 4), dtype=mx.float32))
             calls = evaluate.call_count
+            self.assertEqual(projection.call_count, 3)
+            self.assertTrue(all(call.kwargs['loop_mode'] == decoder_loop for call in projection.call_args_list))
         mx.eval(output)
         bank.select.assert_called_once_with((2, 5))
         bank.retain.assert_called_once_with(output)
         hot_bank.retain.assert_called_once_with(output)
         return output, calls
+
+    def test_split_loop_reaches_all_projections_without_extra_evaluation(self):
+        reference, _ = self.run_routed(None)
+        actual, calls = self.run_routed(None, decoder_loop='split')
+        self.assertEqual(calls, 0)
+        self.assertTrue(mx.array_equal(actual, reference).item())
 
     def test_only_sync_mode_adds_a_layer_wait_and_preserves_arithmetic(self):
         reference, calls = self.run_routed(None)

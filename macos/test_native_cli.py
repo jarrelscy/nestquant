@@ -12,6 +12,14 @@ class NativeCliTest(unittest.TestCase):
         return ['native_generate.py', '--model', '/unused/model', '--archive', '/unused/archive',
                 '--backbone', '/unused/backbone', '--output', '/unused/fresh-result.json', *options]
 
+    def test_invalid_decoder_loop_is_rejected_before_loading(self):
+        with patch('sys.argv', self.arguments('--decoder-loop', 'unknown')), \
+                patch.object(native_generate, 'validate') as load, redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as failure:
+                native_generate.main()
+            self.assertEqual(failure.exception.code, 2)
+            load.assert_not_called()
+
     def test_five_percent_requires_refinements_and_six_gib_before_loading(self):
         for options in ([], ['--refinements'], ['--refinement-budget-gib', '6']):
             with self.subTest(options=options), patch('sys.argv', self.arguments('--hot-fraction', '0.05', *options)), \

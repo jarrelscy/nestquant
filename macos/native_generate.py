@@ -23,10 +23,13 @@ from resources import process_usage, system_pressure, vm_snapshot
 
 
 class PagedExperts(nn.Module):
-    def __init__(self, layer, bank, hot, cold_fastpath=False, diagnostics=None):
+    def __init__(self, layer, bank, hot, cold_fastpath=False, diagnostics=None, decoder_loop='inline'):
         super().__init__()
         self.gate = layer.gate
         self.shared_experts = layer.shared_experts
+        if decoder_loop not in ('inline', 'split'):
+            raise ValueError('Use inline or split decoder loops')
+        self._decoder_loop = decoder_loop
         self._bank = bank
         self._hot = hot
         self._forward_to_route_seconds = 0.0
@@ -78,7 +81,8 @@ class PagedExperts(nn.Module):
         def project(name, value):
             return projection_matvec_banked(*planes[name], value, route, 2,
                                             refinements=hot.planes[name] if use_refinements else None,
-                                            refined_route=hot_route if use_refinements else None)
+                                            refined_route=hot_route if use_refinements else None,
+                                            loop_mode=self._decoder_loop)
 
         gate = mx.minimum(project('gate', rows), 10.0)
         up = mx.clip(project('up', rows), -10.0, 10.0)
@@ -115,7 +119,9 @@ class PagedExperts(nn.Module):
 
 
 def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0,
-                 cold_fastpath=False, base_read_mode='scatter', diagnostics=None):
+                 cold_fastpath=False, base_read_mode='scatter', diagnostics=None, decoder_loop='inline'):
+    if decoder_loop not in ('inline', 'split'):
+        raise ValueError('Use inline or split decoder loops')
     if base_read_mode not in ('scatter', 'staged') or (full_base and base_read_mode != 'scatter'):
         raise ValueError('Staged required reads support paged expert-major execution only')
     if base_budget_gib not in ((56,) if full_base else (32, 40, 44)):
@@ -161,7 +167,7 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
                                       base_bytes=sum(item.bytes for item in banks), memory=memory_sample())), flush=True)
             if hot is not None:
                 hot.attach(number, bank.planes)
-            layer.mlp = PagedExperts(layer.mlp, bank, hot, cold_fastpath, diagnostics).eval()
+            layer.mlp = PagedExperts(layer.mlp, bank, hot, cold_fastpath, diagnostics, decoder_loop).eval()
             if diagnostics is not None:
                 diagnostics.record('base_bank_ready', layer=number, base_bytes=sum(item.bytes for item in banks),
                                    memory=memory_sample())
@@ -397,6 +403,7 @@ def main():
     parser.add_argument('--base-prefetch', type=int, choices=(1, 2, 4))
     parser.add_argument('--base-read-mode', choices=('scatter', 'staged'), default='scatter')
     parser.add_argument('--cold-fastpath', action='store_true')
+    parser.add_argument('--decoder-loop', choices=('inline', 'split'), default='inline')
     parser.add_argument('--diagnostics', type=Path)
     parser.add_argument('--profile-sync', action='store_true')
     args = parser.parse_args()
@@ -468,7 +475,7 @@ def main():
         start = time.perf_counter()
         model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
                                     args.full_base, args.base_budget_gib, args.preload_mib_s, args.cold_fastpath,
-                                    args.base_read_mode, diagnostics)
+                                    args.base_read_mode, diagnostics, args.decoder_loop)
         if args.base_prefetch:
             from native_base_prefetch import NativeBasePrefetch
 
@@ -505,7 +512,7 @@ def main():
                           route_timing_includes_device_sync=not args.full_base,
                           route_timing_includes_base_load=False,
                           base_prefetch=base_prefetch.report() if base_prefetch is not None else None,
-                          cold_fastpath=args.cold_fastpath,
+                          cold_fastpath=args.cold_fastpath, decoder_loop=args.decoder_loop,
                           hot_fraction=args.hot_fraction if hot is not None else None)
             if diagnostics is not None:
                 result['diagnostics'] = dict(file=str(args.diagnostics), synchronize_layers=args.profile_sync,
