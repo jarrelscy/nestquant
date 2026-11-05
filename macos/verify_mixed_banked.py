@@ -42,7 +42,13 @@ def compare(store, layer):
                                            refined_route=invalid_route)
         if not mx.isnan(invalid[0]).all().item() or not mx.isfinite(invalid[1:]).all().item():
             raise RuntimeError('Invalid refinement slot did not fail locally')
-        results[name] = relative
+        all_cold = mx.full((len(route),), cold, dtype=mx.uint32)
+        mixed_cold = projection_matvec_banked(base, meta, x, route, 2,
+                                              refinements=upgraded, refined_route=all_cold)
+        base_only = projection_matvec_banked(base, meta, x, route, 2)
+        if not mx.array_equal(mixed_cold, base_only).item():
+            raise RuntimeError(f'All-cold mixed projection differs from base at layer {layer} {name}')
+        results[name] = dict(mixed_relative_rms=relative, all_cold_identical=True)
     return dict(layer=layer, relative_rms=results)
 
 

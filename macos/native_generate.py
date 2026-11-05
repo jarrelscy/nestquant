@@ -22,13 +22,16 @@ from resources import process_usage, system_pressure, vm_snapshot
 
 
 class PagedExperts(nn.Module):
-    def __init__(self, layer, bank, hot):
+    def __init__(self, layer, bank, hot, cold_fastpath=False):
         super().__init__()
         self.gate = layer.gate
         self.shared_experts = layer.shared_experts
         self._bank = bank
         self._hot = hot
         self._forward_to_route_seconds = 0.0
+        self._cold_fastpath = cold_fastpath
+        self._cold_only_calls = 0
+        self._cold_fastpath_calls = 0
 
     def __call__(self, x):
         ids, weights = self.gate(x)
@@ -47,13 +50,19 @@ class PagedExperts(nn.Module):
         if self._hot is not None:
             norms = mx.square(tokens.astype(mx.float32)).sum(axis=-1)
             hot, hot_route = self._hot.route(self._bank.layer, planes, experts, weights, norms)
+        use_refinements = hot is not None
+        if hot is not None and self._hot.phase == 'decode' and not any(expert in hot.slots for expert in experts):
+            self._cold_only_calls += 1
+            if self._cold_fastpath:
+                use_refinements = False
+                self._cold_fastpath_calls += 1
         rounded = tokens.astype(mx.float16).astype(mx.float32)
         rows = mx.broadcast_to(rounded[:, None, :], (tokens.shape[0], ids.shape[-1], width)).reshape(route.size, width)
 
         def project(name, value):
             return projection_matvec_banked(*planes[name], value, route, 2,
-                                            refinements=hot.planes[name] if hot is not None else None,
-                                            refined_route=hot_route)
+                                            refinements=hot.planes[name] if use_refinements else None,
+                                            refined_route=hot_route if use_refinements else None)
 
         gate = mx.minimum(project('gate', rows), 10.0)
         up = mx.clip(project('up', rows), -10.0, 10.0)
@@ -68,7 +77,8 @@ class PagedExperts(nn.Module):
         return output
 
 
-def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0):
+def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0,
+                 cold_fastpath=False):
     if base_budget_gib not in ((56,) if full_base else (32, 40, 44)):
         raise ValueError('Use a 32, 40, or 44 GiB paged budget, or 56 GiB for the full base')
     if full_base and (len(rows) != 42 or any(row != 288 for row in rows)):
@@ -106,7 +116,7 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
                                       base_bytes=sum(item.bytes for item in banks), memory=memory_sample())), flush=True)
             if hot is not None:
                 hot.attach(number, bank.planes)
-            layer.mlp = PagedExperts(layer.mlp, bank, hot).eval()
+            layer.mlp = PagedExperts(layer.mlp, bank, hot, cold_fastpath).eval()
             guard.check(force=True)
         if len(banks) != 42:
             raise RuntimeError('Expected 42 packed routed layers')
@@ -149,10 +159,12 @@ def token_major_prefill(model, chunks, cache, guard, hot):
 
 
 def stats(model):
-    result = dict(forward_to_route_seconds=0.0)
+    result = dict(forward_to_route_seconds=0.0, cold_only_calls=0, cold_fastpath_calls=0)
     for layer in model.layers:
         if isinstance(layer.mlp, PagedExperts):
             result['forward_to_route_seconds'] += layer.mlp._forward_to_route_seconds
+            result['cold_only_calls'] += layer.mlp._cold_only_calls
+            result['cold_fastpath_calls'] += layer.mlp._cold_fastpath_calls
             for name, value in layer.mlp._bank.stats.items():
                 result[name] = result.get(name, 0) + value
     result['process_disk_read_bytes'] = process_usage().diskio_bytesread
@@ -298,6 +310,7 @@ def main():
     parser.add_argument('--verify-prefill', action='store_true')
     parser.add_argument('--fixed-json', type=Path)
     parser.add_argument('--base-prefetch', type=int, choices=(1, 2, 4))
+    parser.add_argument('--cold-fastpath', action='store_true')
     args = parser.parse_args()
     if args.output.exists() or not 0 < args.max_tokens <= 4096:
         parser.error('Use a fresh output and a positive token budget of at most 4096')
@@ -315,6 +328,8 @@ def main():
         parser.error('A refinement budget requires --refinements')
     if args.base_prefetch and (not args.refinements or args.verify_prefill or args.full_base):
         parser.error('Base prediction requires the committed refinement predictor during generation')
+    if args.cold_fastpath and not args.refinements:
+        parser.error('The cold fast path requires a mixed-precision runtime')
     if args.chunk_size * 8 > args.rows or (args.refinements and args.chunk_size * 8 > args.prefill_rows):
         parser.error('The packed row budget must cover the full prefill chunk')
     rows = [args.rows] * 42
@@ -346,7 +361,7 @@ def main():
     try:
         start = time.perf_counter()
         model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
-                                    args.full_base, args.base_budget_gib, args.preload_mib_s)
+                                    args.full_base, args.base_budget_gib, args.preload_mib_s, args.cold_fastpath)
         if args.base_prefetch:
             from native_base_prefetch import NativeBasePrefetch
 
@@ -381,6 +396,7 @@ def main():
                           route_timing_includes_device_sync=not args.full_base,
                           route_timing_includes_base_load=False,
                           base_prefetch=base_prefetch.report() if base_prefetch is not None else None,
+                          cold_fastpath=args.cold_fastpath,
                           hot_fraction=args.hot_fraction if hot is not None else None)
         with args.output.open('x') as output:
             json.dump(result, output, indent=2)
