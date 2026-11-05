@@ -159,18 +159,96 @@ def compare_threadgroups(store, layer, guard):
     return dict(layer=layer, scenarios=results)
 
 
+def compare_stages(store, layer, guard):
+    from unittest.mock import patch
+
+    import decoder
+
+    weights = [store.get(layer, expert, 4) for expert in EXPERTS]
+    route = mx.array((7, 2, 3, 0, 5, 1, 6, 4), dtype=mx.uint32)
+    records = []
+    for name, (_, meta) in weights[0].items():
+        planes = pack([expert[name][0] for expert in weights])
+        inputs = mx.random.normal((8, meta['k'])).astype(mx.float16).astype(mx.float32)
+        mx.eval(planes, inputs, route)
+        for mode in ('base', 'refined', 'mixed', 'mixed-cold'):
+            level = 4 if mode == 'refined' else 2
+            refined = (mx.where(mx.arange(8) % 2 == 0, route, mx.array(0xffffffff, dtype=mx.uint32))
+                       if mode == 'mixed' else mx.full((8,), 0xffffffff, dtype=mx.uint32))
+            extra = dict(refinements=planes, refined_route=refined) if mode.startswith('mixed') else {}
+            mx.eval(refined)
+
+            def project(value):
+                return projection_matvec_banked(planes, meta, value, route, level, **extra)
+
+            captured = []
+            factory = decoder._matvec_kernel
+
+            def capture(*args):
+                kernel = factory(*args)
+
+                def invoke(**kwargs):
+                    result = kernel(**kwargs)
+                    captured.append((kernel, kwargs, result))
+                    return result
+
+                return invoke
+
+            with patch.object(decoder, '_matvec_kernel', capture):
+                expected = project(inputs)
+                mx.eval(expected)
+            if len(captured) != 1 or not mx.isfinite(expected).all().item():
+                raise RuntimeError('Projection did not capture one finite matvec')
+            kernel, arguments, partial = captured.pop()
+            mx.eval(arguments['inputs'], partial)
+            compiled = mx.compile(project)
+            calls = dict(full=lambda: project(inputs), raw=lambda: kernel(**arguments)[0],
+                         compiled=lambda: compiled(inputs))
+            outputs = {kind: call() for kind, call in calls.items()}
+            mx.eval(outputs)
+            if (not mx.array_equal(outputs['raw'], partial[0]).item()
+                    or not mx.array_equal(outputs['full'], expected).item()):
+                raise RuntimeError('Raw or full projection output changed')
+            compiled_relative = (mx.linalg.norm(outputs['compiled'] - expected) / mx.linalg.norm(expected)).item()
+            if not compiled_relative < 0.001:
+                raise RuntimeError('Compiled projection exceeds the existing relative-error bound')
+            for call in calls.values():
+                for _ in range(5):
+                    mx.eval(call())
+            samples = {kind: [] for kind in calls}
+            schedule = random.Random(42)
+            for _ in range(25):
+                order = list(calls)
+                schedule.shuffle(order)
+                for kind in order:
+                    started = time.perf_counter()
+                    output = calls[kind]()
+                    mx.eval(output)
+                    samples[kind].append((time.perf_counter() - started) * 1000)
+                    if not mx.array_equal(output, outputs[kind]).item():
+                        raise RuntimeError('Timed projection output changed')
+                guard.check(force=True)
+            records.append(dict(projection=name, mode=mode, compiled_relative_rms=compiled_relative,
+                                compiled_identical=mx.array_equal(outputs['compiled'], expected).item(),
+                                variants={kind: dict(median_ms=statistics.median(values), samples_ms=values)
+                                          for kind, values in samples.items()}))
+    return dict(layer=layer, projections=records)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--threadgroups', action='store_true')
+    probes = parser.add_mutually_exclusive_group()
+    probes.add_argument('--threadgroups', action='store_true')
+    probes.add_argument('--stages', action='store_true')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('Use a fresh output file')
     mx.set_cache_limit(256 * 1024**2)
     mx.random.seed(42)
     store = ExpertStore(args.model, cache_gib=0.5)
-    if args.threadgroups:
+    if args.threadgroups or args.stages:
         from metrics import MemoryGuard
 
         guard = MemoryGuard(4)
@@ -178,6 +256,11 @@ def main():
     try:
         checks = []
         for layer in (3, 44):
+            if args.stages:
+                check = compare_stages(store, layer, guard)
+                checks.append(check)
+                print(json.dumps(check), flush=True)
+                continue
             if args.threadgroups:
                 check = compare_threadgroups(store, layer, guard)
                 checks.append(check)
@@ -191,7 +274,9 @@ def main():
         store.close()
     with args.output.open('x') as output:
         json.dump(dict(scope='Eight cached experts per layer, with a bank packed before timing',
-                       threadgroup_probe=args.threadgroups, checks=checks), output, indent=2)
+                       threadgroup_probe=args.threadgroups, stages_probe=args.stages,
+                       raw_scope='Matvec only, with already evaluated rotated inputs; timings are not additive',
+                       checks=checks), output, indent=2)
         output.write('\n')
 
 
