@@ -61,6 +61,10 @@ class RequiredLayoutTest(unittest.TestCase):
                         with self.assertRaisesRegex(EOFError, 'truncated'):
                             measure_layer(bank, experts, VARIANTS, lambda: None)
                     self.assertTrue(mappings[-1].closed)
+                    with patch('expert_major_base.os.preadv', side_effect=OSError('read failed')):
+                        with self.assertRaisesRegex(OSError, 'read failed'):
+                            measure_layer(bank, experts, ('shared', 'private', 'scatter', 'staged'), lambda: None)
+                    self.assertTrue(mappings[-1].closed)
                 with self.assertRaises(ValueError):
                     measure_layer(bank, experts, (*VARIANTS, 'private'), lambda: None)
             finally:
