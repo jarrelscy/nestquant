@@ -73,6 +73,40 @@ def build(model, directory):
         store.close()
 
 
+def read_bank(directory, layer, reader='mlx'):
+    from safetensors import safe_open
+
+    file, sidecar = paths(directory, layer)
+    evidence = json.loads(sidecar.read_text())
+    if evidence['revision'] != REVISION or evidence['state'] != fingerprint(file):
+        raise RuntimeError(f'Resident archive changed: {file.name}')
+    if reader == 'mlx':
+        values, meta = mx.load(file, format='safetensors', return_metadata=True)
+    elif reader == 'mmap':
+        from mapped_weights import load_mapped
+
+        values, meta = load_mapped(file)
+    elif reader == 'metal':
+        with safe_open(file, framework='mlx', device='mps', backend='pread') as handle:
+            meta = handle.metadata()
+            values = {}
+            for key in handle.keys():
+                values[key] = handle.get_tensor(key)
+                mx.eval(values[key])
+    else:
+        raise ValueError('Unsupported resident bank reader')
+    if (meta['format'], meta['revision'], meta['layer']) != (FORMAT, REVISION, str(layer)):
+        raise RuntimeError(f'Resident archive metadata mismatch: {file.name}')
+    bank = {name: ({}, geometry) for name, geometry in json.loads(meta['geometry']).items()}
+    for key, value in values.items():
+        name, field = key.split('.', 1)
+        mx.eval(value)
+        bank[name][0][field] = value
+    if evidence['state'] != fingerprint(file):
+        raise RuntimeError(f'Resident archive changed during read: {file.name}')
+    return bank
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', required=True, type=Path)

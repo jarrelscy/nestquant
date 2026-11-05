@@ -59,7 +59,8 @@ class PackedExpertBank:
         self.host = {}
         self.previous_output = None
         self.selection_pending = False
-        self.stats = dict(hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0)
+        self.fully_resident = False
+        self.stats = dict(hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0, resident_routes=0)
         self.fd = path.open('rb')
         try:
             fcntl.fcntl(self.fd, fcntl.F_NOCACHE, 1)
@@ -101,6 +102,44 @@ class PackedExpertBank:
                     written += count
             self.stats['read_bytes'] += row_bytes
         self.stats['read_seconds'] += time.perf_counter() - start
+
+    def preload(self, check):
+        if self.rows != 288 or self.slots or self.selection_pending:
+            raise RuntimeError('Preload requires an unused bank with all 288 expert rows')
+        start = time.perf_counter()
+        for target, offset, _ in self.host.values():
+            with memoryview(target).cast('B') as buffer:
+                written = 0
+                while written < buffer.nbytes:
+                    end = min(buffer.nbytes, written + 16 * 1024**2)
+                    count = os.preadv(self.fd.fileno(), [buffer[written:end]], offset + written)
+                    if count == 0:
+                        raise EOFError('Packed expert preload ended early')
+                    written += count
+                    self.stats['read_bytes'] += count
+            check()
+        self.stats['read_seconds'] += time.perf_counter() - start
+        checks = []
+        for planes, _ in self.planes.values():
+            for array in planes.values():
+                indices = mx.arange(0, array.size, 16384 // array.itemsize)
+                checks.append(array.reshape(-1)[indices].astype(mx.float32).sum())
+        mx.eval(checks)
+        check()
+        self.slots.update((expert, expert) for expert in range(288))
+        self.free_slots.clear()
+        self.fully_resident = True
+
+    def select_device(self, experts):
+        if not self.fully_resident:
+            raise RuntimeError('Device routing requires a fully loaded base bank')
+        if self.selection_pending:
+            raise RuntimeError('Retain the selected rows\' output before selecting again')
+        if experts.ndim != 1 or experts.dtype != mx.uint32 or experts.size == 0:
+            raise ValueError('Device routes require a nonempty uint32 vector')
+        self.selection_pending = True
+        self.stats['resident_routes'] += experts.size
+        return experts
 
     def select(self, experts):
         if self.selection_pending:
@@ -148,6 +187,7 @@ class PackedExpertBank:
             self.finish()
             mx.synchronize()
         finally:
+            self.fully_resident = False
             self.fd.close()
             self.planes.clear()
             self.host.clear()

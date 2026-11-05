@@ -20,9 +20,6 @@ from packed_expert_bank import PackedExpertBank
 from resources import process_usage
 
 
-BASE_BANK_LIMIT = 32 * 1024**3
-
-
 class PagedExperts(nn.Module):
     def __init__(self, layer, bank, hot):
         super().__init__()
@@ -37,9 +34,12 @@ class PagedExperts(nn.Module):
         width = x.shape[-1]
         tokens = x.reshape(-1, width)
         started = time.perf_counter()
-        experts = tuple(ids.reshape(-1).tolist())
+        if self._bank.fully_resident and self._hot is None:
+            route = self._bank.select_device(ids.reshape(-1).astype(mx.uint32))
+        else:
+            experts = tuple(ids.reshape(-1).tolist())
+            route = mx.array(self._bank.select(experts), dtype=mx.uint32)
         self._forward_to_route_seconds += time.perf_counter() - started
-        route = mx.array(self._bank.select(experts), dtype=mx.uint32)
         planes = self._bank.planes
         hot, hot_route = None, None
         if self._hot is not None:
@@ -66,10 +66,14 @@ class PagedExperts(nn.Module):
         return output
 
 
-def load_runtime(root, backbone, archive, rows, guard, hot):
+def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32):
+    if base_budget_gib not in ((56,) if full_base else (32, 40, 44)):
+        raise ValueError('Use a 32, 40, or 44 GiB paged budget, or 56 GiB for the full base')
+    if full_base and (len(rows) != 42 or any(row != 288 for row in rows)):
+        raise ValueError('Full base residency requires all 288 experts in each routed layer')
     model = load_prepared(root, backbone, lambda name, size: guard.check())
     banks = []
-    remaining = BASE_BANK_LIMIT
+    remaining = base_budget_gib * 1024**3
     try:
         for number, layer in enumerate(model.layers):
             if not isinstance(layer.mlp, RoutedPlaceholder):
@@ -81,6 +85,12 @@ def load_runtime(root, backbone, archive, rows, guard, hot):
             bank = PackedExpertBank(file, number, rows[number - 3], REVISION, remaining)
             banks.append(bank)
             remaining -= bank.bytes
+            if full_base:
+                bank.preload(lambda: guard.check(force=True))
+                if evidence['state'] != fingerprint(file):
+                    raise RuntimeError(f'Packed layer changed during preload: {file.name}')
+                print(json.dumps(dict(event='base_layer_resident', layer=number,
+                                      base_bytes=sum(item.bytes for item in banks), memory=memory_sample())), flush=True)
             if hot is not None:
                 hot.attach(number, bank.planes)
             layer.mlp = PagedExperts(layer.mlp, bank, hot).eval()
@@ -126,7 +136,8 @@ def token_major_prefill(model, chunks, cache, guard, hot):
 
 
 def stats(model):
-    result = dict(forward_to_route_seconds=0.0, hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0)
+    result = dict(forward_to_route_seconds=0.0, hits=0, misses=0, evictions=0, read_bytes=0,
+                  read_seconds=0.0, resident_routes=0)
     for layer in model.layers:
         if isinstance(layer.mlp, PagedExperts):
             result['forward_to_route_seconds'] += layer.mlp._forward_to_route_seconds
@@ -253,7 +264,9 @@ def main():
     parser.add_argument('--prompt', default='Reply with exactly GLM_RESIDENT_OK and no other text.')
     parser.add_argument('--max-tokens', type=int, default=16)
     parser.add_argument('--chunk-size', type=int, choices=(4, 8, 16), default=4)
-    parser.add_argument('--rows', type=int, choices=(64, 96, 128, 160), default=96)
+    parser.add_argument('--rows', type=int, choices=(64, 96, 128, 160, 192, 224, 288), default=96)
+    parser.add_argument('--full-base', action='store_true')
+    parser.add_argument('--base-budget-gib', type=int, choices=(32, 40, 44, 56), default=32)
     parser.add_argument('--row-plan', type=Path)
     parser.add_argument('--refinements', action='store_true')
     parser.add_argument('--hot-fraction', type=float, choices=(0.01, 0.02, 0.03), default=0.02)
@@ -266,6 +279,10 @@ def main():
         parser.error('Use a fresh output and a positive token budget of at most 4096')
     if args.verify_prefill and args.fixed_json:
         parser.error('The prefill equivalence check does not generate tokens')
+    if args.full_base != (args.rows == 288) or (args.full_base and args.row_plan is not None):
+        parser.error('Full residency requires --full-base --rows 288 and excludes a row plan')
+    if args.full_base != (args.base_budget_gib == 56):
+        parser.error('The full base requires a 56 GiB base budget; paged banks allow at most 44 GiB')
     if args.chunk_size * 8 > args.rows or (args.refinements and args.chunk_size * 8 > args.prefill_rows):
         parser.error('The packed row budget must cover the full prefill chunk')
     rows = [args.rows] * 42
@@ -278,6 +295,8 @@ def main():
     validate(args.model)
     mx.set_cache_limit(256 * 1024**2)
     mx.set_memory_limit(76 * 1024**3)
+    if args.full_base:
+        mx.set_wired_limit(68 * 1024**3)
     guard = MemoryGuard(82)
     config = json.loads((args.model / 'config.json').read_text())['text_config']
     if config['swiglu_limit'] != 10:
@@ -292,7 +311,9 @@ def main():
     banks = []
     try:
         start = time.perf_counter()
-        model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot)
+        model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
+                                    args.full_base, args.base_budget_gib)
+        startup_stats = stats(model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True, trust_remote_code=False)
         template = (Path(__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
         ids = tokenizer.apply_chat_template([{'role': 'user', 'content': args.prompt}], tokenize=True,
@@ -313,7 +334,10 @@ def main():
             result.update(startup_seconds=startup, rows=args.rows, chunk_size=args.chunk_size,
                           rows_by_layer=rows, prefill_order=prefill.__name__, checkpoint_revision=REVISION,
                           backbone_bytes=sum(a.nbytes for _, a in tree_flatten(model.parameters())),
-                          base_bytes=sum(bank.bytes for bank in banks), base_limit_bytes=BASE_BANK_LIMIT,
+                          base_bytes=sum(bank.bytes for bank in banks),
+                          base_limit_bytes=args.base_budget_gib * 1024**3,
+                          full_base=args.full_base, startup_stats=startup_stats,
+                          requested_wired_bytes=68 * 1024**3 if args.full_base else 0,
                           hot_fraction=args.hot_fraction if hot is not None else None)
         with args.output.open('x') as output:
             json.dump(result, output, indent=2)
