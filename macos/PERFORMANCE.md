@@ -2,7 +2,7 @@
 
 Owner: Andru. Measured: 2026-11-04 to 2026-11-05.
 
-Native mixed execution passed one coding check at 4.62 tokens/s. A fixed-token replay reached 3.94 tokens/s, compared with 1.27 tokens/s for the reference path. These are separate workloads. Interactive latency remains high, and the 15–30 tokens/s target remains unmet.
+Native mixed execution passed 10 of 12 coding cases at a median 3.55 decode tokens/s with a 32 GiB base limit. A separate 40 GiB coding case passed at 4.62 tokens/s. A fixed-token replay reached 3.94 tokens/s, compared with 1.27 tokens/s for the reference path. These are different workloads and configurations. Interactive latency remains high, and the 15–30 tokens/s target remains unmet.
 
 Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkpoint: GLM-5.3-Flash NestQuant 1.5/4, revision `4023870a6f2c6097e37fa5d2e54040db64b011e9`.
 
@@ -146,6 +146,10 @@ Each larger profile matched 126 of 129 greedy next-token predictions from the tu
 
 An autoregressive HumanEval/3 check at 40 GiB passed the network-disabled grader. It emitted the same 149 tokens as the earlier 96-row run. Decode increased from 2.04 to 4.62 tokens/s, and prefill fell from 194.49 to 130.66 seconds. This comparison also increased the prefill scratch bank from 64 to 160 rows. Its 51.92 GiB peak stayed at normal pressure with at least 33% reported free memory and no additional system swap-outs. One passing case does not establish general accuracy.
 
+On that coding request, the 2% allocation delivered 10.60% refined calls and 22.75% salience coverage. Delivery of wanted calls was 98.22%. The predictor's top-budget forecasts assigned 24.99% salience versus 22.45% observed across overlapping windows. No predictor parameters were fitted on this request.
+
+The later route timer accidentally included base selection and reads. Those windows must not be added to base-read time or compared with the earlier route-only timer. Complete decode rates and separate read times remain valid. Source `c56076c` restores the original timing boundary. See [the complete replay, coding, and isolation evidence](results/2026-11-05-native-cache-sweep.json).
+
 ### Prefill configuration sweep
 
 Three runs at source `8a162b9` compared supported prefill settings without changing the runtime. Each used 192 base rows, a 40 GiB limit, 2% hot allocation, 29 prompt tokens, and 128 identical forced inputs. The 16-token, 240-row prefill check first matched logits, all 167 cache arrays, and committed predictor state between token-major and layer-major schedules. It compared equal chunk sizes, not 8-token against 16-token numerical equivalence.
@@ -162,9 +166,27 @@ All three replays completed at normal pressure and restored Qwen. The 8/160 cont
 
 A separate 135-token coding request with 192 base rows, 16-token chunks, and 240 scratch rows produced no saved answer. Its last durable sample reported pressure level 2 at a 51.23 GiB peak. The execution handle and child process were absent after interruption, while the receipt still said `running`. The exact exit reason and cleanup timeline were not captured. A live recovery check verified healthy Qwen and normal system pressure. The sweep report preserves this incomplete attempt separately. It supplies no throughput or quality score and prevents treating the short sweep as longer-prompt validation.
 
-On that coding request, the 2% allocation delivered 10.60% refined calls and 22.75% salience coverage. Delivery of wanted calls was 98.22%. The predictor's top-budget forecasts assigned 24.99% salience versus 22.45% observed across overlapping windows. No predictor parameters were fitted on this request.
+### Twelve-case coding subset
 
-The later route timer accidentally included base selection and reads. Those windows must not be added to base-read time or compared with the earlier route-only timer. Complete decode rates and separate read times remain valid. Source `c56076c` restores the original timing boundary. See [the complete replay, coding, and isolation evidence](results/2026-11-05-native-cache-sweep.json).
+Source `8a162b9` passed 10 of 12 fixed HumanEval cases using native mixed execution. Each case ran in a fresh process with 160 base rows, a 32 GiB base limit, 16-token chunks, and 240 prefill rows. The hot allocation remained 2%, asynchronous refinements remained enabled, and predictive base reads remained disabled. Outputs had a 768-token ceiling and used the thinking-off template. These settings preserved the external 84 GiB guard, inner 82 GiB guard, normal-pressure requirement, and 20% reported-free floor.
+
+| Measurement across twelve coding cases | Result |
+|---|---:|
+| Held-out executable checks | 10/12 passed |
+| Median decode rate | 3.546 tokens/s |
+| Decode range | 2.727–4.172 tokens/s |
+| Median first-token latency | 115.807 s |
+| First-token latency range | 80.221–147.136 s |
+| Peak process footprint | 46.02 GiB |
+| Minimum reported free memory | 34% |
+| System swap-out increase, trials and cleanup | 2.125 MiB |
+| Normal-pressure completion and Qwen restoration | 12/12 |
+
+HumanEval/97 failed because the answer applied a final modulo after multiplication. HumanEval/158 reversed the maximum-selection rule and its tie-break. The generated answers completed normally, so these are answer failures rather than truncated outputs. The same twelve cases previously scored 11/12 with the separate EXL3 runtime, which failed only case 97. That comparison changes quantization and execution, so it does not identify the cause of the extra NestQuant failure.
+
+Across 2,192 decode steps, the 242 allocated slots refined 86,879 of 736,512 routed calls (11.80%). They covered 25.23% of squared routing salience and delivered 98.85% of wanted calls. These are aggregate predictor and scheduler measurements, separate from the executable score. Twelve cases do not establish broad coding accuracy, with high confidence about that limit.
+
+The [coding report](results/2026-11-05-native-coding-subset.json) includes every response, token sequence, command, phase counters, coverage report, and source-file hash. The grader used the pinned HumanEval dataset and a network-disabled, read-only container with a 256 MiB limit. Model startup, cold prefill, and decode are reported separately. These coding rates must not be substituted for the fixed-replay rates. System swap-outs also include other processes and cleanup, so they cannot be attributed entirely to inference.
 
 ### Anticipatory base reads
 
