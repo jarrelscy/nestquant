@@ -399,3 +399,5 @@ Conversion and GPU verification enforce a 6 GiB process guard. The local supervi
 The optional `microbench_banked.py --stages` probe compares full, compiled, and raw Metal projection timings. Raw timing uses already evaluated rotated inputs. These timings are not an additive latency ledger. The probe checks output stability and keeps compiled projections outside generation.
 
 Use `microbench_banked.py --decoder-variants` to compare the original integer decoder with packed reads and a sum lookup. The probe checks eight cached experts at layers 3 and 44. It covers base, refined, mixed, and cold modes under the same 4 GiB guards. It does not change generation defaults.
+
+The decoder comparison also includes a cooperative SIMD variant. Each lane group loads a compressed ring once and shares its words through lane shuffles. The byte decoder remains the default.

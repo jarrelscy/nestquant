@@ -1,5 +1,24 @@
 # Mac performance measurements
 
+## Integer decoder variants
+
+The [four-variant component probe](results/2026-11-05-native-decoder-variants.json) retained exact outputs in all 32 variant/scenario pairs. Wider packed reads regressed. The integer sum lookup improved component medians by about 3%. Neither variant is selected by generation.
+
+| Layer and mode | Original | Packed reads | Integer lookup | Packed reads plus lookup |
+|---|---:|---:|---:|---:|
+| 3, base | 1.057 ms | 1.858 ms | 1.028 ms | 1.837 ms |
+| 3, refined | 1.718 ms | 3.492 ms | 1.662 ms | 3.422 ms |
+| 3, mixed | 1.870 ms | 3.011 ms | 1.816 ms | 2.986 ms |
+| 3, mixed-cold | 1.465 ms | 2.244 ms | 1.414 ms | 2.230 ms |
+| 44, base | 1.056 ms | 1.857 ms | 1.023 ms | 1.835 ms |
+| 44, refined | 1.738 ms | 3.508 ms | 1.673 ms | 3.441 ms |
+| 44, mixed | 1.818 ms | 2.981 ms | 1.770 ms | 2.954 ms |
+| 44, mixed-cold | 1.470 ms | 2.236 ms | 1.421 ms | 2.236 ms |
+
+The probe peaked at 733.94 MiB, retained normal pressure, added no swap-outs, and restored Qwen. Confidence is high in these component observations and low in any projected model gain. Fable/high identified an alignment hazard in the earlier uint-pointer draft. The measured commit already replaced it with byte-aligned packed vectors and offset tests. Follow-up review confirmation remains pending.
+
+The next optional variant loads each compressed ring once across a SIMD group. Uniform lane shuffles extract subsequent states from those loaded words. The 90-byte residual tail includes the first two ring bytes in its final word. Independent bit references, all threadgroup sizes, both sign layouts, and mixed GPU outputs passed in the 92-test suite. This remains a component experiment until real weights and measured timing pass.
+
 ## Projection cost probe
 
 The [projection probe](results/2026-11-05-native-projection-stages.json) compared full projections, compiled projections, and captured raw Metal matvec calls. All raw and full outputs remained exact. Compiled outputs also matched exactly in all 24 sampled scenarios. Each variant used five warm-ups and 25 samples in shuffled order.
