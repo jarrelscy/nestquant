@@ -10,6 +10,8 @@ Hardware: Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2. Checkp
 
 A fixed 128-token replay matched the reference store's 5,641 observed decode base misses at 32 GiB. On the same access trace, a 40 GiB cache would have missed 4,817 times. The trace produced the same miss count at 44, 48, and 56 GiB. This run starts cold. It measures one prompt and holds the observed routes fixed. It does not estimate the memory pressure or routing changes of a live larger cache.
 
+An offline audit reconciled both reference traces with their recorded 32 GiB miss and eviction counts. Their decode phases first accessed 4,817 and 4,844 experts that prefill had never used. At 40 GiB, every remaining simulated miss was one of those first accesses. Better eviction cannot remove these cold reads on these traces, with high confidence. Prior residency or accurate prefetch could move them earlier. This result does not establish the optimum for native per-layer banks or different prompts. See [the first-access counts](results/2026-11-05-cache-first-accesses.json).
+
 | Fixed-token reference comparison | Synchronous base | Async base after route selection |
 |---|---:|---:|
 | Decode rate | 1.272 tokens/s | 1.268 tokens/s |
@@ -143,6 +145,22 @@ Both larger profiles completed at normal pressure without additional system swap
 Each larger profile matched 126 of 129 greedy next-token predictions from the tuned baseline. Their forced input tokens were identical. At 40 GiB, refinements covered 15.67% of expert calls and 30.95% of salience. The scheduler delivered 98.62% of wanted calls. These are coverage measurements, not answer-accuracy scores.
 
 An autoregressive HumanEval/3 check at 40 GiB passed the network-disabled grader. It emitted the same 149 tokens as the earlier 96-row run. Decode increased from 2.04 to 4.62 tokens/s, and prefill fell from 194.49 to 130.66 seconds. This comparison also increased the prefill scratch bank from 64 to 160 rows. Its 51.92 GiB peak stayed at normal pressure with at least 33% reported free memory and no additional system swap-outs. One passing case does not establish general accuracy.
+
+### Prefill configuration sweep
+
+Three runs at source `8a162b9` compared supported prefill settings without changing the runtime. Each used 192 base rows, a 40 GiB limit, 2% hot allocation, 29 prompt tokens, and 128 identical forced inputs. The 16-token, 240-row prefill check first matched logits, all 167 cache arrays, and committed predictor state between token-major and layer-major schedules. It compared equal chunk sizes, not 8-token against 16-token numerical equivalence.
+
+| Prefill chunk / scratch rows | First-token latency | Decode tokens/s | Prefill refinement reads | Peak footprint | Minimum reported free |
+|---|---:|---:|---:|---:|---:|
+| 8 / 160 | 52.89 s | 3.095 | 31.86 GiB | 51.33 GiB | 31% |
+| 8 / 240 | 54.67 s | 3.156 | 31.86 GiB | 51.41 GiB | 30% |
+| 16 / 240 | 53.30 s | 3.547 | 31.89 GiB | 51.48 GiB | 31% |
+
+The larger settings did not improve first-token latency on this short prompt. The scratch increase did not reduce refinement bytes. Decode always processes one committed token per step, so its observed speed difference cannot be attributed directly to larger prefill batches. Greedy next-token predictions matched the control at 125/129 and 124/129 positions, respectively. Asynchronous precision and background activity remain confounders.
+
+All three replays completed at normal pressure and restored Qwen. The 8/160 control added 448 KiB of system swap-outs across the run and cleanup. The other two added none. The preceding parity run added 256 KiB while retaining normal pressure. The [sweep report](results/2026-11-05-native-prefill-sweep.json) contains arguments, predictor coverage, memory samples, and hashes of the complete local reports. These short replays do not establish longer-prompt memory safety or task accuracy.
+
+A separate 135-token coding request with 192 base rows, 16-token chunks, and 240 scratch rows produced no saved answer. Its last durable sample reported pressure level 2 at a 51.23 GiB peak. The execution handle and child process were absent after interruption, while the receipt still said `running`. The exact exit reason and cleanup timeline were not captured. A live recovery check verified healthy Qwen and normal system pressure. The sweep report preserves this incomplete attempt separately. It supplies no throughput or quality score and prevents treating the short sweep as longer-prompt validation.
 
 On that coding request, the 2% allocation delivered 10.60% refined calls and 22.75% salience coverage. Delivery of wanted calls was 98.22%. The predictor's top-budget forecasts assigned 24.99% salience versus 22.45% observed across overlapping windows. No predictor parameters were fitted on this request.
 
