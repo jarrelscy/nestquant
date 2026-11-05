@@ -82,6 +82,11 @@ def read_bank(directory, layer, reader='mlx'):
         raise RuntimeError(f'Resident archive changed: {file.name}')
     if reader == 'mlx':
         values, meta = mx.load(file, format='safetensors', return_metadata=True)
+    elif reader == 'mlx-nocache':
+        with file.open('rb', buffering=0) as handle:
+            fcntl.fcntl(handle.fileno(), fcntl.F_NOCACHE, 1)
+            values, meta = mx.load(handle, format='safetensors', return_metadata=True)
+            mx.eval(values)
     elif reader == 'mmap':
         from mapped_weights import load_mapped
 

@@ -40,7 +40,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--archive', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--reader', choices=('metal', 'mlx', 'mmap'), default='metal')
+    parser.add_argument('--reader', choices=('metal', 'mlx', 'mlx-nocache', 'mmap'), default='metal')
     parser.add_argument('--wire-base', action='store_true')
     parser.add_argument('--touch-each-layer', action='store_true')
     parser.add_argument('--model', type=Path)
@@ -56,8 +56,8 @@ def main():
     mx.set_cache_limit(256 * 1024**2)
     mx.set_memory_limit(76 * 1024**3)
     if args.wire_base:
-        if args.reader != 'mlx':
-            parser.error('This wired probe is validated only with --reader mlx')
+        if args.reader not in ('mlx', 'mlx-nocache'):
+            parser.error('Use --reader mlx or mlx-nocache for this wired probe')
         mx.set_wired_limit(args.wired_gib * 1024**3)
     banks = []
     bank_bytes = 0
