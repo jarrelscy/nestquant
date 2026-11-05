@@ -1,8 +1,9 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import mlx.core as mx
 import numpy as np
@@ -65,6 +66,25 @@ class PackedExpertBankTest(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(RuntimeError, '288 expert rows'):
                     bank.preload(lambda: None)
+            finally:
+                bank.close()
+
+    def test_guard_failure_does_not_publish_a_partial_preload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'L3.safetensors'
+            mx.save_safetensors(path, {'gate.word': mx.zeros((288, 16384), dtype=mx.int32)}, metadata={
+                'format': 'nestquant-resident-base-v1', 'revision': 'fixture', 'layer': '3',
+                'geometry': json.dumps({'gate': {}}),
+            })
+            bank = PackedExpertBank(path, 3, 288, 'fixture')
+            try:
+                with patch('packed_expert_bank.os.preadv', wraps=os.preadv) as reads:
+                    with self.assertRaisesRegex(MemoryError, 'guard'):
+                        bank.preload(Mock(side_effect=MemoryError('guard')))
+                self.assertEqual(reads.call_count, 1)
+                self.assertEqual(bank.stats['read_bytes'], 16 * 1024**2)
+                self.assertFalse(bank.fully_resident)
+                self.assertEqual(bank.slots, {})
             finally:
                 bank.close()
 

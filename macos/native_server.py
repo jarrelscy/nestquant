@@ -9,6 +9,7 @@ import signal
 import time
 from uuid import uuid4
 
+from jinja2 import TemplateError
 import mlx.core as mx
 from transformers import AutoTokenizer
 from mlx_vlm.tools import load_tool_module, process_tool_calls
@@ -29,6 +30,15 @@ def parse_request(body):
     if (body.get('stream', False) or body.get('n', 1) != 1 or body.get('temperature', 0) != 0
             or body.get('tool_choice', 'auto') not in ('auto', 'none')):
         raise ValueError('Use one greedy non-streaming completion with auto or no tool selection')
+    supported = {'model', 'messages', 'tools', 'tool_choice', 'stream', 'n', 'temperature',
+                 'max_completion_tokens', 'max_tokens', 'seed', 'top_p', 'frequency_penalty',
+                 'presence_penalty', 'logprobs', 'stop'}
+    if (body.keys() - supported or body.get('top_p', 1) != 1
+            or body.get('frequency_penalty', 0) != 0 or body.get('presence_penalty', 0) != 0
+            or body.get('logprobs', False) not in (False, None) or body.get('stop') not in (None, [])):
+        raise ValueError('Unsupported completion option')
+    if body.get('seed') is not None and type(body['seed']) is not int:
+        raise ValueError('Expected an integer seed for the deterministic greedy mode')
     messages = body.get('messages')
     if not isinstance(messages, list) or not 1 <= len(messages) <= 128:
         raise ValueError('Expected between 1 and 128 messages')
@@ -82,12 +92,16 @@ class Session:
         self.prefix = PrefixCache(self.model, self.hot, 8, boundary=32)
         self.parser = load_tool_module('glm47')
 
-    def completion(self, body):
+    def prepare(self, body):
         messages, tools, limit = parse_request(body)
         ids = self.tokenizer.apply_chat_template(messages, tools=tools, tokenize=True, return_dict=False,
                                                  add_generation_prompt=True, chat_template=self.template)
         if not ids or len(ids) + limit > 4096:
             raise ValueError('Rendered prompt and completion exceed 4096 tokens')
+        return ids, tools, limit
+
+    def completion(self, prepared):
+        ids, tools, limit = prepared
         cache = self.model.make_cache()
         if self.hot is not None:
             self.hot.reset()
@@ -147,6 +161,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, payload):
         response = json.dumps(payload, allow_nan=False).encode()
+        self.reply_bytes(status, response)
+
+    def reply_bytes(self, status, response):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(response)))
@@ -175,14 +192,24 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= MAX_BODY:
                 raise ValueError('Request body exceeds the accepted range')
             body = json.loads(self.rfile.read(length))
-            response = self.server.session.completion(body)
-        except (ValueError, UnicodeError, TimeoutError):
+            prepared = self.server.session.prepare(body)
+        except (ValueError, UnicodeError, TimeoutError, TypeError, TemplateError):
             self.reply(400, {'error': {'message': 'Invalid or unsupported completion request'}})
             return
-        except MemoryError as exc:
-            print(f'Runtime memory guard stopped service: {exc}', flush=True)
-            raise SystemExit(75)
-        self.reply(200, response)
+        try:
+            response = self.server.session.completion(prepared)
+            encoded = json.dumps(response, allow_nan=False).encode()
+        except Exception as exc:
+            print(f'Runtime stopped service after {type(exc).__name__}', flush=True)
+            try:
+                self.reply(500, {'error': {'message': 'Runtime stopped; restart the local service'}})
+            except OSError:
+                pass
+            raise SystemExit(75 if isinstance(exc, MemoryError) else 1) from exc
+        try:
+            self.reply_bytes(200, encoded)
+        except OSError:
+            pass
 
     def log_message(self, format, *args):
         pass

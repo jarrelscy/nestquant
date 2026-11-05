@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import time
 
@@ -17,7 +18,7 @@ from metrics import MemoryGuard
 from native_assets import REVISION, fingerprint, paths
 from native_backbone import RoutedPlaceholder, load_prepared
 from packed_expert_bank import PackedExpertBank
-from resources import process_usage
+from resources import process_usage, system_pressure, vm_snapshot
 
 
 class PagedExperts(nn.Module):
@@ -71,7 +72,9 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
         raise ValueError('Use a 32, 40, or 44 GiB paged budget, or 56 GiB for the full base')
     if full_base and (len(rows) != 42 or any(row != 288 for row in rows)):
         raise ValueError('Full base residency requires all 288 experts in each routed layer')
-    model = load_prepared(root, backbone, lambda name, size: guard.check())
+    if full_base and hot is not None:
+        raise ValueError('Full base residency currently supports base-only execution')
+    model = load_prepared(root, backbone, lambda name, size: guard.check(force=True))
     banks = []
     remaining = base_budget_gib * 1024**3
     try:
@@ -152,7 +155,7 @@ def memory_sample():
     return dict(physical_bytes=usage.phys_footprint, lifetime_physical_peak_bytes=usage.lifetime_max_phys_footprint,
                 resident_bytes=usage.resident_size, wired_bytes=usage.wired_size,
                 mlx_active_bytes=mx.get_active_memory(), mlx_peak_bytes=mx.get_peak_memory(),
-                mlx_cache_bytes=mx.get_cache_memory())
+                mlx_cache_bytes=mx.get_cache_memory(), system_pressure=system_pressure(), system_vm=vm_snapshot())
 
 
 def diff(after, before):
@@ -283,6 +286,8 @@ def main():
         parser.error('Full residency requires --full-base --rows 288 and excludes a row plan')
     if args.full_base != (args.base_budget_gib == 56):
         parser.error('The full base requires a 56 GiB base budget; paged banks allow at most 44 GiB')
+    if args.full_base and args.refinements:
+        parser.error('Full base residency currently supports base-only execution')
     if args.chunk_size * 8 > args.rows or (args.refinements and args.chunk_size * 8 > args.prefill_rows):
         parser.error('The packed row budget must cover the full prefill chunk')
     rows = [args.rows] * 42
@@ -338,6 +343,8 @@ def main():
                           base_limit_bytes=args.base_budget_gib * 1024**3,
                           full_base=args.full_base, startup_stats=startup_stats,
                           requested_wired_bytes=68 * 1024**3 if args.full_base else 0,
+                          residency_refresh_interval_ms=os.environ.get('MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS'),
+                          route_timing_includes_device_sync=not args.full_base,
                           hot_fraction=args.hot_fraction if hot is not None else None)
         with args.output.open('x') as output:
             json.dump(result, output, indent=2)

@@ -1,5 +1,7 @@
 import ctypes
 import os
+import re
+import subprocess
 
 
 class RUsageInfoV4(ctypes.Structure):
@@ -43,3 +45,13 @@ def system_pressure():
                            ctypes.byref(size), None, 0) != 0:
         raise OSError(ctypes.get_errno(), 'Cannot read macOS memory pressure')
     return value.value
+
+
+def vm_snapshot():
+    output = subprocess.check_output(['/usr/bin/vm_stat'], text=True, timeout=3)
+    page_size = re.search(r'page size of (\d+) bytes', output)
+    if page_size is None:
+        raise RuntimeError('Cannot read the system VM page size')
+    counters = dict((name.strip(), int(value)) for name, value in
+                    re.findall(r'^([^:\n]+):\s+(\d+)\.', output, re.MULTILINE))
+    return dict(page_size_bytes=int(page_size.group(1)), counters=counters)

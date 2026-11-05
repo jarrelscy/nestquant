@@ -117,7 +117,7 @@ class PackedExpertBank:
                         raise EOFError('Packed expert preload ended early')
                     written += count
                     self.stats['read_bytes'] += count
-            check()
+                    check()
         self.stats['read_seconds'] += time.perf_counter() - start
         checks = []
         for planes, _ in self.planes.values():
