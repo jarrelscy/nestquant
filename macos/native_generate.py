@@ -383,6 +383,7 @@ def main():
     parser.add_argument('--rows', type=int, choices=(64, 96, 128, 160, 192, 224, 288), default=96)
     parser.add_argument('--full-base', action='store_true')
     parser.add_argument('--full-base-wired-gib', type=int, choices=(0, 32, 56, 68))
+    parser.add_argument('--paged-wired-gib', type=int, choices=(0, 32))
     parser.add_argument('--preload-mib-s', type=int, choices=(0, 256, 512, 1024), default=0)
     parser.add_argument('--base-budget-gib', type=int, choices=(32, 40, 44, 56), default=32)
     parser.add_argument('--row-plan', type=Path)
@@ -419,6 +420,8 @@ def main():
         parser.error('Staged required reads support paged expert-major execution only')
     if not args.full_base and (args.full_base_wired_gib is not None or args.preload_mib_s):
         parser.error('Residency and preload pacing controls require --full-base')
+    if args.full_base and args.paged_wired_gib is not None:
+        parser.error('The paged residency limit excludes --full-base')
     if args.refinement_budget_gib != 4 and not args.refinements:
         parser.error('A refinement budget requires --refinements')
     if args.hot_fraction == 0.05 and (not args.refinements or args.refinement_budget_gib != 6):
@@ -439,8 +442,9 @@ def main():
     validate(args.model)
     mx.set_cache_limit(256 * 1024**2)
     mx.set_memory_limit(76 * 1024**3)
-    wired_gib = (68 if args.full_base_wired_gib is None else args.full_base_wired_gib) if args.full_base else 0
-    if args.full_base:
+    wired_gib = ((68 if args.full_base_wired_gib is None else args.full_base_wired_gib)
+                 if args.full_base else (args.paged_wired_gib or 0))
+    if args.full_base or args.paged_wired_gib is not None:
         mx.set_wired_limit(wired_gib * 1024**3)
     guard = MemoryGuard(82)
     config = json.loads((args.model / 'config.json').read_text())['text_config']
