@@ -307,7 +307,7 @@ This setting changes residency, not expert allocation or process guards. It can 
 
 Add `--threadgroups` to the supervised `microbench_banked.py` command to compare 64, 128, 256, and 512 threads per Metal group. Use a 4 GiB external watchdog. The probe checks layers 3 and 44 with eight cached experts. It covers base, refined, mixed, and all-cold mixed projections. Every candidate must match the 256-thread output exactly before timing and after each timed evaluation. Each scenario warms every candidate three times and measures 25 samples per candidate in a shuffled order. Guard checks and equality checks are outside timing.
 
-The probe preserves each SIMD reduction and all quantized arithmetic. It changes how SIMD groups share a threadgroup. The production runtime keeps 256 threads. All 82 runtime tests passed, including both residual patterns and invalid-route isolation. Real-weight timing remains pending. Component timings do not establish model throughput.
+The probe preserves each SIMD reduction and all quantized arithmetic. It changes how SIMD groups share a threadgroup. The production runtime keeps 256 threads. All 82 runtime tests passed, including both residual patterns and invalid-route isolation. Real-weight checks passed at layers 3 and 44. Timing differences were small and inconsistent, so the runtime keeps 256 threads. The probe peaked at 731.64 MiB, retained normal pressure, added no swap-outs, and restored Qwen. See [the component measurements](results/2026-11-05-native-threadgroups.json). Component timings do not establish model throughput.
 
 ### Loopback chat and prefix reuse
 
