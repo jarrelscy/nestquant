@@ -94,6 +94,22 @@ A precision control reproduced the 1.3086% failure with identical BF16 initializ
 
 In a separate trained layer-zero component probe, median Torch/MPS attention took 1.225 ms. With synchronization around individual fallbacks, the convolution update took 0.213 ms and the recurrent Kimi Delta Attention function took 0.410 ms. Those component windows do not sum to a single ordinary forward. MLX BF16 took 0.756 ms at 0.884% relative RMS difference. MLX affine-8 took 0.587 ms at 1.824%. Affine-4 took 0.450 ms at 19.588% and was rejected. This probe uses 32 recurrent positions and measures one attention layer.
 
+### Controlled preload pacing
+
+Source `88f4064` adds optional pacing after each positional read, with pressure checks before and after every wait. Two independent Max-account Fable/high reviews cleared the control-first protocol after failure evidence was added. All 46 runtime unit tests and six server boundary tests passed. Each trial released idle Qwen and retained the 82 GiB inner guard, 84 GiB external guard, normal-pressure requirement, and 20% reported-free floor.
+
+| Native full-base startup | Failure layer | Peak footprint | Base still unread | Read time | Pacing waits | Minimum reported free |
+|---|---:|---:|---:|---:|---:|---:|
+| No explicit wiring, unpaced | 25 | 39.37 GiB | 26.32 GiB | 6.92 s | 0 s | 44% |
+| No explicit wiring, 512 MiB/s | 24 | 38.91 GiB | 26.65 GiB | 12.31 s | 47.18 s | 46% |
+| 68 GiB residency request, 512 MiB/s | 37 | 55.13 GiB | 10.57 GiB | 12.63 s | 76.72 s | 23% |
+
+Every trial stopped at pressure level 2 before prefill or generation. None reached either process cap. All restored Qwen, preserved the unrelated port forward, and added zero system swap-outs. The failed layer event retains its partial byte count and memory sample. The two inner-guard failures reported `MemoryError: macOS reports memory pressure; stop inference and reduce memory use`. The external supervisor also stopped the unpaced control under pressure.
+
+Pacing engaged but did not make the unwired configuration pass, with high confidence for these trials. At failure, its process resident pages were 6.40 GiB versus a 38.91 GiB physical footprint. The wired trial retained 54.76 GiB of resident pages at a 55.13 GiB footprint. System compressor occupancy and process footprint overlap; the compressor cannot be attributed entirely to unrelated applications. Wiring changed residency materially, but neither combination established full-model feasibility. Sequential background activity limits causal attribution beyond this controlled setting.
+
+The profiles use `--full-base --rows 288 --base-budget-gib 56 --chunk-size 8 --max-tokens 16`. Set `--full-base-wired-gib` and `--preload-mib-s` to the table's values. Keep the host watchdog active. The [pacing report](results/2026-11-05-preload-pacing.json) records complete arguments, per-layer samples, and guard outcomes. Startup `read_seconds` now measures only positional read calls. It excludes checks and pacing, so older whole-preload timings are not directly comparable. These failed trials supply no throughput or quality result.
+
 ### Matched native replay
 
 Each run used the same 29 rendered prompt tokens and the same 128 forced decode inputs. Both native runs used the affine-8 backbone, four-bit prefill, eight-token chunks, 160 refinement scratch rows, and 242 decode refinement slots. The tuned run redistributed the same 6,720 base slots using the first half of the earlier reference trace. The two native reservations differed by about 1.3 MiB because packed correction sizes vary by layer.
