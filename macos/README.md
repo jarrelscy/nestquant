@@ -275,7 +275,7 @@ python macos/probe_required_layout.py --archive "$EXPERT_ARCHIVE" \
   --output "$RESULTS/read-layout.json"
 ```
 
-Use the same 8 GiB external watchdog and 4 GiB inner guard. Logical buffers total 50 expert rows, approximately 236 MiB with this archive. This probe runs without model execution, refinement contention, or concurrent reads. Summaries include only layers where every variant physically reads at least 95% of its requested bytes. A passing byte check does not establish storage comparability. The layout probe has not been benchmarked yet.
+Use the same 8 GiB external watchdog and 4 GiB inner guard. Logical buffers total 50 expert rows, approximately 236 MiB with this archive. This probe runs without model execution, refinement contention, or concurrent reads. Summaries include only layers where every variant physically reads at least 95% of its requested bytes. A passing byte check does not establish storage comparability. The completed run admitted all 42 layers. Median scattered reads took 2.688 ms, versus 0.881 ms for a contiguous read and copy combined. This component result does not establish a model speedup. See [the comparison](PERFORMANCE.md#required-read-diagnostics).
 
 ### Loopback chat and prefix reuse
 

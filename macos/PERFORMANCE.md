@@ -282,7 +282,22 @@ The histogram replay failed under pressure level 2 after 337.5 seconds. It used 
 
 System compressor occupancy rose from 22.73 GiB before the replay to 53.81 GiB at the stop. System swap-outs increased by 83.1875 MiB. These counters cover the whole desktop and do not assign causality to one process. A mid-run process inventory showed substantial browser, Node, virtual-machine, and agent workloads. Their footprints overlap and must not be added as a physical-memory ledger. Qwen was restored and its health endpoint passed. The unchanged full-model replay will not be repeated under these conditions.
 
-Fable recommended separating scatter overhead, destination type, and read contention before adding a pool. The isolated serial read's 0.578 ms median and the preceding model's roughly 2.54 ms mean are different workloads. Their gap motivates a controlled layout comparison, not a promised speedup. The bounded single-layer probe is implemented but unmeasured. See [the evidence](results/2026-11-05-required-read-diagnostics.json) and [probe commands](README.md#required-read-concurrency-probe).
+Fable recommended separating scatter overhead, destination type, and read contention before adding a pool. The isolated serial read's 0.578 ms median and the preceding model's roughly 2.54 ms mean are different workloads. Their gap motivated a controlled layout comparison, not a promised speedup. See [the initial evidence](results/2026-11-05-required-read-diagnostics.json) and [probe commands](README.md#required-read-concurrency-probe).
+
+The layout probe at `ba42314` compared four paths using one 32-row bank at a time. Each layer supplied eight disjoint expert IDs per variant. Variant order rotated across layers, and destination pages were touched before timing. All 42 layers passed the common admission rule: every variant physically read at least 95% of requested bytes. The probe validated 336 complete sampled rows after timing. It did not execute the model, GPU projections, concurrent reads, or the refinement worker.
+
+| Component path | Median read | Mean read | Median read plus copy |
+|---|---:|---:|---:|
+| Existing 24-plane scatter | 2.688 ms | 8.904 ms | 2.688 ms |
+| Contiguous private buffer | 0.640 ms | 0.950 ms | 0.640 ms |
+| Contiguous shared buffer | 0.721 ms | 0.990 ms | 0.721 ms |
+| Private read, then bank copy | 0.683 ms | 0.971 ms | 0.881 ms |
+
+The staged copy itself took 0.095 ms median. Medians of separate intervals do not add to the median combined interval. The staged path reduced mean read-plus-copy time in every layer. Its median paired ratio to scatter was 0.277. Scatter had a long tail: its 90th-percentile read was 25.66 ms. That tail differs from the preceding model workload, so component averages must not replace model timings in a throughput prediction.
+
+Confidence is high in the observed component layout difference and moderate in attributing the model's remaining read delay to the same mechanism. The shared-buffer control stayed near the private-buffer control, which supports scatter overhead as a contributor. Staged reads reuse one private buffer, while the private control uses eight. Bank-slot alignment also differs. These limits matter for small differences, and the probe does not measure contention with GPU execution or refinement reads.
+
+Both independent Max-account Fable/high reviewers approved the probe and a test-only follow-up before launch. All 69 runtime tests and five supervisor tests passed. A proposed cleanup error was not reproduced by the requested OS-read failure fixture; the reviewer withdrew it. No runtime cleanup change was made. The probe's lifetime peak was 197,886,816 bytes (188.72 MiB). Pressure remained at level 1 with at least 70% reported free memory. System swap-outs increased by 512 KiB, and Qwen recovered. The model still uses scattered required reads; this result justifies a bounded staged-read implementation as the next experiment. See [the full layout evidence](results/2026-11-05-required-read-layout.json).
 
 ### Anticipatory base reads
 
