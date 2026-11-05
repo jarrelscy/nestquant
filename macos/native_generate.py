@@ -17,12 +17,13 @@ from decoder import projection_matvec_banked
 from metrics import MemoryGuard
 from native_assets import REVISION, fingerprint, paths
 from native_backbone import RoutedPlaceholder, load_prepared
+from native_diagnostics import NativeDiagnostics
 from packed_expert_bank import BaseReadStaging, PackedExpertBank
 from resources import process_usage, system_pressure, vm_snapshot
 
 
 class PagedExperts(nn.Module):
-    def __init__(self, layer, bank, hot, cold_fastpath=False):
+    def __init__(self, layer, bank, hot, cold_fastpath=False, diagnostics=None):
         super().__init__()
         self.gate = layer.gate
         self.shared_experts = layer.shared_experts
@@ -32,24 +33,39 @@ class PagedExperts(nn.Module):
         self._cold_fastpath = cold_fastpath
         self._cold_only_calls = 0
         self._cold_fastpath_calls = 0
+        self._diagnostics = diagnostics
 
     def __call__(self, x):
+        diagnostic = self._diagnostics
+        measure = diagnostic is not None and diagnostic.synchronize_layers and diagnostic.phase == 'decode'
+        if measure:
+            if self._bank.fully_resident:
+                raise ValueError('Synchronized diagnostics require paged expert banks')
+            entered = time.perf_counter()
         ids, weights = self.gate(x)
         width = x.shape[-1]
         tokens = x.reshape(-1, width)
         started = time.perf_counter()
+        if measure:
+            gate_graph_seconds = started - entered
         if self._bank.fully_resident and self._hot is None:
             route = self._bank.select_device(ids.reshape(-1).astype(mx.uint32))
             self._forward_to_route_seconds += time.perf_counter() - started
         else:
             experts = tuple(ids.reshape(-1).tolist())
             self._forward_to_route_seconds += time.perf_counter() - started
+            if measure:
+                routed_at = time.perf_counter()
             route = mx.array(self._bank.select(experts), dtype=mx.uint32)
+        if measure:
+            selected_at = time.perf_counter()
         planes = self._bank.planes
         hot, hot_route = None, None
         if self._hot is not None:
             norms = mx.square(tokens.astype(mx.float32)).sum(axis=-1)
             hot, hot_route = self._hot.route(self._bank.layer, planes, experts, weights, norms)
+        if measure:
+            refined_at = time.perf_counter()
         use_refinements = hot is not None
         if hot is not None and self._hot.phase == 'decode' and not any(expert in hot.slots for expert in experts):
             self._cold_only_calls += 1
@@ -68,17 +84,38 @@ class PagedExperts(nn.Module):
         up = mx.clip(project('up', rows), -10.0, 10.0)
         routed = project('down', gate * mx.sigmoid(gate) * up).reshape(*ids.shape, width)
         routed = (routed * weights[..., None].astype(mx.float16).astype(mx.float32)).sum(axis=-2)
-        output = routed.astype(x.dtype) + self.shared_experts(x)
+        routed = routed.astype(x.dtype)
+        if measure:
+            expert_graph_at = time.perf_counter()
+        output = routed + self.shared_experts(x)
+        if measure:
+            shared_graph_at = time.perf_counter()
         self._bank.retain(output)
         if hot is not None:
             hot.retain(output)
             if self._hot.phase == 'prefill':
                 mx.eval(output, norms, weights)
+        if measure:
+            evaluate_at = time.perf_counter()
+            mx.eval(output, weights, norms if hot is not None else [])
+            evaluated_at = time.perf_counter()
+            diagnostic.record(
+                'routed_layer', layer=self._bank.layer, expert_ids=list(experts),
+                refined_slots=[hot.slots.get(expert, 0xffffffff) for expert in experts] if hot is not None else None,
+                gate_graph_host_wall_seconds=gate_graph_seconds,
+                route_extraction_wall_seconds=routed_at - started,
+                base_selection_host_wall_seconds=selected_at - routed_at,
+                refinement_route_host_wall_seconds=refined_at - selected_at,
+                expert_graph_host_wall_seconds=expert_graph_at - refined_at,
+                shared_graph_host_wall_seconds=shared_graph_at - expert_graph_at,
+                retain_host_wall_seconds=evaluate_at - shared_graph_at,
+                output_eval_wait_seconds=evaluated_at - evaluate_at,
+                call_wall_seconds=evaluated_at - entered)
         return output
 
 
 def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0,
-                 cold_fastpath=False, base_read_mode='scatter'):
+                 cold_fastpath=False, base_read_mode='scatter', diagnostics=None):
     if base_read_mode not in ('scatter', 'staged') or (full_base and base_read_mode != 'scatter'):
         raise ValueError('Staged required reads support paged expert-major execution only')
     if base_budget_gib not in ((56,) if full_base else (32, 40, 44)):
@@ -89,7 +126,12 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
         raise ValueError('Full base residency currently supports base-only execution')
     if preload_mib_s not in (0, 256, 512, 1024) or (preload_mib_s and not full_base):
         raise ValueError('Preload pacing requires a supported full-base loading rate')
-    model = load_prepared(root, backbone, lambda name, size: guard.check(force=True))
+    def backbone_loaded(name, size):
+        if diagnostics is not None:
+            diagnostics.record('backbone_module_ready', module=name, bytes=size, memory=memory_sample())
+        guard.check(force=True)
+
+    model = load_prepared(root, backbone, backbone_loaded)
     banks = []
     staging = BaseReadStaging() if base_read_mode == 'staged' else None
     remaining = base_budget_gib * 1024**3
@@ -119,7 +161,10 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
                                       base_bytes=sum(item.bytes for item in banks), memory=memory_sample())), flush=True)
             if hot is not None:
                 hot.attach(number, bank.planes)
-            layer.mlp = PagedExperts(layer.mlp, bank, hot, cold_fastpath).eval()
+            layer.mlp = PagedExperts(layer.mlp, bank, hot, cold_fastpath, diagnostics).eval()
+            if diagnostics is not None:
+                diagnostics.record('base_bank_ready', layer=number, base_bytes=sum(item.bytes for item in banks),
+                                   memory=memory_sample())
             guard.check(force=True)
         if len(banks) != 42:
             raise RuntimeError('Expected 42 packed routed layers')
@@ -130,11 +175,13 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
         raise
 
 
-def layer_major_prefill(model, chunks, cache, guard, hot):
+def layer_major_prefill(model, chunks, cache, guard, hot, diagnostics=None):
     hidden = [mx.repeat(model.model.embed_tokens(mx.array([chunk]))[:, :, None],
                         model.config.hc_mult, axis=2) for chunk in chunks]
     indices = [None] * len(chunks)
-    for layer, state in zip(model.layers, cache, strict=True):
+    for number, (layer, state) in enumerate(zip(model.layers, cache, strict=True)):
+        if diagnostics is not None:
+            diagnostics.record('prefill_layer_started', layer=number, memory=memory_sample())
         for i, value in enumerate(hidden):
             if hot is not None:
                 hot.chunk_index = i
@@ -142,6 +189,8 @@ def layer_major_prefill(model, chunks, cache, guard, hot):
             hidden[i], indices[i] = layer(value, mask, state, indices[i])
             mx.eval(hidden[i], indices[i], state.state)
             guard.check()
+        if diagnostics is not None:
+            diagnostics.record('prefill_layer_complete', layer=number, chunks=len(chunks), memory=memory_sample())
     value = model.model.norm(hidden[-1][:, -1:].mean(axis=2))
     logits = model.model.embed_tokens.as_linear(value) if model.config.tie_word_embeddings else model.lm_head(value)
     mx.eval(logits)
@@ -199,20 +248,34 @@ def top_margin(logits):
     return float((pair.max() - pair.min()).item())
 
 
-def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard, forced=None, base_prefetch=None):
+def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard, forced=None, base_prefetch=None,
+             diagnostics=None):
     if base_prefetch is not None and hot is None:
         raise ValueError('Base read-ahead requires a committed predictor')
+    if diagnostics is not None and (prefill is not layer_major_prefill
+                                    or (diagnostics.synchronize_layers and max_tokens > 128)):
+        raise ValueError('Native diagnostics require layer-major prefill and at most 128 synchronized decode steps')
     cache = model.make_cache()
     if hot is not None:
         hot.reset()
     before = stats(model)
     memory = {'loaded': memory_sample()}
+    if diagnostics is not None:
+        diagnostics.set_phase('prefill')
+        diagnostics.record('prefill_started', prompt_tokens=len(ids), memory=memory['loaded'])
     start = time.perf_counter()
-    logits = prefill(model, [ids[i:i + chunk] for i in range(0, len(ids), chunk)], cache, guard, hot)
+    chunks = [ids[i:i + chunk] for i in range(0, len(ids), chunk)]
+    if diagnostics is not None:
+        logits = prefill(model, chunks, cache, guard, hot, diagnostics)
+    else:
+        logits = prefill(model, chunks, cache, guard, hot)
     token = greedy(logits)
     ttft = time.perf_counter() - start
     after_prefill = stats(model)
     memory['after_prefill'] = memory_sample()
+    if diagnostics is not None:
+        diagnostics.record('prefill_complete', memory=memory['after_prefill'])
+        diagnostics.set_phase('decode')
     output = []
     times = []
     greedy_ids = [token]
@@ -224,29 +287,47 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
         output.append(token)
         if forced is None and index + 1 == max_tokens:
             break
+        if diagnostics is not None:
+            diagnostics.begin_step(index)
         start = time.perf_counter()
         if hot is not None:
             hot.begin_decode(token)
         if base_prefetch is not None:
             base_prefetch.begin(hot.predictor.loading_priority())
+        if diagnostics is not None:
+            policy_at = time.perf_counter()
         logits = model(mx.array([[token]]), cache=cache).logits
         mx.eval(logits, [entry.state for entry in cache])
+        if diagnostics is not None:
+            forward_at = time.perf_counter()
         if hot is not None:
             hot.commit([token])
         if base_prefetch is not None:
             base_prefetch.drain()
+        if diagnostics is not None:
+            committed_at = time.perf_counter()
         greedy_ids.append(greedy(logits))
         times.append(time.perf_counter() - start)
         if forced is not None:
             replay_steps.append(dict(ready_mask=hot.readiness_digest() if hot is not None else None,
                                      logit_margin=top_margin(logits)))
         guard.check()
+        if diagnostics is not None:
+            diagnostics.record('decode_step_complete', memory=memory_sample(),
+                               begin_policy_host_wall_seconds=policy_at - start,
+                               forward_and_eval_wall_seconds=forward_at - policy_at,
+                               commit_host_wall_seconds=committed_at - forward_at,
+                               sampling_wall_seconds=start + times[-1] - committed_at,
+                               timed_decode_wall_seconds=times[-1])
     cache_bytes = {}
     for entry in cache:
         name = type(entry).__name__
         cache_bytes[name] = cache_bytes.get(name, 0) + sum(
             array.nbytes for _, array in tree_flatten(entry.state) if isinstance(array, mx.array))
     memory['after_decode'] = memory_sample()
+    if diagnostics is not None:
+        diagnostics.set_phase('complete')
+        diagnostics.record('decode_complete', memory=memory['after_decode'])
     return dict(text=tokenizer.decode(output, skip_special_tokens=True), generated_ids=output,
                 greedy_next_ids=greedy_ids, teacher_forced=forced is not None, prompt_tokens=len(ids),
                 generated_tokens=len(output), ttft_seconds=ttft, decode_tps=len(times) / sum(times) if times else None,
@@ -315,9 +396,17 @@ def main():
     parser.add_argument('--base-prefetch', type=int, choices=(1, 2, 4))
     parser.add_argument('--base-read-mode', choices=('scatter', 'staged'), default='scatter')
     parser.add_argument('--cold-fastpath', action='store_true')
+    parser.add_argument('--diagnostics', type=Path)
+    parser.add_argument('--profile-sync', action='store_true')
     args = parser.parse_args()
     if args.output.exists() or not 0 < args.max_tokens <= 4096:
         parser.error('Use a fresh output and a positive token budget of at most 4096')
+    if args.diagnostics is not None and (args.diagnostics.exists() or args.diagnostics.resolve() == args.output.resolve()):
+        parser.error('Use a fresh diagnostic path separate from the result')
+    if args.diagnostics is not None and (args.token_major or args.verify_prefill):
+        parser.error('Native diagnostics require ordinary layer-major generation')
+    if args.profile_sync and (args.diagnostics is None or args.full_base or args.max_tokens > 128):
+        parser.error('Synchronized diagnostics require a diagnostic file, paged banks, and at most 128 output tokens')
     if args.verify_prefill and args.fixed_json:
         parser.error('The prefill equivalence check does not generate tokens')
     if args.full_base != (args.rows == 288) or (args.full_base and args.row_plan is not None):
@@ -360,17 +449,22 @@ def main():
     eos = json.loads((args.model / 'generation_config.json').read_text())['eos_token_id']
     eos = {eos} if isinstance(eos, int) else set(eos)
     hot = None
-    if args.refinements:
-        from native_refinements import NativeHotRefinements
-
-        hot = NativeHotRefinements(args.model, args.hot_fraction, args.prefill_rows, args.refinement_budget_gib)
+    diagnostics = None
     banks = []
     base_prefetch = None
     try:
+        if args.diagnostics is not None:
+            diagnostics = NativeDiagnostics(args.diagnostics, args.profile_sync)
+        if args.refinements:
+            from native_refinements import NativeHotRefinements
+
+            hot = NativeHotRefinements(args.model, args.hot_fraction, args.prefill_rows, args.refinement_budget_gib)
+            if diagnostics is not None:
+                diagnostics.record('predictor_ready', memory=memory_sample())
         start = time.perf_counter()
         model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
                                     args.full_base, args.base_budget_gib, args.preload_mib_s, args.cold_fastpath,
-                                    args.base_read_mode)
+                                    args.base_read_mode, diagnostics)
         if args.base_prefetch:
             from native_base_prefetch import NativeBasePrefetch
 
@@ -393,7 +487,7 @@ def main():
             prefill = token_major_prefill if args.token_major else layer_major_prefill
             startup = time.perf_counter() - start
             result = generate(model, tokenizer, ids, args.max_tokens, eos, prefill, args.chunk_size, hot, guard, forced,
-                              base_prefetch)
+                              base_prefetch, diagnostics)
             result.update(startup_seconds=startup, rows=args.rows, chunk_size=args.chunk_size,
                           rows_by_layer=rows, prefill_order=prefill.__name__, checkpoint_revision=REVISION,
                           backbone_bytes=sum(a.nbytes for _, a in tree_flatten(model.parameters())),
@@ -409,6 +503,10 @@ def main():
                           base_prefetch=base_prefetch.report() if base_prefetch is not None else None,
                           cold_fastpath=args.cold_fastpath,
                           hot_fraction=args.hot_fraction if hot is not None else None)
+            if diagnostics is not None:
+                result['diagnostics'] = dict(file=str(args.diagnostics), synchronize_layers=args.profile_sync,
+                                             timings_are_diagnostic=True,
+                                             limitation='Instrumentation changes host timing and can change refinement readiness.')
         with args.output.open('x') as output:
             json.dump(result, output, indent=2)
             output.write('\n')
@@ -422,8 +520,12 @@ def main():
                 if hot is not None:
                     hot.close()
         finally:
-            for bank in banks:
-                bank.close()
+            try:
+                for bank in banks:
+                    bank.close()
+            finally:
+                if diagnostics is not None:
+                    diagnostics.close()
 
 
 if __name__ == '__main__':
