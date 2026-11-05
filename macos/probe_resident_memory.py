@@ -57,7 +57,7 @@ def main():
     mx.set_memory_limit(76 * 1024**3)
     if args.wire_base:
         if args.reader != 'mlx':
-            parser.error('--wire-base requires MLX-owned buffers')
+            parser.error('This wired probe is validated only with --reader mlx')
         mx.set_wired_limit(args.wired_gib * 1024**3)
     banks = []
     bank_bytes = 0

@@ -48,10 +48,13 @@ def system_pressure():
 
 
 def vm_snapshot():
-    output = subprocess.check_output(['/usr/bin/vm_stat'], text=True, timeout=3)
+    try:
+        output = subprocess.check_output(['/usr/bin/vm_stat'], text=True, timeout=3, close_fds=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        return dict(error=type(error).__name__)
     page_size = re.search(r'page size of (\d+) bytes', output)
     if page_size is None:
-        raise RuntimeError('Cannot read the system VM page size')
+        return dict(error='Cannot read the system VM page size')
     counters = dict((name.strip(), int(value)) for name, value in
                     re.findall(r'^([^:\n]+):\s+(\d+)\.', output, re.MULTILINE))
     return dict(page_size_bytes=int(page_size.group(1)), counters=counters)
