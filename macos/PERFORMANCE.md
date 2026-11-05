@@ -1,5 +1,20 @@
 # Mac performance measurements
 
+## Cooperative ring result
+
+The [cooperative ring comparison](results/2026-11-05-native-decoder-shuffle.json) retained exact outputs across all 48 variant/scenario pairs. It regressed performance. The original byte decoder remains the generation default.
+
+| Layer and mode | Original | Original with lookup | Cooperative ring | Cooperative ring with lookup |
+|---|---:|---:|---:|---:|
+| 3, base | 1.063 ms | 1.034 ms | 1.720 ms | 1.542 ms |
+| 3, mixed | 1.861 ms | 1.810 ms | 2.961 ms | 2.499 ms |
+| 44, base | 1.050 ms | 1.020 ms | 1.690 ms | 1.534 ms |
+| 44, mixed | 1.823 ms | 1.786 ms | 2.948 ms | 2.486 ms |
+
+The probe peaked at 733.60 MiB, retained normal pressure, added no swap-outs, and restored Qwen. All 93 runtime tests passed. Max-account Fable/high confirmed the alignment correction and reviewed the cooperative plan. Its requested layout guard is implemented. The review did not predict the observed regression reliably. Confidence is high in these component measurements and low in attributing them to a particular compiler instruction sequence without disassembly. No full-model trial used these variants.
+
+The remaining model-level goal is open. The next investigation checks serial-versus-MTP differences in the already downloaded EXL3 alternative, which previously reached the target range. That earlier result is not current safety evidence for the desktop workload. NestQuant remains available with its original decoder.
+
 ## Integer decoder variants
 
 The [four-variant component probe](results/2026-11-05-native-decoder-variants.json) retained exact outputs in all 32 variant/scenario pairs. Wider packed reads regressed. The integer sum lookup improved component medians by about 3%. Neither variant is selected by generation.
