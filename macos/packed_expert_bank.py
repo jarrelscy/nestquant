@@ -67,6 +67,9 @@ class PackedExpertBank:
                           prefetch_hits=0, prefetch_wait_seconds=0.0, prefetch_copy_seconds=0.0,
                           prefetch_read_bytes=0, prefetch_read_seconds=0.0, prefetch_discarded=0,
                           prefetch_cancelled=0, prefetch_errors=0, preload_sleep_seconds=0.0)
+        for bucket in (*range(9), 'ge9'):
+            self.stats[f'miss_batch_{bucket}_calls'] = 0
+            self.stats[f'miss_batch_{bucket}_read_seconds'] = 0.0
         self.fd = path.open('rb')
         try:
             fcntl.fcntl(self.fd, fcntl.F_NOCACHE, 1)
@@ -202,7 +205,10 @@ class PackedExpertBank:
         ordered = tuple(dict.fromkeys(experts))
         if len(ordered) > self.rows or any(type(expert) is not int or not 0 <= expert < 288 for expert in ordered):
             raise ValueError('The routed experts do not fit the packed row bank')
-        if any(expert not in self.slots for expert in ordered):
+        missing = sum(expert not in self.slots for expert in ordered)
+        bucket = missing if missing < 9 else 'ge9'
+        reads_before = self.stats['read_seconds']
+        if missing:
             self.finish()
         wanted = set(ordered)
         for expert in ordered:
@@ -226,6 +232,8 @@ class PackedExpertBank:
             self.stats['misses'] += 1
         if self.prefetch is not None:
             self.prefetch.advance(self.layer)
+        self.stats[f'miss_batch_{bucket}_calls'] += 1
+        self.stats[f'miss_batch_{bucket}_read_seconds'] += self.stats['read_seconds'] - reads_before
         self.selection_pending = True
         return tuple(self.slots[expert] for expert in experts)
 

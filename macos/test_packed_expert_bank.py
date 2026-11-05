@@ -12,6 +12,40 @@ from packed_expert_bank import PackedExpertBank, PackedRefinementBank
 
 
 class PackedExpertBankTest(unittest.TestCase):
+    def test_miss_batches_count_unique_routes_and_attribute_only_required_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'L3.safetensors'
+            weights = mx.arange(288 * 4, dtype=mx.int32).reshape(288, 4)
+            mx.save_safetensors(path, {'gate.word': weights}, metadata={
+                'format': 'nestquant-resident-base-v1', 'revision': 'fixture', 'layer': '3',
+                'geometry': json.dumps({'gate': {}}),
+            })
+            bank = PackedExpertBank(path, 3, 32, 'fixture')
+            ticks = iter(value * .01 for value in range(100))
+            batches = ((1, 2, 2), (2, 1), (3,), (4, 5, 6), tuple(range(7, 16)),
+                       tuple(range(16, 20)), tuple(range(20, 28)))
+            try:
+                with patch('packed_expert_bank.time.perf_counter', side_effect=lambda: next(ticks)):
+                    for experts in batches:
+                        route = bank.select(experts)
+                        actual = bank.planes['gate'][0]['word'][mx.array(route)]
+                        bank.retain(actual)
+                        self.assertTrue(mx.array_equal(actual, weights[mx.array(experts)]).item())
+                for bucket, misses in ((2, 2), (0, 0), (1, 1), (3, 3), ('ge9', 9), (4, 4), (8, 8)):
+                    self.assertEqual(bank.stats[f'miss_batch_{bucket}_calls'], 1)
+                    self.assertAlmostEqual(bank.stats[f'miss_batch_{bucket}_read_seconds'], misses * .01)
+                self.assertEqual(bank.stats['miss_batch_5_calls'], 0)
+                self.assertEqual(bank.stats['miss_batch_6_calls'], 0)
+                self.assertEqual(bank.stats['miss_batch_7_calls'], 0)
+                self.assertEqual(bank.stats['misses'], 27)
+                self.assertAlmostEqual(bank.stats['read_seconds'], .27)
+                before = dict(bank.stats)
+                with self.assertRaises(ValueError):
+                    bank.select((288,))
+                self.assertEqual(bank.stats, before)
+            finally:
+                bank.close()
+
     def test_paced_preload_checks_before_waiting_and_counts_read_time_separately(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'L3.safetensors'
