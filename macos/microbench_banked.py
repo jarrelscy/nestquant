@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+import random
 import statistics
 import time
 
@@ -97,19 +98,91 @@ def compare(store, layer, level):
                 compiled=timed(lambda: (compiled(planes, rows, device_route) * scores[:, None]).sum(axis=0)))
 
 
+def compare_threadgroups(store, layer, guard):
+    weights = [store.get(layer, expert, 4) for expert in EXPERTS]
+    bank = {}
+    for name, (_, meta) in weights[0].items():
+        if any(value[name][1] != meta for value in weights):
+            raise RuntimeError(f'Mismatched bank layout for {name}')
+        bank[name] = pack([value[name][0] for value in weights]), meta
+    mx.eval([array for planes, _ in bank.values() for array in planes.values()])
+    route = mx.array((7, 2, 3, 0, 5, 1, 6, 4), dtype=mx.uint32)
+    rows = mx.random.normal((8, 4096)).astype(mx.float16).astype(mx.float32)
+    mx.eval(route, rows)
+    guard.check(force=True)
+    groups = (64, 128, 256, 512)
+    results = []
+    for mode in ('base', 'refined', 'mixed', 'mixed-cold'):
+        level = 4 if mode == 'refined' else 2
+        refined = (mx.where(mx.arange(8) % 2 == 0, route, mx.array(0xffffffff, dtype=mx.uint32))
+                   if mode == 'mixed' else mx.full((8,), 0xffffffff, dtype=mx.uint32))
+        mx.eval(refined)
+
+        def run(size):
+            def project(name, value):
+                planes, meta = bank[name]
+                extra = dict(refinements=planes, refined_route=refined) if mode.startswith('mixed') else {}
+                return projection_matvec_banked(planes, meta, value, route, level,
+                                                 threadgroup_size=size, **extra)
+
+            gate = mx.minimum(project('gate', rows), 10.0)
+            up = mx.clip(project('up', rows), -10.0, 10.0)
+            return project('down', gate * mx.sigmoid(gate) * up)
+
+        expected = run(256)
+        mx.eval(expected)
+        if not mx.isfinite(expected).all().item():
+            raise RuntimeError('Nonfinite threadgroup reference')
+        for size in groups:
+            for _ in range(3):
+                actual = run(size)
+                mx.eval(actual)
+                if not mx.array_equal(actual, expected).item():
+                    raise RuntimeError(f'Threadgroup output changed: layer {layer}, {mode}, {size}')
+            guard.check(force=True)
+        samples = {size: [] for size in groups}
+        schedule = random.Random(42)
+        for _ in range(25):
+            order = list(groups)
+            schedule.shuffle(order)
+            for size in order:
+                started = time.perf_counter()
+                actual = run(size)
+                mx.eval(actual)
+                samples[size].append((time.perf_counter() - started) * 1000)
+                if not mx.array_equal(actual, expected).item():
+                    raise RuntimeError('Timed threadgroup output changed')
+            guard.check(force=True)
+        results.append(dict(mode=mode, identical=True,
+                            variants=[dict(threadgroup_size=size, median_ms=statistics.median(values),
+                                           samples_ms=values) for size, values in samples.items()]))
+    return dict(layer=layer, scenarios=results)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--threadgroups', action='store_true')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('Use a fresh output file')
     mx.set_cache_limit(256 * 1024**2)
     mx.random.seed(42)
     store = ExpertStore(args.model, cache_gib=0.5)
+    if args.threadgroups:
+        from metrics import MemoryGuard
+
+        guard = MemoryGuard(4)
+        store.memory_check = lambda: guard.check(force=True)
     try:
         checks = []
         for layer in (3, 44):
+            if args.threadgroups:
+                check = compare_threadgroups(store, layer, guard)
+                checks.append(check)
+                print(json.dumps(check), flush=True)
+                continue
             for level in (2, 4):
                 check = compare(store, layer, level)
                 checks.append(check)
@@ -117,7 +190,8 @@ def main():
     finally:
         store.close()
     with args.output.open('x') as output:
-        json.dump(dict(scope='Eight cached experts per layer, with a bank packed before timing', checks=checks), output, indent=2)
+        json.dump(dict(scope='Eight cached experts per layer, with a bank packed before timing',
+                       threadgroup_probe=args.threadgroups, checks=checks), output, indent=2)
         output.write('\n')
 
 

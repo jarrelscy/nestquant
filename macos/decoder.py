@@ -133,16 +133,22 @@ def dense_projection(rings: mx.array, meta: dict, su: mx.array, sv: mx.array,
 
 
 @lru_cache(maxsize=None)
-def _matvec_kernel(base_k: float, residual_k: float):
+def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256):
+    if type(threadgroup_size) is not int or threadgroup_size not in (64, 128, 256, 512):
+        raise ValueError('Use 64, 128, 256, or 512 threads per banked matvec group')
     bka, bmask = PATTERNS[base_k]
     rka, rmask = PATTERNS[residual_k]
+    unit = ('threadgroup_position_in_grid.x' if threadgroup_size == 256 else
+            f'(threadgroup_position_in_grid.x * {threadgroup_size // 32} + simdgroup_index_in_threadgroup) / 8')
+    group = ('simdgroup_index_in_threadgroup' if threadgroup_size == 256 else
+             f'(threadgroup_position_in_grid.x * {threadgroup_size // 32} + simdgroup_index_in_threadgroup) % 8')
     source = f"""
-    uint unit = threadgroup_position_in_grid.x;
+    uint unit = {unit};
     uint row = threadgroup_position_in_grid.y;
     uint expert = BANKED ? expert_ids[row] : 0;
     uint hot = MIXED ? refined_ids[row] : expert;
     bool refined = LEVEL == 4 || (MIXED && hot != 0xffffffffu);
-    uint g = simdgroup_index_in_threadgroup;
+    uint g = {group};
     uint lane = thread_index_in_simdgroup;
     uint flat = order[unit];
     uint chunk = flat / TN;
@@ -195,7 +201,7 @@ def _matvec_kernel(base_k: float, residual_k: float):
     }}
     """
     return mx.fast.metal_kernel(
-        name=f'nq_matvec_{int(base_k * 10000)}_{int(residual_k * 10000)}',
+        name=f'nq_matvec_{int(base_k * 10000)}_{int(residual_k * 10000)}_g{threadgroup_size}',
         input_names=['base', 'residual', 'words', 'variants', 'order', 'x', 'expert_ids', 'refined_ids'],
         output_names=['partial'], source=source, header=HEADER,
         compile_options={'math_mode': 'safe'},
@@ -226,7 +232,10 @@ def projection_matvec(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
 
 def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
                              route: tuple[int, ...] | mx.array, level: int, *,
-                             refinements: dict | None = None, refined_route: mx.array | None = None) -> mx.array:
+                             refinements: dict | None = None, refined_route: mx.array | None = None,
+                             threadgroup_size=256) -> mx.array:
+    if type(threadgroup_size) is not int or threadgroup_size not in (64, 128, 256, 512):
+        raise ValueError('Use 64, 128, 256, or 512 threads per banked matvec group')
     if isinstance(route, mx.array) and (route.ndim != 1 or route.dtype != mx.uint32):
         raise ValueError('Device routes require a vector of uint32 expert IDs')
     rows = len(route)
@@ -279,10 +288,10 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
         valid = (cold | ready) if valid is None else valid & (cold | ready)
     scaled = x * su.astype(mx.float32)
     rotated = mx.hadamard_transform(scaled.reshape(rows, -1, 128)).astype(mx.float16).astype(mx.float32)
-    partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'])(
+    partial = _matvec_kernel(meta['base_K'], meta['res_rule']['K'], threadgroup_size)(
         inputs=[planes['base'], residual, words, planes['var'], order, rotated, expert_ids, refinement_ids],
         template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed)],
-        grid=(tk * tn * 256, rows, 1), threadgroup=(256, 1, 1),
+        grid=(tk * tn * 256, rows, 1), threadgroup=(threadgroup_size, 1, 1),
         output_shapes=[(rows, tn, tk, 16)], output_dtypes=[mx.float32],
     )[0]
     projected = partial.sum(axis=2).reshape(rows, -1, 128)
