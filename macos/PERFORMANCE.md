@@ -208,7 +208,25 @@ Four fixed-token replays alternated 2% and 3% hot allocations at source `52a54ba
 
 The 3% profile increased refined-call and salience coverage in both runs without exceeding the existing 4 GiB refinement budget. Reducing prefill scratch capacity made that allocation possible. All four trials completed at normal pressure and restored Qwen. The roughly 0.7% median throughput difference is smaller than the variation between the controls. These two repetitions do not establish a speed gain, with high confidence about that limitation.
 
-Three-percent allocation is a candidate for answer-quality testing, with moderate confidence. Increased coverage is not evidence that it corrects the coding failures. Keep the documented default until those checks finish. The [complete comparison](results/2026-11-05-native-hot-fractions.json) includes commands, prediction calibration, read counters, readiness digests, and evidence hashes. Forced inputs matched, while greedy predictions and asynchronous precision could differ.
+The [complete comparison](results/2026-11-05-native-hot-fractions.json) includes commands, prediction calibration, read counters, readiness digests, and evidence hashes. Forced inputs matched, while greedy predictions and asynchronous precision could differ.
+
+The subsequent twelve-case coding check at source `e30f77e` also passed 10/12 with 3% hot allocation. It retained 160 base rows, 16-token chunks, and 128 prefill rows. Every case ended normally, retained normal pressure, and restored Qwen. The [three-percent coding report](results/2026-11-05-native-coding-subset-p3.json) includes responses, counters, exact commands, and hashes for each result, receipt, and log.
+
+| Coding measurement | 2% / 240 prefill rows | 3% / 128 prefill rows |
+|---|---:|---:|
+| Executable checks passed | 10/12 | 10/12 |
+| Median decode rate | 3.546 tokens/s | 3.467 tokens/s |
+| Median first-token latency | 115.807 s | 133.543 s |
+| Peak footprint | 46.02 GiB | 46.87 GiB |
+| Actual refined-call coverage | 11.80% | 15.35% |
+| Routing salience coverage | 25.23% | 31.81% |
+| Delivery of wanted calls | 98.85% | 98.28% |
+| Minimum reported free memory | 34% | 34% |
+| Added system swap-outs | 2.125 MiB | 0 |
+
+Both profiles failed cases 97 and 158. At 3%, case 158 selected the maximum unique-character count but still omitted the required lexicographic tie-break. Eight responses had identical token sequences across the profiles. The smaller prefill bank accompanied an increase in aggregate refinement reads from 850.58 to 1,087.59 GB. Different scratch capacity, generated trajectories, and desktop activity prevent attributing the timing difference solely to hot allocation.
+
+Three percent improved measured coverage but did not improve this executable score. Confidence is high about the observed result and low about generalizing twelve cases to broad accuracy. The default remains unchanged.
 
 ### Anticipatory base reads
 

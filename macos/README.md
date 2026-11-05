@@ -2,7 +2,7 @@
 
 This experimental runtime reads the published GLM-5.3-Flash NestQuant 1.5/4 checkpoint. The native path uses a prepared MLX backbone and bounded Metal expert banks. The reference path uses the Transformers text backbone on PyTorch MPS.
 
-**Status, 2026-11-05.** The native path reached 3.82 tokens/s on a fixed 128-token replay with a 40 GiB base budget. A separate native mixed run passed HumanEval/3 at 4.62 tokens/s and 51.92 GiB peak process footprint. Its 149 generated tokens matched the earlier 2.04 tokens/s result. These results remain below the 15-30 tokens/s target. See [measurements and limits](PERFORMANCE.md#larger-bounded-caches).
+**Status, 2026-11-05.** The native 32 GiB base profile passed 10/12 coding cases at 3.55 median decode tokens/s with 2% hot allocation. A 3% profile also passed 10/12, at 3.47 tokens/s and 46.87 GiB peak footprint. Both retained normal pressure and restored the daily model service. These results remain below the 15-30 tokens/s target. See [coding evidence](PERFORMANCE.md#twelve-case-coding-subset) and [the allocation comparison](PERFORMANCE.md#native-hot-allocation-comparison). A separate 40 GiB run passed one coding case at 4.62 tokens/s, but broader safety at that size remains unproven.
 
 The asynchronous path reads refinements in the background and executes the precision that is ready. The grouped reader passed three full-model answer checks and delivered 16.25% actual hot-call coverage. The earlier reader also passed one complete coding task. The unchunked BF16 comparison retains its documented tolerance failure. See the [asynchronous path](ASYNC.md) and [the separate greedy MTP experiment](#greedy-mtp-experiment).
 
