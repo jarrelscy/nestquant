@@ -285,6 +285,18 @@ The base-row budget excludes this separate 16 MiB reservation. The whole-process
 
 Use `--base-read-mode staged` with `verify_expert_major.py` to compare the candidate's GPU projections against the original archive. This verification retains eviction and reload checks. It reports candidate read, copy, and wait counters.
 
+### Optional execution diagnostics
+
+The diagnostic candidate has unit coverage but has not received the required independent reviews or a full-model trial. Do not treat it as a validated performance change.
+
+Add `--diagnostics /absolute/path/trace.jsonl` to a supervised native generation command. Use a fresh path that differs from the result path. The runtime flushes each JSON record. Records identify loaded backbone modules, prepared base banks, prefill layer boundaries, and completed decode steps. Memory records retain process, MLX, compressor, and pressure measurements. A guard stop can therefore leave useful evidence without a completed result file.
+
+Add `--profile-sync` to that diagnostic command to evaluate each routed layer's output during decode. This mode requires paged banks and at most 128 output tokens. It records selected expert IDs, actual refinement slots, and host wall intervals. The intervals cover route extraction, base selection, refinement publication, graph construction, and the explicit output wait. Per-step records also separate policy preparation, model execution, predictor commit, and token selection. Diagnostics require ordinary layer-major generation and exclude the prefill-equivalence command.
+
+The intervals are not pure GPU timings. Base selection can wait for previous GPU use. Refinement publication can wait for another bank. Graph construction can schedule GPU work or wait for allocation. Evaluating the output adds a synchronization boundary and can change refinement readiness. Memory records and flushed writes also add overhead. The result marks its timings as diagnostic. Do not report them as ordinary throughput or sum overlapping model, layer, and read intervals.
+
+The default path adds no layer evaluation or diagnostic file. Existing memory guards remain active. A future reviewed comparison must use a smaller profile after the documented quality-suite pressure stop.
+
 ### Loopback chat and prefix reuse
 
 The experimental native server accepts one greedy, non-streaming text request at a time. It binds to loopback. Its OpenAI-compatible routes require a local model ID and send no requests to OpenAI. The server accepts function schemas and renders them with the pinned chat template. It returns model tool calls for the client to execute.
