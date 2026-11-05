@@ -303,6 +303,12 @@ Add `--paged-wired-gib 32` to request up to 32 GiB of resident MLX allocations d
 
 This setting changes residency, not expert allocation or process guards. It can increase system memory pressure. Keep the external watchdog and normal-pressure requirement active. The option passed 80 runtime tests. A guarded four-run comparison measured a 4.65 tokens/s median with 32 GiB residency, versus 4.09 without residency. The 13.7% gain applies to this fixed-input replay. A subsequent coding answer passed HumanEval/3 at 4.22 tokens/s. All five runs retained normal pressure, added no swap-outs, stayed below 28.23 GiB peak, and restored Qwen. Broader quality remains unmeasured. See [the residency evidence](results/2026-11-05-native-paged-residency.json). See [MLX residency semantics](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html).
 
+### Banked threadgroup probe
+
+Add `--threadgroups` to the supervised `microbench_banked.py` command to compare 64, 128, 256, and 512 threads per Metal group. Use a 4 GiB external watchdog. The probe checks layers 3 and 44 with eight cached experts. It covers base, refined, mixed, and all-cold mixed projections. Every candidate must match the 256-thread output exactly before timing and after each timed evaluation. Each scenario warms every candidate three times and measures 25 samples per candidate in a shuffled order. Guard checks and equality checks are outside timing.
+
+The probe preserves each SIMD reduction and all quantized arithmetic. It changes how SIMD groups share a threadgroup. The production runtime keeps 256 threads. All 82 runtime tests passed, including both residual patterns and invalid-route isolation. Real-weight timing remains pending. Component timings do not establish model throughput.
+
 ### Loopback chat and prefix reuse
 
 The experimental native server accepts one greedy, non-streaming text request at a time. It binds to loopback. Its OpenAI-compatible routes require a local model ID and send no requests to OpenAI. The server accepts function schemas and renders them with the pinned chat template. It returns model tool calls for the client to execute.
