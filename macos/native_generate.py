@@ -291,6 +291,7 @@ def main():
     parser.add_argument('--base-budget-gib', type=int, choices=(32, 40, 44, 56), default=32)
     parser.add_argument('--row-plan', type=Path)
     parser.add_argument('--refinements', action='store_true')
+    parser.add_argument('--refinement-budget-gib', type=int, choices=(4, 6), default=4)
     parser.add_argument('--hot-fraction', type=float, choices=(0.01, 0.02, 0.03), default=0.02)
     parser.add_argument('--prefill-rows', type=int, choices=(64, 128, 160, 192, 240), default=64)
     parser.add_argument('--token-major', action='store_true')
@@ -310,6 +311,8 @@ def main():
         parser.error('Full base residency currently supports base-only execution')
     if not args.full_base and (args.full_base_wired_gib is not None or args.preload_mib_s):
         parser.error('Residency and preload pacing controls require --full-base')
+    if args.refinement_budget_gib != 4 and not args.refinements:
+        parser.error('A refinement budget requires --refinements')
     if args.base_prefetch and (not args.refinements or args.verify_prefill or args.full_base):
         parser.error('Base prediction requires the committed refinement predictor during generation')
     if args.chunk_size * 8 > args.rows or (args.refinements and args.chunk_size * 8 > args.prefill_rows):
@@ -337,7 +340,7 @@ def main():
     if args.refinements:
         from native_refinements import NativeHotRefinements
 
-        hot = NativeHotRefinements(args.model, args.hot_fraction, args.prefill_rows)
+        hot = NativeHotRefinements(args.model, args.hot_fraction, args.prefill_rows, args.refinement_budget_gib)
     banks = []
     base_prefetch = None
     try:

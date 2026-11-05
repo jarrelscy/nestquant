@@ -17,11 +17,13 @@ from prefetch import BoundedReader
 
 
 COLD_SLOT = 0xffffffff
-REFINEMENT_LIMIT = 4 * 1024**3
 
 
 class NativeHotRefinements:
-    def __init__(self, root, fraction, prefill_rows):
+    def __init__(self, root, fraction, prefill_rows, budget_gib=4):
+        if type(budget_gib) is not int or budget_gib not in (4, 6):
+            raise ValueError('Use a 4 or 6 GiB refinement budget')
+        self.budget_bytes = budget_gib * 1024**3
         os.environ.setdefault('NQ_FLASH_JT_PARAMS', json.dumps(dict(mix=0.75, hm=4.0, G=1, half_life=64.0)))
         module, self.staging = staged_predictor()
         self.predictor = module.CommittedPredictor(
@@ -39,8 +41,8 @@ class NativeHotRefinements:
         rows = self.predictor.budgets[layer]
         proposed = PackedRefinementBank.bytes_for(base, rows)
         scratch = max(self.prefill_max_bytes, PackedRefinementBank.bytes_for(base, self.prefill_rows))
-        if proposed + self.reserved_bytes() + scratch + self.worker.budget_bytes > REFINEMENT_LIMIT:
-            raise MemoryError('Native decode, prefill, and staging banks exceed the 4 GiB refinement budget')
+        if proposed + self.reserved_bytes() + scratch + self.worker.budget_bytes > self.budget_bytes:
+            raise MemoryError('Native decode, prefill, and staging banks exceed the refinement budget')
         self.banks[layer] = PackedRefinementBank(base, rows)
         self.prefill_max_bytes = scratch
 
@@ -165,7 +167,7 @@ class NativeHotRefinements:
 
         self.worker.discard(count)
         return dict(bytes_reserved=self.reserved_bytes(), prefill_rows=self.prefill_rows,
-                    prefill_max_bytes=self.prefill_max_bytes, budget_bytes=REFINEMENT_LIMIT,
+                    prefill_max_bytes=self.prefill_max_bytes, budget_bytes=self.budget_bytes,
                     prefill_staging_peak_bytes=self.prefill_peak_bytes,
                     staging_peak_bytes=self.worker.peak_reserved_bytes,
                     predictor_seconds=self.seconds, predictor_memory=predictor_memory(self.predictor),
