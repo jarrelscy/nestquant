@@ -253,6 +253,21 @@ Use `--archive "$EXPERT_ARCHIVE"` with the native paged generator to select this
 
 All 42 converted layers passed byte-for-byte checks over 59,553,531,072 bytes and 756 sampled projection comparisons. Validation included eviction and reload. The check peaked at 519,078,944 bytes of process footprint, retained normal pressure, and restored Qwen. System swap-outs increased by 393,216 bytes during the check and cleanup. These system counters do not attribute swaps to the verifier. See [the component evidence](results/2026-11-05-native-storage-validation.json).
 
+### Required-read concurrency probe
+
+The component probe measures private CPU-buffer reads at widths 1, 2, and 4. It uses the validated expert-major archive and preserves source files. The fixed sequence contains distinct expert rows across all 42 layers. Six trials use widths 1, 2, 4, 4, 2, and 1. Each trial excludes eight warm-up reads.
+
+Keep the external watchdog at 8 GiB. The probe enforces a 4 GiB inner guard and allocates four bounded row buffers. It joins worker threads before closing files, including after failure. Each read checks its length and the first and last 64 bytes. The separate archive verifier supplies complete byte equality.
+
+```sh
+python macos/probe_required_reads.py --archive "$EXPERT_ARCHIVE" --reads 384 \
+  --output "$RESULTS/read-scaling.json"
+```
+
+Active batch time includes thread dispatch, completion, and boundary checks. Wall time also includes memory checks. Neither measure establishes model throughput or the performance of writes into shared GPU banks. This probe has no measured result yet.
+
+Native bank statistics also report `miss_batch_0` through `miss_batch_8` and the `miss_batch_ge9` overflow bucket. Each bucket records successful selection calls and their required-read seconds. Duplicate routed IDs count once. Timing excludes speculative-read waits and waiting for prior GPU use. Decode selects eight experts, so its histogram can support exact projections for different reader widths. Such projections remain estimates until model testing.
+
 ### Loopback chat and prefix reuse
 
 The experimental native server accepts one greedy, non-streaming text request at a time. It binds to loopback. Its OpenAI-compatible routes require a local model ID and send no requests to OpenAI. The server accepts function schemas and renders them with the pinned chat template. It returns model tool calls for the client to execute.
