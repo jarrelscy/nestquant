@@ -9,7 +9,7 @@ from native_assets import FORMAT, REVISION, fingerprint, paths, read_bank
 
 
 class NativeAssetsTest(unittest.TestCase):
-    def test_uncached_file_reader_preserves_arrays_after_close(self):
+    def test_uncached_arrays_survive_source_overwrite_and_close(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             file, sidecar = paths(root, 3)
@@ -22,6 +22,7 @@ class NativeAssetsTest(unittest.TestCase):
             sidecar.write_text(json.dumps({'revision': REVISION, 'state': fingerprint(file)}))
             ordinary = read_bank(root, 3, 'mlx')
             uncached = read_bank(root, 3, 'mlx-nocache')
+            file.write_bytes(bytes(file.stat().st_size))
             file.unlink()
             self.assertEqual(uncached['gate'][1], geometry['gate'])
             for name, value in expected.items():

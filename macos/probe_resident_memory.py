@@ -10,7 +10,7 @@ import mlx.core as mx
 from mlx.utils import tree_flatten
 
 from native_assets import read_bank
-from resources import process_usage, system_pressure
+from resources import process_usage, system_pressure, vm_snapshot
 
 
 def sample(event, bank_bytes, **fields):
@@ -20,7 +20,7 @@ def sample(event, bank_bytes, **fields):
                   resident_bytes=usage.resident_size, wired_bytes=usage.wired_size,
                   mlx_active_bytes=mx.get_active_memory(), mlx_cache_bytes=mx.get_cache_memory(),
                   mlx_peak_bytes=mx.get_peak_memory(), read_bytes=usage.diskio_bytesread,
-                  pressure=system_pressure(), **fields)
+                  pressure=system_pressure(), system_vm=vm_snapshot(), **fields)
     print(json.dumps(record), flush=True)
     return record
 
