@@ -270,6 +270,20 @@ Actual refined-call coverage stayed between 19.90% and 20.11%. Salience coverage
 
 The timing counters attribute about 33.5 seconds of the roughly 50-second prefill to refinement reads. Installation adds about 2.1 seconds and may include waiting for prior GPU work. Publication timing has the same synchronization caveat. These counters can overlap background activity and must not be summed indiscriminately. The 15–30 tokens/s target remains unmet. See [the full comparison](results/2026-11-05-native-storage.json) and [archive validation](results/2026-11-05-native-storage-validation.json).
 
+### Required-read diagnostics
+
+Source `a206d8e` added selection miss histograms and a bounded CPU read probe. Two independent Max-account Fable/high reviewers approved one component sweep and one fixed-input model replay. All 66 runtime tests and five supervisor tests passed before launch.
+
+The component sweep used widths 1, 2, 4, 4, 2, and 1 over the same 384 rows. The first serial trial requested 1.891 GB and physically read 1.897 GB. Its active throughput was 7.83 GB/s, with 0.578 ms median latency per read. Later trials physically read only 0.403 GB each, or 21.3% of requested bytes. Their apparent width gains are cache-confounded and cannot justify an SSD reader pool. Confidence is high in this measurement limitation.
+
+The component's lifetime peak footprint was 49,988,328 bytes. It retained pressure level 1 and at least 72% reported free memory. System swap-outs did not increase, and Qwen recovered.
+
+The histogram replay failed under pressure level 2 after 337.5 seconds. It used the preceding storage profile unchanged: 160 base rows, 32 GiB, chunk 16, prefill 128, 3% hot allocation, and `hm=4`. Peak footprint was 49,862,381,712 bytes (46.44 GiB). Reported free memory never fell below 36%. The external guard reported `MemoryError: Memory guard stopped the run to preserve desktop headroom`. Neither the 84 GiB external cap nor the 82 GiB inner cap was reached. No completed throughput or miss histogram was produced.
+
+System compressor occupancy rose from 22.73 GiB before the replay to 53.81 GiB at the stop. System swap-outs increased by 83.1875 MiB. These counters cover the whole desktop and do not assign causality to one process. A mid-run process inventory showed substantial browser, Node, virtual-machine, and agent workloads. Their footprints overlap and must not be added as a physical-memory ledger. Qwen was restored and its health endpoint passed. The unchanged full-model replay will not be repeated under these conditions.
+
+Fable recommended separating scatter overhead, destination type, and read contention before adding a pool. The isolated serial read's 0.578 ms median and the preceding model's roughly 2.54 ms mean are different workloads. Their gap motivates a controlled layout comparison, not a promised speedup. The bounded single-layer probe is implemented but unmeasured. See [the evidence](results/2026-11-05-required-read-diagnostics.json) and [probe commands](README.md#required-read-concurrency-probe).
+
 ### Anticipatory base reads
 
 Source `0c30ab1` adds an opt-in native worker for predicted base rows. It reuses committed jT/EMA scores without changing the refinement policy. The worker reads private CPU buffers. The main thread installs only required rows after the previous GPU use completes. Missing predictions retain the synchronous fallback. Two independent Max-account Fable/high reviews approved the corrected implementation before testing. All 44 runtime unit tests and six server boundary tests passed.

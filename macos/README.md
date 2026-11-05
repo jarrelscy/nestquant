@@ -264,9 +264,18 @@ python macos/probe_required_reads.py --archive "$EXPERT_ARCHIVE" --reads 384 \
   --output "$RESULTS/read-scaling.json"
 ```
 
-Active batch time includes thread dispatch, completion, and boundary checks. Wall time also includes memory checks. Neither measure establishes model throughput or the performance of writes into shared GPU banks. This probe has no measured result yet.
+Active batch time includes thread dispatch, completion, and boundary checks. Wall time also includes memory checks. Neither measure establishes model throughput or the performance of writes into shared GPU banks. The first completed sweep was cache-confounded: later passes physically read only 21.3% of requested bytes. Its width ratios do not establish SSD scaling. See [the diagnostic results](PERFORMANCE.md#required-read-diagnostics).
 
 Native bank statistics also report `miss_batch_0` through `miss_batch_8` and the `miss_batch_ge9` overflow bucket. Each bucket records successful selection calls and their required-read seconds. Duplicate routed IDs count once. Timing excludes speculative-read waits and waiting for prior GPU use. Decode selects eight experts, so its histogram can support exact projections for different reader widths. Such projections remain estimates until model testing.
+
+The single-layer layout probe compares the actual scattered bank fill with private contiguous, shared contiguous, and staged-copy reads. It uses 32 disjoint expert IDs per layer and rotates variant order. It touches destination pages before timing. After all four variants, it validates two complete rows per variant against the archive. It closes each layer before opening the next.
+
+```sh
+python macos/probe_required_layout.py --archive "$EXPERT_ARCHIVE" \
+  --output "$RESULTS/read-layout.json"
+```
+
+Use the same 8 GiB external watchdog and 4 GiB inner guard. Logical buffers total 50 expert rows, approximately 236 MiB with this archive. This probe runs without model execution, refinement contention, or concurrent reads. Summaries include only layers where every variant physically reads at least 95% of its requested bytes. A passing byte check does not establish storage comparability. The layout probe has not been benchmarked yet.
 
 ### Loopback chat and prefix reuse
 
