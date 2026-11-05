@@ -265,7 +265,8 @@ def main():
                 variants = ({str(size): dict(threadgroup_size=size) for size in (64, 128, 256, 512)}
                             if args.threadgroups else
                             {f'{load}-{lookup}': dict(state_load=load, sum_lookup=lookup)
-                             for load, lookup in (('bytes', False), ('u32', False), ('bytes', True), ('u32', True))})
+                             for load, lookup in (('bytes', False), ('u32', False), ('bytes', True), ('u32', True),
+                                                  ('shuffle', False), ('shuffle', True))})
                 check = compare_variants(store, layer, guard, variants)
                 checks.append(check)
                 print(json.dumps(check), flush=True)

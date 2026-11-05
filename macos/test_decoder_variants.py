@@ -10,11 +10,13 @@ from test_compact_base import compact, fixture
 class DecoderVariantsTest(unittest.TestCase):
     def test_wide_reads_match_circular_bit_reference(self):
         kernel = mx.fast.metal_kernel(
-            name='test_nq_wide_states', input_names=['buffer'], output_names=['ordinary', 'wide'], header=HEADER,
+            name='test_nq_packed_states', input_names=['buffer'], output_names=['ordinary', 'wide', 'shuffled'], header=HEADER,
             source='''uint i = thread_position_in_grid.x;
             if (i >= RINGS * 256) return;
             ordinary[i] = nq_state(buffer, i / 256, i % 256, KA, MASK);
-            wide[i] = nq_state_wide(buffer, i / 256, i % 256, KA, MASK);''')
+            wide[i] = nq_state_wide(buffer, i / 256, i % 256, KA, MASK);
+            uint word = nq_ring_word(buffer, i / 256, thread_index_in_simdgroup, KA, MASK);
+            shuffled[i] = nq_state_shuffled(word, i % 256, KA, MASK);''')
         rng = np.random.default_rng(42)
         for density, (ka, mask) in PATTERNS.items():
             ring_bytes = int(density * 32)
@@ -34,13 +36,14 @@ class DecoderVariantsTest(unittest.TestCase):
                     for offset in range(4):
                         buffer = mx.concatenate([mx.zeros((offset,), dtype=mx.uint8), mx.array(raw.reshape(-1))])
                         mx.eval(buffer)
-                        original, actual = kernel(inputs=[buffer[offset:]],
+                        original, actual, shuffled = kernel(inputs=[buffer[offset:]],
                                                   template=[('RINGS', count), ('KA', ka), ('MASK', mask)],
                                                   grid=(count * 256, 1, 1), threadgroup=(256, 1, 1),
-                                                  output_shapes=[(count * 256,)] * 2, output_dtypes=[mx.uint32] * 2)
+                                                  output_shapes=[(count * 256,)] * 3, output_dtypes=[mx.uint32] * 3)
                         with self.subTest(density=density, count=count, kind=kind, offset=offset):
                             self.assertTrue(mx.array_equal(original, mx.array(expected, dtype=mx.uint32)).item())
                             self.assertTrue(mx.array_equal(actual, original).item())
+                            self.assertTrue(mx.array_equal(shuffled, original).item())
 
     def test_lookup_covers_every_state_exactly(self):
         expected = []
@@ -63,15 +66,19 @@ class DecoderVariantsTest(unittest.TestCase):
                     for compacted in (False, True):
                         selected = dict(planes, var=arrays[f'{name}.var']) if compacted else planes
                         metadata = geometry[name] if compacted else meta
-                        for state_load, lookup in (('u32', False), ('bytes', True), ('u32', True)):
+                        for state_load, lookup, group in [(load, table, group) for load, table in (
+                                ('u32', False), ('bytes', True), ('u32', True), ('shuffle', False), ('shuffle', True))
+                                for group in (64, 128, 256, 512)]:
                             with self.subTest(residual=residual, name=name, level=level, mask=mask,
-                                              compacted=compacted, state_load=state_load, lookup=lookup):
+                                              compacted=compacted, state_load=state_load, lookup=lookup, group=group):
                                 actual = projection_matvec_banked(selected, metadata, inputs, route, level,
-                                                                 state_load=state_load, sum_lookup=lookup, **extra)
+                                                                 state_load=state_load, sum_lookup=lookup,
+                                                                 threadgroup_size=group, **extra)
                                 self.assertTrue(mx.array_equal(actual, expected).item())
                                 invalid = projection_matvec_banked(selected, metadata, inputs,
                                                                   mx.array((4, 0, 2, 1), dtype=mx.uint32), level,
-                                                                  state_load=state_load, sum_lookup=lookup, **extra)
+                                                                  state_load=state_load, sum_lookup=lookup,
+                                                                  threadgroup_size=group, **extra)
                                 self.assertTrue(mx.isnan(invalid[0]).all().item())
                                 self.assertTrue(mx.array_equal(invalid[1:], expected[1:]).item())
 

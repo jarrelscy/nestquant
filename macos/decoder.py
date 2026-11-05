@@ -41,6 +41,25 @@ uint nq_state_wide(Buffer buf, uint ring, uint pos, uint ka, uint mask) {
     if (shift > 16) value |= as_type<uint>(uchar4(words[absolute / 4 + 1])) << (32 - shift);
     return value & 65535;
 }
+template <typename Buffer>
+uint nq_ring_word(Buffer buf, uint ring, uint lane, uint ka, uint mask) {
+    uint bytes = (ka * 256 + popcount(mask) * 16) / 8;
+    uint value = 0;
+    if (lane < (bytes + 3) / 4) {
+        for (uint i = 0; i < 4; ++i)
+            value |= uint(buf[ring * bytes + (lane * 4 + i) % bytes]) << (i * 8);
+    }
+    return value;
+}
+uint nq_state_shuffled(uint lane_word, uint pos, uint ka, uint mask) {
+    uint bytes = (ka * 256 + popcount(mask) * 16) / 8;
+    uint bit = ka * pos + (mask == 0xAAAA ? pos / 2 :
+        (pos / 16) * popcount(mask) + popcount(mask & ((1u << (pos % 16)) - 1)));
+    uint shift = bit % 32;
+    uint low = simd_shuffle(lane_word, bit / 32);
+    uint high = simd_shuffle(lane_word, (bit / 32 + 1) % ((bytes + 3) / 4));
+    return ((low >> shift) | (shift > 16 ? (high << ((32 - shift) & 31)) : 0)) & 65535;
+}
 '''
 
 
@@ -163,8 +182,8 @@ def dense_projection(rings: mx.array, meta: dict, su: mx.array, sv: mx.array,
 def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256, state_load='bytes'):
     if type(threadgroup_size) is not int or threadgroup_size not in (64, 128, 256, 512):
         raise ValueError('Use 64, 128, 256, or 512 threads per banked matvec group')
-    if state_load not in ('bytes', 'u32'):
-        raise ValueError('Use bytes or u32 packed state reads')
+    if state_load not in ('bytes', 'u32', 'shuffle'):
+        raise ValueError('Use bytes, u32, or shuffle packed state reads')
     bka, bmask = PATTERNS[base_k]
     rka, rmask = PATTERNS[residual_k]
     unit = ('threadgroup_position_in_grid.x' if threadgroup_size == 256 else
@@ -172,6 +191,13 @@ def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256, state
     group = ('simdgroup_index_in_threadgroup' if threadgroup_size == 256 else
              f'(threadgroup_position_in_grid.x * {threadgroup_size // 32} + simdgroup_index_in_threadgroup) % 8')
     state = 'nq_state_wide' if state_load == 'u32' else 'nq_state'
+    preload = (f'uint base_word = nq_ring_word(base, ring, lane, {bka}, {bmask});\n'
+               f'    uint residual_word = refined ? nq_ring_word(residual, refined_ring, lane, {rka}, {rmask}) : 0;'
+               if state_load == 'shuffle' else '')
+    base_state = (f'nq_state_shuffled(base_word, p, {bka}, {bmask})' if state_load == 'shuffle' else
+                  f'{state}(base, ring, p, {bka}, {bmask})')
+    residual_state = (f'nq_state_shuffled(residual_word, p, {rka}, {rmask})' if state_load == 'shuffle' else
+                      f'{state}(residual, refined_ring, p, {rka}, {rmask})')
     source = f"""
     uint unit = {unit};
     uint row = threadgroup_position_in_grid.y;
@@ -206,14 +232,15 @@ def _matvec_kernel(base_k: float, residual_k: float, threadgroup_size=256, state
         a = float(ah) * sign;
         b = float(ch) * sign;
     }}
+    {preload}
     float s0 = 0.0f, s1 = 0.0f;
     for (uint j = 0; j < 8; ++j) {{
         uint p = lane + j * 32;
-        uint bs = {state}(base, ring, p, {bka}, {bmask});
+        uint bs = {base_state};
         uint sb = SUM_LOOKUP ? uint(sum_table[bs]) : nq_sum(bs);
         uint code = sb;
         if (refined) {{
-            uint rs = {state}(residual, refined_ring, p, {rka}, {rmask});
+            uint rs = {residual_state};
             uint sr = SUM_LOOKUP ? uint(sum_table[rs]) : nq_sum(rs);
             code = (mb * sb + n * sr + 128) >> 8;
         }}
@@ -272,7 +299,7 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
                              threadgroup_size=256, state_load='bytes', sum_lookup=False) -> mx.array:
     if type(threadgroup_size) is not int or threadgroup_size not in (64, 128, 256, 512):
         raise ValueError('Use 64, 128, 256, or 512 threads per banked matvec group')
-    if state_load not in ('bytes', 'u32') or type(sum_lookup) is not bool:
+    if state_load not in ('bytes', 'u32', 'shuffle') or type(sum_lookup) is not bool:
         raise ValueError('Unsupported packed decoder variant')
     if isinstance(route, mx.array) and (route.ndim != 1 or route.dtype != mx.uint32):
         raise ValueError('Device routes require a vector of uint32 expert IDs')
