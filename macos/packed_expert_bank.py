@@ -64,7 +64,7 @@ class PackedExpertBank:
         self.stats = dict(hits=0, misses=0, evictions=0, read_bytes=0, read_seconds=0.0, resident_routes=0,
                           prefetch_hits=0, prefetch_wait_seconds=0.0, prefetch_copy_seconds=0.0,
                           prefetch_read_bytes=0, prefetch_read_seconds=0.0, prefetch_discarded=0,
-                          prefetch_cancelled=0, prefetch_errors=0)
+                          prefetch_cancelled=0, prefetch_errors=0, preload_sleep_seconds=0.0)
         self.fd = path.open('rb')
         try:
             fcntl.fcntl(self.fd, fcntl.F_NOCACHE, 1)
@@ -127,22 +127,34 @@ class PackedExpertBank:
         for name, (target, _, _) in self.host.items():
             target[slot] = np.frombuffer(payload[name], dtype=np.uint8)
 
-    def preload(self, check):
+    def preload(self, check, bytes_per_second=0):
         if self.rows != 288 or self.slots or self.selection_pending:
             raise RuntimeError('Preload requires an unused bank with all 288 expert rows')
+        if not math.isfinite(bytes_per_second) or bytes_per_second < 0:
+            raise ValueError('Preload rate must be finite and nonnegative')
         start = time.perf_counter()
+        loaded = 0
         for target, offset, _ in self.host.values():
             with memoryview(target).cast('B') as buffer:
                 written = 0
                 while written < buffer.nbytes:
                     end = min(buffer.nbytes, written + 16 * 1024**2)
+                    read_start = time.perf_counter()
                     count = os.preadv(self.fd.fileno(), [buffer[written:end]], offset + written)
+                    self.stats['read_seconds'] += time.perf_counter() - read_start
                     if count == 0:
                         raise EOFError('Packed expert preload ended early')
                     written += count
+                    loaded += count
                     self.stats['read_bytes'] += count
                     check()
-        self.stats['read_seconds'] += time.perf_counter() - start
+                    if bytes_per_second:
+                        delay = loaded / bytes_per_second - (time.perf_counter() - start)
+                        if delay > 0:
+                            wait_start = time.perf_counter()
+                            time.sleep(delay)
+                            self.stats['preload_sleep_seconds'] += time.perf_counter() - wait_start
+                            check()
         checks = []
         for planes, _ in self.planes.values():
             for array in planes.values():

@@ -12,6 +12,63 @@ from packed_expert_bank import PackedExpertBank, PackedRefinementBank
 
 
 class PackedExpertBankTest(unittest.TestCase):
+    def test_paced_preload_checks_before_waiting_and_counts_read_time_separately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'L3.safetensors'
+            weights = mx.arange(288 * 4, dtype=mx.int32).reshape(288, 4)
+            mx.save_safetensors(path, {'gate.word': weights, 'up.word': weights}, metadata={
+                'format': 'nestquant-resident-base-v1', 'revision': 'fixture', 'layer': '3',
+                'geometry': json.dumps({'gate': {}, 'up': {}}),
+            })
+            bank = PackedExpertBank(path, 3, 288, 'fixture')
+            clock = [0.0]
+            checks = []
+            read = os.preadv
+
+            def delayed_read(*args):
+                clock[0] += 0.25
+                return read(*args)
+
+            def sleep(seconds):
+                self.assertEqual(checks[-1], clock[0])
+                self.assertFalse(bank.fully_resident)
+                clock[0] += seconds
+
+            try:
+                with patch('packed_expert_bank.time.perf_counter', side_effect=lambda: clock[0]), \
+                        patch('packed_expert_bank.time.sleep', side_effect=sleep) as waits, \
+                        patch('packed_expert_bank.os.preadv', side_effect=delayed_read):
+                    bank.preload(lambda: checks.append(clock[0]), bytes_per_second=weights.nbytes)
+                self.assertEqual([call.args[0] for call in waits.call_args_list], [0.75, 0.75])
+                self.assertEqual(bank.stats['read_seconds'], 0.5)
+                self.assertEqual(bank.stats['preload_sleep_seconds'], 1.5)
+                self.assertTrue(mx.array_equal(bank.planes['gate'][0]['word'], weights).item())
+                self.assertTrue(mx.array_equal(bank.planes['up'][0]['word'], weights).item())
+                self.assertTrue(bank.fully_resident)
+            finally:
+                bank.close()
+
+    def test_paced_preload_does_not_wait_after_a_guard_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'L3.safetensors'
+            mx.save_safetensors(path, {'gate.word': mx.zeros((288, 4), dtype=mx.int32)}, metadata={
+                'format': 'nestquant-resident-base-v1', 'revision': 'fixture', 'layer': '3',
+                'geometry': json.dumps({'gate': {}}),
+            })
+            bank = PackedExpertBank(path, 3, 288, 'fixture')
+            try:
+                for invalid in (-1, float('nan'), float('inf')):
+                    with self.assertRaises(ValueError):
+                        bank.preload(lambda: None, invalid)
+                with patch('packed_expert_bank.time.sleep') as sleep:
+                    with self.assertRaisesRegex(MemoryError, 'pressure'):
+                        bank.preload(Mock(side_effect=MemoryError('pressure')), bytes_per_second=1)
+                    sleep.assert_not_called()
+                self.assertFalse(bank.fully_resident)
+                self.assertEqual(bank.slots, {})
+            finally:
+                bank.close()
+
     def test_full_preload_routes_without_further_reads(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'L3.safetensors'

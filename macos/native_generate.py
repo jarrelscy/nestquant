@@ -68,13 +68,15 @@ class PagedExperts(nn.Module):
         return output
 
 
-def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32):
+def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0):
     if base_budget_gib not in ((56,) if full_base else (32, 40, 44)):
         raise ValueError('Use a 32, 40, or 44 GiB paged budget, or 56 GiB for the full base')
     if full_base and (len(rows) != 42 or any(row != 288 for row in rows)):
         raise ValueError('Full base residency requires all 288 experts in each routed layer')
     if full_base and hot is not None:
         raise ValueError('Full base residency currently supports base-only execution')
+    if preload_mib_s not in (0, 256, 512, 1024) or (preload_mib_s and not full_base):
+        raise ValueError('Preload pacing requires a supported full-base loading rate')
     model = load_prepared(root, backbone, lambda name, size: guard.check(force=True))
     banks = []
     remaining = base_budget_gib * 1024**3
@@ -90,10 +92,17 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
             banks.append(bank)
             remaining -= bank.bytes
             if full_base:
-                bank.preload(lambda: guard.check(force=True))
+                try:
+                    bank.preload(lambda: guard.check(force=True), preload_mib_s * 1024**2)
+                except BaseException:
+                    print(json.dumps(dict(event='base_layer_preload_failed', layer=number,
+                                          monotonic_seconds=time.perf_counter(), stats=bank.stats,
+                                          memory=memory_sample())), flush=True)
+                    raise
                 if evidence['state'] != fingerprint(file):
                     raise RuntimeError(f'Packed layer changed during preload: {file.name}')
                 print(json.dumps(dict(event='base_layer_resident', layer=number,
+                                      monotonic_seconds=time.perf_counter(), stats=bank.stats,
                                       base_bytes=sum(item.bytes for item in banks), memory=memory_sample())), flush=True)
             if hot is not None:
                 hot.attach(number, bank.planes)
@@ -277,6 +286,8 @@ def main():
     parser.add_argument('--chunk-size', type=int, choices=(4, 8, 16), default=4)
     parser.add_argument('--rows', type=int, choices=(64, 96, 128, 160, 192, 224, 288), default=96)
     parser.add_argument('--full-base', action='store_true')
+    parser.add_argument('--full-base-wired-gib', type=int, choices=(0, 32, 56, 68))
+    parser.add_argument('--preload-mib-s', type=int, choices=(0, 256, 512, 1024), default=0)
     parser.add_argument('--base-budget-gib', type=int, choices=(32, 40, 44, 56), default=32)
     parser.add_argument('--row-plan', type=Path)
     parser.add_argument('--refinements', action='store_true')
@@ -297,6 +308,8 @@ def main():
         parser.error('The full base requires a 56 GiB base budget; paged banks allow at most 44 GiB')
     if args.full_base and args.refinements:
         parser.error('Full base residency currently supports base-only execution')
+    if not args.full_base and (args.full_base_wired_gib is not None or args.preload_mib_s):
+        parser.error('Residency and preload pacing controls require --full-base')
     if args.base_prefetch and (not args.refinements or args.verify_prefill or args.full_base):
         parser.error('Base prediction requires the committed refinement predictor during generation')
     if args.chunk_size * 8 > args.rows or (args.refinements and args.chunk_size * 8 > args.prefill_rows):
@@ -311,8 +324,9 @@ def main():
     validate(args.model)
     mx.set_cache_limit(256 * 1024**2)
     mx.set_memory_limit(76 * 1024**3)
+    wired_gib = (68 if args.full_base_wired_gib is None else args.full_base_wired_gib) if args.full_base else 0
     if args.full_base:
-        mx.set_wired_limit(68 * 1024**3)
+        mx.set_wired_limit(wired_gib * 1024**3)
     guard = MemoryGuard(82)
     config = json.loads((args.model / 'config.json').read_text())['text_config']
     if config['swiglu_limit'] != 10:
@@ -329,7 +343,7 @@ def main():
     try:
         start = time.perf_counter()
         model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
-                                    args.full_base, args.base_budget_gib)
+                                    args.full_base, args.base_budget_gib, args.preload_mib_s)
         if args.base_prefetch:
             from native_base_prefetch import NativeBasePrefetch
 
@@ -359,7 +373,7 @@ def main():
                           base_bytes=sum(bank.bytes for bank in banks),
                           base_limit_bytes=args.base_budget_gib * 1024**3,
                           full_base=args.full_base, startup_stats=startup_stats,
-                          requested_wired_bytes=68 * 1024**3 if args.full_base else 0,
+                          requested_wired_bytes=wired_gib * 1024**3, preload_mib_s=args.preload_mib_s,
                           residency_refresh_interval_ms=os.environ.get('MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS'),
                           route_timing_includes_device_sync=not args.full_base,
                           route_timing_includes_base_load=False,
