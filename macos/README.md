@@ -287,7 +287,7 @@ Use `--base-read-mode staged` with `verify_expert_major.py` to compare the candi
 
 ### Optional execution diagnostics
 
-The diagnostic candidate has unit coverage but has not received the required independent reviews or a full-model trial. Do not treat it as a validated performance change.
+The owner waived the Fable review gate before three guarded full-model trials. The 64-row ordinary replay measured 4.59 tokens/s. Instrumented coding and synchronized replay measured 4.11 and 3.74 tokens/s respectively. The coding answer passed HumanEval/3. All three runs retained normal pressure, added no swap-outs, and restored Qwen. These diagnostics have no independent Fable approval. See [the diagnostic evidence](results/2026-11-05-native-diagnostics.json).
 
 Add `--diagnostics /absolute/path/trace.jsonl` to a supervised native generation command. Use a fresh path that differs from the result path. The runtime flushes each JSON record. Records identify loaded backbone modules, prepared base banks, prefill layer boundaries, and completed decode steps. Memory records retain process, MLX, compressor, and pressure measurements. A guard stop can therefore leave useful evidence without a completed result file.
 
@@ -295,7 +295,13 @@ Add `--profile-sync` to that diagnostic command to evaluate each routed layer's 
 
 The intervals are not pure GPU timings. Base selection can wait for previous GPU use. Refinement publication can wait for another bank. Graph construction can schedule GPU work or wait for allocation. Evaluating the output adds a synchronization boundary and can change refinement readiness. Memory records and flushed writes also add overhead. The result marks its timings as diagnostic. Do not report them as ordinary throughput or sum overlapping model, layer, and read intervals.
 
-The default path adds no layer evaluation or diagnostic file. Existing memory guards remain active. A future reviewed comparison must use a smaller profile after the documented quality-suite pressure stop.
+The default path adds no layer evaluation or diagnostic file. Existing memory guards remain active. These trials used 64 base rows, eight-token chunks, 3% hot allocation, and a 40 GiB outer watchdog. Their peaks stayed below 28.23 GiB. One passing coding case does not establish broader quality.
+
+### Optional paged residency
+
+Add `--paged-wired-gib 32` to request up to 32 GiB of resident MLX allocations during paged generation. Use `--paged-wired-gib 0` for an explicit zero-residency control. Omit the option to preserve existing allocator behavior. Full-base generation uses its separate residency option and rejects this setting.
+
+This setting changes residency, not expert allocation or process guards. It can increase system memory pressure. Keep the external watchdog and normal-pressure requirement active. The option passed 80 runtime tests. A guarded throughput comparison remains pending. The AI-proposed hypothesis is that residency can reduce compression costs observed during prefill. It is not a demonstrated speed improvement. See [MLX residency semantics](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html).
 
 ### Loopback chat and prefix reuse
 
