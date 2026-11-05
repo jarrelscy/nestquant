@@ -1,5 +1,22 @@
 # Mac performance measurements
 
+## Distinct expert row scaling
+
+The [row-scaling probe](results/2026-11-06-native-row-scaling.json) passed every raw output comparison across layers 3 and 44, three projections, and four precision modes. The full eight-row outputs also matched their 32-row prefixes exactly. The production kernel remained unchanged.
+
+The table reports medians across the six layer/projection medians for each mode. Each underlying median contains 25 shuffled samples after five warm-ups.
+
+| Mode | One row | Eight rows | 32 rows |
+|---|---:|---:|---:|
+| base | 0.166 ms | 0.383 ms | 1.155 ms |
+| refined | 0.198 ms | 0.607 ms | 1.985 ms |
+| mixed | 0.226 ms | 0.629 ms | 2.039 ms |
+| mixed-cold | 0.189 ms | 0.512 ms | 1.607 ms |
+
+Each row selects a distinct expert from the same 32-expert bank. Increasing rows increases both work and the weight footprint. Prefix routes also change cache reuse. These measurements do not isolate arithmetic from memory cost or establish a model throughput ceiling. The one-row mixed case is fully refined; larger mixed counts are half refined. Confidence is high in the component measurements and low in projected model gains.
+
+Peak physical footprint was 1.40 GB, versus the 4 GiB guard. Sampled resident memory peaked at 0.90 GB. Pressure remained normal, reported free memory stayed at least 67%, and no system swap-outs were added. The supervisor restored Qwen after the probe. The separate daily GLM service was then restored with its existing 512K configuration. Two independent Fable/high static reviews found no blockers before execution.
+
 ## Cooperative ring result
 
 The [cooperative ring comparison](results/2026-11-05-native-decoder-shuffle.json) retained exact outputs across all 48 variant/scenario pairs. It regressed performance. The original byte decoder remains the generation default.
