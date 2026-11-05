@@ -1,5 +1,7 @@
 # Mac performance measurements
 
+The compact-backbone full-base probe stopped at pressure level 2 on layer 44. It peaked at 61.43 GiB, retained at least 22% reported free memory, added no system swap-outs, and restored Qwen. The final layer loaded, but the final page sweeps did not complete. The existing 84/82 GiB guards and 56 GiB residency request were unchanged. Confidence is high that this configuration did not fit safely in the observed desktop state. This does not prove that every compact layout is infeasible. See [the stopped probe](results/2026-11-05-native-compact-fullbase-stop.json).
+
 Owner: Andru. Measured: 2026-11-04 to 2026-11-05.
 
 Native mixed execution passed 10 of 12 coding cases at a median 3.55 decode tokens/s with a 32 GiB base limit. A separate 40 GiB coding case passed at 4.62 tokens/s. A fixed-token replay reached 3.94 tokens/s, compared with 1.27 tokens/s for the reference path. These are different workloads and configurations. Interactive latency remains high, and the 15–30 tokens/s target remains unmet.

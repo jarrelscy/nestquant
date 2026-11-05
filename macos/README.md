@@ -378,3 +378,20 @@ Keep prompts, output limits, sampling, chunking, cache budgets, and warm-up proc
 Reports separate logical tensor reads from process-attributed disk reads. The expert-forward timer includes loading. Reader time can overlap execution and must not be added to elapsed time. Process peaks include model loading and earlier requests. A process restart does not clear the operating-system file cache.
 
 These reference benchmarks cover one greedy text sequence with a 4,096-token validation ceiling. The native chat and MTP experiments use separate commands and measurements.
+
+## Lossless resident archive experiment
+
+The optional `nestquant-resident-base-v2` format packs eight binary signs per byte. It also aliases identical gate/up low-rank correction matrices. Conversion rejects nonbinary signs or unequal corrections. It checks source hashes and compares every reconstructed byte after saving each layer. Existing archives remain unchanged.
+
+The compact format supports `native_assets.read_bank` and banked projections. Paged banks and scalar projections reject it. Full-generation integration remains pending. Do not infer safe residency or throughput from the format change.
+
+1. Prepare a separate archive with at least 100 GiB of remaining disk reserve.
+2. Verify real GPU projections against the original archive and scalar references.
+3. Run the supervised resident-memory probe before attempting generation.
+
+```sh
+.venv-macos/bin/python macos/compact_base.py --archive "$BASE_ARCHIVE" --output-dir "$COMPACT_BASE_ARCHIVE"
+.venv-macos/bin/python macos/verify_compact_base.py --model "$MODEL" --archive "$BASE_ARCHIVE" --compact-archive "$COMPACT_BASE_ARCHIVE" --output compact-base-verification.json
+```
+
+Conversion and GPU verification enforce a 6 GiB process guard. The local supervisor uses an 8 GiB outer cap and preserves pressure/free-memory checks. All 88 runtime tests and five supervisor tests passed. The first suite invocation failed four imports because its optional dependency path was absent: `ModuleNotFoundError: No module named 'mlx_vlm'`. The corrected invocation used the existing dependencies without installing packages. No full-model result is claimed for this format yet.
