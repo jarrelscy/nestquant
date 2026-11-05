@@ -277,6 +277,12 @@ python macos/probe_required_layout.py --archive "$EXPERT_ARCHIVE" \
 
 Use the same 8 GiB external watchdog and 4 GiB inner guard. Logical buffers total 50 expert rows, approximately 236 MiB with this archive. This probe runs without model execution, refinement contention, or concurrent reads. Summaries include only layers where every variant physically reads at least 95% of its requested bytes. A passing byte check does not establish storage comparability. The completed run admitted all 42 layers. Median scattered reads took 2.688 ms, versus 0.881 ms for a contiguous read and copy combined. This component result does not establish a model speedup. See [the comparison](PERFORMANCE.md#required-read-diagnostics).
 
+The native generator accepts experimental `--base-read-mode staged` with an expert-major archive. The default remains `scatter`. Staged mode reads each required row into one shared 16 MiB CPU buffer, then copies its planes into the existing bank. A lock protects the complete read-and-copy interval across banks. Previous GPU use still completes before slot replacement. Required reads remain synchronous, and asynchronous refinements retain their existing worker.
+
+The base-row budget excludes this separate 16 MiB reservation. The whole-process guards still cover it. Output records `base_read_mode`, `base_staging_bytes`, `read_copy_seconds`, and `read_staging_wait_seconds`. Required-read timers exclude copying and lock waits. Staged mode rejects field-major archives and full-base preload. The runtime candidate has not received a real-weight validation or model benchmark yet.
+
+Use `--base-read-mode staged` with `verify_expert_major.py` to compare the candidate's GPU projections against the original archive. This verification retains eviction and reload checks. It reports candidate read, copy, and wait counters.
+
 ### Loopback chat and prefix reuse
 
 The experimental native server accepts one greedy, non-streaming text request at a time. It binds to loopback. Its OpenAI-compatible routes require a local model ID and send no requests to OpenAI. The server accepts function schemas and renders them with the pinned chat template. It returns model tool calls for the client to execute.
