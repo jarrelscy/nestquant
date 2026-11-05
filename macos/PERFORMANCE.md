@@ -188,6 +188,28 @@ Across 2,192 decode steps, the 242 allocated slots refined 86,879 of 736,512 rou
 
 The [coding report](results/2026-11-05-native-coding-subset.json) includes every response, token sequence, command, phase counters, coverage report, and source-file hash. The grader used the pinned HumanEval dataset and a network-disabled, read-only container with a 256 MiB limit. Model startup, cold prefill, and decode are reported separately. These coding rates must not be substituted for the fixed-replay rates. System swap-outs also include other processes and cleanup, so they cannot be attributed entirely to inference.
 
+### Native hot-allocation comparison
+
+Four fixed-token replays alternated 2% and 3% hot allocations at source `52a54ba`. Each used 160 base rows, a 32 GiB base limit, 16-token chunks, 128 prefill rows, and the same 128 forced inputs. Predictor parameters remained `mix=0.75`, `hm=4`, `G=1`, and `half_life=64`. Predictive base reads remained disabled. Each profile ran twice under the same guards.
+
+| Measurement | 2% allocation | 3% allocation |
+|---|---:|---:|
+| Allocated hot slots | 242 | 363 |
+| Refinement reservation, including prefill and worker | 2.928 GiB | 3.864 GiB |
+| Individual decode rates | 3.277, 3.484 tokens/s | 3.360, 3.448 tokens/s |
+| Median decode rate | 3.381 tokens/s | 3.404 tokens/s |
+| Median first-token latency | 52.207 s | 51.370 s |
+| Actual refined-call coverage | 15.73% | 20.00% |
+| Routing salience coverage | 31.06% | 38.79% |
+| Delivery of wanted calls | 98.70% | 97.95% |
+| Peak process footprint | 45.85 GiB | 46.80 GiB |
+| Minimum reported free memory | 34% | 35% |
+| Added system swap-outs | 0 | 0 |
+
+The 3% profile increased refined-call and salience coverage in both runs without exceeding the existing 4 GiB refinement budget. Reducing prefill scratch capacity made that allocation possible. All four trials completed at normal pressure and restored Qwen. The roughly 0.7% median throughput difference is smaller than the variation between the controls. These two repetitions do not establish a speed gain, with high confidence about that limitation.
+
+Three-percent allocation is a candidate for answer-quality testing, with moderate confidence. Increased coverage is not evidence that it corrects the coding failures. Keep the documented default until those checks finish. The [complete comparison](results/2026-11-05-native-hot-fractions.json) includes commands, prediction calibration, read counters, readiness digests, and evidence hashes. Forced inputs matched, while greedy predictions and asynchronous precision could differ.
+
 ### Anticipatory base reads
 
 Source `0c30ab1` adds an opt-in native worker for predicted base rows. It reuses committed jT/EMA scores without changing the refinement policy. The worker reads private CPU buffers. The main thread installs only required rows after the previous GPU use completes. Missing predictions retain the synchronous fallback. Two independent Max-account Fable/high reviews approved the corrected implementation before testing. All 44 runtime unit tests and six server boundary tests passed.
