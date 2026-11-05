@@ -1,5 +1,20 @@
 # Mac performance measurements
 
+## Projection cost probe
+
+The [projection probe](results/2026-11-05-native-projection-stages.json) compared full projections, compiled projections, and captured raw Metal matvec calls. All raw and full outputs remained exact. Compiled outputs also matched exactly in all 24 sampled scenarios. Each variant used five warm-ups and 25 samples in shuffled order.
+
+| Layer and mode | Full projection medians, summed | Raw matvec medians, summed | Compiled projection medians, summed |
+|---|---:|---:|---:|
+| 3, base | 1.491 ms | 1.147 ms | 1.392 ms |
+| 3, mixed | 2.274 ms | 1.891 ms | 2.155 ms |
+| 44, base | 1.498 ms | 1.138 ms | 1.402 ms |
+| 44, mixed | 2.311 ms | 1.892 ms | 2.172 ms |
+
+These are three separately evaluated projections. Raw calls use already rotated inputs. The measurements suggest prioritizing the integer decoder, with moderate confidence. They do not establish a model throughput ceiling or isolate additive GPU intervals. The probe peaked at 724.03 MiB, retained normal pressure, added no swap-outs, and restored Qwen.
+
+The next optional component comparison tests packed four-byte reads and a 65,536-entry integer lookup. Both retain the original byte decoder as the default. All 92 runtime tests passed, including every lookup entry, circular bit references, byte-offset views, and mixed projection equality. Apple specifies byte alignment for `packed_uchar4` in [Metal Shading Language, table 2.4](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf). The wider read checks both word ends before loading and falls back near ring boundaries. The model path does not select either variant yet.
+
 The lossless archive experiment reduced base storage from 59,553,531,072 to 58,326,697,152 bytes, saving 1.143 GiB. All 42 layers passed full byte reconstruction, and 24 real GPU comparisons matched exactly. Conversion and GPU verification peaked at 3.26 and 3.37 GiB, retained normal pressure, added no swap-outs, and restored Qwen. The subsequent full-base probe stopped at pressure level 2 on layer 42. Its child recorded a 57.68 GiB lifetime peak, versus 56.54 GiB sampled by the outer watchdog. Another 2.60 GiB of base remained unloaded. No refinements or generation were included. Qwen recovered with zero added swap-outs. Confidence is high in this failure and low in treating its stopping point as a fixed capacity. See [the lossless archive evidence](results/2026-11-05-native-lossless-base.json).
 
 The compact-backbone full-base probe stopped at pressure level 2 on layer 44. It peaked at 61.43 GiB, retained at least 22% reported free memory, added no system swap-outs, and restored Qwen. The final layer loaded, but the final page sweeps did not complete. The existing 84/82 GiB guards and 56 GiB residency request were unchanged. Confidence is high that this configuration did not fit safely in the observed desktop state. This does not prove that every compact layout is infeasible. See [the stopped probe](results/2026-11-05-native-compact-fullbase-stop.json).
