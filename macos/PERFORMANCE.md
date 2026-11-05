@@ -196,6 +196,19 @@ The benchmark excludes SSD reads, packing time, attention, and the predictor. Th
 
 The device route variant produced identical results to the host route in all four component cases. An out-of-range device ID produced a nonfinite result in its own row while valid rows stayed finite. The check uses a bounded gather without waiting for the host to read the IDs. The serial path passed its independent CPU comparison after the alternating-mask offset change. See [device-route results](results/device-expert-projections.json).
 
+### Compiled banked projection
+
+A later probe compiled the existing banked expert function with all variable arrays passed explicitly. The immutable layout permutation remains a captured constant. Compiled and eager outputs matched exactly in all four cases, including changed scales, sign planes, and input vectors. Invalid device routes retained their NaN checks. The compiled agreement threshold was 1e-5 relative RMS.
+
+| Layer and precision | Eager device route | Compiled | Relative speed |
+|---|---:|---:|---:|
+| Layer 3, base | 1.117 ms | 1.155 ms | 0.968x |
+| Layer 3, refined | 1.788 ms | 1.718 ms | 1.041x |
+| Layer 44, base | 1.125 ms | 1.131 ms | 0.994x |
+| Layer 44, refined | 1.806 ms | 1.720 ms | 1.050x |
+
+Compilation did not improve the base path and remains outside generation. Each timing follows five warmups and reports the median of 25 iterations. The first compiled call is recorded separately. Peak process footprint was 0.82 GiB under a 12 GiB external guard. Pressure remained normal, swap-outs did not increase, and Qwen recovered. See the [reviewed microbenchmark evidence](results/2026-11-05-compiled-banked-probe.json). These timings exclude model routing, loading, and backbone execution.
+
 ## Full-model validation after the reader correction
 
 The [individual-read comparison](results/2026-11-04-preadv-2pct-128.json) used clean source `af4516d`, a 2% hot allocation, 32 GiB base cache, and 4 GiB refinement/staging budget. It retained the 84 GiB process guard, eight-token prefill chunks, and no memory wiring. One 16-token warm-up preceded three measured 128-token requests with the same interval-merging prompt as the earlier comparison.
