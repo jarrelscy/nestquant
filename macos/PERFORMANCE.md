@@ -228,6 +228,23 @@ Both profiles failed cases 97 and 158. At 3%, case 158 selected the maximum uniq
 
 Three percent improved measured coverage but did not improve this executable score. Confidence is high about the observed result and low about generalizing twelve cases to broad accuracy. The default remains unchanged.
 
+### Refinement retention policy
+
+Source `9060b5e` tested the existing retention parameter without changing runtime code. All runs used 3% hot allocation, 160 base rows, 16-token chunks, 128 prefill rows, and the same 128 forced inputs. The policy multiplies an existing pool member's score by `1 + hm`. The sequence was `hm=4`, `hm=1`, `hm=0`, and a second `hm=4` control. Other predictor settings and all memory guards remained unchanged.
+
+| Measurement | `hm=4`, two controls | `hm=1`, one run | `hm=0`, one run |
+|---|---:|---:|---:|
+| Median decode rate | 3.412 tokens/s | 3.185 tokens/s | 2.976 tokens/s |
+| Actual refined-call coverage | 20.03% | 23.87% | 24.65% |
+| Routing salience coverage | 38.80% | 47.21% | 48.33% |
+| Delivery of wanted calls | 97.98% | 95.69% | 87.16% |
+| Median decode refinement reads | 7.92 GB | 22.90 GB | 38.78 GB |
+| Minimum reported free memory | 35% | 34% | 35% |
+
+The controls measured 3.496 and 3.328 tokens/s. Lower retention increased ready salience but also increased storage traffic and reduced delivery reliability. The result supports retaining `hm=4` for throughput, with moderate confidence given the small number of runs. It does not establish which policy gives better answers.
+
+All four runs completed at normal pressure and restored Qwen. The first control and `hm=1` added no swap-outs. The `hm=0` run added 1,113,636,864 bytes (1.04 GiB), and the final control added 589,824 bytes. Both increases were already present after prefill, before measured decode, and did not increase during decode. These are system-wide counters, so the experiment cannot attribute them solely to the retention setting or GLM. The [retention report](results/2026-11-05-native-retention.json) preserves the phase counters, commands, prediction changes, and evidence hashes. This replay supplies no answer-quality score.
+
 ### Anticipatory base reads
 
 Source `0c30ab1` adds an opt-in native worker for predicted base rows. It reuses committed jT/EMA scores without changing the refinement policy. The worker reads private CPU buffers. The main thread installs only required rows after the previous GPU use completes. Missing predictions retain the synchronous fallback. Two independent Max-account Fable/high reviews approved the corrected implementation before testing. All 44 runtime unit tests and six server boundary tests passed.
