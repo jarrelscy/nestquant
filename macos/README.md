@@ -287,6 +287,12 @@ Use `--base-read-mode staged` with `verify_expert_major.py` to compare the candi
 
 ### Optional execution diagnostics
 
+Use `--replay-passes 2 --fixed-json <trace.json> --max-tokens 128` to compare initial and warm execution within one loaded model. Keep the external memory watchdog active. This option retains base and refinement banks but creates a fresh attention cache and resets the predictor for each pass. It excludes other diagnostic modes and prefill verification. The default remains one pass.
+
+The existing result fields describe the first pass. The `warm_replay` field contains the second pass. Each completed pass also emits a flushed `replay_pass_complete` JSON record. Preserve that log if a later pass stops before the result file is written.
+
+Compare actual misses, read bytes, evictions, and decode time before attributing a change to storage. Retained banks do not guarantee zero misses. Refinement readiness and greedy predictions can differ despite identical forced tokens. Compare `replay_steps` and `greedy_next_ids` across passes. This diagnostic does not establish answer quality, a throughput ceiling, or long-context capacity. Two guarded trials stopped under pressure, so a complete paired result remains pending. See [the retained results](results/2026-11-06-native-warm-replay.json).
+
 The owner waived the Fable review gate before three guarded full-model trials. The 64-row ordinary replay measured 4.59 tokens/s. Instrumented coding and synchronized replay measured 4.11 and 3.74 tokens/s respectively. The coding answer passed HumanEval/3. All three runs retained normal pressure, added no swap-outs, and restored Qwen. These diagnostics have no independent Fable approval. See [the diagnostic evidence](results/2026-11-05-native-diagnostics.json).
 
 Add `--diagnostics /absolute/path/trace.jsonl` to a supervised native generation command. Use a fresh path that differs from the result path. The runtime flushes each JSON record. Records identify loaded backbone modules, prepared base banks, prefill layer boundaries, and completed decode steps. Memory records retain process, MLX, compressor, and pressure measurements. A guard stop can therefore leave useful evidence without a completed result file.

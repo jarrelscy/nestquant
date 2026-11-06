@@ -1,0 +1,115 @@
+{
+  "source_commit": "4253efca020e72b55c5fb0d2aa9cb1b640a8f298",
+  "runtime_source_sha256": "32ec7bfd3c55d67af5c72ce4bcee10bd9d58c1865fdf529a1ef83f0a4083b3ab",
+  "state": "no_valid_paired_result",
+  "hardware": {
+    "chip": "Apple M5 Max",
+    "gpu_cores": 40,
+    "unified_memory_gib": 128
+  },
+  "protocol": {
+    "passes": 2,
+    "forced_tokens": 128,
+    "chunk_size": 8,
+    "base_budget_gib": 40,
+    "hot_fraction": 0.03,
+    "prefill_rows": 128,
+    "base_read_mode": "staged",
+    "decoder_loop": "split",
+    "outer_guard_gib": 52,
+    "pressure_required": 1,
+    "free_percent_floor": 20,
+    "required_swapout_delta_bytes": 0
+  },
+  "runs": [
+    {
+      "rows": 160,
+      "state": "pressure_guard_stop",
+      "peak_observed_footprint_bytes": 50002661328,
+      "minimum_free_percent": 28,
+      "guard_pressure": 2,
+      "guard_free_percent": 28,
+      "swapout_delta_bytes": 0,
+      "completed_passes": [],
+      "artifact_sha256": {
+        ".log": "5e976404d6490e50078d033c1e0cd3e8acbd751c55b2728a5bb24026723672dd",
+        "-isolation.json": "a681e692ad70ee6e0db89be3972542789e8773821aa6098801b3d4545ae7fc40"
+      }
+    },
+    {
+      "rows": 128,
+      "state": "pressure_guard_stop",
+      "peak_observed_footprint_bytes": 44458016832,
+      "minimum_free_percent": 33,
+      "guard_pressure": 2,
+      "guard_free_percent": 44,
+      "swapout_delta_bytes": 1310720,
+      "completed_passes": [
+        {
+          "pass_index": 0,
+          "decode_tps": 6.056604435895063,
+          "ttft_seconds": 43.09420762502123,
+          "teacher_forced": true,
+          "generated_tokens": 128,
+          "decode": {
+            "hits": 34771,
+            "misses": 8237,
+            "evictions": 6873,
+            "read_bytes": 40547058339,
+            "read_seconds": 5.068758329434786,
+            "read_copy_seconds": 1.5016531709698029,
+            "read_staging_wait_seconds": 0.005188672977965325,
+            "total_base_read_bytes": 40547058339,
+            "process_disk_read_bytes": 36533985280
+          },
+          "refinement_coverage": {
+            "allocated_fraction": 0.030009920634920636,
+            "routed_calls": 43008,
+            "call_fractions": {
+              "wanted": 0.20463634672619047,
+              "ready": 0.19663783482142858,
+              "wanted_ready": 0.19652157738095238,
+              "late": 0.008114769345238096,
+              "cached_outside_wanted": 0.00011625744047619047,
+              "fixed": 0.01002139136904762
+            },
+            "wanted_delivery_fraction": 0.9603454152937166,
+            "mean_salience_coverage": {
+              "wanted": 0.3965041816886459,
+              "ready": 0.3833085309409594,
+              "fixed": 0.013823096370024405,
+              "jt_top_budget": 0.5826814087040196,
+              "ema_top_budget": 0.34410234606403073,
+              "static": 0.07591235188231779
+            }
+          }
+        }
+      ],
+      "artifact_sha256": {
+        ".log": "18d45e0285d904fc5232adb8ebcbd10c31d4586962fb61925f456e54b8e1cfdb",
+        "-isolation.json": "c8ce6361a290a4293bacb64bd97eb9c798910b6fe9369ecabed9e81ed809643a"
+      }
+    }
+  ],
+  "tests": {
+    "passed": 14,
+    "device": "CPU",
+    "suites": [
+      "test_native_cli",
+      "test_native_diagnostics"
+    ],
+    "scope": "CLI validation, fresh attention and predictor state, per-pass counter deltas, evidence retention and failure cleanup; not full-model equivalence."
+  },
+  "review": {
+    "account": "Max",
+    "model": "claude-fable-5-1",
+    "effort": "high",
+    "outcome": "Usage limit; no fresh review. Prior review gate was waived."
+  },
+  "interpretation": [
+    "Neither trial completed both passes within the safety gates. No warm-cache speedup is established.",
+    "The 128-row initial pass measured6.06tokens/s, but the overall trial failed pressure and zero-swap gates.",
+    "Retained base and refinement banks can change readiness; identical forced tokens do not establish identical precision or answer quality.",
+    "The saved daily fallback was manually restored after pressure blocked automatic startup. No memory guards were weakened."
+  ]
+}

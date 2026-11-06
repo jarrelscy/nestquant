@@ -695,3 +695,18 @@ The 336 complete, overlapping calibration windows forecast 34.74% salience in th
 These measurements support useful jT rankings on this prompt. The final policy captures less salience than raw jT ranking because it also applies EMA, fixed slots, and retention hysteresis. Removing those constraints could increase SSD churn; the ranking comparison does not measure that counterfactual. Confidence is high in the recorded counts and moderate in this policy-tuning lead.
 
 These diagnostics measure routing prediction on mixed-precision execution. Three repeated-prompt requests are not a held-out quality suite. They do not establish answer accuracy, general calibration, or agreement with an FP8/BF16 reference. No predictor parameters were fitted on these requests. The complete palindrome request supplies a second prompt, with only 16 overlapping calibration windows.
+
+### Repeated cache replay
+
+Source `4253efc` adds two fixed-token passes through one loaded model. Expert banks remain allocated, while each pass creates fresh attention state and resets the predictor. Fourteen CPU tests passed, including per-pass counter deltas and evidence retention after failure. The default remains one pass.
+
+Neither full-model trial completed a safe paired comparison. Both used 128 forced tokens, eight-token chunks, staged required reads, the split decoder, and 3% refinement slots. The outer guard remained 52 GiB, with normal pressure and at least 20% reported free memory required.
+
+| Base rows | Completed passes | Initial decode tokens/s | Peak footprint | Guard pressure | Added swap-outs |
+|---|---:|---:|---:|---:|---:|
+| 160 | 0 | Unmeasured | 50.00 GB | 2 | 0 |
+| 128 | 1 | 6.06 | 44.46 GB | 2 | 1.25 MiB |
+
+The 128-row initial pass served 34,771 base-cache hits and required 8,237 misses. Its 3.00% refinement allocation served 19.66% of routed calls and 38.33% of routed salience. Requested refinements were ready for 96.03% of their routed calls. These are observed coverage counters, not an answer-accuracy score.
+
+The second pass stopped under pressure. Its completed first-pass log remained available, but no warm-cache gain is established. Confidence is high in the recorded measurements and unknown for paired throughput or quality. Fable on Max/high returned a usage limit, so no fresh review was obtained. See [the results, hashes, and limitations](results/2026-11-06-native-warm-replay.json).
