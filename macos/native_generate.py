@@ -400,6 +400,7 @@ def main():
     parser.add_argument('--token-major', action='store_true')
     parser.add_argument('--verify-prefill', action='store_true')
     parser.add_argument('--fixed-json', type=Path)
+    parser.add_argument('--replay-passes', type=int, choices=(1, 2), default=1)
     parser.add_argument('--base-prefetch', type=int, choices=(1, 2, 4))
     parser.add_argument('--base-read-mode', choices=('scatter', 'staged'), default='scatter')
     parser.add_argument('--cold-fastpath', action='store_true')
@@ -417,6 +418,9 @@ def main():
         parser.error('Synchronized diagnostics require a diagnostic file, paged banks, and at most 128 output tokens')
     if args.verify_prefill and args.fixed_json:
         parser.error('The prefill equivalence check does not generate tokens')
+    if args.replay_passes == 2 and (not args.fixed_json or args.max_tokens > 128
+                                   or args.verify_prefill or args.diagnostics is not None):
+        parser.error('Two replay passes require a fixed trace of at most 128 tokens and exclude other diagnostics')
     if args.full_base != (args.rows == 288) or (args.full_base and args.row_plan is not None):
         parser.error('Full residency requires --full-base --rows 288 and excludes a row plan')
     if args.full_base != (args.base_budget_gib == 56):
@@ -497,8 +501,16 @@ def main():
                     parser.error('The fixed token trace is invalid or too short')
             prefill = token_major_prefill if args.token_major else layer_major_prefill
             startup = time.perf_counter() - start
-            result = generate(model, tokenizer, ids, args.max_tokens, eos, prefill, args.chunk_size, hot, guard, forced,
-                              base_prefetch, diagnostics)
+            for pass_index in range(args.replay_passes):
+                guard.check(force=True)
+                current = generate(model, tokenizer, ids, args.max_tokens, eos, prefill, args.chunk_size, hot, guard,
+                                   forced, base_prefetch, diagnostics)
+                if pass_index == 0:
+                    result = current
+                else:
+                    result['warm_replay'] = current
+                if args.replay_passes == 2:
+                    print(json.dumps(dict(event='replay_pass_complete', pass_index=pass_index, result=current)), flush=True)
             result.update(startup_seconds=startup, rows=args.rows, chunk_size=args.chunk_size,
                           rows_by_layer=rows, prefill_order=prefill.__name__, checkpoint_revision=REVISION,
                           backbone_bytes=sum(a.nbytes for _, a in tree_flatten(model.parameters())),

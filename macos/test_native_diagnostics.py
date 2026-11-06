@@ -12,6 +12,37 @@ from native_generate import PagedExperts, generate, layer_major_prefill, main
 
 
 class NativeDiagnosticsTest(unittest.TestCase):
+    def test_reused_model_resets_attention_predictor_and_counter_deltas(self):
+        class Model:
+            def __init__(self):
+                self.caches = []
+
+            def make_cache(self):
+                cache = [SimpleNamespace(state=[mx.array([0])])]
+                self.caches.append(cache)
+                return cache
+
+            def __call__(self, tokens, cache):
+                cache[0].state[0] = cache[0].state[0] + 1
+                return SimpleNamespace(logits=mx.array([[[0., 1., 2.]]]))
+
+        model = Model()
+        hot = Mock()
+        hot.readiness_digest.return_value = 'fixture-ready'
+        hot.report.return_value = {}
+        tokenizer = SimpleNamespace(decode=lambda ids, **kw: str(ids))
+        prefill = Mock(return_value=mx.array([[[0., 2., 1.]]]))
+        with patch('native_generate.memory_sample', return_value={}), \
+                patch('native_generate.stats', side_effect=[{'hits': i} for i in range(6)]):
+            passes = [generate(model, tokenizer, [1], 2, {0}, prefill, 1, hot, Mock(), forced=[1, 2])
+                      for _ in range(2)]
+        self.assertIsNot(model.caches[0], model.caches[1])
+        self.assertEqual([cache[0].state[0].item() for cache in model.caches], [2, 2])
+        self.assertEqual(hot.reset.call_count, 2)
+        self.assertEqual([item['decode']['hits'] for item in passes], [1, 1])
+        self.assertEqual([item['generated_ids'] for item in passes], [[1, 2], [1, 2]])
+        self.assertEqual(passes[0]['greedy_next_ids'], passes[1]['greedy_next_ids'])
+
     def test_flushed_records_survive_an_interrupted_phase(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'trace.jsonl'
