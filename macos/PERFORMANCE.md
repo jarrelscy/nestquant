@@ -2,7 +2,7 @@
 
 ## KL divergence on generated traces
 
-The [10 November measurements](results/2026-11-10-kld-traces.json) score the reference runtime with teacher-forced KL divergence. Layer-major prefill measured **0.0342** against the BF16 teacher, under the 0.05 goal. Streamed decode fell from 0.155 to 0.066 as the hot allocation rose from 2 to 46 four-bit experts per layer. The 23, 35 and 46 expert arms measured 0.080, 0.072 and 0.066, inside or below the 0.07 to 0.09 decode goal, but with only part of the base resident. The full-resident-base arm did not run: the host admitted 59.8 GiB and that configuration needs about 82 GiB.
+The [10 November measurements](results/2026-11-10-kld-traces.json) score the reference runtime with teacher-forced KL divergence. Layer-major prefill measured **0.0342** against the BF16 teacher, under the 0.05 goal. Streamed decode fell from 0.155 to 0.066 as the hot allocation rose from 2 to 46 four-bit experts per layer. The 23, 35 and 46 expert arms measured 0.080, 0.072 and 0.066, inside or below the 0.07 to 0.09 decode goal, but with only part of the base resident. One full-resident-base arm completed after a restart, with a 1 GiB refinement cache: zero synchronous base reads, 2.3 to 3.9 decode tokens/s and an 82.75 GiB peak. Larger refinement caches with a resident base did not fit.
 
 | Arm | Four-bit experts per layer | Mean KLD | 95% interval | Top-1 agreement | Decode tokens/s | Peak footprint |
 |---|---:|---:|---:|---:|---:|---:|
@@ -15,6 +15,7 @@ The [10 November measurements](results/2026-11-10-kld-traces.json) score the ref
 | Decode, 8 GiB cache, 20 GiB base cache | 23.0 | 0.0802 | 0.059 to 0.103 | 93.2% | 0.86 to 1.11 | 53.2 GiB |
 | Decode, 12 GiB cache, 16 GiB base cache | 34.6 | 0.0716 | 0.051 to 0.095 | 93.2% | 0.58 to 0.82 | 53.0 GiB |
 | Decode, 16 GiB cache, 12 GiB base cache | 46.1 | 0.0656 | 0.049 to 0.085 | 93.1% | 0.38 to 0.73 | 52.9 GiB |
+| Decode, complete resident base, 1 GiB cache | 2.9 | 0.1477 | 0.111 to 0.189 | 90.4% | 2.28 to 3.90 | 82.8 GiB |
 
 Prefill windows 0000 to 0003 measured 0.0275, 0.0487, 0.0272 and 0.0333. Each is 0.006 to 0.012 above the model card's value for the same window. The cause is not identified.
 
@@ -38,7 +39,24 @@ The operating system reported 86% free memory before that launch. That figure co
 | 8 GiB | 86 GiB | 102 GiB |
 | 16 GiB | 94 GiB | 110 GiB |
 
-Full-base residency with streamed refinements therefore remains unproven on this desktop. No benchmark relaxed the reserve or stopped unrelated applications.
+### Full-base residency after a restart
+
+After a restart with most applications closed, free plus file-backed memory reached 97 to 100 GiB. The arm with the complete base and a 1 GiB refinement cache then completed all eight traces. It made no synchronous base read. Decode ran at 2.28 to 3.90 tokens/s, against 1.55 to 2.16 for the same hot allocation with a 32 GiB base cache. Its KLD of 0.1477 matches that bounded arm's 0.1460, as expected for the same 2.9 experts per layer. Between 28 and 75 refinements per trace were not ready, against 248 to 393 loaded.
+
+Three attempts were stopped first. They corrected the memory model above:
+
+| Attempt | Progress | Stop |
+|---|---|---|
+| 2 GiB cache | Base layer 39 of 44 | Supervisor budget, 74.3 GiB against 74.1 admitted |
+| 1 GiB cache | Base layer 43 of 44 | Process guard at warning pressure, 79.6 GiB, 21.5 GiB still reclaimable |
+| 1 GiB cache | Decoding the first trace | Supervisor budget, 82.29 GiB against 82.08 admitted |
+
+- The fixed cost outside the expert caches is about 25.7 GiB, not 16.8 GiB. The backbone alone measures 16.78 GiB of tensors and a 20.87 GiB process footprint, and releasing the MPS cache recovers nothing. The estimates in the table above are therefore about 4 GiB too low.
+- `kld_harness.py --guard-above-default-cap` now lets the process guard tolerate warning pressure, matching an external watchdog that stops at critical pressure. The default guard is unchanged.
+- The base is not wired. The compressor held 27.7 GiB during the third attempt, so idle base planes were compressed. A resident base that the system compresses costs decompression time on reuse.
+- Host headroom fell to 14.6 GiB during the completed run, under the 16 GiB reserve and above the 8 GiB stop line. Larger refinement caches were not attempted.
+
+Full-base residency with streamed refinements is therefore demonstrated only at the smallest hot allocation, and only on a nearly empty desktop. The decode goal and the resident base were not met in one run. No benchmark relaxed the reserve or stopped unrelated applications.
 
 ## Split-loop model trial remains experimental
 

@@ -1425,6 +1425,167 @@
     }
    ],
    "note": "The last four traces ran while an unrelated model download wrote to the same SSD at about 16 MiB/s."
+  },
+  {
+   "arm": "full1",
+   "mode": "decode",
+   "reference": "all-4-bit layer-major prefill of the same trace",
+   "configuration": {
+    "hot_fraction": 0.01,
+    "hot_slots": 121,
+    "resident_base": true,
+    "base_cache_gib": null,
+    "cache_gib": 1.0,
+    "async_refinements": true,
+    "prefill_chunk_size": 64,
+    "max_decode_tokens": 160,
+    "fixed_fraction": 0.2,
+    "jt_mix": 0.75,
+    "predictor_preset": "spark_256K_U_2630_flat50"
+   },
+   "hot_experts_per_layer": 2.88,
+   "pooled": {
+    "count": 1280,
+    "mean": 0.147666,
+    "p50": 0.004091,
+    "p95": 0.727337,
+    "p99": 1.911542,
+    "max": 5.514709,
+    "top1_agreement": 0.903906
+   },
+   "mean_95_interval_block_bootstrap": [
+    0.1107,
+    0.1891
+   ],
+   "supervisor": {
+    "state": "complete",
+    "peak_footprint_gib": 82.75,
+    "admitted_gib": 84.74,
+    "minimum_host_free_plus_file_backed_gib": 14.58
+   },
+   "note": "Complete 55.46 GiB base resident, after a restart with most applications closed. A model download wrote to the same SSD during the run. Three earlier attempts on 10 and 11 November were stopped by the guards at 74.3, 79.6 and 82.3 GiB.",
+   "items": [
+    {
+     "name": "code_debug",
+     "tokens": 492,
+     "prompt_tokens": 108,
+     "steps": 160,
+     "mean_kld": 0.133735,
+     "top1_agreement": 0.875,
+     "decode_tokens_per_second": 2.492,
+     "desired_hot_share": 0.0948,
+     "executed_hot_share": 0.0941,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 265,
+     "async_fallbacks": 41
+    },
+    {
+     "name": "code_python",
+     "tokens": 413,
+     "prompt_tokens": 29,
+     "steps": 160,
+     "mean_kld": 0.056582,
+     "top1_agreement": 0.9812,
+     "decode_tokens_per_second": 3.206,
+     "desired_hot_share": 0.1057,
+     "executed_hot_share": 0.105,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 393,
+     "async_fallbacks": 34
+    },
+    {
+     "name": "general_explain",
+     "tokens": 417,
+     "prompt_tokens": 33,
+     "steps": 160,
+     "mean_kld": 0.210434,
+     "top1_agreement": 0.8688,
+     "decode_tokens_per_second": 2.276,
+     "desired_hot_share": 0.1404,
+     "executed_hot_share": 0.139,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 248,
+     "async_fallbacks": 75
+    },
+    {
+     "name": "math_word",
+     "tokens": 358,
+     "prompt_tokens": 65,
+     "steps": 160,
+     "mean_kld": 0.045825,
+     "top1_agreement": 0.9875,
+     "decode_tokens_per_second": 3.591,
+     "desired_hot_share": 0.0962,
+     "executed_hot_share": 0.0955,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 258,
+     "async_fallbacks": 39
+    },
+    {
+     "name": "planning_agentic",
+     "tokens": 435,
+     "prompt_tokens": 51,
+     "steps": 160,
+     "mean_kld": 0.226937,
+     "top1_agreement": 0.8375,
+     "decode_tokens_per_second": 3.896,
+     "desired_hot_share": 0.1175,
+     "executed_hot_share": 0.1166,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 266,
+     "async_fallbacks": 51
+    },
+    {
+     "name": "reasoning_puzzle",
+     "tokens": 390,
+     "prompt_tokens": 64,
+     "steps": 160,
+     "mean_kld": 0.06288,
+     "top1_agreement": 0.9375,
+     "decode_tokens_per_second": 3.384,
+     "desired_hot_share": 0.0893,
+     "executed_hot_share": 0.0887,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 259,
+     "async_fallbacks": 33
+    },
+    {
+     "name": "summarise_tradeoffs",
+     "tokens": 421,
+     "prompt_tokens": 37,
+     "steps": 160,
+     "mean_kld": 0.186368,
+     "top1_agreement": 0.8875,
+     "decode_tokens_per_second": 3.821,
+     "desired_hot_share": 0.0962,
+     "executed_hot_share": 0.0954,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 320,
+     "async_fallbacks": 45
+    },
+    {
+     "name": "writing_plain",
+     "tokens": 423,
+     "prompt_tokens": 39,
+     "steps": 160,
+     "mean_kld": 0.258569,
+     "top1_agreement": 0.8562,
+     "decode_tokens_per_second": 3.121,
+     "desired_hot_share": 0.0912,
+     "executed_hot_share": 0.0907,
+     "synchronous_base_misses": 0,
+     "refinement_misses": 0,
+     "async_loaded": 289,
+     "async_fallbacks": 28
+    }
+   ]
   }
  ],
  "full_resident_base_attempt": {
@@ -1445,7 +1606,7 @@
   },
   "host_free_plus_file_backed_gib": 75.5,
   "host_reserve_gib": 16,
-  "outcome": "Stopped during base loading at layer 29 when the process footprint reached the admitted budget. No decode step ran."
+  "outcome": "Stopped during base loading at layer 29 when the process footprint reached the admitted budget. No decode step ran. A later attempt with a 1 GiB refinement cache completed; see arm full1."
  },
  "limits": [
   "Decode is scored against a 4-bit reference, so decode values exclude the 4-bit prefill error against BF16.",
