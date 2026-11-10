@@ -1,0 +1,29 @@
+{
+  "status": "failed",
+  "source_commit": "c876a325e540eebd723ee23847448390459d3d43",
+  "checkpoint_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+  "stage": "resident base loading; last completed layer43; no generation or benchmark",
+  "configuration": {
+    "hot_fraction": 0.02,
+    "cache_gib": 4,
+    "process_limit_gib": 84,
+    "prefill_chunk_size": 8,
+    "async_refinements": true,
+    "wired_memory": false,
+    "storage_backend": "pread"
+  },
+  "guard_trip": {
+    "peak_bytes": 84337130176,
+    "free_percent": 44,
+    "pressure_level": 2
+  },
+  "before_child": {
+    "pressure_level": 1,
+    "free_percent": 84
+  },
+  "peak_observed_footprint_bytes": 84337130176,
+  "minimum_free_percent": 44,
+  "error": "MemoryError: Memory guard stopped the run to preserve desktop headroom",
+  "baseline_restored": true,
+  "conclusion": "pread alone did not prevent system pressure. No throughput or quality result was produced."
+}

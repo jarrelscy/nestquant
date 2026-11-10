@@ -1,0 +1,5533 @@
+{
+  "summary": {
+    "status": "complete",
+    "runs": 3,
+    "first_decode_step_seconds": {
+      "median": 0.8405883329978678,
+      "minimum": 0.5058794170035981,
+      "maximum": 0.9656806249986403
+    },
+    "subsequent_decode_tokens_per_second": {
+      "median": 1.6458976893501007,
+      "minimum": 1.5723743576510336,
+      "maximum": 1.6531362557182818
+    },
+    "decode_tokens_per_second": {
+      "median": 1.6382943072996978,
+      "minimum": 1.5749111821305495,
+      "maximum": 1.6480803209855723
+    },
+    "decode_hot_expert_fraction": {
+      "median": 0.16472159730033745,
+      "minimum": 0.15748031496062992,
+      "maximum": 0.16519028871391075
+    },
+    "decode_desired_hot_expert_fraction": {
+      "median": 0.1653777652793401,
+      "minimum": 0.1589098237720285,
+      "maximum": 0.16594019497562804
+    },
+    "async_fallbacks": {
+      "median": 111,
+      "minimum": 108,
+      "maximum": 153
+    },
+    "decode_base_misses": {
+      "median": 4358,
+      "minimum": 4201,
+      "maximum": 4775
+    },
+    "decode_base_evictions": {
+      "median": 4201,
+      "minimum": 2662,
+      "maximum": 4358
+    },
+    "decode_base_load_seconds": {
+      "median": 34.31115539956954,
+      "minimum": 32.88161909766495,
+      "maximum": 36.86813406366855
+    },
+    "time_to_first_token_seconds": {
+      "median": 61.63691691702115,
+      "minimum": 48.08417504199315,
+      "maximum": 62.42473475000588
+    },
+    "prefill_tokens_per_second": {
+      "median": 0.4704972514936352,
+      "minimum": 0.4645594429217381,
+      "maximum": 0.6031090265076515
+    },
+    "prefill_disk_read_bytes": {
+      "median": 47507308544,
+      "minimum": 38329286656,
+      "maximum": 47908290560
+    },
+    "decode_disk_read_bytes": {
+      "median": 32509018112,
+      "minimum": 31618367488,
+      "maximum": 35347472384
+    },
+    "process_peak_physical_footprint_bytes": 64382812896,
+    "generated_tokens": [
+      128,
+      128,
+      128
+    ],
+    "identical_generated_tokens": false,
+    "metadata": {
+      "source_commit": "b5c37f468478366030f25d5d2716dc4751df3621",
+      "source_dirty": false,
+      "expected_model_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+      "device": {
+        "device_name": "Apple M5 Max",
+        "max_recommended_working_set_size": 115448725504,
+        "memory_size": 137438953472,
+        "architecture": "applegpu_g17s",
+        "max_buffer_length": 86586540032,
+        "resource_limit": 499000
+      },
+      "model": "GLM-5.3-Flash-NestQuant-1.5-4bit",
+      "load_seconds": 5.824181333009619,
+      "packages": {
+        "mlx": "0.32.4",
+        "torch": "2.15.0",
+        "transformers": "5.22.1",
+        "safetensors": "0.8.0"
+      },
+      "async_refinements": true,
+      "memory_limit_gib": 84,
+      "base_cache_gib": 32.0,
+      "hot_fraction": 0.02,
+      "hot_slots": 242,
+      "cache_gib": 4.0,
+      "wired_memory": false,
+      "resident_base": true,
+      "resident_hot": false,
+      "resident_base_bytes": 0,
+      "prefill_chunk_size": 8,
+      "requested_output_tokens": 128,
+      "prompt": "Write a Python function that merges overlapping intervals. Explain its algorithm, edge cases, and time complexity. Include examples.",
+      "sampling": "greedy",
+      "method": "One discarded warm-up, then at least three measured requests in one process",
+      "limitations": "Process lifetime peak includes model loading; measurements do not grade answer quality"
+    }
+  },
+  "predictor_aggregate": {
+    "decode_steps": 381,
+    "routed_calls": 128016,
+    "counts": {
+      "wanted": 20919,
+      "ready": 20798,
+      "wanted_ready": 20547,
+      "late": 372,
+      "cached_outside_wanted": 251,
+      "fixed": 991
+    },
+    "call_fractions": {
+      "wanted": 0.16340926134233222,
+      "ready": 0.16246406699162605,
+      "wanted_ready": 0.16050337457817773,
+      "late": 0.002905886764154481,
+      "cached_outside_wanted": 0.001960692413448319,
+      "fixed": 0.00774121984751906
+    },
+    "wanted_delivery_fraction": 0.982217123189445,
+    "mean_salience_coverage": {
+      "wanted": 0.31858072391551984,
+      "ready": 0.31439414323566595,
+      "fixed": 0.009443509882054661,
+      "jt_top_budget": 0.4914449421125124,
+      "ema_top_budget": 0.2861290743604466,
+      "static": 0.0561226163339247
+    },
+    "calibration_windows": 336,
+    "calibration": {
+      "top_budget_predicted_salience_share": 0.3497999629129597,
+      "top_budget_observed_salience_share": 0.3288020781468553,
+      "mean_total_variation": 0.5488180242459585,
+      "mean_cross_entropy_nats": 4.401710227453794
+    },
+    "limitations": "Three repeated-prompt requests; overlapping windows are correlated. No held-out reference quality evaluation or parameter fitting."
+  },
+  "runs": [
+    {
+      "text": "# Merging Overlapping Intervals\n\n## The Solution\n\n```python\ndef merge_intervals(intervals):\n    \"\"\"\n    Merge overlapping intervals into consolidated intervals.\n\n    Args:\n        intervals: List of [start, end] pairs (lists or tuples).\n\n    Returns:\n        List of merged, non-overlapping intervals sorted by start time.\n\n    Raises:\n        ValueError: If any interval has start > end.\n    \"\"\"\n    if not intervals:\n        return []\n\n    # Validate input\n    for interval in intervals:\n        if interval[0] > interval[1]:\n            raise ValueError(f\"Invalid interval: {interval} (start > end",
+      "generated_ids": [
+        2,
+        386,
+        94497,
+        6065,
+        89870,
+        1333,
+        41958,
+        271,
+        565,
+        576,
+        12472,
+        271,
+        73022,
+        12663,
+        198,
+        750,
+        10875,
+        90055,
+        1548,
+        41958,
+        982,
+        262,
+        3190,
+        262,
+        39865,
+        49499,
+        26904,
+        1119,
+        58880,
+        26904,
+        382,
+        262,
+        17668,
+        510,
+        286,
+        26904,
+        25,
+        1759,
+        315,
+        508,
+        2468,
+        11,
+        835,
+        60,
+        13521,
+        320,
+        17550,
+        476,
+        44957,
+        3593,
+        262,
+        5184,
+        510,
+        286,
+        1759,
+        315,
+        25920,
+        11,
+        2477,
+        28155,
+        89870,
+        26904,
+        10610,
+        553,
+        1191,
+        882,
+        382,
+        262,
+        59891,
+        510,
+        286,
+        15390,
+        25,
+        1416,
+        894,
+        9868,
+        702,
+        1191,
+        861,
+        835,
+        624,
+        262,
+        3190,
+        262,
+        421,
+        537,
+        26904,
+        510,
+        286,
+        470,
+        14589,
+        262,
+        671,
+        23219,
+        1946,
+        198,
+        262,
+        369,
+        9868,
+        304,
+        26904,
+        510,
+        286,
+        421,
+        9868,
+        58,
+        15,
+        60,
+        861,
+        9868,
+        58,
+        16,
+        10338,
+        310,
+        4828,
+        15390,
+        955,
+        1,
+        7928,
+        9868,
+        25,
+        314,
+        27809,
+        92,
+        320,
+        2468,
+        861,
+        835
+      ],
+      "prompt_tokens": 29,
+      "generated_tokens": 128,
+      "ttft_seconds": 48.08417504199315,
+      "decode_step_seconds": [
+        0.5058794170035981,
+        0.40607037500012666,
+        0.36864654201781377,
+        0.33734245799132623,
+        0.49327237499528565,
+        0.30758541697287,
+        0.302478333003819,
+        0.26981070899637416,
+        0.2752089579880703,
+        0.30045666598016396,
+        0.5440397079801187,
+        0.3482362079957966,
+        0.41259841597639024,
+        0.427866708021611,
+        0.4412833749956917,
+        1.0074079999758396,
+        0.847217875008937,
+        0.7447299170016777,
+        1.268734334007604,
+        0.6731524589995388,
+        1.1970829170022625,
+        0.8341146250022575,
+        0.7520766249799635,
+        0.5578675829747226,
+        0.5832082080014516,
+        0.5593682920152787,
+        0.5163436250004452,
+        1.0611064580152743,
+        0.7077038749994244,
+        0.6971266659966204,
+        0.7462725829973351,
+        0.6773169999942183,
+        1.0234103749971837,
+        0.7498064589744899,
+        0.631154249975225,
+        0.5359350000217091,
+        0.6612643330008723,
+        0.7779477500007488,
+        0.6339934999996331,
+        1.1150037499901373,
+        0.9034670409746468,
+        0.9793803749780636,
+        0.6365307079977356,
+        0.8242803330067545,
+        0.631686916021863,
+        0.7231049590045586,
+        0.5919770420005079,
+        0.5854623329942115,
+        0.6202978339861147,
+        0.6361392090038862,
+        0.6890203749935608,
+        0.5357236249838024,
+        0.3819222500023898,
+        0.513360124983592,
+        0.37292462500045076,
+        0.4430922910105437,
+        0.4127242920221761,
+        0.4850949579849839,
+        0.6874026670120656,
+        0.562856542004738,
+        0.37151920798351057,
+        0.364977541990811,
+        0.5713100419961847,
+        0.6693969579937402,
+        0.5374120829801541,
+        0.6593754579953384,
+        0.3956872920098249,
+        0.49340033301268704,
+        0.7336342910130043,
+        0.48029858301742934,
+        0.5907362090074457,
+        0.7518046659824904,
+        0.5628197920159437,
+        0.7075456670136191,
+        0.8251941250055097,
+        0.5005127500044182,
+        0.7897384999960195,
+        0.595533833024092,
+        0.7982896670000628,
+        0.6309220409893896,
+        0.6527143340208568,
+        0.7417205829988234,
+        0.5543204579735175,
+        0.6404015420121141,
+        0.6934724999882746,
+        0.7543623329838738,
+        0.589022041996941,
+        0.7610064590116963,
+        0.5018820420082193,
+        0.5795260000159033,
+        0.6462180830130819,
+        0.4485468330094591,
+        0.49394337501144037,
+        0.6346047910046764,
+        0.5375042920059059,
+        0.5684669170004781,
+        0.6359552500071004,
+        0.6972792909946293,
+        0.7611917910107877,
+        1.1191687079844996,
+        0.6652461669873446,
+        0.5187629589927383,
+        0.4761991669947747,
+        0.5166306250030175,
+        0.7044161249941681,
+        0.800934957980644,
+        0.6632672499981709,
+        0.7922628330125008,
+        0.7258145000087097,
+        0.6174533330195118,
+        0.9423787909909151,
+        0.7620741249993443,
+        0.6510807500162628,
+        0.7097339580068365,
+        0.674002040992491,
+        0.6341760829964187,
+        0.7327018750074785,
+        0.6074778339825571,
+        0.6457324170041829,
+        0.5344382499752101,
+        0.5802390839962754,
+        0.9349201659788378,
+        0.6758734590257518,
+        0.6888069589913357,
+        0.6797634999966249,
+        0.5367465000017546,
+        0.6103470829839353
+      ],
+      "decode_tokens_per_second": 1.5749111821305495,
+      "elapsed_seconds": 128.74405370798195,
+      "first_decode_step_seconds": 0.5058794170035981,
+      "subsequent_decode_tokens_per_second": 1.5723743576510336,
+      "predictor_seconds": 0.6964977477618959,
+      "prefetch_drain_seconds": 2.22500239033252e-05,
+      "predictor_diagnostics": {
+        "decode_steps": 127,
+        "routed_calls": 42672,
+        "allocated_slots": 242,
+        "allocated_fraction": 0.020006613756613757,
+        "counts": {
+          "wanted": 6781,
+          "ready": 6720,
+          "wanted_ready": 6628,
+          "late": 153,
+          "cached_outside_wanted": 92,
+          "fixed": 305
+        },
+        "call_fractions": {
+          "wanted": 0.1589098237720285,
+          "ready": 0.15748031496062992,
+          "wanted_ready": 0.15532433445819271,
+          "late": 0.0035854893138357706,
+          "cached_outside_wanted": 0.002155980502437195,
+          "fixed": 0.007147544056992876
+        },
+        "wanted_delivery_fraction": 0.9774369562011502,
+        "mean_salience_coverage": {
+          "wanted": 0.31436506010804344,
+          "ready": 0.3099056141788793,
+          "fixed": 0.00907508244301793,
+          "jt_top_budget": 0.49816268211176684,
+          "ema_top_budget": 0.2780619921705152,
+          "static": 0.0550392249073452
+        },
+        "per_layer": [
+          {
+            "layer": 3,
+            "slots": 11,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 88,
+              "ready": 78,
+              "wanted_ready": 71,
+              "late": 17,
+              "cached_outside_wanted": 7,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2937108452870585,
+              "ready": 0.2512111964713984,
+              "fixed": 0.0003514271945605677,
+              "jt_top_budget": 0.6223011513367948,
+              "ema_top_budget": 0.19530832862369757,
+              "static": 0.021647178228022944
+            }
+          },
+          {
+            "layer": 4,
+            "slots": 9,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 63,
+              "ready": 56,
+              "wanted_ready": 54,
+              "late": 9,
+              "cached_outside_wanted": 2,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.18331316959225535,
+              "ready": 0.14741587435484735,
+              "fixed": 0.009378102539831769,
+              "jt_top_budget": 0.5311186922929161,
+              "ema_top_budget": 0.09629888351029164,
+              "static": 0.05737460193291895
+            }
+          },
+          {
+            "layer": 5,
+            "slots": 9,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 51,
+              "ready": 46,
+              "wanted_ready": 45,
+              "late": 6,
+              "cached_outside_wanted": 1,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.15116212179131214,
+              "ready": 0.13030921999980508,
+              "fixed": 0.006768382261032532,
+              "jt_top_budget": 0.40474842060831856,
+              "ema_top_budget": 0.12661913657520885,
+              "static": 0.02186200343449252
+            }
+          },
+          {
+            "layer": 6,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 55,
+              "ready": 46,
+              "wanted_ready": 46,
+              "late": 9,
+              "cached_outside_wanted": 0,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.1584926802704492,
+              "ready": 0.13856679937230443,
+              "fixed": 0.0009274063973850639,
+              "jt_top_budget": 0.46970276880265577,
+              "ema_top_budget": 0.11079422213604938,
+              "static": 0.012738792860985258
+            }
+          },
+          {
+            "layer": 7,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 146,
+              "ready": 141,
+              "wanted_ready": 141,
+              "late": 5,
+              "cached_outside_wanted": 0,
+              "fixed": 22
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4365929593559045,
+              "ready": 0.42339293108971676,
+              "fixed": 0.050633723278527255,
+              "jt_top_budget": 0.6181346635651375,
+              "ema_top_budget": 0.36594730465283476,
+              "static": 0.3525569666921948
+            }
+          },
+          {
+            "layer": 8,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 82,
+              "ready": 79,
+              "wanted_ready": 79,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 4
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.20217948693474613,
+              "ready": 0.19211607436396153,
+              "fixed": 0.005390699386845037,
+              "jt_top_budget": 0.4640724981392215,
+              "ema_top_budget": 0.17495019575214382,
+              "static": 0.09833208576917246
+            }
+          },
+          {
+            "layer": 9,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 64,
+              "ready": 61,
+              "wanted_ready": 56,
+              "late": 8,
+              "cached_outside_wanted": 5,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.15317955860488486,
+              "ready": 0.14510094197551993,
+              "fixed": 0.0001914973012410897,
+              "jt_top_budget": 0.4468194663638977,
+              "ema_top_budget": 0.13852416175495755,
+              "static": 0.014771748180117863
+            }
+          },
+          {
+            "layer": 10,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 89,
+              "ready": 83,
+              "wanted_ready": 83,
+              "late": 6,
+              "cached_outside_wanted": 0,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.20309778932964762,
+              "ready": 0.1903691715296763,
+              "fixed": 8.908199965180043e-05,
+              "jt_top_budget": 0.41086160860849064,
+              "ema_top_budget": 0.09213483998297985,
+              "static": 0.0012485608172284255
+            }
+          },
+          {
+            "layer": 11,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 198,
+              "ready": 194,
+              "wanted_ready": 194,
+              "late": 4,
+              "cached_outside_wanted": 0,
+              "fixed": 15
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4223420962385902,
+              "ready": 0.4119682430176069,
+              "fixed": 0.011612207377819237,
+              "jt_top_budget": 0.5994483793987766,
+              "ema_top_budget": 0.3499344124835386,
+              "static": 0.25045637504331936
+            }
+          },
+          {
+            "layer": 12,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 140,
+              "ready": 132,
+              "wanted_ready": 132,
+              "late": 8,
+              "cached_outside_wanted": 0,
+              "fixed": 12
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.28013220582536746,
+              "ready": 0.2719382575907336,
+              "fixed": 0.002429660522530911,
+              "jt_top_budget": 0.468082271234124,
+              "ema_top_budget": 0.19551455068289023,
+              "static": 0.0030184326763018103
+            }
+          },
+          {
+            "layer": 13,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 176,
+              "ready": 173,
+              "wanted_ready": 173,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 11
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3356219441607885,
+              "ready": 0.32941086546146137,
+              "fixed": 0.010581643339668942,
+              "jt_top_budget": 0.5098409760217425,
+              "ema_top_budget": 0.2835172444299342,
+              "static": 0.09472076988585784
+            }
+          },
+          {
+            "layer": 14,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 256,
+              "ready": 252,
+              "wanted_ready": 252,
+              "late": 4,
+              "cached_outside_wanted": 0,
+              "fixed": 21
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.44208913636623076,
+              "ready": 0.4401714845017757,
+              "fixed": 0.04157569146849327,
+              "jt_top_budget": 0.6356211347306318,
+              "ema_top_budget": 0.38764391872693166,
+              "static": 0.189259677276268
+            }
+          },
+          {
+            "layer": 15,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 132,
+              "ready": 129,
+              "wanted_ready": 129,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 7
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2602191412506233,
+              "ready": 0.2480544431308979,
+              "fixed": 0.006933051091101985,
+              "jt_top_budget": 0.45526672505077526,
+              "ema_top_budget": 0.21903962902823262,
+              "static": 0.026695748659846818
+            }
+          },
+          {
+            "layer": 16,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 87,
+              "ready": 83,
+              "wanted_ready": 81,
+              "late": 6,
+              "cached_outside_wanted": 2,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.18451007600458014,
+              "ready": 0.17872978395720113,
+              "fixed": 0.0003929315205292221,
+              "jt_top_budget": 0.3973426601215744,
+              "ema_top_budget": 0.14613907887578242,
+              "static": 0.04078648601895903
+            }
+          },
+          {
+            "layer": 17,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 196,
+              "ready": 197,
+              "wanted_ready": 192,
+              "late": 4,
+              "cached_outside_wanted": 5,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3295003024977458,
+              "ready": 0.32961279513597336,
+              "fixed": 0.0,
+              "jt_top_budget": 0.47894858474837854,
+              "ema_top_budget": 0.29235024625741357,
+              "static": 0.2155448166166078
+            }
+          },
+          {
+            "layer": 18,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 253,
+              "ready": 254,
+              "wanted_ready": 251,
+              "late": 2,
+              "cached_outside_wanted": 3,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.423185838959486,
+              "ready": 0.4241722506051652,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5942002056573986,
+              "ema_top_budget": 0.4326768438349474,
+              "static": 0.06643349306829521
+            }
+          },
+          {
+            "layer": 19,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 231,
+              "ready": 227,
+              "wanted_ready": 227,
+              "late": 4,
+              "cached_outside_wanted": 0,
+              "fixed": 38
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3934088810189345,
+              "ready": 0.3914689957752236,
+              "fixed": 0.02242038754734023,
+              "jt_top_budget": 0.49703061408231536,
+              "ema_top_budget": 0.33289127488153464,
+              "static": 0.0767930932243953
+            }
+          },
+          {
+            "layer": 20,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 193,
+              "ready": 189,
+              "wanted_ready": 188,
+              "late": 5,
+              "cached_outside_wanted": 1,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3341367544400002,
+              "ready": 0.32857237080660284,
+              "fixed": 0.002553689578222929,
+              "jt_top_budget": 0.4654019704170128,
+              "ema_top_budget": 0.3180744771431088,
+              "static": 0.013633198095964236
+            }
+          },
+          {
+            "layer": 21,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 204,
+              "ready": 206,
+              "wanted_ready": 201,
+              "late": 3,
+              "cached_outside_wanted": 5,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.33419062670052546,
+              "ready": 0.3375895223776089,
+              "fixed": 0.0,
+              "jt_top_budget": 0.494298904403337,
+              "ema_top_budget": 0.25957620537249615,
+              "static": 0.05076013859636887
+            }
+          },
+          {
+            "layer": 22,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 180,
+              "ready": 180,
+              "wanted_ready": 173,
+              "late": 7,
+              "cached_outside_wanted": 7,
+              "fixed": 10
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2952843568212108,
+              "ready": 0.2936375137139537,
+              "fixed": 0.011586116806980568,
+              "jt_top_budget": 0.48050259812975704,
+              "ema_top_budget": 0.2177167452921607,
+              "static": 0.01547531179588249
+            }
+          },
+          {
+            "layer": 23,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 149,
+              "ready": 146,
+              "wanted_ready": 146,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 10
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.17445396681590283,
+              "ready": 0.17305353759191097,
+              "fixed": 0.0031410172829900254,
+              "jt_top_budget": 0.3869174922131759,
+              "ema_top_budget": 0.1664370602607425,
+              "static": 0.014328115660055532
+            }
+          },
+          {
+            "layer": 24,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 188,
+              "ready": 186,
+              "wanted_ready": 184,
+              "late": 4,
+              "cached_outside_wanted": 2,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.33567067419970004,
+              "ready": 0.3348213108691743,
+              "fixed": 0.00036261644836775727,
+              "jt_top_budget": 0.4904251298658877,
+              "ema_top_budget": 0.33207084661074826,
+              "static": 0.0007744464321122042
+            }
+          },
+          {
+            "layer": 25,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 208,
+              "ready": 207,
+              "wanted_ready": 205,
+              "late": 3,
+              "cached_outside_wanted": 2,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3277387340100889,
+              "ready": 0.32751128293128234,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4435568525464545,
+              "ema_top_budget": 0.2923523061800938,
+              "static": 0.07087135704828684
+            }
+          },
+          {
+            "layer": 26,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 286,
+              "ready": 283,
+              "wanted_ready": 283,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 11
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4556502875137702,
+              "ready": 0.4527040873441783,
+              "fixed": 0.01705769827794707,
+              "jt_top_budget": 0.5567580090713691,
+              "ema_top_budget": 0.3846845383735451,
+              "static": 0.019713713411102486
+            }
+          },
+          {
+            "layer": 27,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 130,
+              "ready": 140,
+              "wanted_ready": 130,
+              "late": 0,
+              "cached_outside_wanted": 10,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.283915002193649,
+              "ready": 0.3055933852167882,
+              "fixed": 0.0,
+              "jt_top_budget": 0.44425412013600873,
+              "ema_top_budget": 0.31563105861885654,
+              "static": 0.01015608821663099
+            }
+          },
+          {
+            "layer": 28,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 142,
+              "ready": 150,
+              "wanted_ready": 141,
+              "late": 1,
+              "cached_outside_wanted": 9,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3207189858283916,
+              "ready": 0.33846684367086244,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4808808477101904,
+              "ema_top_budget": 0.30659780774396544,
+              "static": 0.0
+            }
+          },
+          {
+            "layer": 29,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 159,
+              "ready": 158,
+              "wanted_ready": 158,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3296771168058436,
+              "ready": 0.3294880034148543,
+              "fixed": 0.0004402883933629114,
+              "jt_top_budget": 0.4932538429610412,
+              "ema_top_budget": 0.2454531545018035,
+              "static": 0.0015053264052096397
+            }
+          },
+          {
+            "layer": 30,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 203,
+              "ready": 204,
+              "wanted_ready": 203,
+              "late": 0,
+              "cached_outside_wanted": 1,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.42600920963877514,
+              "ready": 0.42611631988033694,
+              "fixed": 0.0,
+              "jt_top_budget": 0.6000504864679975,
+              "ema_top_budget": 0.42624749356412117,
+              "static": 8.423140866379104e-05
+            }
+          },
+          {
+            "layer": 31,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 150,
+              "ready": 149,
+              "wanted_ready": 149,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 11
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.323301745535316,
+              "ready": 0.3211490255696504,
+              "fixed": 0.012383285606303633,
+              "jt_top_budget": 0.49336952142515555,
+              "ema_top_budget": 0.3564012230620021,
+              "static": 0.014951038062735308
+            }
+          },
+          {
+            "layer": 32,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 206,
+              "ready": 203,
+              "wanted_ready": 203,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 66
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.49121472228198904,
+              "ready": 0.48878723852182154,
+              "fixed": 0.11747453075856286,
+              "jt_top_budget": 0.5883303815912811,
+              "ema_top_budget": 0.3883497479472375,
+              "static": 0.12234463253147033
+            }
+          },
+          {
+            "layer": 33,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 154,
+              "ready": 155,
+              "wanted_ready": 153,
+              "late": 1,
+              "cached_outside_wanted": 2,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.23299365881459175,
+              "ready": 0.23468267453257266,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4168051325325286,
+              "ema_top_budget": 0.17831052593308155,
+              "static": 0.03796502252995303
+            }
+          },
+          {
+            "layer": 34,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 172,
+              "ready": 172,
+              "wanted_ready": 172,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3317586866882854,
+              "ready": 0.3317586866882854,
+              "fixed": 0.00037247322070597185,
+              "jt_top_budget": 0.5664379179374982,
+              "ema_top_budget": 0.3477353285167472,
+              "static": 0.005582991152835479
+            }
+          },
+          {
+            "layer": 35,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 168,
+              "ready": 177,
+              "wanted_ready": 168,
+              "late": 0,
+              "cached_outside_wanted": 9,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.41218755640061133,
+              "ready": 0.41612215921519935,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5406669749237331,
+              "ema_top_budget": 0.41215327412242664,
+              "static": 0.004919526671276387
+            }
+          },
+          {
+            "layer": 36,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 228,
+              "ready": 227,
+              "wanted_ready": 227,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.45868833987857577,
+              "ready": 0.45827830411292714,
+              "fixed": 0.001982038296004315,
+              "jt_top_budget": 0.5427076330636108,
+              "ema_top_budget": 0.46043188323961604,
+              "static": 0.0067954191606823125
+            }
+          },
+          {
+            "layer": 37,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 147,
+              "ready": 146,
+              "wanted_ready": 146,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.29577640573160896,
+              "ready": 0.2950662889851856,
+              "fixed": 0.0002238830799108069,
+              "jt_top_budget": 0.4407281693925158,
+              "ema_top_budget": 0.2990884029107052,
+              "static": 0.014629831147110441
+            }
+          },
+          {
+            "layer": 38,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 121,
+              "ready": 118,
+              "wanted_ready": 118,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 5
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.21248453386599422,
+              "ready": 0.21112839938603511,
+              "fixed": 0.0042208367941674,
+              "jt_top_budget": 0.41275306245741267,
+              "ema_top_budget": 0.26045676943756496,
+              "static": 0.03517674602586606
+            }
+          },
+          {
+            "layer": 39,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 237,
+              "ready": 236,
+              "wanted_ready": 236,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 25
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4310465858996599,
+              "ready": 0.43069329728772965,
+              "fixed": 0.030608175341170666,
+              "jt_top_budget": 0.5391038145996854,
+              "ema_top_budget": 0.4196965562688809,
+              "static": 0.0845432297756414
+            }
+          },
+          {
+            "layer": 40,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 169,
+              "ready": 166,
+              "wanted_ready": 166,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.43843045544066916,
+              "ready": 0.4339943206434979,
+              "fixed": 0.0009551594722688674,
+              "jt_top_budget": 0.5464358751022905,
+              "ema_top_budget": 0.3913464803277843,
+              "static": 0.004551462683810269
+            }
+          },
+          {
+            "layer": 41,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 152,
+              "ready": 152,
+              "wanted_ready": 151,
+              "late": 1,
+              "cached_outside_wanted": 1,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.29111924734462574,
+              "ready": 0.2865154703201847,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4427045001584385,
+              "ema_top_budget": 0.24443656613106482,
+              "static": 0.11860197763178526
+            }
+          },
+          {
+            "layer": 42,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 205,
+              "ready": 220,
+              "wanted_ready": 202,
+              "late": 3,
+              "cached_outside_wanted": 18,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3048067148765878,
+              "ready": 0.3140370299395949,
+              "fixed": 0.0013026313842794343,
+              "jt_top_budget": 0.5086413435605681,
+              "ema_top_budget": 0.31761348569433345,
+              "static": 0.03311227184240109
+            }
+          },
+          {
+            "layer": 43,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 180,
+              "ready": 179,
+              "wanted_ready": 179,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 5
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2618994689400241,
+              "ready": 0.2615847706369913,
+              "fixed": 0.0066865388270018694,
+              "jt_top_budget": 0.47644105232720496,
+              "ema_top_budget": 0.21142238209917733,
+              "static": 0.05339460727976691
+            }
+          },
+          {
+            "layer": 44,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 143,
+              "ready": 140,
+              "wanted_ready": 140,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2474404543828216,
+              "ready": 0.24067462352243282,
+              "fixed": 0.0001265898119470021,
+              "jt_top_budget": 0.4678661949369074,
+              "ema_top_budget": 0.186035079620006,
+              "static": 0.03353593215790237
+            }
+          }
+        ],
+        "block_calibration": {
+          "full_windows": 112,
+          "excluded_tail_predictions": 15,
+          "target": "Mean per-token normalized squared routing weights over t..t+15, matching shipped train.py block_loss",
+          "scope": "Decode-only overlapping windows on observed mixed-precision routing; not independent samples or output-quality validation",
+          "mean_total_variation": 0.5487137202677121,
+          "mean_cross_entropy_nats": 4.413868229212538,
+          "uniform_cross_entropy_nats": 5.662960480135946,
+          "top_budget_predicted_salience_share": 0.34536703836610766,
+          "top_budget_observed_salience_share": 0.3238216549854497,
+          "soft_share_bin_error": 0.00018710782796214733,
+          "bins": [
+            {
+              "lower": 0.0,
+              "upper": 0.001,
+              "count": 641747,
+              "predicted_mean": 0.00043035077276673333,
+              "observed_mean": 0.0004457381569994407
+            },
+            {
+              "lower": 0.001,
+              "upper": 0.005,
+              "count": 527196,
+              "predicted_mean": 0.00228789410030262,
+              "observed_mean": 0.002252648212229117
+            },
+            {
+              "lower": 0.005,
+              "upper": 0.01,
+              "count": 104271,
+              "predicted_mean": 0.00692310936135656,
+              "observed_mean": 0.007033402440720685
+            },
+            {
+              "lower": 0.01,
+              "upper": 0.025,
+              "count": 55260,
+              "predicted_mean": 0.015028103120143684,
+              "observed_mean": 0.016389687191883186
+            },
+            {
+              "lower": 0.025,
+              "upper": 0.05,
+              "count": 15635,
+              "predicted_mean": 0.03440348597170161,
+              "observed_mean": 0.03633031902752261
+            },
+            {
+              "lower": 0.05,
+              "upper": 0.1,
+              "count": 6788,
+              "predicted_mean": 0.06871723442990936,
+              "observed_mean": 0.06862663424203332
+            },
+            {
+              "lower": 0.1,
+              "upper": 0.25,
+              "count": 3307,
+              "predicted_mean": 0.1473110262715712,
+              "observed_mean": 0.1306141889409817
+            },
+            {
+              "lower": 0.25,
+              "upper": 0.5,
+              "count": 533,
+              "predicted_mean": 0.3180102267028243,
+              "observed_mean": 0.2284650385564883
+            },
+            {
+              "lower": 0.5,
+              "upper": 1.0,
+              "count": 15,
+              "predicted_mean": 0.554296859105428,
+              "observed_mean": 0.24750722248093251
+            }
+          ]
+        },
+        "limitations": [
+          "Top-budget jT, EMA and static comparisons rescore the same observed routing, not alternative model executions",
+          "Salience coverage is not answer accuracy",
+          "No predictor parameters fitted on this request"
+        ]
+      },
+      "predictor_metrics_seconds": 0.17350074907881208,
+      "prefill_tokens_per_second": 0.6031090265076515,
+      "expert_metrics": {
+        "hits": 39990,
+        "misses": 8790,
+        "load_seconds": 69.54529382369947,
+        "expert_forward_seconds": 98.88015110528795,
+        "base_load_seconds": 36.86813406366855,
+        "base_tensor_bytes": 24760279040,
+        "refinement_tensor_bytes": 39085764608,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 31177,
+        "base_misses": 4775,
+        "refinement_hits": 8813,
+        "refinement_misses": 4015,
+        "async_load_seconds": 5.144195751985535,
+        "async_loaded": 594,
+        "async_discarded": 0,
+        "async_fallbacks": 153,
+        "async_install_seconds": 0.2496454631036613,
+        "base_evictions": 2662
+      },
+      "expert_metrics_by_phase": {
+        "prefill": {
+          "hits": 2093,
+          "misses": 4015,
+          "load_seconds": 32.67715976003092,
+          "expert_forward_seconds": 45.21283945711912,
+          "base_load_seconds": 0.0,
+          "base_tensor_bytes": 0,
+          "refinement_tensor_bytes": 34045890560,
+          "hot_sync_seconds": 0.0,
+          "base_hits": 0,
+          "base_misses": 0,
+          "refinement_hits": 2093,
+          "refinement_misses": 4015,
+          "async_load_seconds": 0.0,
+          "async_loaded": 0,
+          "async_discarded": 0,
+          "async_fallbacks": 0,
+          "async_install_seconds": 0.0,
+          "base_evictions": 0
+        },
+        "decode": {
+          "hits": 37897,
+          "misses": 4775,
+          "load_seconds": 36.86813406366855,
+          "expert_forward_seconds": 53.667311648168834,
+          "base_load_seconds": 36.86813406366855,
+          "base_tensor_bytes": 24760279040,
+          "refinement_tensor_bytes": 5039874048,
+          "hot_sync_seconds": 0.0,
+          "base_hits": 31177,
+          "base_misses": 4775,
+          "refinement_hits": 6720,
+          "refinement_misses": 0,
+          "async_load_seconds": 5.144195751985535,
+          "async_loaded": 594,
+          "async_discarded": 0,
+          "async_fallbacks": 153,
+          "async_install_seconds": 0.2496454631036613,
+          "base_evictions": 2662
+        }
+      },
+      "expert_cache_bytes": {
+        "limit": 4294967296,
+        "resident_limit": 4227858432,
+        "staging_reserved": 67108864,
+        "peak_staging_reserved": 51961856,
+        "after_prefill": 4221956096,
+        "after_decode": 1981280256,
+        "resident_base": 34355387475,
+        "base_limit": 34359738368
+      },
+      "disk_reads": {
+        "prefill": 38329286656,
+        "decode": 35347472384
+      },
+      "resources": {
+        "before": {
+          "disk_read_bytes": 87884865536,
+          "disk_written_bytes": 110592,
+          "physical_footprint_bytes": 51209379360,
+          "lifetime_peak_physical_footprint_bytes": 51209379360,
+          "mlx_active_bytes": 26046984324,
+          "mlx_peak_bytes": 26054709588,
+          "mlx_cached_bytes": 472876296,
+          "mps_driver_allocated_bytes": 46063714304,
+          "mps_allocated_bytes": 18034924544
+        },
+        "after_prefill": {
+          "disk_read_bytes": 126214152192,
+          "disk_written_bytes": 110592,
+          "physical_footprint_bytes": 53479531624,
+          "lifetime_peak_physical_footprint_bytes": 53481514088,
+          "mlx_active_bytes": 28270608516,
+          "mlx_peak_bytes": 28731806056,
+          "mlx_cached_bytes": 481465736,
+          "mps_driver_allocated_bytes": 48331259904,
+          "mps_allocated_bytes": 18184708352
+        },
+        "after_decode": {
+          "disk_read_bytes": 161561624576,
+          "disk_written_bytes": 110592,
+          "physical_footprint_bytes": 62122900632,
+          "lifetime_peak_physical_footprint_bytes": 62122900632,
+          "mlx_active_bytes": 36343176275,
+          "mlx_peak_bytes": 36379045387,
+          "mlx_cached_bytes": 509289534,
+          "mps_driver_allocated_bytes": 56838389760,
+          "mps_allocated_bytes": 18186856960
+        }
+      },
+      "decode_hot_expert_fraction": 0.15748031496062992,
+      "decode_desired_hot_expert_fraction": 0.1589098237720285,
+      "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+      "backbone_device": "mps",
+      "thinking": false,
+      "policy": {
+        "base_bits": 1.5,
+        "hot_bits": 4,
+        "slots": 242,
+        "fixed": 48,
+        "jt_mix": 0.75,
+        "refresh_tokens": 1,
+        "prefill_bits": 4,
+        "prefill_chunk_size": 8,
+        "resident_base": true,
+        "resident_hot": false,
+        "hot_set_capacity_bytes": 2008899584,
+        "wired_memory": false,
+        "async_refinements": true,
+        "base_cache_gib": 32.0,
+        "process_memory_limit_bytes": 90194313216
+      },
+      "limitations": [
+        "text only",
+        "single sequence",
+        "4096 token validation ceiling",
+        "no speculative decoding",
+        "synchronous prefill SSD reads",
+        "readiness-dependent decode precision",
+        "greedy sampling",
+        "unquantized attention cache",
+        "synchronous base-cache misses"
+      ]
+    },
+    {
+      "text": "# Merging Overlapping Intervals\n\n## The Solution\n\n```python\ndef merge_intervals(intervals):\n    \"\"\"\n    Merge overlapping intervals into a list of non-overlapping intervals.\n    \n    Args:\n        intervals: List of [start, end] pairs (lists or tuples).\n    \n    Returns:\n        List of merged [start, end] intervals, sorted by start time.\n    \"\"\"\n    if not intervals:\n        return []\n    \n    # Sort by start value (and by end as tiebreaker for determinism)\n    intervals_sorted = sorted(intervals, key=lambda x: (x[0], x[1]))\n    \n    merged",
+      "generated_ids": [
+        2,
+        386,
+        94497,
+        6065,
+        89870,
+        1333,
+        41958,
+        271,
+        565,
+        576,
+        12472,
+        271,
+        73022,
+        12663,
+        198,
+        750,
+        10875,
+        90055,
+        1548,
+        41958,
+        982,
+        262,
+        3190,
+        262,
+        39865,
+        49499,
+        26904,
+        1119,
+        264,
+        1140,
+        315,
+        2477,
+        28155,
+        89870,
+        26904,
+        624,
+        1066,
+        262,
+        17668,
+        510,
+        286,
+        26904,
+        25,
+        1759,
+        315,
+        508,
+        2468,
+        11,
+        835,
+        60,
+        13521,
+        320,
+        17550,
+        476,
+        44957,
+        4292,
+        1066,
+        262,
+        5184,
+        510,
+        286,
+        1759,
+        315,
+        25920,
+        508,
+        2468,
+        11,
+        835,
+        60,
+        26904,
+        11,
+        10610,
+        553,
+        1191,
+        882,
+        624,
+        262,
+        3190,
+        262,
+        421,
+        537,
+        26904,
+        510,
+        286,
+        470,
+        4167,
+        1066,
+        262,
+        671,
+        15954,
+        553,
+        1191,
+        897,
+        320,
+        437,
+        553,
+        835,
+        438,
+        18103,
+        63661,
+        369,
+        6315,
+        2142,
+        340,
+        262,
+        26904,
+        41046,
+        284,
+        10610,
+        1548,
+        41958,
+        11,
+        1376,
+        27412,
+        856,
+        25,
+        320,
+        87,
+        58,
+        15,
+        1125,
+        856,
+        58,
+        16,
+        10902,
+        1066,
+        262,
+        25920
+      ],
+      "prompt_tokens": 29,
+      "generated_tokens": 128,
+      "ttft_seconds": 61.63691691702115,
+      "decode_step_seconds": [
+        0.8405883329978678,
+        0.7856902919884305,
+        0.6686392079864163,
+        0.6070358330034651,
+        0.4428108330175746,
+        0.5802304579992779,
+        0.4611226659908425,
+        0.4935539169819094,
+        0.4644470000057481,
+        0.7412325839977711,
+        0.6530626669991761,
+        0.4442540000018198,
+        0.7365102909971029,
+        0.6345277500222437,
+        0.5851533329987433,
+        0.7911619579826947,
+        0.7011106669961009,
+        0.48366570798680186,
+        0.8476829579740297,
+        0.5201310830016155,
+        0.7665045830071904,
+        0.6062679169990588,
+        0.6047529169882182,
+        0.5607794999959879,
+        0.514496624993626,
+        0.49193954101065174,
+        0.39615529202274047,
+        0.9436837089888286,
+        0.5934519169968553,
+        0.6749527500069235,
+        0.6756299170083366,
+        0.7732533329981379,
+        0.5064460829889867,
+        0.4236396249907557,
+        0.4772323750075884,
+        0.7344632500025909,
+        0.47271454200381413,
+        0.5172402919852175,
+        0.7360281669825781,
+        0.7120381660060957,
+        0.6541585410013795,
+        0.4950132090016268,
+        0.523985250008991,
+        0.5713389579905197,
+        0.45322774999658577,
+        0.6841860420245212,
+        0.6107672500074841,
+        0.7007520839979406,
+        0.5100897919910494,
+        0.6121555000136141,
+        0.5683461249864195,
+        0.5184112089918926,
+        0.494490584009327,
+        0.4986044589895755,
+        0.52382691699313,
+        0.6251455419987906,
+        0.47096966701792553,
+        0.6083737919980194,
+        0.5961499999975786,
+        0.376290499989409,
+        0.45404441698337905,
+        0.4159111669869162,
+        0.42209212499437854,
+        0.39309591602068394,
+        0.538737291994039,
+        0.6528896669915412,
+        0.9730807910091244,
+        0.4421431669907179,
+        0.43497812500572763,
+        0.40862775000277907,
+        0.591458416020032,
+        0.575671833998058,
+        0.7050082909991033,
+        0.6379155830072705,
+        0.5973460410023108,
+        0.5199392919894308,
+        0.5837291250063572,
+        0.5113312080211472,
+        0.5678213330102153,
+        0.8897463330067694,
+        0.9686712080147117,
+        0.6780467909993604,
+        0.7501356250140816,
+        0.6887475000112318,
+        0.6268660839996301,
+        0.8651372919848654,
+        0.5475669169973116,
+        0.5388200840097852,
+        0.6497146250039805,
+        0.6146901249885559,
+        0.6101316249987576,
+        0.4226721659942996,
+        0.5298805829952471,
+        0.47611529199639335,
+        0.6055214169900864,
+        0.499517125019338,
+        0.4844976250024047,
+        0.7085035000054631,
+        0.6531782079837285,
+        0.5353121249936521,
+        0.7409706669859588,
+        0.8367379170085769,
+        0.5364462079887744,
+        0.5539908329956234,
+        0.4187847090070136,
+        0.6639485000050627,
+        0.5464903750107624,
+        0.7048426660185214,
+        0.66231220800546,
+        0.7251290419953875,
+        0.5472239999799058,
+        0.7645685840107035,
+        0.6928112079913262,
+        0.738742417015601,
+        0.7097038329811767,
+        0.7002879579958972,
+        0.6796900409972295,
+        0.7438292499864474,
+        0.685392666986445,
+        0.7672850419767201,
+        0.679788917012047,
+        0.7955520409741439,
+        0.6209017499932088,
+        0.6134610419976525,
+        0.5350374999979977,
+        0.42027499998221174,
+        0.4452876659925096
+      ],
+      "decode_tokens_per_second": 1.6480803209855723,
+      "elapsed_seconds": 138.7161729579966,
+      "first_decode_step_seconds": 0.8405883329978678,
+      "subsequent_decode_tokens_per_second": 1.6531362557182818,
+      "predictor_seconds": 0.6982021650474053,
+      "prefetch_drain_seconds": 1.5583005733788013e-05,
+      "predictor_diagnostics": {
+        "decode_steps": 127,
+        "routed_calls": 42672,
+        "allocated_slots": 242,
+        "allocated_fraction": 0.020006613756613757,
+        "counts": {
+          "wanted": 7057,
+          "ready": 7029,
+          "wanted_ready": 6946,
+          "late": 111,
+          "cached_outside_wanted": 83,
+          "fixed": 346
+        },
+        "call_fractions": {
+          "wanted": 0.1653777652793401,
+          "ready": 0.16472159730033745,
+          "wanted_ready": 0.16277652793400824,
+          "late": 0.0026012373453318336,
+          "cached_outside_wanted": 0.001945069366329209,
+          "fixed": 0.008108361454818148
+        },
+        "wanted_delivery_fraction": 0.9842709366586369,
+        "mean_salience_coverage": {
+          "wanted": 0.32153230314749964,
+          "ready": 0.3178120171398135,
+          "fixed": 0.0099424708126976,
+          "jt_top_budget": 0.4888474966438716,
+          "ema_top_budget": 0.29021855138062624,
+          "static": 0.05731699739961612
+        },
+        "per_layer": [
+          {
+            "layer": 3,
+            "slots": 11,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 84,
+              "ready": 77,
+              "wanted_ready": 72,
+              "late": 12,
+              "cached_outside_wanted": 5,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2745224342764931,
+              "ready": 0.23594845343792867,
+              "fixed": 0.0002748219564169948,
+              "jt_top_budget": 0.6118639896739964,
+              "ema_top_budget": 0.18927260759940603,
+              "static": 0.015838971739607265
+            }
+          },
+          {
+            "layer": 4,
+            "slots": 9,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 77,
+              "ready": 71,
+              "wanted_ready": 70,
+              "late": 7,
+              "cached_outside_wanted": 1,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.20558015490520948,
+              "ready": 0.17030578408215394,
+              "fixed": 0.005312374435093028,
+              "jt_top_budget": 0.5452748349971602,
+              "ema_top_budget": 0.1288298554985988,
+              "static": 0.06476763991009928
+            }
+          },
+          {
+            "layer": 5,
+            "slots": 9,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 41,
+              "ready": 39,
+              "wanted_ready": 36,
+              "late": 5,
+              "cached_outside_wanted": 3,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.12018107641220585,
+              "ready": 0.1039568905496604,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4032871708845066,
+              "ema_top_budget": 0.10687955784879309,
+              "static": 0.013045179188533639
+            }
+          },
+          {
+            "layer": 6,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 55,
+              "ready": 50,
+              "wanted_ready": 50,
+              "late": 5,
+              "cached_outside_wanted": 0,
+              "fixed": 4
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.1513673271775675,
+              "ready": 0.14407149458753574,
+              "fixed": 0.0010063319520971542,
+              "jt_top_budget": 0.45250834753060926,
+              "ema_top_budget": 0.09676982924106384,
+              "static": 0.01123465672343393
+            }
+          },
+          {
+            "layer": 7,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 158,
+              "ready": 154,
+              "wanted_ready": 154,
+              "late": 4,
+              "cached_outside_wanted": 0,
+              "fixed": 23
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4290154242029947,
+              "ready": 0.41818368310337145,
+              "fixed": 0.050669910270283974,
+              "jt_top_budget": 0.581918116510121,
+              "ema_top_budget": 0.35945785932296975,
+              "static": 0.3328716278864213
+            }
+          },
+          {
+            "layer": 8,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 92,
+              "ready": 89,
+              "wanted_ready": 88,
+              "late": 4,
+              "cached_outside_wanted": 1,
+              "fixed": 5
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.22549072331242684,
+              "ready": 0.20852487338267794,
+              "fixed": 0.00589003639934202,
+              "jt_top_budget": 0.423629786535759,
+              "ema_top_budget": 0.18197880440973974,
+              "static": 0.10453498040706478
+            }
+          },
+          {
+            "layer": 9,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 51,
+              "ready": 53,
+              "wanted_ready": 45,
+              "late": 6,
+              "cached_outside_wanted": 8,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.11683238468509956,
+              "ready": 0.11337216496008343,
+              "fixed": 0.00031896181262081014,
+              "jt_top_budget": 0.4374472774560407,
+              "ema_top_budget": 0.09264830665083816,
+              "static": 0.024671802467656923
+            }
+          },
+          {
+            "layer": 10,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 84,
+              "ready": 80,
+              "wanted_ready": 80,
+              "late": 4,
+              "cached_outside_wanted": 0,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.18904898082903174,
+              "ready": 0.18495440878887312,
+              "fixed": 0.0012340871486380795,
+              "jt_top_budget": 0.3813451329942856,
+              "ema_top_budget": 0.09837856565722235,
+              "static": 0.0031777724051841954
+            }
+          },
+          {
+            "layer": 11,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 197,
+              "ready": 196,
+              "wanted_ready": 195,
+              "late": 2,
+              "cached_outside_wanted": 1,
+              "fixed": 11
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.40922549973965877,
+              "ready": 0.4079234776073021,
+              "fixed": 0.009073353285634387,
+              "jt_top_budget": 0.5790520253656588,
+              "ema_top_budget": 0.34299857112594256,
+              "static": 0.2248691997025286
+            }
+          },
+          {
+            "layer": 12,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 138,
+              "ready": 130,
+              "wanted_ready": 130,
+              "late": 8,
+              "cached_outside_wanted": 0,
+              "fixed": 16
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.238250265182383,
+              "ready": 0.21726108097209698,
+              "fixed": 0.0030089043730413653,
+              "jt_top_budget": 0.4291595253072063,
+              "ema_top_budget": 0.15543066729074187,
+              "static": 0.004072250027432873
+            }
+          },
+          {
+            "layer": 13,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 194,
+              "ready": 189,
+              "wanted_ready": 189,
+              "late": 5,
+              "cached_outside_wanted": 0,
+              "fixed": 12
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3976082283144106,
+              "ready": 0.38304984117137536,
+              "fixed": 0.012477210458928864,
+              "jt_top_budget": 0.5322936498796169,
+              "ema_top_budget": 0.3459143814636363,
+              "static": 0.09853449873207726
+            }
+          },
+          {
+            "layer": 14,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 267,
+              "ready": 264,
+              "wanted_ready": 264,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 24
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4769692063709422,
+              "ready": 0.4716236451120397,
+              "fixed": 0.045513202165217245,
+              "jt_top_budget": 0.6327674059983944,
+              "ema_top_budget": 0.41254200194175134,
+              "static": 0.21339451167003912
+            }
+          },
+          {
+            "layer": 15,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 121,
+              "ready": 117,
+              "wanted_ready": 117,
+              "late": 4,
+              "cached_outside_wanted": 0,
+              "fixed": 10
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.26305401801659295,
+              "ready": 0.24802663085617443,
+              "fixed": 0.016137187469927372,
+              "jt_top_budget": 0.40484533666135697,
+              "ema_top_budget": 0.2073491289228095,
+              "static": 0.03611486126049232
+            }
+          },
+          {
+            "layer": 16,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 105,
+              "ready": 104,
+              "wanted_ready": 104,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.21870759148264585,
+              "ready": 0.21862789014833925,
+              "fixed": 0.00023752482257252387,
+              "jt_top_budget": 0.3876588030031919,
+              "ema_top_budget": 0.18104158444822274,
+              "static": 0.040306485172677486
+            }
+          },
+          {
+            "layer": 17,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 207,
+              "ready": 203,
+              "wanted_ready": 203,
+              "late": 4,
+              "cached_outside_wanted": 0,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.36440598942793884,
+              "ready": 0.3588483333836442,
+              "fixed": 0.0018397332532792353,
+              "jt_top_budget": 0.4738835431194328,
+              "ema_top_budget": 0.32905121709576135,
+              "static": 0.2391943931233367
+            }
+          },
+          {
+            "layer": 18,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 266,
+              "ready": 272,
+              "wanted_ready": 265,
+              "late": 1,
+              "cached_outside_wanted": 7,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.401853982553751,
+              "ready": 0.4131383847067593,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5875834083863835,
+              "ema_top_budget": 0.4165051616389617,
+              "static": 0.0666240923616988
+            }
+          },
+          {
+            "layer": 19,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 297,
+              "ready": 295,
+              "wanted_ready": 295,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 51
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.451996484611015,
+              "ready": 0.4509710224515062,
+              "fixed": 0.030627363517556815,
+              "jt_top_budget": 0.5084715629242267,
+              "ema_top_budget": 0.37976807300637766,
+              "static": 0.08306356134876638
+            }
+          },
+          {
+            "layer": 20,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 179,
+              "ready": 176,
+              "wanted_ready": 175,
+              "late": 4,
+              "cached_outside_wanted": 1,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.29874326610778545,
+              "ready": 0.2936824004111019,
+              "fixed": 0.002892914979565327,
+              "jt_top_budget": 0.45594298427711555,
+              "ema_top_budget": 0.2726825636048852,
+              "static": 0.014593702840173953
+            }
+          },
+          {
+            "layer": 21,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 208,
+              "ready": 206,
+              "wanted_ready": 204,
+              "late": 4,
+              "cached_outside_wanted": 2,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.34950877885373177,
+              "ready": 0.34312714441627046,
+              "fixed": 0.0006944146161839196,
+              "jt_top_budget": 0.48858147404673274,
+              "ema_top_budget": 0.28175692573658695,
+              "static": 0.049504798974402214
+            }
+          },
+          {
+            "layer": 22,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 165,
+              "ready": 166,
+              "wanted_ready": 160,
+              "late": 5,
+              "cached_outside_wanted": 6,
+              "fixed": 9
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2598723024553151,
+              "ready": 0.26118336828617766,
+              "fixed": 0.011470006514660782,
+              "jt_top_budget": 0.43054993095653316,
+              "ema_top_budget": 0.1913315122557605,
+              "static": 0.015727715652552307
+            }
+          },
+          {
+            "layer": 23,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 165,
+              "ready": 163,
+              "wanted_ready": 163,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 9
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.19608707153161145,
+              "ready": 0.19489651290167107,
+              "fixed": 0.003012438615056847,
+              "jt_top_budget": 0.35668654470434996,
+              "ema_top_budget": 0.19572454916650342,
+              "static": 0.009576052391125968
+            }
+          },
+          {
+            "layer": 24,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 216,
+              "ready": 216,
+              "wanted_ready": 214,
+              "late": 2,
+              "cached_outside_wanted": 2,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.39302675389538344,
+              "ready": 0.39612860140518297,
+              "fixed": 0.00019250337653829995,
+              "jt_top_budget": 0.5146678868745084,
+              "ema_top_budget": 0.3541184176513655,
+              "static": 0.0007878601794767721
+            }
+          },
+          {
+            "layer": 25,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 209,
+              "ready": 208,
+              "wanted_ready": 207,
+              "late": 2,
+              "cached_outside_wanted": 1,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.32413146859077635,
+              "ready": 0.3227723612795984,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4416908982637474,
+              "ema_top_budget": 0.33362394559582664,
+              "static": 0.10019163218340212
+            }
+          },
+          {
+            "layer": 26,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 290,
+              "ready": 287,
+              "wanted_ready": 287,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 10
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.48683281677617235,
+              "ready": 0.4855636925518498,
+              "fixed": 0.01732332478621648,
+              "jt_top_budget": 0.5094128782597823,
+              "ema_top_budget": 0.4102870904008531,
+              "static": 0.021571597973875173
+            }
+          },
+          {
+            "layer": 27,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 149,
+              "ready": 162,
+              "wanted_ready": 149,
+              "late": 0,
+              "cached_outside_wanted": 13,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.39749236935401167,
+              "ready": 0.42369362688766965,
+              "fixed": 0.0,
+              "jt_top_budget": 0.49280222028787685,
+              "ema_top_budget": 0.3901299706366694,
+              "static": 0.006526225768302071
+            }
+          },
+          {
+            "layer": 28,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 153,
+              "ready": 154,
+              "wanted_ready": 153,
+              "late": 0,
+              "cached_outside_wanted": 1,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.389846542680135,
+              "ready": 0.39198370951451633,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5012209737318043,
+              "ema_top_budget": 0.38567886277046687,
+              "static": 0.0
+            }
+          },
+          {
+            "layer": 29,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 133,
+              "ready": 133,
+              "wanted_ready": 133,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.28314553868585096,
+              "ready": 0.28314553868585096,
+              "fixed": 0.0004419295943229969,
+              "jt_top_budget": 0.41653293396198365,
+              "ema_top_budget": 0.23208094606980947,
+              "static": 0.001641085060868148
+            }
+          },
+          {
+            "layer": 30,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 215,
+              "ready": 215,
+              "wanted_ready": 215,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4378818929119428,
+              "ready": 0.4378818929119428,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5464415027209283,
+              "ema_top_budget": 0.43451035330472776,
+              "static": 0.0002454343369483571
+            }
+          },
+          {
+            "layer": 31,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 160,
+              "ready": 159,
+              "wanted_ready": 159,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 9
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3507514164410187,
+              "ready": 0.348549175172547,
+              "fixed": 0.012106484430011178,
+              "jt_top_budget": 0.45015365905071386,
+              "ema_top_budget": 0.3645401498690238,
+              "static": 0.013456516930263465
+            }
+          },
+          {
+            "layer": 32,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 213,
+              "ready": 212,
+              "wanted_ready": 212,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 84
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4491232955133708,
+              "ready": 0.44869255465555236,
+              "fixed": 0.13381422785335703,
+              "jt_top_budget": 0.5653137255862659,
+              "ema_top_budget": 0.3962223143014203,
+              "static": 0.13990246753356397
+            }
+          },
+          {
+            "layer": 33,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 146,
+              "ready": 146,
+              "wanted_ready": 146,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2534178040220771,
+              "ready": 0.2534178040220771,
+              "fixed": 0.0,
+              "jt_top_budget": 0.43929371650729,
+              "ema_top_budget": 0.20135601094675784,
+              "static": 0.011720567212001074
+            }
+          },
+          {
+            "layer": 34,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 174,
+              "ready": 173,
+              "wanted_ready": 173,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3535435732074795,
+              "ready": 0.3482208089579926,
+              "fixed": 0.000746826951501507,
+              "jt_top_budget": 0.5346396045168779,
+              "ema_top_budget": 0.38696069455355503,
+              "static": 0.005765175385920994
+            }
+          },
+          {
+            "layer": 35,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 193,
+              "ready": 197,
+              "wanted_ready": 193,
+              "late": 0,
+              "cached_outside_wanted": 4,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.38728822059974954,
+              "ready": 0.3905757671492426,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5613428614716165,
+              "ema_top_budget": 0.45140200035702216,
+              "static": 0.007887068554107573
+            }
+          },
+          {
+            "layer": 36,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 236,
+              "ready": 235,
+              "wanted_ready": 235,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 4
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.5012528661399611,
+              "ready": 0.500845733491003,
+              "fixed": 0.001874004404905645,
+              "jt_top_budget": 0.5956530196183376,
+              "ema_top_budget": 0.503624590309995,
+              "static": 0.004582340810250277
+            }
+          },
+          {
+            "layer": 37,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 134,
+              "ready": 134,
+              "wanted_ready": 133,
+              "late": 1,
+              "cached_outside_wanted": 1,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.23471038432171604,
+              "ready": 0.23835713695529484,
+              "fixed": 0.000334714982656697,
+              "jt_top_budget": 0.45530804647064177,
+              "ema_top_budget": 0.2526560282233139,
+              "static": 0.008047649307611015
+            }
+          },
+          {
+            "layer": 38,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 138,
+              "ready": 137,
+              "wanted_ready": 137,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 5
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.20416799986219156,
+              "ready": 0.20375700655130133,
+              "fixed": 0.004754269744513048,
+              "jt_top_budget": 0.4073146707246991,
+              "ema_top_budget": 0.2377104536170462,
+              "static": 0.04912427188189815
+            }
+          },
+          {
+            "layer": 39,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 253,
+              "ready": 253,
+              "wanted_ready": 253,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 30
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4651162165351245,
+              "ready": 0.4651162165351245,
+              "fixed": 0.032936049852617076,
+              "jt_top_budget": 0.5709412906676692,
+              "ema_top_budget": 0.4467126199715139,
+              "static": 0.09699095226936774
+            }
+          },
+          {
+            "layer": 40,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 163,
+              "ready": 162,
+              "wanted_ready": 162,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4048223676516058,
+              "ready": 0.40315250668324315,
+              "fixed": 0.00017640736337391197,
+              "jt_top_budget": 0.5221711481292406,
+              "ema_top_budget": 0.40500598396723897,
+              "static": 0.00353756127588854
+            }
+          },
+          {
+            "layer": 41,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 160,
+              "ready": 161,
+              "wanted_ready": 159,
+              "late": 1,
+              "cached_outside_wanted": 2,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.28656377921722026,
+              "ready": 0.28832696208299075,
+              "fixed": 0.000481538727955305,
+              "jt_top_budget": 0.438851630503461,
+              "ema_top_budget": 0.25857478291286323,
+              "static": 0.12950799235233318
+            }
+          },
+          {
+            "layer": 42,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 221,
+              "ready": 237,
+              "wanted_ready": 220,
+              "late": 1,
+              "cached_outside_wanted": 17,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.32356250157653643,
+              "ready": 0.33937293112117983,
+              "fixed": 0.0015950040479599068,
+              "jt_top_budget": 0.513171281023734,
+              "ema_top_budget": 0.3369850213102677,
+              "static": 0.03670103510786418
+            }
+          },
+          {
+            "layer": 43,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 201,
+              "ready": 200,
+              "wanted_ready": 200,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 5
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2895984588693185,
+              "ready": 0.286905296509571,
+              "fixed": 0.009115709971253386,
+              "jt_top_budget": 0.4840244069113769,
+              "ema_top_budget": 0.24232018674851608,
+              "static": 0.07015581192492155
+            }
+          },
+          {
+            "layer": 44,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 149,
+              "ready": 154,
+              "wanted_ready": 147,
+              "late": 2,
+              "cached_outside_wanted": 7,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.24975927489453226,
+              "ready": 0.24996791143169467,
+              "fixed": 0.0,
+              "jt_top_budget": 0.46589565254737475,
+              "ema_top_budget": 0.19836701054147626,
+              "static": 0.0332518907497076
+            }
+          }
+        ],
+        "block_calibration": {
+          "full_windows": 112,
+          "excluded_tail_predictions": 15,
+          "target": "Mean per-token normalized squared routing weights over t..t+15, matching shipped train.py block_loss",
+          "scope": "Decode-only overlapping windows on observed mixed-precision routing; not independent samples or output-quality validation",
+          "mean_total_variation": 0.5485373168515288,
+          "mean_cross_entropy_nats": 4.3950522065413375,
+          "uniform_cross_entropy_nats": 5.662960480135946,
+          "top_budget_predicted_salience_share": 0.35481862283923943,
+          "top_budget_observed_salience_share": 0.33233462418467535,
+          "soft_share_bin_error": 0.00014732138626344826,
+          "bins": [
+            {
+              "lower": 0.0,
+              "upper": 0.001,
+              "count": 655630,
+              "predicted_mean": 0.0004263368200384425,
+              "observed_mean": 0.00044815105947750667
+            },
+            {
+              "lower": 0.001,
+              "upper": 0.005,
+              "count": 515250,
+              "predicted_mean": 0.0022843424013557346,
+              "observed_mean": 0.0023592068845866383
+            },
+            {
+              "lower": 0.005,
+              "upper": 0.01,
+              "count": 102844,
+              "predicted_mean": 0.006922203790789867,
+              "observed_mean": 0.007063077762206714
+            },
+            {
+              "lower": 0.01,
+              "upper": 0.025,
+              "count": 54900,
+              "predicted_mean": 0.01503347983273367,
+              "observed_mean": 0.015485783455656264
+            },
+            {
+              "lower": 0.025,
+              "upper": 0.05,
+              "count": 15441,
+              "predicted_mean": 0.03442062463373241,
+              "observed_mean": 0.034912591926396605
+            },
+            {
+              "lower": 0.05,
+              "upper": 0.1,
+              "count": 6709,
+              "predicted_mean": 0.06893251386699724,
+              "observed_mean": 0.06724736102400923
+            },
+            {
+              "lower": 0.1,
+              "upper": 0.25,
+              "count": 3326,
+              "predicted_mean": 0.14947152274626604,
+              "observed_mean": 0.1398863715520327
+            },
+            {
+              "lower": 0.25,
+              "upper": 0.5,
+              "count": 617,
+              "predicted_mean": 0.3234358623116677,
+              "observed_mean": 0.24349480242591173
+            },
+            {
+              "lower": 0.5,
+              "upper": 1.0,
+              "count": 35,
+              "predicted_mean": 0.5591109326907566,
+              "observed_mean": 0.35104144500470325
+            }
+          ]
+        },
+        "limitations": [
+          "Top-budget jT, EMA and static comparisons rescore the same observed routing, not alternative model executions",
+          "Salience coverage is not answer accuracy",
+          "No predictor parameters fitted on this request"
+        ]
+      },
+      "predictor_metrics_seconds": 0.17190028697950765,
+      "prefill_tokens_per_second": 0.4704972514936352,
+      "expert_metrics": {
+        "hits": 40551,
+        "misses": 9684,
+        "load_seconds": 77.54513453182881,
+        "expert_forward_seconds": 108.482017557777,
+        "base_load_seconds": 44.15205460321158,
+        "base_tensor_bytes": 29336875008,
+        "refinement_tensor_bytes": 39060291584,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 31442,
+        "base_misses": 5656,
+        "refinement_hits": 9109,
+        "refinement_misses": 4028,
+        "async_load_seconds": 5.006825747725088,
+        "async_loaded": 578,
+        "async_discarded": 0,
+        "async_fallbacks": 111,
+        "async_install_seconds": 0.29648845369229093,
+        "base_evictions": 5656
+      },
+      "expert_metrics_by_phase": {
+        "prefill": {
+          "hits": 2080,
+          "misses": 5483,
+          "load_seconds": 44.663515434163855,
+          "expert_forward_seconds": 58.4434103750973,
+          "base_load_seconds": 11.27043550554663,
+          "base_tensor_bytes": 7554289664,
+          "refinement_tensor_bytes": 34156314624,
+          "hot_sync_seconds": 0.0,
+          "base_hits": 0,
+          "base_misses": 1455,
+          "refinement_hits": 2080,
+          "refinement_misses": 4028,
+          "async_load_seconds": 0.0,
+          "async_loaded": 0,
+          "async_discarded": 0,
+          "async_fallbacks": 0,
+          "async_install_seconds": 0.0,
+          "base_evictions": 1455
+        },
+        "decode": {
+          "hits": 38471,
+          "misses": 4201,
+          "load_seconds": 32.88161909766495,
+          "expert_forward_seconds": 50.0386071826797,
+          "base_load_seconds": 32.88161909766495,
+          "base_tensor_bytes": 21782585344,
+          "refinement_tensor_bytes": 4903976960,
+          "hot_sync_seconds": 0.0,
+          "base_hits": 31442,
+          "base_misses": 4201,
+          "refinement_hits": 7029,
+          "refinement_misses": 0,
+          "async_load_seconds": 5.006825747725088,
+          "async_loaded": 578,
+          "async_discarded": 0,
+          "async_fallbacks": 111,
+          "async_install_seconds": 0.29648845369229093,
+          "base_evictions": 4201
+        }
+      },
+      "expert_cache_bytes": {
+        "limit": 4294967296,
+        "resident_limit": 4227858432,
+        "staging_reserved": 67108864,
+        "peak_staging_reserved": 51961856,
+        "after_prefill": 4221956096,
+        "after_decode": 1981337600,
+        "resident_base": 34355854419,
+        "base_limit": 34359738368
+      },
+      "disk_reads": {
+        "prefill": 47507308544,
+        "decode": 31618367488
+      },
+      "resources": {
+        "before": {
+          "disk_read_bytes": 161561624576,
+          "disk_written_bytes": 151552,
+          "physical_footprint_bytes": 62122900632,
+          "lifetime_peak_physical_footprint_bytes": 62122900632,
+          "mlx_active_bytes": 36343176275,
+          "mlx_peak_bytes": 36379045387,
+          "mlx_cached_bytes": 509289534,
+          "mps_driver_allocated_bytes": 56838389760,
+          "mps_allocated_bytes": 18034924544
+        },
+        "after_prefill": {
+          "disk_read_bytes": 209068933120,
+          "disk_written_bytes": 151552,
+          "physical_footprint_bytes": 64376292064,
+          "lifetime_peak_physical_footprint_bytes": 64377570016,
+          "mlx_active_bytes": 38585838675,
+          "mlx_peak_bytes": 39045774623,
+          "mlx_cached_bytes": 491226590,
+          "mps_driver_allocated_bytes": 59089240064,
+          "mps_allocated_bytes": 18184708352
+        },
+        "after_decode": {
+          "disk_read_bytes": 240687300608,
+          "disk_written_bytes": 151552,
+          "physical_footprint_bytes": 62135780064,
+          "lifetime_peak_physical_footprint_bytes": 64377570016,
+          "mlx_active_bytes": 36343286867,
+          "mlx_peak_bytes": 39045774623,
+          "mlx_cached_bytes": 511784286,
+          "mps_driver_allocated_bytes": 56842403840,
+          "mps_allocated_bytes": 18186856960
+        }
+      },
+      "decode_hot_expert_fraction": 0.16472159730033745,
+      "decode_desired_hot_expert_fraction": 0.1653777652793401,
+      "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+      "backbone_device": "mps",
+      "thinking": false,
+      "policy": {
+        "base_bits": 1.5,
+        "hot_bits": 4,
+        "slots": 242,
+        "fixed": 48,
+        "jt_mix": 0.75,
+        "refresh_tokens": 1,
+        "prefill_bits": 4,
+        "prefill_chunk_size": 8,
+        "resident_base": true,
+        "resident_hot": false,
+        "hot_set_capacity_bytes": 2008899584,
+        "wired_memory": false,
+        "async_refinements": true,
+        "base_cache_gib": 32.0,
+        "process_memory_limit_bytes": 90194313216
+      },
+      "limitations": [
+        "text only",
+        "single sequence",
+        "4096 token validation ceiling",
+        "no speculative decoding",
+        "synchronous prefill SSD reads",
+        "readiness-dependent decode precision",
+        "greedy sampling",
+        "unquantized attention cache",
+        "synchronous base-cache misses"
+      ]
+    },
+    {
+      "text": "# Merging Overlapping Intervals\n\n## The Solution\n\n```python\ndef merge_intervals(intervals):\n    \"\"\"\n    Merge overlapping intervals into consolidated intervals.\n\n    Args:\n        intervals: List of [start, end] pairs (lists or tuples).\n\n    Returns:\n        List of merged, non-overlapping intervals sorted by start time.\n    \"\"\"\n    if not intervals:\n        return []\n\n    # Sort by start time (and by end time as tiebreaker)\n    intervals.sort(key=lambda x: (x[0], x[1]))\n\n    merged = [list(intervals[0])]  # copy so we can mutate safely\n\n   ",
+      "generated_ids": [
+        2,
+        386,
+        94497,
+        6065,
+        89870,
+        1333,
+        41958,
+        271,
+        565,
+        576,
+        12472,
+        271,
+        73022,
+        12663,
+        198,
+        750,
+        10875,
+        90055,
+        1548,
+        41958,
+        982,
+        262,
+        3190,
+        262,
+        39865,
+        49499,
+        26904,
+        1119,
+        58880,
+        26904,
+        382,
+        262,
+        17668,
+        510,
+        286,
+        26904,
+        25,
+        1759,
+        315,
+        508,
+        2468,
+        11,
+        835,
+        60,
+        13521,
+        320,
+        17550,
+        476,
+        44957,
+        3593,
+        262,
+        5184,
+        510,
+        286,
+        1759,
+        315,
+        25920,
+        11,
+        2477,
+        28155,
+        89870,
+        26904,
+        10610,
+        553,
+        1191,
+        882,
+        624,
+        262,
+        3190,
+        262,
+        421,
+        537,
+        26904,
+        510,
+        286,
+        470,
+        14589,
+        262,
+        671,
+        15954,
+        553,
+        1191,
+        882,
+        320,
+        437,
+        553,
+        835,
+        882,
+        438,
+        18103,
+        63661,
+        340,
+        262,
+        26904,
+        10609,
+        4857,
+        27412,
+        856,
+        25,
+        320,
+        87,
+        58,
+        15,
+        1125,
+        856,
+        58,
+        16,
+        36736,
+        262,
+        25920,
+        284,
+        508,
+        1607,
+        1548,
+        41958,
+        58,
+        15,
+        71527,
+        220,
+        671,
+        2975,
+        773,
+        582,
+        646,
+        66693,
+        20953,
+        271,
+        262
+      ],
+      "prompt_tokens": 29,
+      "generated_tokens": 128,
+      "ttft_seconds": 62.42473475000588,
+      "decode_step_seconds": [
+        0.9656806249986403,
+        0.6116278749832418,
+        0.7166855419927742,
+        0.7711873329826631,
+        0.43359425000380725,
+        0.577259707992198,
+        0.3689724580035545,
+        0.4599363750021439,
+        0.5379041249980219,
+        0.8061956669844221,
+        0.6378125409828499,
+        0.42569004200049676,
+        0.6890702079981565,
+        0.6088607499841601,
+        0.4467576250026468,
+        0.7697000000043772,
+        0.6183315409871284,
+        0.537732666998636,
+        0.6939772499899846,
+        0.48864562500966713,
+        0.6385751669877209,
+        0.5812505000212695,
+        0.7033904999843799,
+        0.48827375000109896,
+        0.5486534999799915,
+        0.5055296659993473,
+        0.5160061669885181,
+        1.0052533329871949,
+        0.7215693750185892,
+        0.5449103330029175,
+        0.6074847920099273,
+        0.43311829198501073,
+        0.83701524999924,
+        0.595196832990041,
+        0.513774499995634,
+        0.4473562919883989,
+        0.526958166010445,
+        0.6801169999816921,
+        0.5983699169883039,
+        0.8185585410101339,
+        0.6377453749882989,
+        0.7901735830237158,
+        0.5301697910181247,
+        0.746371209010249,
+        0.5390507090196479,
+        0.6737889589858241,
+        0.5596392079896759,
+        0.5867247080022935,
+        0.5861663749965373,
+        0.617942042008508,
+        0.627188708022004,
+        0.5758410829876084,
+        0.43216225001378916,
+        0.5166586660197936,
+        0.3933790409937501,
+        0.45136266699410044,
+        0.45915433298796415,
+        0.518396166007733,
+        0.7209396660036873,
+        0.5628865409817081,
+        0.3724890830053482,
+        0.38921304201358,
+        0.5255211250041611,
+        0.5468785419943742,
+        0.4917875420069322,
+        0.6782653330010362,
+        0.6389581670227926,
+        0.5729904579930007,
+        0.5922719580121338,
+        0.5295185420254711,
+        0.9183220840059221,
+        0.9115612079913262,
+        0.7156550830113702,
+        0.6812348749954253,
+        0.965358333021868,
+        0.6587431250081863,
+        0.6527579590037931,
+        0.47960962500656024,
+        0.4744856670149602,
+        0.4052977079991251,
+        0.44748791700112633,
+        0.37712045799707994,
+        0.4582848330028355,
+        0.45786941700498573,
+        0.6363772500189953,
+        0.4431802500039339,
+        0.5336920419940725,
+        0.41897279099794105,
+        0.7096594580216333,
+        0.6654084170004353,
+        0.5779362500179559,
+        0.5174734579923097,
+        0.6959972089971416,
+        0.638891540991608,
+        0.7430403339967597,
+        0.7017651250062045,
+        0.7354912080045324,
+        0.7948777499841526,
+        0.6777284169802442,
+        0.7107584589975886,
+        0.7674004170112312,
+        0.8139431250165217,
+        0.8729353340168018,
+        0.7763304169930052,
+        0.6857202090031933,
+        0.6267769999976736,
+        0.6736388340068515,
+        0.6000564170244616,
+        0.47675299999536946,
+        0.5965349590114783,
+        0.7595044579938985,
+        0.4669322910194751,
+        0.49028029199689627,
+        0.6873774580017198,
+        0.5828483749937732,
+        0.7204176250088494,
+        0.5826743750076275,
+        0.5651546250155661,
+        0.5688494580099359,
+        0.4945886670029722,
+        0.543205082998611,
+        0.7242926670005545,
+        0.9151290419977158,
+        0.5718365420179907,
+        0.6658458749880083,
+        0.6085952080029529,
+        0.5363702500180807
+      ],
+      "decode_tokens_per_second": 1.6382943072996978,
+      "elapsed_seconds": 139.96485145800398,
+      "first_decode_step_seconds": 0.9656806249986403,
+      "subsequent_decode_tokens_per_second": 1.6458976893501007,
+      "predictor_seconds": 0.7017952890892047,
+      "prefetch_drain_seconds": 1.6207981389015913e-05,
+      "predictor_diagnostics": {
+        "decode_steps": 127,
+        "routed_calls": 42672,
+        "allocated_slots": 242,
+        "allocated_fraction": 0.020006613756613757,
+        "counts": {
+          "wanted": 7081,
+          "ready": 7049,
+          "wanted_ready": 6973,
+          "late": 108,
+          "cached_outside_wanted": 76,
+          "fixed": 340
+        },
+        "call_fractions": {
+          "wanted": 0.16594019497562804,
+          "ready": 0.16519028871391075,
+          "wanted_ready": 0.16340926134233222,
+          "late": 0.002530933633295838,
+          "cached_outside_wanted": 0.0017810273715785528,
+          "fixed": 0.007967754030746156
+        },
+        "wanted_delivery_fraction": 0.9847479169608813,
+        "mean_salience_coverage": {
+          "wanted": 0.3198448084910165,
+          "ready": 0.31546479838830505,
+          "fixed": 0.009312976390448457,
+          "jt_top_budget": 0.4873246475818988,
+          "ema_top_budget": 0.2901066795301983,
+          "static": 0.0560116266948128
+        },
+        "per_layer": [
+          {
+            "layer": 3,
+            "slots": 11,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 81,
+              "ready": 73,
+              "wanted_ready": 65,
+              "late": 16,
+              "cached_outside_wanted": 8,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2506296886064914,
+              "ready": 0.19367104434767599,
+              "fixed": 0.0002748219564169948,
+              "jt_top_budget": 0.590638637166433,
+              "ema_top_budget": 0.1674097917259623,
+              "static": 0.01459496355231531
+            }
+          },
+          {
+            "layer": 4,
+            "slots": 9,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 78,
+              "ready": 71,
+              "wanted_ready": 69,
+              "late": 9,
+              "cached_outside_wanted": 2,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.20294376962814295,
+              "ready": 0.15505739845856095,
+              "fixed": 0.0039584634694718075,
+              "jt_top_budget": 0.5071603567677412,
+              "ema_top_budget": 0.1379623570661936,
+              "static": 0.062186744070705166
+            }
+          },
+          {
+            "layer": 5,
+            "slots": 9,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 46,
+              "ready": 43,
+              "wanted_ready": 42,
+              "late": 4,
+              "cached_outside_wanted": 1,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.13850275570278894,
+              "ready": 0.12132663603809331,
+              "fixed": 0.00770044259104872,
+              "jt_top_budget": 0.40061649630251406,
+              "ema_top_budget": 0.11100486428721892,
+              "static": 0.02499478282245302
+            }
+          },
+          {
+            "layer": 6,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 55,
+              "ready": 52,
+              "wanted_ready": 51,
+              "late": 4,
+              "cached_outside_wanted": 1,
+              "fixed": 4
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.16670212003946797,
+              "ready": 0.15688906447444495,
+              "fixed": 0.001587583838189456,
+              "jt_top_budget": 0.47398873798160684,
+              "ema_top_budget": 0.09361760325542233,
+              "static": 0.011749627134021619
+            }
+          },
+          {
+            "layer": 7,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 151,
+              "ready": 145,
+              "wanted_ready": 145,
+              "late": 6,
+              "cached_outside_wanted": 0,
+              "fixed": 22
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.42574683401038266,
+              "ready": 0.40617695753056154,
+              "fixed": 0.05034547693000107,
+              "jt_top_budget": 0.5756401900257635,
+              "ema_top_budget": 0.3523708109412141,
+              "static": 0.33202452459045895
+            }
+          },
+          {
+            "layer": 8,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 85,
+              "ready": 84,
+              "wanted_ready": 84,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 4
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2087932932102093,
+              "ready": 0.20548728035151276,
+              "fixed": 0.005404614520645739,
+              "jt_top_budget": 0.4624271258109618,
+              "ema_top_budget": 0.18880195121703547,
+              "static": 0.11949995491205281
+            }
+          },
+          {
+            "layer": 9,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 55,
+              "ready": 51,
+              "wanted_ready": 48,
+              "late": 7,
+              "cached_outside_wanted": 3,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.1267653827283327,
+              "ready": 0.11511001508582111,
+              "fixed": 0.00018542652812313922,
+              "jt_top_budget": 0.4320664911358395,
+              "ema_top_budget": 0.10361015122770505,
+              "static": 0.028571547151710903
+            }
+          },
+          {
+            "layer": 10,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 86,
+              "ready": 83,
+              "wanted_ready": 82,
+              "late": 4,
+              "cached_outside_wanted": 1,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.1869568276173081,
+              "ready": 0.17761639073046218,
+              "fixed": 0.0012189848087417385,
+              "jt_top_budget": 0.3882386436733522,
+              "ema_top_budget": 0.1122460371793653,
+              "static": 0.002053881147496118
+            }
+          },
+          {
+            "layer": 11,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 194,
+              "ready": 192,
+              "wanted_ready": 192,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 11
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4049430527117655,
+              "ready": 0.4035219063725468,
+              "fixed": 0.009323290278833225,
+              "jt_top_budget": 0.5655875934037944,
+              "ema_top_budget": 0.35400345313673287,
+              "static": 0.2471968704267274
+            }
+          },
+          {
+            "layer": 12,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 156,
+              "ready": 146,
+              "wanted_ready": 146,
+              "late": 10,
+              "cached_outside_wanted": 0,
+              "fixed": 19
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2671603047690951,
+              "ready": 0.24280971680203792,
+              "fixed": 0.0029515369486280657,
+              "jt_top_budget": 0.4673453432357947,
+              "ema_top_budget": 0.16829563280311113,
+              "static": 0.008064200636470523
+            }
+          },
+          {
+            "layer": 13,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 199,
+              "ready": 196,
+              "wanted_ready": 196,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 9
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3955795978340853,
+              "ready": 0.3846986226023567,
+              "fixed": 0.008269602835574558,
+              "jt_top_budget": 0.5358069907950433,
+              "ema_top_budget": 0.35577624455623186,
+              "static": 0.0885137602825096
+            }
+          },
+          {
+            "layer": 14,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 283,
+              "ready": 280,
+              "wanted_ready": 280,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 21
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4593980953148657,
+              "ready": 0.4538289365701807,
+              "fixed": 0.04279712618471879,
+              "jt_top_budget": 0.6129445150990448,
+              "ema_top_budget": 0.3994796096420734,
+              "static": 0.1967002008515052
+            }
+          },
+          {
+            "layer": 15,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 117,
+              "ready": 114,
+              "wanted_ready": 114,
+              "late": 3,
+              "cached_outside_wanted": 0,
+              "fixed": 7
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2560568072484414,
+              "ready": 0.24592834083969892,
+              "fixed": 0.006932850810783239,
+              "jt_top_budget": 0.4430543116798525,
+              "ema_top_budget": 0.22868596487629408,
+              "static": 0.025694806879720387
+            }
+          },
+          {
+            "layer": 16,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 110,
+              "ready": 108,
+              "wanted_ready": 108,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.23313048891592617,
+              "ready": 0.23285012425505322,
+              "fixed": 0.0003654119229187008,
+              "jt_top_budget": 0.4081792968918569,
+              "ema_top_budget": 0.19284425298084754,
+              "static": 0.039668872855130335
+            }
+          },
+          {
+            "layer": 17,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 205,
+              "ready": 205,
+              "wanted_ready": 202,
+              "late": 3,
+              "cached_outside_wanted": 3,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3327567078854227,
+              "ready": 0.3329515599192576,
+              "fixed": 0.0009375198868852864,
+              "jt_top_budget": 0.49700524445613264,
+              "ema_top_budget": 0.2903005987487198,
+              "static": 0.2195120733961486
+            }
+          },
+          {
+            "layer": 18,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 265,
+              "ready": 264,
+              "wanted_ready": 264,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3932099843003292,
+              "ready": 0.3927111408306455,
+              "fixed": 0.0,
+              "jt_top_budget": 0.6142969711843658,
+              "ema_top_budget": 0.4405153853743528,
+              "static": 0.061167574242985266
+            }
+          },
+          {
+            "layer": 19,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 306,
+              "ready": 304,
+              "wanted_ready": 304,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 54
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.47655448810811873,
+              "ready": 0.4755290259486101,
+              "fixed": 0.030063705130083933,
+              "jt_top_budget": 0.536752624655062,
+              "ema_top_budget": 0.40147753272507436,
+              "static": 0.07687121378701024
+            }
+          },
+          {
+            "layer": 20,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 162,
+              "ready": 160,
+              "wanted_ready": 159,
+              "late": 3,
+              "cached_outside_wanted": 1,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2668402908195248,
+              "ready": 0.26312996066266664,
+              "fixed": 0.0025057209611503623,
+              "jt_top_budget": 0.43479781676592194,
+              "ema_top_budget": 0.2634665252841398,
+              "static": 0.013959120514158369
+            }
+          },
+          {
+            "layer": 21,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 223,
+              "ready": 222,
+              "wanted_ready": 221,
+              "late": 2,
+              "cached_outside_wanted": 1,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3781683493645914,
+              "ready": 0.37641065055122824,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5007059758735561,
+              "ema_top_budget": 0.30388490647091304,
+              "static": 0.044718188497983445
+            }
+          },
+          {
+            "layer": 22,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 158,
+              "ready": 168,
+              "wanted_ready": 155,
+              "late": 3,
+              "cached_outside_wanted": 13,
+              "fixed": 9
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.24680647145643164,
+              "ready": 0.2623938515817768,
+              "fixed": 0.011311157514914951,
+              "jt_top_budget": 0.4422753468202391,
+              "ema_top_budget": 0.212018449307975,
+              "static": 0.014858391173342827
+            }
+          },
+          {
+            "layer": 23,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 157,
+              "ready": 155,
+              "wanted_ready": 155,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 6
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.19310150585954877,
+              "ready": 0.19191094722960841,
+              "fixed": 0.0019052563936762898,
+              "jt_top_budget": 0.359729849137072,
+              "ema_top_budget": 0.19132324823813127,
+              "static": 0.008572338638547061
+            }
+          },
+          {
+            "layer": 24,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 204,
+              "ready": 202,
+              "wanted_ready": 202,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.35839408464691797,
+              "ready": 0.35707337718541265,
+              "fixed": 0.0003737306384706241,
+              "jt_top_budget": 0.49194409369470476,
+              "ema_top_budget": 0.3329183906792813,
+              "static": 0.0016581450242589976
+            }
+          },
+          {
+            "layer": 25,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 221,
+              "ready": 221,
+              "wanted_ready": 219,
+              "late": 2,
+              "cached_outside_wanted": 2,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.32901756623587425,
+              "ready": 0.32865975747275994,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4393803366415319,
+              "ema_top_budget": 0.32552649579907067,
+              "static": 0.09520975806449761
+            }
+          },
+          {
+            "layer": 26,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 282,
+              "ready": 280,
+              "wanted_ready": 280,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 9
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.45662887685917747,
+              "ready": 0.45566487290928015,
+              "fixed": 0.016248489042086353,
+              "jt_top_budget": 0.5127579499726227,
+              "ema_top_budget": 0.4039099139795686,
+              "static": 0.018986860566934546
+            }
+          },
+          {
+            "layer": 27,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 134,
+              "ready": 147,
+              "wanted_ready": 134,
+              "late": 0,
+              "cached_outside_wanted": 13,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.35349866273577163,
+              "ready": 0.3755551060928147,
+              "fixed": 0.0,
+              "jt_top_budget": 0.46937031310728006,
+              "ema_top_budget": 0.34599533945668554,
+              "static": 0.004424442591442571
+            }
+          },
+          {
+            "layer": 28,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 152,
+              "ready": 154,
+              "wanted_ready": 152,
+              "late": 0,
+              "cached_outside_wanted": 2,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3885239162212124,
+              "ready": 0.38921204180838015,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5280491938825392,
+              "ema_top_budget": 0.3887947335559517,
+              "static": 0.0
+            }
+          },
+          {
+            "layer": 29,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 124,
+              "ready": 124,
+              "wanted_ready": 124,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 2
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2656746134123327,
+              "ready": 0.2656746134123327,
+              "fixed": 0.0006172911987391023,
+              "jt_top_budget": 0.4055228351896013,
+              "ema_top_budget": 0.2281396125565014,
+              "static": 0.001542221064641283
+            }
+          },
+          {
+            "layer": 30,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 204,
+              "ready": 204,
+              "wanted_ready": 204,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.41421538766470667,
+              "ready": 0.41421538766470667,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5243922730482248,
+              "ema_top_budget": 0.419177737308506,
+              "static": 0.00020039151956399134
+            }
+          },
+          {
+            "layer": 31,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 172,
+              "ready": 171,
+              "wanted_ready": 171,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 10
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.36582746847379566,
+              "ready": 0.363625227205324,
+              "fixed": 0.013938822476444696,
+              "jt_top_budget": 0.45076048218797227,
+              "ema_top_budget": 0.38407670835847363,
+              "static": 0.01573319237890013
+            }
+          },
+          {
+            "layer": 32,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 218,
+              "ready": 216,
+              "wanted_ready": 216,
+              "late": 2,
+              "cached_outside_wanted": 0,
+              "fixed": 80
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.43210738129631976,
+              "ready": 0.42976479718370225,
+              "fixed": 0.12338034762201416,
+              "jt_top_budget": 0.5414780687572247,
+              "ema_top_budget": 0.37854563344045156,
+              "static": 0.1302113905625426
+            }
+          },
+          {
+            "layer": 33,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 176,
+              "ready": 175,
+              "wanted_ready": 175,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.28826605086568163,
+              "ready": 0.28777868508821325,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4424119996894391,
+              "ema_top_budget": 0.24206252479617146,
+              "static": 0.011712759293399155
+            }
+          },
+          {
+            "layer": 34,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 171,
+              "ready": 170,
+              "wanted_ready": 170,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 3
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.3574379426755237,
+              "ready": 0.35658839572546586,
+              "fixed": 0.0008757768619547043,
+              "jt_top_budget": 0.531997742881007,
+              "ema_top_budget": 0.38035017247476155,
+              "static": 0.005025654281954354
+            }
+          },
+          {
+            "layer": 35,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 204,
+              "ready": 209,
+              "wanted_ready": 204,
+              "late": 0,
+              "cached_outside_wanted": 5,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4249069158111031,
+              "ready": 0.4336587533765427,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5494783194991517,
+              "ema_top_budget": 0.4479017464146904,
+              "static": 0.005976574321213171
+            }
+          },
+          {
+            "layer": 36,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 228,
+              "ready": 227,
+              "wanted_ready": 227,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 5
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.472754696980209,
+              "ready": 0.47234756433125097,
+              "fixed": 0.002290567577829031,
+              "jt_top_budget": 0.5403246263576857,
+              "ema_top_budget": 0.4704814343798714,
+              "static": 0.006389150350971263
+            }
+          },
+          {
+            "layer": 37,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 138,
+              "ready": 138,
+              "wanted_ready": 138,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 4
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.25375822102406687,
+              "ready": 0.25375822102406687,
+              "fixed": 0.0014524794477288505,
+              "jt_top_budget": 0.4410572204146511,
+              "ema_top_budget": 0.27195564946924866,
+              "static": 0.011898969270585463
+            }
+          },
+          {
+            "layer": 38,
+            "slots": 4,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 127,
+              "ready": 126,
+              "wanted_ready": 126,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 5
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.20061145301627198,
+              "ready": 0.20020045970538172,
+              "fixed": 0.004182606540625273,
+              "jt_top_budget": 0.3720925975138957,
+              "ema_top_budget": 0.2325522419858687,
+              "static": 0.050274478901827055
+            }
+          },
+          {
+            "layer": 39,
+            "slots": 5,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 253,
+              "ready": 253,
+              "wanted_ready": 253,
+              "late": 0,
+              "cached_outside_wanted": 0,
+              "fixed": 27
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.45873908243386396,
+              "ready": 0.45873908243386396,
+              "fixed": 0.03086643003349134,
+              "jt_top_budget": 0.5330958060013413,
+              "ema_top_budget": 0.42087215735190514,
+              "static": 0.0828441436960892
+            }
+          },
+          {
+            "layer": 40,
+            "slots": 6,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 169,
+              "ready": 172,
+              "wanted_ready": 169,
+              "late": 0,
+              "cached_outside_wanted": 3,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.4293508249359704,
+              "ready": 0.43205664183387293,
+              "fixed": 0.0,
+              "jt_top_budget": 0.5503577138075356,
+              "ema_top_budget": 0.4232454223257466,
+              "static": 0.002832670895303827
+            }
+          },
+          {
+            "layer": 41,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 163,
+              "ready": 163,
+              "wanted_ready": 162,
+              "late": 1,
+              "cached_outside_wanted": 1,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.29977301434233233,
+              "ready": 0.3014070684288169,
+              "fixed": 0.0001837818485717998,
+              "jt_top_budget": 0.44067182344410705,
+              "ema_top_budget": 0.26358972872397934,
+              "static": 0.13281310336838312
+            }
+          },
+          {
+            "layer": 42,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 231,
+              "ready": 244,
+              "wanted_ready": 230,
+              "late": 1,
+              "cached_outside_wanted": 14,
+              "fixed": 1
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.353567629644497,
+              "ready": 0.36677034108227974,
+              "fixed": 0.0014561716701758103,
+              "jt_top_budget": 0.5290937856273369,
+              "ema_top_budget": 0.3513774835552523,
+              "static": 0.0286844182198174
+            }
+          },
+          {
+            "layer": 43,
+            "slots": 8,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 197,
+              "ready": 196,
+              "wanted_ready": 196,
+              "late": 1,
+              "cached_outside_wanted": 0,
+              "fixed": 7
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.2971688116180713,
+              "ready": 0.29709907163528526,
+              "fixed": 0.007239519929897432,
+              "jt_top_budget": 0.4672430066248352,
+              "ema_top_budget": 0.2394289506901101,
+              "static": 0.06646916252156246
+            }
+          },
+          {
+            "layer": 44,
+            "slots": 7,
+            "routed_calls": 1016,
+            "counts": {
+              "wanted": 141,
+              "ready": 141,
+              "wanted_ready": 139,
+              "late": 2,
+              "cached_outside_wanted": 2,
+              "fixed": 0
+            },
+            "mean_salience_coverage": {
+              "wanted": 0.22251253959772238,
+              "ready": 0.21966249552625985,
+              "fixed": 0.0,
+              "jt_top_budget": 0.4568964512351136,
+              "ema_top_budget": 0.16448309192152036,
+              "static": 0.03842719672479604
+            }
+          }
+        ],
+        "block_calibration": {
+          "full_windows": 112,
+          "excluded_tail_predictions": 15,
+          "target": "Mean per-token normalized squared routing weights over t..t+15, matching shipped train.py block_loss",
+          "scope": "Decode-only overlapping windows on observed mixed-precision routing; not independent samples or output-quality validation",
+          "mean_total_variation": 0.5492030356186345,
+          "mean_cross_entropy_nats": 4.396210246607507,
+          "uniform_cross_entropy_nats": 5.662960480135946,
+          "top_budget_predicted_salience_share": 0.349214227533532,
+          "top_budget_observed_salience_share": 0.3302499552704409,
+          "soft_share_bin_error": 0.00013458747048027527,
+          "bins": [
+            {
+              "lower": 0.0,
+              "upper": 0.001,
+              "count": 642038,
+              "predicted_mean": 0.0004319477907680953,
+              "observed_mean": 0.00044057843684956966
+            },
+            {
+              "lower": 0.001,
+              "upper": 0.005,
+              "count": 529351,
+              "predicted_mean": 0.0022760458756202594,
+              "observed_mean": 0.002297686443732157
+            },
+            {
+              "lower": 0.005,
+              "upper": 0.01,
+              "count": 102110,
+              "predicted_mean": 0.006924090111116864,
+              "observed_mean": 0.007031114455007414
+            },
+            {
+              "lower": 0.01,
+              "upper": 0.025,
+              "count": 54997,
+              "predicted_mean": 0.015065690756941714,
+              "observed_mean": 0.015961033114933416
+            },
+            {
+              "lower": 0.025,
+              "upper": 0.05,
+              "count": 15779,
+              "predicted_mean": 0.03435765666460665,
+              "observed_mean": 0.035244928785831714
+            },
+            {
+              "lower": 0.05,
+              "upper": 0.1,
+              "count": 6681,
+              "predicted_mean": 0.06844895975345035,
+              "observed_mean": 0.06671624672947433
+            },
+            {
+              "lower": 0.1,
+              "upper": 0.25,
+              "count": 3157,
+              "predicted_mean": 0.1490659800287021,
+              "observed_mean": 0.14171132273106213
+            },
+            {
+              "lower": 0.25,
+              "upper": 0.5,
+              "count": 602,
+              "predicted_mean": 0.3248521158861559,
+              "observed_mean": 0.24658277656705063
+            },
+            {
+              "lower": 0.5,
+              "upper": 1.0,
+              "count": 37,
+              "predicted_mean": 0.5583801350078067,
+              "observed_mean": 0.30829179990627764
+            }
+          ]
+        },
+        "limitations": [
+          "Top-budget jT, EMA and static comparisons rescore the same observed routing, not alternative model executions",
+          "Salience coverage is not answer accuracy",
+          "No predictor parameters fitted on this request"
+        ]
+      },
+      "predictor_metrics_seconds": 0.17830692094867118,
+      "prefill_tokens_per_second": 0.4645594429217381,
+      "expert_metrics": {
+        "hits": 40394,
+        "misses": 9904,
+        "load_seconds": 79.94230612134561,
+        "expert_forward_seconds": 110.41859335763729,
+        "base_load_seconds": 46.26172288827365,
+        "base_tensor_bytes": 30476668928,
+        "refinement_tensor_bytes": 38975840256,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 31265,
+        "base_misses": 5876,
+        "refinement_hits": 9129,
+        "refinement_misses": 4028,
+        "async_load_seconds": 4.969732217723504,
+        "async_loaded": 568,
+        "async_discarded": 0,
+        "async_fallbacks": 108,
+        "async_install_seconds": 0.2923340357665438,
+        "base_evictions": 5876
+      },
+      "expert_metrics_by_phase": {
+        "prefill": {
+          "hits": 2080,
+          "misses": 5546,
+          "load_seconds": 45.631150721776066,
+          "expert_forward_seconds": 59.30660150080803,
+          "base_load_seconds": 11.95056748870411,
+          "base_tensor_bytes": 7882055680,
+          "refinement_tensor_bytes": 34156388352,
+          "hot_sync_seconds": 0.0,
+          "base_hits": 0,
+          "base_misses": 1518,
+          "refinement_hits": 2080,
+          "refinement_misses": 4028,
+          "async_load_seconds": 0.0,
+          "async_loaded": 0,
+          "async_discarded": 0,
+          "async_fallbacks": 0,
+          "async_install_seconds": 0.0,
+          "base_evictions": 1518
+        },
+        "decode": {
+          "hits": 38314,
+          "misses": 4358,
+          "load_seconds": 34.31115539956954,
+          "expert_forward_seconds": 51.11199185682926,
+          "base_load_seconds": 34.31115539956954,
+          "base_tensor_bytes": 22594613248,
+          "refinement_tensor_bytes": 4819451904,
+          "hot_sync_seconds": 0.0,
+          "base_hits": 31265,
+          "base_misses": 4358,
+          "refinement_hits": 7049,
+          "refinement_misses": 0,
+          "async_load_seconds": 4.969732217723504,
+          "async_loaded": 568,
+          "async_discarded": 0,
+          "async_fallbacks": 108,
+          "async_install_seconds": 0.2923340357665438,
+          "base_evictions": 4358
+        }
+      },
+      "expert_cache_bytes": {
+        "limit": 4294967296,
+        "resident_limit": 4227858432,
+        "staging_reserved": 67108864,
+        "peak_staging_reserved": 51961856,
+        "after_prefill": 4221956096,
+        "after_decode": 1973002240,
+        "resident_base": 34355424339,
+        "base_limit": 34359738368
+      },
+      "disk_reads": {
+        "prefill": 47908290560,
+        "decode": 32509018112
+      },
+      "resources": {
+        "before": {
+          "disk_read_bytes": 240687300608,
+          "disk_written_bytes": 192512,
+          "physical_footprint_bytes": 62135780064,
+          "lifetime_peak_physical_footprint_bytes": 64377570016,
+          "mlx_active_bytes": 36343286867,
+          "mlx_peak_bytes": 39045774623,
+          "mlx_cached_bytes": 511784286,
+          "mps_driver_allocated_bytes": 56842403840,
+          "mps_allocated_bytes": 18034924544
+        },
+        "after_prefill": {
+          "disk_read_bytes": 288595591168,
+          "disk_written_bytes": 192512,
+          "physical_footprint_bytes": 64381534944,
+          "lifetime_peak_physical_footprint_bytes": 64382812896,
+          "mlx_active_bytes": 38585236563,
+          "mlx_peak_bytes": 39047339262,
+          "mlx_cached_bytes": 491484638,
+          "mps_driver_allocated_bytes": 59090518016,
+          "mps_allocated_bytes": 18184708352
+        },
+        "after_decode": {
+          "disk_read_bytes": 321104609280,
+          "disk_written_bytes": 192512,
+          "physical_footprint_bytes": 62143382264,
+          "lifetime_peak_physical_footprint_bytes": 64382812896,
+          "mlx_active_bytes": 36334480467,
+          "mlx_peak_bytes": 39047339262,
+          "mlx_cached_bytes": 520185182,
+          "mps_driver_allocated_bytes": 56842928128,
+          "mps_allocated_bytes": 18186856960
+        }
+      },
+      "decode_hot_expert_fraction": 0.16519028871391075,
+      "decode_desired_hot_expert_fraction": 0.16594019497562804,
+      "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+      "backbone_device": "mps",
+      "thinking": false,
+      "policy": {
+        "base_bits": 1.5,
+        "hot_bits": 4,
+        "slots": 242,
+        "fixed": 48,
+        "jt_mix": 0.75,
+        "refresh_tokens": 1,
+        "prefill_bits": 4,
+        "prefill_chunk_size": 8,
+        "resident_base": true,
+        "resident_hot": false,
+        "hot_set_capacity_bytes": 2008899584,
+        "wired_memory": false,
+        "async_refinements": true,
+        "base_cache_gib": 32.0,
+        "process_memory_limit_bytes": 90194313216
+      },
+      "limitations": [
+        "text only",
+        "single sequence",
+        "4096 token validation ceiling",
+        "no speculative decoding",
+        "synchronous prefill SSD reads",
+        "readiness-dependent decode precision",
+        "greedy sampling",
+        "unquantized attention cache",
+        "synchronous base-cache misses"
+      ]
+    }
+  ],
+  "warmup": {
+    "text": "# Merging Overlapping Intervals\n\n## The Function\n\n```python\ndef",
+    "generated_ids": [
+      2,
+      386,
+      94497,
+      6065,
+      89870,
+      1333,
+      41958,
+      271,
+      565,
+      576,
+      5712,
+      271,
+      73022,
+      12663,
+      198,
+      750
+    ],
+    "prompt_tokens": 29,
+    "generated_tokens": 16,
+    "ttft_seconds": 84.52898920801817,
+    "decode_step_seconds": [
+      4.176961999997729,
+      1.4359841249824967,
+      0.9059640830091666,
+      0.8845031670061871,
+      0.6054141249915119,
+      0.9819858749979176,
+      0.6107724170142319,
+      0.6157922080019489,
+      0.6510272499872372,
+      0.9487188749772031,
+      0.7803589169925544,
+      0.571403999987524,
+      1.0497682920249645,
+      0.8730754580174107,
+      0.8383099999919068
+    ],
+    "decode_tokens_per_second": 0.9416171744865699,
+    "elapsed_seconds": 100.46176199999172,
+    "first_decode_step_seconds": 4.176961999997729,
+    "subsequent_decode_tokens_per_second": 1.1911772436640642,
+    "predictor_seconds": 0.07524416409432888,
+    "prefetch_drain_seconds": 1.2666016118600965e-05,
+    "predictor_diagnostics": {
+      "decode_steps": 15,
+      "routed_calls": 5040,
+      "allocated_slots": 242,
+      "allocated_fraction": 0.020006613756613757,
+      "counts": {
+        "wanted": 974,
+        "ready": 934,
+        "wanted_ready": 922,
+        "late": 52,
+        "cached_outside_wanted": 12,
+        "fixed": 65
+      },
+      "call_fractions": {
+        "wanted": 0.19325396825396826,
+        "ready": 0.18531746031746033,
+        "wanted_ready": 0.18293650793650792,
+        "late": 0.010317460317460317,
+        "cached_outside_wanted": 0.002380952380952381,
+        "fixed": 0.012896825396825396
+      },
+      "wanted_delivery_fraction": 0.946611909650924,
+      "mean_salience_coverage": {
+        "wanted": 0.3428242451750512,
+        "ready": 0.3303432013533759,
+        "fixed": 0.02360888937449729,
+        "jt_top_budget": 0.5129784023440076,
+        "ema_top_budget": 0.3423486958359817,
+        "static": 0.10134485917660538
+      },
+      "per_layer": [
+        {
+          "layer": 3,
+          "slots": 11,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 20,
+            "ready": 15,
+            "wanted_ready": 15,
+            "late": 5,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.18885446028152186,
+            "ready": 0.11507776502531507,
+            "fixed": 0.0023268258976638896,
+            "jt_top_budget": 0.5107632804886987,
+            "ema_top_budget": 0.08976086945795674,
+            "static": 0.027430679149811846
+          }
+        },
+        {
+          "layer": 4,
+          "slots": 9,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 10,
+            "ready": 7,
+            "wanted_ready": 7,
+            "late": 3,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.24368627405191268,
+            "ready": 0.12813885994694207,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5490053813254157,
+            "ema_top_budget": 0.17182380983070017,
+            "static": 0.034916589653275695
+          }
+        },
+        {
+          "layer": 5,
+          "slots": 9,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 11,
+            "ready": 9,
+            "wanted_ready": 9,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.18083576579906974,
+            "ready": 0.14427457273181257,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5198161571505607,
+            "ema_top_budget": 0.14464861082349195,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 6,
+          "slots": 7,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 9,
+            "ready": 7,
+            "wanted_ready": 7,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.11876360614867289,
+            "ready": 0.09522051438263582,
+            "fixed": 0.0,
+            "jt_top_budget": 0.40695805558557313,
+            "ema_top_budget": 0.003963880248443832,
+            "static": 0.04196491961063089
+          }
+        },
+        {
+          "layer": 7,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 29,
+            "ready": 26,
+            "wanted_ready": 26,
+            "late": 3,
+            "cached_outside_wanted": 0,
+            "fixed": 8
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.7454169730464754,
+            "ready": 0.6718010458190429,
+            "fixed": 0.1951945657311123,
+            "jt_top_budget": 0.771683970381921,
+            "ema_top_budget": 0.6641294091894613,
+            "static": 0.6387893781105177
+          }
+        },
+        {
+          "layer": 8,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 14,
+            "ready": 13,
+            "wanted_ready": 13,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.20148420240748435,
+            "ready": 0.18534591016008278,
+            "fixed": 0.023837209901048532,
+            "jt_top_budget": 0.4775027888506898,
+            "ema_top_budget": 0.24865011497436462,
+            "static": 0.18822558595572902
+          }
+        },
+        {
+          "layer": 9,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 21,
+            "ready": 18,
+            "wanted_ready": 18,
+            "late": 3,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.16202878188555042,
+            "ready": 0.09835513937573609,
+            "fixed": 0.0,
+            "jt_top_budget": 0.45294099471270305,
+            "ema_top_budget": 0.11053422616208124,
+            "static": 0.09443421831120109
+          }
+        },
+        {
+          "layer": 10,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 11,
+            "ready": 11,
+            "wanted_ready": 11,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.18046182209153167,
+            "ready": 0.18046182209153167,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4227735057329134,
+            "ema_top_budget": 0.1573253975146887,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 11,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 30,
+            "ready": 29,
+            "wanted_ready": 29,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 5
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.522180798020664,
+            "ready": 0.5119352607367583,
+            "fixed": 0.050452077982200506,
+            "jt_top_budget": 0.6898964108926251,
+            "ema_top_budget": 0.5448815216295332,
+            "static": 0.5432105555218067
+          }
+        },
+        {
+          "layer": 12,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 22,
+            "ready": 19,
+            "wanted_ready": 19,
+            "late": 3,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2659241878694927,
+            "ready": 0.25633617419538507,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5314233986770317,
+            "ema_top_budget": 0.32044643272366785,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 13,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 23,
+            "ready": 22,
+            "wanted_ready": 22,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.40931517463860373,
+            "ready": 0.38875264989937997,
+            "fixed": 0.011230585622944524,
+            "jt_top_budget": 0.5154035324486679,
+            "ema_top_budget": 0.42089689063291824,
+            "static": 0.24328671867154472
+          }
+        },
+        {
+          "layer": 14,
+          "slots": 7,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 36,
+            "ready": 34,
+            "wanted_ready": 34,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 6
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.561514672584219,
+            "ready": 0.5530177967709226,
+            "fixed": 0.11521029813229658,
+            "jt_top_budget": 0.7399732190739012,
+            "ema_top_budget": 0.5438894888699674,
+            "static": 0.3505763025988685
+          }
+        },
+        {
+          "layer": 15,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 20,
+            "ready": 19,
+            "wanted_ready": 19,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 3
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.42165571358626647,
+            "ready": 0.4014250759194348,
+            "fixed": 0.03197112645856503,
+            "jt_top_budget": 0.482214092992416,
+            "ema_top_budget": 0.39782853230905973,
+            "static": 0.10611975155096792
+          }
+        },
+        {
+          "layer": 16,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 24,
+            "ready": 23,
+            "wanted_ready": 23,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 1
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2164141676484897,
+            "ready": 0.215739363018027,
+            "fixed": 0.0006748046304626553,
+            "jt_top_budget": 0.3477788303058443,
+            "ema_top_budget": 0.15430619372707374,
+            "static": 0.1332229634259469
+          }
+        },
+        {
+          "layer": 17,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 26,
+            "ready": 25,
+            "wanted_ready": 25,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3392577517140275,
+            "ready": 0.3243692913799494,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5029655249050005,
+            "ema_top_budget": 0.2791667886095089,
+            "static": 0.23931197682008615
+          }
+        },
+        {
+          "layer": 18,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 25,
+            "ready": 24,
+            "wanted_ready": 24,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.29714748295215043,
+            "ready": 0.2929239415754946,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5642075949673607,
+            "ema_top_budget": 0.43035029644465067,
+            "static": 0.19591519025759396
+          }
+        },
+        {
+          "layer": 19,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 41,
+            "ready": 39,
+            "wanted_ready": 39,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 6
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.4607010675270311,
+            "ready": 0.4520188212431913,
+            "fixed": 0.058533562830933375,
+            "jt_top_budget": 0.4121315677766598,
+            "ema_top_budget": 0.3900180121114458,
+            "static": 0.20547466946790352
+          }
+        },
+        {
+          "layer": 20,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 30,
+            "ready": 29,
+            "wanted_ready": 28,
+            "late": 2,
+            "cached_outside_wanted": 1,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.2807319122794953,
+            "ready": 0.27736415363433653,
+            "fixed": 0.021530887387803548,
+            "jt_top_budget": 0.3552412708237824,
+            "ema_top_budget": 0.2973417372393467,
+            "static": 0.04942005812642467
+          }
+        },
+        {
+          "layer": 21,
+          "slots": 7,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 35,
+            "ready": 33,
+            "wanted_ready": 33,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.38586486235245854,
+            "ready": 0.3677134384162447,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5893851291009724,
+            "ema_top_budget": 0.2825204554556206,
+            "static": 0.0897328409148168
+          }
+        },
+        {
+          "layer": 22,
+          "slots": 8,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 29,
+            "ready": 25,
+            "wanted_ready": 25,
+            "late": 4,
+            "cached_outside_wanted": 0,
+            "fixed": 7
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.28654671288679656,
+            "ready": 0.25442034503926286,
+            "fixed": 0.09485223458275041,
+            "jt_top_budget": 0.3891102931127502,
+            "ema_top_budget": 0.2701211919767532,
+            "static": 0.10232730757937843
+          }
+        },
+        {
+          "layer": 23,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 15,
+            "ready": 13,
+            "wanted_ready": 13,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.17623135642209686,
+            "ready": 0.1661512933552684,
+            "fixed": 0.0,
+            "jt_top_budget": 0.41185280457732026,
+            "ema_top_budget": 0.08382395680191243,
+            "static": 0.025988406383591026
+          }
+        },
+        {
+          "layer": 24,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 21,
+            "ready": 20,
+            "wanted_ready": 20,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.29425931395095517,
+            "ready": 0.29266264952932114,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5428246682616282,
+            "ema_top_budget": 0.30322319381406104,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 25,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 33,
+            "ready": 31,
+            "wanted_ready": 31,
+            "late": 2,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3390467360583028,
+            "ready": 0.3238213888319574,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5340655598126559,
+            "ema_top_budget": 0.367959098027632,
+            "static": 0.19926665720367073
+          }
+        },
+        {
+          "layer": 26,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 39,
+            "ready": 36,
+            "wanted_ready": 36,
+            "late": 3,
+            "cached_outside_wanted": 0,
+            "fixed": 5
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.4775978949835429,
+            "ready": 0.45899296109704146,
+            "fixed": 0.08854664149651224,
+            "jt_top_budget": 0.5382730144420818,
+            "ema_top_budget": 0.3997090706630988,
+            "static": 0.08854664149651224
+          }
+        },
+        {
+          "layer": 27,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 8,
+            "ready": 8,
+            "wanted_ready": 8,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.1468887198609226,
+            "ready": 0.1468887198609226,
+            "fixed": 0.0,
+            "jt_top_budget": 0.3121163214172433,
+            "ema_top_budget": 0.1730223396601762,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 28,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 7,
+            "ready": 7,
+            "wanted_ready": 7,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.19419228063116692,
+            "ready": 0.19419228063116692,
+            "fixed": 0.0,
+            "jt_top_budget": 0.44397742368647386,
+            "ema_top_budget": 0.2093900031355686,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 29,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 20,
+            "ready": 20,
+            "wanted_ready": 20,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 2
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.20947528155642203,
+            "ready": 0.20947528155642203,
+            "fixed": 0.0055576471427767745,
+            "jt_top_budget": 0.4492729694787878,
+            "ema_top_budget": 0.32211551516687986,
+            "static": 0.008340065803516294
+          }
+        },
+        {
+          "layer": 30,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 17,
+            "ready": 17,
+            "wanted_ready": 17,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3402075853187616,
+            "ready": 0.3402075853187616,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5885330554525935,
+            "ema_top_budget": 0.42295317693777723,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 31,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 20,
+            "ready": 19,
+            "wanted_ready": 19,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3463417044604088,
+            "ready": 0.32769606172068183,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4301930518728862,
+            "ema_top_budget": 0.38976805238228096,
+            "static": 0.0
+          }
+        },
+        {
+          "layer": 32,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 26,
+            "ready": 25,
+            "wanted_ready": 25,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 11
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.4773606525241956,
+            "ready": 0.4737137132613327,
+            "fixed": 0.2736678636490454,
+            "jt_top_budget": 0.5117615124671695,
+            "ema_top_budget": 0.5175424099860011,
+            "static": 0.2839531589854847
+          }
+        },
+        {
+          "layer": 33,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 18,
+            "ready": 18,
+            "wanted_ready": 18,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.20951487041070863,
+            "ready": 0.20951487041070863,
+            "fixed": 0.0,
+            "jt_top_budget": 0.28369247693071153,
+            "ema_top_budget": 0.1216788928987438,
+            "static": 0.05928153283317354
+          }
+        },
+        {
+          "layer": 34,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 28,
+            "ready": 28,
+            "wanted_ready": 28,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.633091462424486,
+            "ready": 0.633091462424486,
+            "fixed": 0.0,
+            "jt_top_budget": 0.7631467562048982,
+            "ema_top_budget": 0.633091462424486,
+            "static": 0.019081674703649486
+          }
+        },
+        {
+          "layer": 35,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 20,
+            "ready": 20,
+            "wanted_ready": 20,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.489054296210859,
+            "ready": 0.489054296210859,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5946362510906843,
+            "ema_top_budget": 0.5825752274399695,
+            "static": 0.019405620195015714
+          }
+        },
+        {
+          "layer": 36,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 27,
+            "ready": 26,
+            "wanted_ready": 26,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3687746099303652,
+            "ready": 0.3653275535025209,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4791165297786197,
+            "ema_top_budget": 0.3456785067970899,
+            "static": 0.017926989093648003
+          }
+        },
+        {
+          "layer": 37,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 24,
+            "ready": 24,
+            "wanted_ready": 24,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.4265609542499193,
+            "ready": 0.4265609542499193,
+            "fixed": 0.0,
+            "jt_top_budget": 0.5598346144186253,
+            "ema_top_budget": 0.4879224862179463,
+            "static": 0.027450860353046426
+          }
+        },
+        {
+          "layer": 38,
+          "slots": 4,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 35,
+            "ready": 34,
+            "wanted_ready": 34,
+            "late": 1,
+            "cached_outside_wanted": 0,
+            "fixed": 4
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.5728032684886355,
+            "ready": 0.569323525123098,
+            "fixed": 0.017987022282770316,
+            "jt_top_budget": 0.6834480311051344,
+            "ema_top_budget": 0.6385443490559167,
+            "static": 0.04084135559468046
+          }
+        },
+        {
+          "layer": 39,
+          "slots": 5,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 31,
+            "ready": 31,
+            "wanted_ready": 31,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.5920575439444772,
+            "ready": 0.5920575439444772,
+            "fixed": 0.0,
+            "jt_top_budget": 0.6888934784721773,
+            "ema_top_budget": 0.639900023374878,
+            "static": 0.005906803266003732
+          }
+        },
+        {
+          "layer": 40,
+          "slots": 6,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 26,
+            "ready": 26,
+            "wanted_ready": 26,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.4815191218762785,
+            "ready": 0.4815191218762785,
+            "fixed": 0.0,
+            "jt_top_budget": 0.6162884225027316,
+            "ema_top_budget": 0.4890778232463372,
+            "static": 0.005522150122898845
+          }
+        },
+        {
+          "layer": 41,
+          "slots": 7,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 26,
+            "ready": 26,
+            "wanted_ready": 26,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.4076859919244911,
+            "ready": 0.4076859919244911,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4982804752645634,
+            "ema_top_budget": 0.42754758013896976,
+            "static": 0.12848099922280823
+          }
+        },
+        {
+          "layer": 42,
+          "slots": 8,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 30,
+            "ready": 41,
+            "wanted_ready": 30,
+            "late": 0,
+            "cached_outside_wanted": 11,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.3563383057833815,
+            "ready": 0.4609553040807299,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4920675287739866,
+            "ema_top_budget": 0.43675162556121677,
+            "static": 0.0008362629160121184
+          }
+        },
+        {
+          "layer": 43,
+          "slots": 8,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 22,
+            "ready": 22,
+            "wanted_ready": 22,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.24338195406480959,
+            "ready": 0.24338195406480959,
+            "fixed": 0.0,
+            "jt_top_budget": 0.4247375244908421,
+            "ema_top_budget": 0.24257025802102106,
+            "static": 0.015188745721157098
+          }
+        },
+        {
+          "layer": 44,
+          "slots": 7,
+          "routed_calls": 120,
+          "counts": {
+            "wanted": 15,
+            "ready": 15,
+            "wanted_ready": 15,
+            "late": 0,
+            "cached_outside_wanted": 0,
+            "fixed": 0
+          },
+          "mean_salience_coverage": {
+            "wanted": 0.1474480025050491,
+            "ready": 0.1474480025050491,
+            "fixed": 0.0,
+            "jt_top_budget": 0.46690542864101636,
+            "ema_top_budget": 0.2211963134285335,
+            "static": 0.026106455796052787
+          }
+        }
+      ],
+      "block_calibration": {
+        "full_windows": 0,
+        "excluded_tail_predictions": 15,
+        "target": "Mean per-token normalized squared routing weights over t..t+15, matching shipped train.py block_loss",
+        "scope": "Decode-only overlapping windows on observed mixed-precision routing; not independent samples or output-quality validation"
+      },
+      "limitations": [
+        "Top-budget jT, EMA and static comparisons rescore the same observed routing, not alternative model executions",
+        "Salience coverage is not answer accuracy",
+        "No predictor parameters fitted on this request"
+      ]
+    },
+    "predictor_metrics_seconds": 0.011031333939172328,
+    "prefill_tokens_per_second": 0.3430775674914748,
+    "expert_metrics": {
+      "hits": 6224,
+      "misses": 8964,
+      "load_seconds": 74.749114003469,
+      "expert_forward_seconds": 92.69467786958558,
+      "base_load_seconds": 42.75965175643796,
+      "base_tensor_bytes": 25552154624,
+      "refinement_tensor_bytes": 36338733056,
+      "hot_sync_seconds": 0.0,
+      "base_hits": 3222,
+      "base_misses": 4924,
+      "refinement_hits": 3002,
+      "refinement_misses": 4040,
+      "async_load_seconds": 5.313404673099285,
+      "async_loaded": 245,
+      "async_discarded": 0,
+      "async_fallbacks": 52,
+      "async_install_seconds": 0.10749754315475002,
+      "base_evictions": 0
+    },
+    "expert_metrics_by_phase": {
+      "prefill": {
+        "hits": 2068,
+        "misses": 8080,
+        "load_seconds": 65.43097122383188,
+        "expert_forward_seconds": 81.0907033700787,
+        "base_load_seconds": 33.44150897680083,
+        "base_tensor_bytes": 20968210432,
+        "refinement_tensor_bytes": 34258477056,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 0,
+        "base_misses": 4040,
+        "refinement_hits": 2068,
+        "refinement_misses": 4040,
+        "async_load_seconds": 0.0,
+        "async_loaded": 0,
+        "async_discarded": 0,
+        "async_fallbacks": 0,
+        "async_install_seconds": 0.0,
+        "base_evictions": 0
+      },
+      "decode": {
+        "hits": 4156,
+        "misses": 884,
+        "load_seconds": 9.318142779637128,
+        "expert_forward_seconds": 11.603974499506876,
+        "base_load_seconds": 9.318142779637128,
+        "base_tensor_bytes": 4583944192,
+        "refinement_tensor_bytes": 2080256000,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 3222,
+        "base_misses": 884,
+        "refinement_hits": 934,
+        "refinement_misses": 0,
+        "async_load_seconds": 5.313404673099285,
+        "async_loaded": 245,
+        "async_discarded": 0,
+        "async_fallbacks": 52,
+        "async_install_seconds": 0.10749754315475002,
+        "base_evictions": 0
+      }
+    },
+    "expert_cache_bytes": {
+      "limit": 4294967296,
+      "resident_limit": 4227858432,
+      "staging_reserved": 67108864,
+      "peak_staging_reserved": 51961856,
+      "after_prefill": 4221956096,
+      "after_decode": 1998327808,
+      "resident_base": 24042074244,
+      "base_limit": 34359738368
+    },
+    "disk_reads": {
+      "prefill": 64067588096,
+      "decode": 8183226368
+    },
+    "resources": {
+      "before": {
+        "disk_read_bytes": 15634051072,
+        "disk_written_bytes": 77824,
+        "physical_footprint_bytes": 19924928360,
+        "lifetime_peak_physical_footprint_bytes": 23520842000,
+        "mlx_active_bytes": 0,
+        "mlx_peak_bytes": 0,
+        "mlx_cached_bytes": 0,
+        "mps_driver_allocated_bytes": 18825543680,
+        "mps_allocated_bytes": 18034924544
+      },
+      "after_prefill": {
+        "disk_read_bytes": 79701639168,
+        "disk_written_bytes": 77824,
+        "physical_footprint_bytes": 47025099344,
+        "lifetime_peak_physical_footprint_bytes": 47025099344,
+        "mlx_active_bytes": 23954869432,
+        "mlx_peak_bytes": 24409402768,
+        "mlx_cached_bytes": 475313244,
+        "mps_driver_allocated_bytes": 43822252032,
+        "mps_allocated_bytes": 18184708352
+      },
+      "after_decode": {
+        "disk_read_bytes": 87884865536,
+        "disk_written_bytes": 77824,
+        "physical_footprint_bytes": 51209379360,
+        "lifetime_peak_physical_footprint_bytes": 51209379360,
+        "mlx_active_bytes": 26046984324,
+        "mlx_peak_bytes": 26054709588,
+        "mlx_cached_bytes": 472876296,
+        "mps_driver_allocated_bytes": 46063714304,
+        "mps_allocated_bytes": 18184961792
+      }
+    },
+    "decode_hot_expert_fraction": 0.18531746031746033,
+    "decode_desired_hot_expert_fraction": 0.19325396825396826,
+    "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+    "backbone_device": "mps",
+    "thinking": false,
+    "policy": {
+      "base_bits": 1.5,
+      "hot_bits": 4,
+      "slots": 242,
+      "fixed": 48,
+      "jt_mix": 0.75,
+      "refresh_tokens": 1,
+      "prefill_bits": 4,
+      "prefill_chunk_size": 8,
+      "resident_base": true,
+      "resident_hot": false,
+      "hot_set_capacity_bytes": 2008899584,
+      "wired_memory": false,
+      "async_refinements": true,
+      "base_cache_gib": 32.0,
+      "process_memory_limit_bytes": 90194313216
+    },
+    "limitations": [
+      "text only",
+      "single sequence",
+      "4096 token validation ceiling",
+      "no speculative decoding",
+      "synchronous prefill SSD reads",
+      "readiness-dependent decode precision",
+      "greedy sampling",
+      "unquantized attention cache",
+      "synchronous base-cache misses"
+    ]
+  },
+  "isolation": {
+    "state": "complete",
+    "started_at": 1793820852.6279092,
+    "finished_at": 1793821376.685836,
+    "baseline_restored": true,
+    "last_pressure_level": 1,
+    "minimum_free_percent": 62,
+    "model_exit_code": 0,
+    "peak_observed_footprint_bytes": 64382812896,
+    "memory_limit_bytes": 90194313216,
+    "configuration": {
+      "resident_base": true,
+      "resident_hot": false,
+      "cache_gib": 4.0,
+      "base_cache_gib": 32.0,
+      "memory_limit_gib": 84
+    }
+  }
+}

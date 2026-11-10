@@ -1,0 +1,6 @@
+mlx==0.32.4
+numpy==2.5.4
+safetensors==0.8.0
+torch==2.15.0
+transformers==5.22.1
+huggingface-hub==2.4.0

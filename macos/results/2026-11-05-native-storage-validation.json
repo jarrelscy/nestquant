@@ -1,0 +1,4757 @@
+{
+  "date": "2026-11-05",
+  "source_commit": "c06afb6721fe3745be145c1fb26b5fd518202e7c",
+  "hardware": "Apple M5 Max, 40 GPU cores, 128 GiB unified memory, macOS 27.2",
+  "checks": {
+    "runtime_unit_tests": 60,
+    "http_boundary_tests": 6,
+    "cold_dispatch_tests": 4,
+    "local_supervisor_tests": 5
+  },
+  "reports": [
+    {
+      "name": "glm-candidate-mixed-cold-parity-tracked",
+      "command": [
+        "verify_mixed_banked.py",
+        "--model",
+        "$GLM_ROOT/GLM-5.3-Flash-NestQuant-1.5-4bit"
+      ],
+      "memory": {
+        "sampled_peak_bytes": 295032,
+        "minimum_free_percent": 75,
+        "pressure_level": 1,
+        "outer_limit_bytes": 8589934592,
+        "swapout_delta_bytes": 0
+      },
+      "baseline_restored": true,
+      "evidence": {
+        "receipt": "glm-candidate-mixed-cold-parity-tracked-isolation.json",
+        "receipt_sha256": "bfc6f88b3d899390b471bd5c6f0cbc664281d4b439ff55bbf368ead79d62108f",
+        "log": "glm-candidate-mixed-cold-parity-tracked.log",
+        "log_sha256": "4edd442a37418f4f8da183f3416212c27dae846d99991853b183da9c85656a78"
+      },
+      "result": {
+        "status": "passed",
+        "checks": [
+          {
+            "layer": 3,
+            "relative_rms": {
+              "gate": {
+                "mixed_relative_rms": 1.0744757084069079e-08,
+                "all_cold_identical": true
+              },
+              "up": {
+                "mixed_relative_rms": 1.4227499178787184e-08,
+                "all_cold_identical": true
+              },
+              "down": {
+                "mixed_relative_rms": 3.851523100451004e-09,
+                "all_cold_identical": true
+              }
+            }
+          },
+          {
+            "layer": 44,
+            "relative_rms": {
+              "gate": {
+                "mixed_relative_rms": 1.4861228692097939e-08,
+                "all_cold_identical": true
+              },
+              "up": {
+                "mixed_relative_rms": 1.303869279212222e-08,
+                "all_cold_identical": true
+              },
+              "down": {
+                "mixed_relative_rms": 8.365658388242991e-09,
+                "all_cold_identical": true
+              }
+            }
+          }
+        ],
+        "memory": {
+          "physical_bytes": 630523080,
+          "lifetime_peak_physical_bytes": 697631944,
+          "mlx_peak_bytes": 245536351,
+          "pressure_level": 1
+        }
+      }
+    },
+    {
+      "name": "glm-expert-major-prepare-l3-l44",
+      "command": [
+        "expert_major_base.py",
+        "--source",
+        "$GLM_ROOT/resident-banks-v1",
+        "--output-dir",
+        "$GLM_ROOT/expert-major-banks-v1",
+        "--layers",
+        "3",
+        "44"
+      ],
+      "memory": {
+        "sampled_peak_bytes": 32457352,
+        "minimum_free_percent": 74,
+        "pressure_level": 1,
+        "outer_limit_bytes": 8589934592,
+        "swapout_delta_bytes": 0
+      },
+      "baseline_restored": true,
+      "evidence": {
+        "receipt": "glm-expert-major-prepare-l3-l44-isolation.json",
+        "receipt_sha256": "879821b372b2d2754b5da279b9ab33566048b786270d555810d76d4326a1dde8",
+        "log": "glm-expert-major-prepare-l3-l44.log",
+        "log_sha256": "38ef041e50a3cd192d28127c31954df856385ecf660b05c3c8ce0106ae5af041"
+      },
+      "layers": [
+        {
+          "layer": 3,
+          "bytes": 1426201776,
+          "row_bytes": 4952079,
+          "planes": 24
+        },
+        {
+          "layer": 44,
+          "bytes": 1426201776,
+          "row_bytes": 4952079,
+          "planes": 24
+        }
+      ]
+    },
+    {
+      "name": "glm-expert-major-prepare-remaining",
+      "command": [
+        "expert_major_base.py",
+        "--source",
+        "$GLM_ROOT/resident-banks-v1",
+        "--output-dir",
+        "$GLM_ROOT/expert-major-banks-v1",
+        "--layers",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43"
+      ],
+      "memory": {
+        "sampled_peak_bytes": 42812112,
+        "minimum_free_percent": 73,
+        "pressure_level": 1,
+        "outer_limit_bytes": 8589934592,
+        "swapout_delta_bytes": 0
+      },
+      "baseline_restored": true,
+      "evidence": {
+        "receipt": "glm-expert-major-prepare-remaining-isolation.json",
+        "receipt_sha256": "c81274580e3645dd396bfa1936c7f282253939b6f176d44f62489b055125f334",
+        "log": "glm-expert-major-prepare-remaining.log",
+        "log_sha256": "549703a4ccec556e65c9d5f5f2893dddcec881e31f7108108a02cd3165b366c0"
+      },
+      "layers": [
+        {
+          "layer": 4,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 5,
+          "bytes": 1408506928,
+          "row_bytes": 4890639,
+          "planes": 24
+        },
+        {
+          "layer": 6,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 7,
+          "bytes": 1422662704,
+          "row_bytes": 4939791,
+          "planes": 24
+        },
+        {
+          "layer": 8,
+          "bytes": 1412045872,
+          "row_bytes": 4902927,
+          "planes": 24
+        },
+        {
+          "layer": 9,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 10,
+          "bytes": 1419123888,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 11,
+          "bytes": 1408506928,
+          "row_bytes": 4890639,
+          "planes": 24
+        },
+        {
+          "layer": 12,
+          "bytes": 1419123888,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 13,
+          "bytes": 1412045872,
+          "row_bytes": 4902927,
+          "planes": 24
+        },
+        {
+          "layer": 14,
+          "bytes": 1412046000,
+          "row_bytes": 4902927,
+          "planes": 24
+        },
+        {
+          "layer": 15,
+          "bytes": 1412045872,
+          "row_bytes": 4902927,
+          "planes": 24
+        },
+        {
+          "layer": 16,
+          "bytes": 1422662832,
+          "row_bytes": 4939791,
+          "planes": 24
+        },
+        {
+          "layer": 17,
+          "bytes": 1419123888,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 18,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 19,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 20,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 21,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 22,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 23,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 24,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 25,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 26,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 27,
+          "bytes": 1415584944,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 28,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 29,
+          "bytes": 1426201776,
+          "row_bytes": 4952079,
+          "planes": 24
+        },
+        {
+          "layer": 30,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 31,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 32,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 33,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 34,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 35,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 36,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 37,
+          "bytes": 1419123888,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 38,
+          "bytes": 1415584816,
+          "row_bytes": 4915215,
+          "planes": 24
+        },
+        {
+          "layer": 39,
+          "bytes": 1419123760,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 40,
+          "bytes": 1419123888,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 41,
+          "bytes": 1422662832,
+          "row_bytes": 4939791,
+          "planes": 24
+        },
+        {
+          "layer": 42,
+          "bytes": 1419123888,
+          "row_bytes": 4927503,
+          "planes": 24
+        },
+        {
+          "layer": 43,
+          "bytes": 1422662832,
+          "row_bytes": 4939791,
+          "planes": 24
+        }
+      ]
+    },
+    {
+      "name": "glm-expert-major-parity-all",
+      "command": [
+        "verify_expert_major.py",
+        "--source",
+        "$GLM_ROOT/resident-banks-v1",
+        "--archive",
+        "$GLM_ROOT/expert-major-banks-v1",
+        "--output",
+        "$GLM_ROOT/glm-expert-major-parity-all.json"
+      ],
+      "memory": {
+        "sampled_peak_bytes": 519078944,
+        "minimum_free_percent": 72,
+        "pressure_level": 1,
+        "outer_limit_bytes": 8589934592,
+        "swapout_delta_bytes": 393216
+      },
+      "baseline_restored": true,
+      "evidence": {
+        "receipt": "glm-expert-major-parity-all-isolation.json",
+        "receipt_sha256": "5be8337c2b3c006e33c4939075f3cbf28979905e1d929bc7a0bfa1d5e5de6174",
+        "log": "glm-expert-major-parity-all.log",
+        "log_sha256": "b3cda2e5caf1189ebefaa7bc102248e35dbe2715f4c571e6ab00487abf32237e",
+        "result": "glm-expert-major-parity-all.json",
+        "result_sha256": "2c9c0b59c88dabd77b011103402690af661c7ed5e24359bc7779ee2b73bc4cb7"
+      },
+      "result": {
+        "status": "passed",
+        "checks": [
+          {
+            "layer": 3,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1426198752,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 4,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 5,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1408504032,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 6,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 7,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1422659808,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 8,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1412042976,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 9,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 10,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 11,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1408504032,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 12,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 13,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1412042976,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 14,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1412042976,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 15,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1412042976,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 16,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1422659808,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 17,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 18,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 19,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 20,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 21,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 22,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 23,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 24,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 25,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 26,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 27,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 28,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 29,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1426198752,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 30,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 31,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 32,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 33,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 34,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 35,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 36,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 37,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 38,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1415581920,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 39,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 40,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 41,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1422659808,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 42,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1419120864,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 43,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1422659808,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          },
+          {
+            "layer": 44,
+            "experts": 288,
+            "tensors": 6912,
+            "checked_bytes": 1426198752,
+            "projections": [
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 80,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 160,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 240,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 16,
+                "projection": "down",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "gate",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "up",
+                "identical": true
+              },
+              {
+                "first_expert": 0,
+                "projection": "down",
+                "identical": true
+              }
+            ],
+            "evictions": [
+              16,
+              16
+            ]
+          }
+        ],
+        "memory": {
+          "physical_bytes": 201704288,
+          "lifetime_peak_physical_bytes": 519078944,
+          "mlx_peak_bytes": 325305668,
+          "pressure_level": 1
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "These are storage and numerical checks; no model throughput or answer-quality improvement is established.",
+    "The six-GiB refinement option has unit validation only, not a model-memory or quality result.",
+    "Two independent Fable/high reviews remain required before new-code performance measurements.",
+    "System swap-outs include other processes and cannot be attributed solely to the validation child."
+  ]
+}

@@ -1,0 +1,627 @@
+{
+  "status": "complete",
+  "runs": 3,
+  "decode_tokens_per_second": {
+    "median": 0.22666628263299018,
+    "minimum": 0.19906966924379363,
+    "maximum": 0.2372562540024185
+  },
+  "time_to_first_token_seconds": {
+    "median": 131.0337440840085,
+    "minimum": 127.95195512499777,
+    "maximum": 133.27367487500305
+  },
+  "prefill_tokens_per_second": {
+    "median": 0.2213170370939526,
+    "minimum": 0.21759736142339442,
+    "maximum": 0.22664757229906773
+  },
+  "prefill_disk_read_bytes": {
+    "median": 40905838592,
+    "minimum": 39554535424,
+    "maximum": 41234948096
+  },
+  "decode_disk_read_bytes": {
+    "median": 12827299840,
+    "minimum": 11813568512,
+    "maximum": 13009047552
+  },
+  "process_peak_physical_footprint_bytes": 87690121352,
+  "generated_tokens": [
+    16,
+    16,
+    16
+  ],
+  "identical_generated_tokens": true,
+  "metadata": {
+    "device": {
+      "device_name": "Apple M5 Max",
+      "max_recommended_working_set_size": 115448725504,
+      "memory_size": 137438953472,
+      "architecture": "applegpu_g17s",
+      "max_buffer_length": 86586540032,
+      "resource_limit": 499000
+    },
+    "model": "jarrelscy/GLM-5.3-Flash-NestQuant-1.5-4bit",
+    "load_seconds": 232.67701466599829,
+    "packages": {
+      "mlx": "0.32.4",
+      "torch": "2.15.0",
+      "transformers": "5.22.1",
+      "safetensors": "0.8.0"
+    },
+    "hot_fraction": 0.21742724867724866,
+    "hot_slots": 2630,
+    "cache_gib": 4.0,
+    "wired_memory": true,
+    "resident_base": true,
+    "resident_hot": false,
+    "resident_base_bytes": 59052758208,
+    "prefill_chunk_size": 256,
+    "requested_output_tokens": 16,
+    "prompt": "Write a Python function that merges overlapping intervals. Explain its algorithm, edge cases, and time complexity. Include examples.",
+    "sampling": "greedy",
+    "method": "One discarded warm-up, then at least three measured requests in one process",
+    "limitations": "Process lifetime peak includes model loading; measurements do not grade answer quality",
+    "model_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+    "source_commit": "f5d5a63f6eb280adc9f363edd2cc6cbf33b0b28c"
+  },
+  "measured_requests": [
+    {
+      "text": "# Merging Overlapping Intervals\n\n## The Solution\n\n```python\ndef",
+      "generated_ids": [
+        2,
+        386,
+        94497,
+        6065,
+        89870,
+        1333,
+        41958,
+        271,
+        565,
+        576,
+        12472,
+        271,
+        73022,
+        12663,
+        198,
+        750
+      ],
+      "prompt_tokens": 29,
+      "generated_tokens": 16,
+      "ttft_seconds": 133.27367487500305,
+      "decode_step_seconds": [
+        17.497896375018172,
+        3.199764207995031,
+        4.978437166981166,
+        6.189983833988663,
+        7.8601970830059145,
+        3.5444430420175195,
+        11.831169582990697,
+        2.8336380409891717,
+        1.9537973749975208,
+        3.0117431250109803,
+        2.9570032919873483,
+        1.4375303339911625,
+        2.9732546669838484,
+        3.0117832499963697,
+        2.0698630830156617
+      ],
+      "decode_tokens_per_second": 0.19906966924379363,
+      "elapsed_seconds": 208.6316579580016,
+      "prefill_tokens_per_second": 0.21759736142339442,
+      "expert_metrics": {
+        "hits": 9071,
+        "misses": 5628,
+        "load_seconds": 139.3085029196227,
+        "expert_forward_seconds": 168.39572673742077,
+        "base_tensor_bytes": 0,
+        "refinement_tensor_bytes": 47729754112,
+        "hot_sync_seconds": 0.0
+      },
+      "expert_metrics_by_phase": {
+        "prefill": {
+          "hits": 4031,
+          "misses": 4020,
+          "load_seconds": 107.77365947107319,
+          "expert_forward_seconds": 123.02503183096997,
+          "base_tensor_bytes": 0,
+          "refinement_tensor_bytes": 34088198144,
+          "hot_sync_seconds": 0.0
+        },
+        "decode": {
+          "hits": 5040,
+          "misses": 1608,
+          "load_seconds": 31.53484344854951,
+          "expert_forward_seconds": 45.37069490645081,
+          "base_tensor_bytes": 0,
+          "refinement_tensor_bytes": 13641555968,
+          "hot_sync_seconds": 0.0
+        }
+      },
+      "expert_cache_bytes": {
+        "limit": 4294967296,
+        "after_prefill": 4288196608,
+        "after_decode": 4294017024,
+        "resident_base": 59052758208
+      },
+      "disk_reads": {
+        "prefill": 39554535424,
+        "decode": 13009047552
+      },
+      "resources": {
+        "before": {
+          "disk_read_bytes": 155946102784,
+          "disk_written_bytes": 294912,
+          "physical_footprint_bytes": 87620702344,
+          "lifetime_peak_physical_footprint_bytes": 87657861208,
+          "mlx_active_bytes": 63347225792,
+          "mlx_peak_bytes": 63807961428,
+          "mps_allocated_bytes": 18034924544
+        },
+        "after_prefill": {
+          "disk_read_bytes": 195500638208,
+          "disk_written_bytes": 294912,
+          "physical_footprint_bytes": 87629959304,
+          "lifetime_peak_physical_footprint_bytes": 87657861208,
+          "mlx_active_bytes": 63341429952,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18184708352
+        },
+        "after_decode": {
+          "disk_read_bytes": 208509685760,
+          "disk_written_bytes": 294912,
+          "physical_footprint_bytes": 87632629896,
+          "lifetime_peak_physical_footprint_bytes": 87690121352,
+          "mlx_active_bytes": 63347225792,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18184961792
+        }
+      },
+      "decode_hot_expert_fraction": 0.6648809523809524,
+      "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+      "backbone_device": "mps",
+      "thinking": false,
+      "policy": {
+        "base_bits": 1.5,
+        "hot_bits": 4,
+        "slots": 2630,
+        "fixed": 526,
+        "jt_mix": 0.75,
+        "refresh_tokens": 1,
+        "prefill_bits": 4,
+        "prefill_chunk_size": 256,
+        "resident_base": true,
+        "resident_hot": false,
+        "hot_set_capacity_bytes": null,
+        "wired_memory": true
+      },
+      "limitations": [
+        "text only",
+        "single sequence",
+        "4096 token validation ceiling",
+        "no speculative decoding",
+        "synchronous expert SSD reads",
+        "greedy sampling",
+        "unquantized attention cache"
+      ]
+    },
+    {
+      "text": "# Merging Overlapping Intervals\n\n## The Solution\n\n```python\ndef",
+      "generated_ids": [
+        2,
+        386,
+        94497,
+        6065,
+        89870,
+        1333,
+        41958,
+        271,
+        565,
+        576,
+        12472,
+        271,
+        73022,
+        12663,
+        198,
+        750
+      ],
+      "prompt_tokens": 29,
+      "generated_tokens": 16,
+      "ttft_seconds": 127.95195512499777,
+      "decode_step_seconds": [
+        11.734172333002789,
+        4.239246749988524,
+        7.021043874992756,
+        5.546955666999565,
+        6.2787606669880915,
+        2.8546157920209225,
+        1.94612591699115,
+        3.4451774159970228,
+        2.145907708996674,
+        3.2589222920069005,
+        4.553994290996343,
+        2.630367750010919,
+        2.9026567910041194,
+        3.82593399999314,
+        3.7927014589949977
+      ],
+      "decode_tokens_per_second": 0.22666628263299018,
+      "elapsed_seconds": 194.13329637501738,
+      "prefill_tokens_per_second": 0.22664757229906773,
+      "expert_metrics": {
+        "hits": 9071,
+        "misses": 5628,
+        "load_seconds": 137.74158596710186,
+        "expert_forward_seconds": 157.75758303934708,
+        "base_tensor_bytes": 0,
+        "refinement_tensor_bytes": 47729754112,
+        "hot_sync_seconds": 0.0
+      },
+      "expert_metrics_by_phase": {
+        "prefill": {
+          "hits": 4031,
+          "misses": 4020,
+          "load_seconds": 103.89703995594755,
+          "expert_forward_seconds": 118.16525587407523,
+          "base_tensor_bytes": 0,
+          "refinement_tensor_bytes": 34088198144,
+          "hot_sync_seconds": 0.0
+        },
+        "decode": {
+          "hits": 5040,
+          "misses": 1608,
+          "load_seconds": 33.84454601115431,
+          "expert_forward_seconds": 39.592327165271854,
+          "base_tensor_bytes": 0,
+          "refinement_tensor_bytes": 13641555968,
+          "hot_sync_seconds": 0.0
+        }
+      },
+      "expert_cache_bytes": {
+        "limit": 4294967296,
+        "after_prefill": 4288196608,
+        "after_decode": 4294017024,
+        "resident_base": 59052758208
+      },
+      "disk_reads": {
+        "prefill": 40905838592,
+        "decode": 11813568512
+      },
+      "resources": {
+        "before": {
+          "disk_read_bytes": 208509980672,
+          "disk_written_bytes": 299008,
+          "physical_footprint_bytes": 87632662664,
+          "lifetime_peak_physical_footprint_bytes": 87690121352,
+          "mlx_active_bytes": 63347225792,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18034924544
+        },
+        "after_prefill": {
+          "disk_read_bytes": 249415819264,
+          "disk_written_bytes": 299008,
+          "physical_footprint_bytes": 87629615240,
+          "lifetime_peak_physical_footprint_bytes": 87690121352,
+          "mlx_active_bytes": 63341429952,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18184708352
+        },
+        "after_decode": {
+          "disk_read_bytes": 261229387776,
+          "disk_written_bytes": 299008,
+          "physical_footprint_bytes": 87632547976,
+          "lifetime_peak_physical_footprint_bytes": 87690121352,
+          "mlx_active_bytes": 63347225792,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18184961792
+        }
+      },
+      "decode_hot_expert_fraction": 0.6648809523809524,
+      "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+      "backbone_device": "mps",
+      "thinking": false,
+      "policy": {
+        "base_bits": 1.5,
+        "hot_bits": 4,
+        "slots": 2630,
+        "fixed": 526,
+        "jt_mix": 0.75,
+        "refresh_tokens": 1,
+        "prefill_bits": 4,
+        "prefill_chunk_size": 256,
+        "resident_base": true,
+        "resident_hot": false,
+        "hot_set_capacity_bytes": null,
+        "wired_memory": true
+      },
+      "limitations": [
+        "text only",
+        "single sequence",
+        "4096 token validation ceiling",
+        "no speculative decoding",
+        "synchronous expert SSD reads",
+        "greedy sampling",
+        "unquantized attention cache"
+      ]
+    },
+    {
+      "text": "# Merging Overlapping Intervals\n\n## The Solution\n\n```python\ndef",
+      "generated_ids": [
+        2,
+        386,
+        94497,
+        6065,
+        89870,
+        1333,
+        41958,
+        271,
+        565,
+        576,
+        12472,
+        271,
+        73022,
+        12663,
+        198,
+        750
+      ],
+      "prompt_tokens": 29,
+      "generated_tokens": 16,
+      "ttft_seconds": 131.0337440840085,
+      "decode_step_seconds": [
+        9.510310458979802,
+        5.78264754198608,
+        8.090723541012267,
+        6.408940708992304,
+        2.7811438749777153,
+        2.3802836669783574,
+        1.6921733749913983,
+        4.958042625017697,
+        3.9586572910193354,
+        2.874711040989496,
+        3.4344937920104712,
+        1.498298791993875,
+        3.289268667023862,
+        4.023579708009493,
+        2.539505124994321
+      ],
+      "decode_tokens_per_second": 0.2372562540024185,
+      "elapsed_seconds": 194.2682746250066,
+      "prefill_tokens_per_second": 0.2213170370939526,
+      "expert_metrics": {
+        "hits": 9071,
+        "misses": 5628,
+        "load_seconds": 139.9623618972546,
+        "expert_forward_seconds": 159.96488806779962,
+        "base_tensor_bytes": 0,
+        "refinement_tensor_bytes": 47729754112,
+        "hot_sync_seconds": 0.0
+      },
+      "expert_metrics_by_phase": {
+        "prefill": {
+          "hits": 4031,
+          "misses": 4020,
+          "load_seconds": 106.3981008810515,
+          "expert_forward_seconds": 120.74286487299833,
+          "base_tensor_bytes": 0,
+          "refinement_tensor_bytes": 34088198144,
+          "hot_sync_seconds": 0.0
+        },
+        "decode": {
+          "hits": 5040,
+          "misses": 1608,
+          "load_seconds": 33.56426101620309,
+          "expert_forward_seconds": 39.222023194801295,
+          "base_tensor_bytes": 0,
+          "refinement_tensor_bytes": 13641555968,
+          "hot_sync_seconds": 0.0
+        }
+      },
+      "expert_cache_bytes": {
+        "limit": 4294967296,
+        "after_prefill": 4288196608,
+        "after_decode": 4294017024,
+        "resident_base": 59052758208
+      },
+      "disk_reads": {
+        "prefill": 41234948096,
+        "decode": 12827299840
+      },
+      "resources": {
+        "before": {
+          "disk_read_bytes": 261229387776,
+          "disk_written_bytes": 303104,
+          "physical_footprint_bytes": 87632547976,
+          "lifetime_peak_physical_footprint_bytes": 87690121352,
+          "mlx_active_bytes": 63347225792,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18034924544
+        },
+        "after_prefill": {
+          "disk_read_bytes": 302464335872,
+          "disk_written_bytes": 303104,
+          "physical_footprint_bytes": 87630008456,
+          "lifetime_peak_physical_footprint_bytes": 87690121352,
+          "mlx_active_bytes": 63341429952,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18184708352
+        },
+        "after_decode": {
+          "disk_read_bytes": 315291635712,
+          "disk_written_bytes": 303104,
+          "physical_footprint_bytes": 87633088648,
+          "lifetime_peak_physical_footprint_bytes": 87690121352,
+          "mlx_active_bytes": 63347225792,
+          "mlx_peak_bytes": 63808452964,
+          "mps_allocated_bytes": 18184961792
+        }
+      },
+      "decode_hot_expert_fraction": 0.6648809523809524,
+      "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+      "backbone_device": "mps",
+      "thinking": false,
+      "policy": {
+        "base_bits": 1.5,
+        "hot_bits": 4,
+        "slots": 2630,
+        "fixed": 526,
+        "jt_mix": 0.75,
+        "refresh_tokens": 1,
+        "prefill_bits": 4,
+        "prefill_chunk_size": 256,
+        "resident_base": true,
+        "resident_hot": false,
+        "hot_set_capacity_bytes": null,
+        "wired_memory": true
+      },
+      "limitations": [
+        "text only",
+        "single sequence",
+        "4096 token validation ceiling",
+        "no speculative decoding",
+        "synchronous expert SSD reads",
+        "greedy sampling",
+        "unquantized attention cache"
+      ]
+    }
+  ],
+  "warmup": {
+    "text": "# Merging Overlapping Intervals\n\n## The Solution\n\n```python\ndef",
+    "generated_ids": [
+      2,
+      386,
+      94497,
+      6065,
+      89870,
+      1333,
+      41958,
+      271,
+      565,
+      576,
+      12472,
+      271,
+      73022,
+      12663,
+      198,
+      750
+    ],
+    "prompt_tokens": 29,
+    "generated_tokens": 16,
+    "ttft_seconds": 196.1177202500112,
+    "decode_step_seconds": [
+      14.311045708018355,
+      4.247729458002141,
+      5.017840917018475,
+      3.514797959011048,
+      3.0192940830020234,
+      2.4056662090006284,
+      1.8886501669767313,
+      3.1653433330066036,
+      2.0843280410044827,
+      2.8231072500057053,
+      3.304466749978019,
+      1.3966321659972891,
+      2.814641750010196,
+      2.7154307500168215,
+      2.0469569170090836
+    ],
+    "decode_tokens_per_second": 0.27394292454854546,
+    "elapsed_seconds": 250.87823649999336,
+    "prefill_tokens_per_second": 0.14787037072953302,
+    "expert_metrics": {
+      "hits": 9071,
+      "misses": 5639,
+      "load_seconds": 143.31159035483142,
+      "expert_forward_seconds": 209.536807784345,
+      "base_tensor_bytes": 0,
+      "refinement_tensor_bytes": 47823581184,
+      "hot_sync_seconds": 0.0
+    },
+    "expert_metrics_by_phase": {
+      "prefill": {
+        "hits": 4031,
+        "misses": 4031,
+        "load_seconds": 114.47554175302503,
+        "expert_forward_seconds": 170.28408054317697,
+        "base_tensor_bytes": 0,
+        "refinement_tensor_bytes": 34182025216,
+        "hot_sync_seconds": 0.0
+      },
+      "decode": {
+        "hits": 5040,
+        "misses": 1608,
+        "load_seconds": 28.836048601806397,
+        "expert_forward_seconds": 39.25272724116803,
+        "base_tensor_bytes": 0,
+        "refinement_tensor_bytes": 13641555968,
+        "hot_sync_seconds": 0.0
+      }
+    },
+    "expert_cache_bytes": {
+      "limit": 4294967296,
+      "after_prefill": 4288196608,
+      "after_decode": 4294017024,
+      "resident_base": 59052758208
+    },
+    "disk_reads": {
+      "prefill": 52633501696,
+      "decode": 10553798656
+    },
+    "resources": {
+      "before": {
+        "disk_read_bytes": 92758802432,
+        "disk_written_bytes": 77824,
+        "physical_footprint_bytes": 82498323376,
+        "lifetime_peak_physical_footprint_bytes": 84781369584,
+        "mlx_active_bytes": 59053102272,
+        "mlx_peak_bytes": 59053102272,
+        "mps_allocated_bytes": 18034924544
+      },
+      "after_prefill": {
+        "disk_read_bytes": 145392304128,
+        "disk_written_bytes": 77824,
+        "physical_footprint_bytes": 87596798064,
+        "lifetime_peak_physical_footprint_bytes": 87657861208,
+        "mlx_active_bytes": 63341429952,
+        "mlx_peak_bytes": 63807961428,
+        "mps_allocated_bytes": 18184708352
+      },
+      "after_decode": {
+        "disk_read_bytes": 155946102784,
+        "disk_written_bytes": 290816,
+        "physical_footprint_bytes": 87620587656,
+        "lifetime_peak_physical_footprint_bytes": 87657861208,
+        "mlx_active_bytes": 63347225792,
+        "mlx_peak_bytes": 63807961428,
+        "mps_allocated_bytes": 18184961792
+      }
+    },
+    "decode_hot_expert_fraction": 0.6648809523809524,
+    "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+    "backbone_device": "mps",
+    "thinking": false,
+    "policy": {
+      "base_bits": 1.5,
+      "hot_bits": 4,
+      "slots": 2630,
+      "fixed": 526,
+      "jt_mix": 0.75,
+      "refresh_tokens": 1,
+      "prefill_bits": 4,
+      "prefill_chunk_size": 256,
+      "resident_base": true,
+      "resident_hot": false,
+      "hot_set_capacity_bytes": null,
+      "wired_memory": true
+    },
+    "limitations": [
+      "text only",
+      "single sequence",
+      "4096 token validation ceiling",
+      "no speculative decoding",
+      "synchronous expert SSD reads",
+      "greedy sampling",
+      "unquantized attention cache"
+    ]
+  }
+}

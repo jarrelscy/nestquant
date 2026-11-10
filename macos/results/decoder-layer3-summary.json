@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "shards": 8,
+  "experts": 288,
+  "projections": 3,
+  "levels": 2,
+  "decoded_weight_values": 14495514624,
+  "mismatches": 0
+}

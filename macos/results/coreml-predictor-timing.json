@@ -1,0 +1,139 @@
+{
+  "status": "complete",
+  "scope": "One incremental jT predictor step after 32 cached positions; not GLM generation",
+  "coremltools": "9.0",
+  "torch": "2.15.0",
+  "timed_runs": 20,
+  "limitations": [
+    "Fixed 32-position cache, not the complete 256-position deployment",
+    "Compute plan reports anticipated device placement, not hardware-counter proof",
+    "FP16 conversion may change expert rankings; no production integration"
+  ],
+  "cached_positions": 32,
+  "predictor_window": 256,
+  "torch_wrapper_matches_incremental_predictor": true,
+  "pytorch_incremental_timing": {
+    "median_seconds": 0.0033469994959887117,
+    "samples_seconds": [
+      0.0037842919991817325,
+      0.003664207994006574,
+      0.003247499989811331,
+      0.0033898330002557486,
+      0.003378041001269594,
+      0.004416250012582168,
+      0.003263416001573205,
+      0.0032816250168252736,
+      0.003251874994020909,
+      0.0032363749924115837,
+      0.0042124169995076954,
+      0.0033159579907078296,
+      0.003300375014077872,
+      0.0032046250125858933,
+      0.0041907499835360795,
+      0.003275707975262776,
+      0.0036151669919490814,
+      0.0037869999941904098,
+      0.00341724997269921,
+      0.003304207988549024
+    ]
+  },
+  "package": "/Users/codeninja/Models/GLM/coreml-predictor-timing/predictor.mlpackage",
+  "variants": [
+    {
+      "compute_units": "CPU_ONLY",
+      "comparisons": {
+        "probabilities": {
+          "relative_rms": 0.005402415059506893,
+          "max_absolute": 0.00031045451760292053
+        },
+        "next_keys": {
+          "relative_rms": 0.0009818329708650708,
+          "max_absolute": 0.04994857311248779
+        },
+        "next_values": {
+          "relative_rms": 0.0014476089272648096,
+          "max_absolute": 0.02848738431930542
+        }
+      },
+      "top8_overlap": 0.9940476190476191,
+      "planned_operations": {
+        "unknown": 561,
+        "MLCPUComputeDevice": 405
+      },
+      "timing": {
+        "median_seconds": 0.0013588540023192763,
+        "samples_seconds": [
+          0.0014556249952875078,
+          0.0014195829862728715,
+          0.001369957986753434,
+          0.0016735839890316129,
+          0.0014092089841142297,
+          0.0013648750027641654,
+          0.0013599999947473407,
+          0.0013233750069048256,
+          0.001357708009891212,
+          0.0013600839884020388,
+          0.001311707979766652,
+          0.0012781249824911356,
+          0.0012681249936576933,
+          0.0012615419982466847,
+          0.0012428330082911998,
+          0.0012698750069830567,
+          0.0016213330090977252,
+          0.0018946670170407742,
+          0.0013231250050012022,
+          0.0012978339800611138
+        ]
+      }
+    },
+    {
+      "compute_units": "CPU_AND_NE",
+      "comparisons": {
+        "probabilities": {
+          "relative_rms": 0.002575425896793604,
+          "max_absolute": 0.0001974310725927353
+        },
+        "next_keys": {
+          "relative_rms": 0.0004498715861700475,
+          "max_absolute": 0.019939899444580078
+        },
+        "next_values": {
+          "relative_rms": 0.0006477974820882082,
+          "max_absolute": 0.011958032846450806
+        }
+      },
+      "top8_overlap": 1.0,
+      "planned_operations": {
+        "unknown": 561,
+        "MLCPUComputeDevice": 16,
+        "MLNeuralEngineComputeDevice": 389
+      },
+      "timing": {
+        "median_seconds": 0.0013313544914126396,
+        "samples_seconds": [
+          0.0013725419994443655,
+          0.0014613749808631837,
+          0.001397833984810859,
+          0.0013634159986395389,
+          0.0013506660179700702,
+          0.0013365840131882578,
+          0.0013232910132501274,
+          0.0013299169950187206,
+          0.0013141249946784228,
+          0.0013611670001409948,
+          0.0013327919878065586,
+          0.0013342909805942327,
+          0.0013169580197427422,
+          0.0013060829951427877,
+          0.0013293329975567758,
+          0.0013438329915516078,
+          0.0013090410211589187,
+          0.0013207499869167805,
+          0.0013043750077486038,
+          0.0013082090008538216
+        ]
+      }
+    }
+  ],
+  "peak_process_bytes": 2943356024
+}

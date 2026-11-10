@@ -1,0 +1,41 @@
+{
+  "status": "passed",
+  "before_cache_release": {
+    "disk_read_bytes": 1534038016,
+    "disk_written_bytes": 8192,
+    "physical_footprint_bytes": 22413577624,
+    "lifetime_peak_physical_footprint_bytes": 22413577624,
+    "mlx_active_bytes": 0,
+    "mlx_peak_bytes": 0,
+    "mlx_cached_bytes": 0,
+    "mps_driver_allocated_bytes": 18825543680,
+    "mps_allocated_bytes": 18034924544
+  },
+  "after_cache_release": {
+    "disk_read_bytes": 1534038016,
+    "disk_written_bytes": 8192,
+    "physical_footprint_bytes": 22413577624,
+    "lifetime_peak_physical_footprint_bytes": 22413577624,
+    "mlx_active_bytes": 0,
+    "mlx_peak_bytes": 0,
+    "mlx_cached_bytes": 0,
+    "mps_driver_allocated_bytes": 18825543680,
+    "mps_allocated_bytes": 18034924544
+  },
+  "after_allocator_release": {
+    "disk_read_bytes": 1534038016,
+    "disk_written_bytes": 8192,
+    "physical_footprint_bytes": 22413577624,
+    "lifetime_peak_physical_footprint_bytes": 22413577624,
+    "mlx_active_bytes": 0,
+    "mlx_peak_bytes": 0,
+    "mlx_cached_bytes": 0,
+    "mps_driver_allocated_bytes": 18825543680,
+    "mps_allocated_bytes": 18034924544
+  },
+  "allocator_reported_released_bytes": 0,
+  "tensor_count": 1178,
+  "tensor_bytes": 18019154168,
+  "sampled_tensor_digest": "ea03a8fa451620ae7981f543561a19f921720a2f3cdbf336dadb0626aa06973b",
+  "scope": "Text backbone only; first eight values of each live tensor unchanged after releasing unused MPS cache; no expert loading or generation"
+}

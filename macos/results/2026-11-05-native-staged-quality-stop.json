@@ -1,0 +1,157 @@
+{
+  "date": "2026-11-05",
+  "status": "stopped",
+  "source_commit": "288fc00e0f9a5d3415cf718f4dea2d8d70a8557b",
+  "planned_cases": 12,
+  "completed_answers": 0,
+  "launched_cases": 1,
+  "quality_score": null,
+  "error": "MemoryError: Memory guard stopped the run to preserve desktop headroom",
+  "peak_bytes": 40699623736,
+  "outer_limit_bytes": 51539607552,
+  "required_pressure_level": 1,
+  "stop_pressure_level": 2,
+  "minimum_free_percent": 44,
+  "baseline_restored": true,
+  "compressor_before_bytes": 20862861312,
+  "compressor_at_stop_bytes": 61101539328,
+  "system_swapout_delta_bytes": 0,
+  "duration_seconds": 136.91589903831482,
+  "receipt": {
+    "state": "failed",
+    "started_at": 1793863834.61974,
+    "command": [
+      "native_generate.py",
+      "--model",
+      "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+      "--archive",
+      "/Users/codeninja/Models/GLM/expert-major-banks-v1",
+      "--backbone",
+      "/Users/codeninja/Models/GLM/backbone-affine8-v1",
+      "--rows",
+      "128",
+      "--base-budget-gib",
+      "32",
+      "--chunk-size",
+      "16",
+      "--refinements",
+      "--refinement-budget-gib",
+      "4",
+      "--prefill-rows",
+      "128",
+      "--hot-fraction",
+      "0.03",
+      "--base-read-mode",
+      "staged",
+      "--prompt",
+      "Complete the Python function below. Return the complete code in a Python code block.\n\nfrom typing import List\n\n\ndef below_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero([1, 2, 3])\n    False\n    >>> below_zero([1, 2, -4, 5])\n    True\n    \"\"\"\n",
+      "--max-tokens",
+      "768",
+      "--output",
+      "/Users/codeninja/Models/GLM/glm-native-staged-r128-coding-task3.json"
+    ],
+    "baseline": "Qwen",
+    "baseline_port": 18084,
+    "baseline_pid": 1667,
+    "paused_jobs": [],
+    "preserved_pauses": [
+      75012,
+      8419
+    ],
+    "baseline_restored": true,
+    "memory_limit_bytes": 51539607552,
+    "peak_observed_footprint_bytes": 40699623736,
+    "minimum_free_percent": 44,
+    "configuration": {
+      "resident_base": false,
+      "resident_hot": false,
+      "cache_gib": 4,
+      "base_cache_gib": null,
+      "memory_limit_gib": 84
+    },
+    "preflight": {
+      "pressure_level": 1,
+      "free_percent": 34,
+      "supervisor_footprint_bytes": 20693472,
+      "open_file_limit": [
+        1048575,
+        9223372036854775807
+      ]
+    },
+    "forwarded_ports": [
+      18080
+    ],
+    "before_isolation_owners": [
+      {
+        "pid": 1667,
+        "physical_bytes": 1314694856,
+        "resident_bytes": 55159324672,
+        "wired_bytes": 0
+      }
+    ],
+    "before_child": {
+      "pressure_level": 1,
+      "free_percent": 75,
+      "vm_pages": {
+        "page_size": 16384,
+        "File-backed pages": 3813240,
+        "Anonymous pages": 2295120,
+        "Pages wired down": 725920,
+        "Pages occupied by compressor": 1273368,
+        "Compressions": 558687019,
+        "Decompressions": 457747900,
+        "Pageouts": 175831,
+        "Swapins": 13886447,
+        "Swapouts": 17212681
+      }
+    },
+    "child_pid": 77458,
+    "peak_observed_wired_bytes": 2550038528,
+    "peak_observed_resident_bytes": 27809087488,
+    "last_pressure_level": 2,
+    "guard_trip": {
+      "peak_bytes": 40699623736,
+      "free_percent": 44,
+      "pressure_level": 2,
+      "vm_pages": {
+        "page_size": 16384,
+        "File-backed pages": 2351760,
+        "Anonymous pages": 1295512,
+        "Pages wired down": 915802,
+        "Pages occupied by compressor": 3729342,
+        "Compressions": 562419620,
+        "Decompressions": 458391488,
+        "Pageouts": 176039,
+        "Swapins": 13886470,
+        "Swapouts": 17212681
+      }
+    },
+    "after_child_vm_pages": {
+      "page_size": 16384,
+      "File-backed pages": 2351760,
+      "Anonymous pages": 1163667,
+      "Pages wired down": 955390,
+      "Pages occupied by compressor": 3553515,
+      "Compressions": 562419620,
+      "Decompressions": 458391655,
+      "Pageouts": 176039,
+      "Swapins": 13886470,
+      "Swapouts": 17212681
+    },
+    "resumed_jobs": [],
+    "finished_at": 1793863971.535639,
+    "error": "MemoryError: Memory guard stopped the run to preserve desktop headroom"
+  },
+  "evidence": {
+    "glm-native-staged-r128-coding-task3-isolation.json": "53df73f23adc19fedb607d1fdb9c4b73ac999b1dea5684c3bd66cae94d5564d7",
+    "glm-native-staged-r128-coding-task3.log": "473681b622c22c16d6332ad6a96cd27c1107efe664a6e03577718cbf6fbf0af1",
+    "experiments/native-staged-quality-protocol-2026-11-05.json": "adf5288b3c7444b095d3d104454f87eb3057c85ec002912af9b7759501a93b24",
+    "reviews/native-staged-quality-review-completion-2026-11-05.json": "66f2a671de05c594a25e93076a57e7a5439ab22d5fae902141f99d25ae28b197"
+  },
+  "limitations": [
+    "No completed result, throughput measurement or quality score. The remaining eleven cases were not launched.",
+    "The log does not identify the last model phase or layer. Per-layer durable diagnostics are needed.",
+    "System compressor counters cover all processes. They do not attribute every compressed page to this model.",
+    "The48GiB outercap did not trigger. Neither raising it nor repeating this unchangedprofile is supported."
+  ]
+}

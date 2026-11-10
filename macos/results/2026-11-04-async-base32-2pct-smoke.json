@@ -1,0 +1,598 @@
+{
+  "source_commit": "cfe99f6",
+  "checkpoint_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+  "report": {
+    "status": "passed",
+    "async_refinements": true,
+    "wired_memory": false,
+    "hot_fraction": 0.02,
+    "resident_base": true,
+    "resident_hot": false,
+    "scope": "Three short text smoke checks, not a general quality evaluation",
+    "checks": [
+      {
+        "name": "exact_reply",
+        "passed": true,
+        "expected": "GLM_MAC_OK",
+        "generation": {
+          "text": "GLM_MAC_OK",
+          "generated_ids": [
+            3825,
+            44,
+            27979,
+            8374,
+            154827
+          ],
+          "prompt_tokens": 17,
+          "generated_tokens": 5,
+          "ttft_seconds": 86.14331183300237,
+          "decode_step_seconds": [
+            4.03672579099657,
+            2.825007541978266,
+            1.8470040410174988,
+            1.1120332079881337
+          ],
+          "decode_tokens_per_second": 0.40730001445501185,
+          "elapsed_seconds": 95.96540516699315,
+          "first_decode_step_seconds": 4.03672579099657,
+          "subsequent_decode_tokens_per_second": 0.5186681826317052,
+          "predictor_seconds": 0.02059329202165827,
+          "prefetch_drain_seconds": 1.2416974641382694e-05,
+          "prefill_tokens_per_second": 0.19734555867733805,
+          "expert_metrics": {
+            "hits": 1934,
+            "misses": 6090,
+            "load_seconds": 77.3422418696864,
+            "expert_forward_seconds": 88.8103683477093,
+            "base_tensor_bytes": 16574316544,
+            "refinement_tensor_bytes": 26205933568,
+            "hot_sync_seconds": 0.0,
+            "base_hits": 871,
+            "base_misses": 3192,
+            "refinement_hits": 1063,
+            "refinement_misses": 2898,
+            "async_load_seconds": 5.814101963187568,
+            "async_loaded": 191,
+            "async_discarded": 0,
+            "async_fallbacks": 34,
+            "async_install_seconds": 0.08727912593167275,
+            "base_evictions": 0
+          },
+          "expert_metrics_by_phase": {
+            "prefill": {
+              "hits": 884,
+              "misses": 5796,
+              "load_seconds": 71.76517112876172,
+              "expert_forward_seconds": 82.1178690478846,
+              "base_tensor_bytes": 15049871360,
+              "refinement_tensor_bytes": 24581472256,
+              "hot_sync_seconds": 0.0,
+              "base_hits": 0,
+              "base_misses": 2898,
+              "refinement_hits": 884,
+              "refinement_misses": 2898,
+              "async_load_seconds": 0.0,
+              "async_loaded": 0,
+              "async_discarded": 0,
+              "async_fallbacks": 0,
+              "async_install_seconds": 0.0,
+              "base_evictions": 0
+            },
+            "decode": {
+              "hits": 1050,
+              "misses": 294,
+              "load_seconds": 5.5770707409246825,
+              "expert_forward_seconds": 6.6924992998247035,
+              "base_tensor_bytes": 1524445184,
+              "refinement_tensor_bytes": 1624461312,
+              "hot_sync_seconds": 0.0,
+              "base_hits": 871,
+              "base_misses": 294,
+              "refinement_hits": 179,
+              "refinement_misses": 0,
+              "async_load_seconds": 5.814101963187568,
+              "async_loaded": 191,
+              "async_discarded": 0,
+              "async_fallbacks": 34,
+              "async_install_seconds": 0.08727912593167275,
+              "base_evictions": 0
+            }
+          },
+          "expert_cache_bytes": {
+            "limit": 4294967296,
+            "resident_limit": 4227858432,
+            "staging_reserved": 67108864,
+            "peak_staging_reserved": 51937280,
+            "after_prefill": 4221071360,
+            "after_decode": 1915965440,
+            "resident_base": 15587130120,
+            "base_limit": 34359738368
+          },
+          "disk_reads": {
+            "prefill": 51713323008,
+            "decode": 4151762944
+          },
+          "resources": {
+            "before": {
+              "disk_read_bytes": 15528779776,
+              "disk_written_bytes": 77824,
+              "physical_footprint_bytes": 19927500624,
+              "lifetime_peak_physical_footprint_bytes": 23519121680,
+              "mlx_active_bytes": 0,
+              "mlx_peak_bytes": 0,
+              "mlx_cached_bytes": 0,
+              "mps_driver_allocated_bytes": 18825543680,
+              "mps_allocated_bytes": 18034924544
+            },
+            "after_prefill": {
+              "disk_read_bytes": 67242102784,
+              "disk_written_bytes": 749568,
+              "physical_footprint_bytes": 40246345496,
+              "lifetime_peak_physical_footprint_bytes": 40246345496,
+              "mlx_active_bytes": 18376387022,
+              "mlx_peak_bytes": 18821266088,
+              "mlx_cached_bytes": 474870624,
+              "mps_driver_allocated_bytes": 38002524160,
+              "mps_allocated_bytes": 18184505600
+            },
+            "after_decode": {
+              "disk_read_bytes": 71393865728,
+              "disk_written_bytes": 749568,
+              "physical_footprint_bytes": 40391016744,
+              "lifetime_peak_physical_footprint_bytes": 40391016744,
+              "mlx_active_bytes": 17506622216,
+              "mlx_peak_bytes": 18821266088,
+              "mlx_cached_bytes": 473514872,
+              "mps_driver_allocated_bytes": 37161631744,
+              "mps_allocated_bytes": 18184573184
+            }
+          },
+          "decode_hot_expert_fraction": 0.1331845238095238,
+          "decode_desired_hot_expert_fraction": 0.15476190476190477,
+          "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+          "backbone_device": "mps",
+          "thinking": false,
+          "policy": {
+            "base_bits": 1.5,
+            "hot_bits": 4,
+            "slots": 242,
+            "fixed": 48,
+            "jt_mix": 0.75,
+            "refresh_tokens": 1,
+            "prefill_bits": 4,
+            "prefill_chunk_size": 8,
+            "resident_base": true,
+            "resident_hot": false,
+            "hot_set_capacity_bytes": 2008899584,
+            "wired_memory": false,
+            "async_refinements": true,
+            "base_cache_gib": 32.0,
+            "process_memory_limit_bytes": 90194313216
+          },
+          "limitations": [
+            "text only",
+            "single sequence",
+            "4096 token validation ceiling",
+            "no speculative decoding",
+            "synchronous prefill SSD reads",
+            "readiness-dependent decode precision",
+            "greedy sampling",
+            "unquantized attention cache",
+            "synchronous base-cache misses"
+          ]
+        }
+      },
+      {
+        "name": "arithmetic",
+        "passed": true,
+        "expected": "42",
+        "generation": {
+          "text": "42",
+          "generated_ids": [
+            101961,
+            154827
+          ],
+          "prompt_tokens": 21,
+          "generated_tokens": 2,
+          "ttft_seconds": 66.89357775001554,
+          "decode_step_seconds": [
+            2.1674912499729544
+          ],
+          "decode_tokens_per_second": 0.46136287747988736,
+          "elapsed_seconds": 69.06156812500558,
+          "first_decode_step_seconds": 2.1674912499729544,
+          "subsequent_decode_tokens_per_second": null,
+          "predictor_seconds": 0.004485790996113792,
+          "prefetch_drain_seconds": 3.483399632386863e-05,
+          "prefill_tokens_per_second": 0.3139314820097976,
+          "expert_metrics": {
+            "hits": 1453,
+            "misses": 4542,
+            "load_seconds": 53.90779353599646,
+            "expert_forward_seconds": 65.10081399304909,
+            "base_tensor_bytes": 7048208384,
+            "refinement_tensor_bytes": 27729129472,
+            "hot_sync_seconds": 0.0,
+            "base_hits": 238,
+            "base_misses": 1359,
+            "refinement_hits": 1215,
+            "refinement_misses": 3183,
+            "async_load_seconds": 1.4896550819685217,
+            "async_loaded": 84,
+            "async_discarded": 2,
+            "async_fallbacks": 34,
+            "async_install_seconds": 0.026584710838505998,
+            "base_evictions": 0
+          },
+          "expert_metrics_by_phase": {
+            "prefill": {
+              "hits": 1170,
+              "misses": 4489,
+              "load_seconds": 52.92380266205873,
+              "expert_forward_seconds": 63.82486153597711,
+              "base_tensor_bytes": 6773555200,
+              "refinement_tensor_bytes": 26997755904,
+              "hot_sync_seconds": 0.0,
+              "base_hits": 0,
+              "base_misses": 1306,
+              "refinement_hits": 1170,
+              "refinement_misses": 3183,
+              "async_load_seconds": 0.0,
+              "async_loaded": 0,
+              "async_discarded": 0,
+              "async_fallbacks": 0,
+              "async_install_seconds": 0.0,
+              "base_evictions": 0
+            },
+            "decode": {
+              "hits": 283,
+              "misses": 53,
+              "load_seconds": 0.9839908739377279,
+              "expert_forward_seconds": 1.2759524570719805,
+              "base_tensor_bytes": 274653184,
+              "refinement_tensor_bytes": 731373568,
+              "hot_sync_seconds": 0.0,
+              "base_hits": 238,
+              "base_misses": 53,
+              "refinement_hits": 45,
+              "refinement_misses": 0,
+              "async_load_seconds": 1.4896550819685217,
+              "async_loaded": 84,
+              "async_discarded": 2,
+              "async_fallbacks": 34,
+              "async_install_seconds": 0.026584710838505998,
+              "base_evictions": 0
+            }
+          },
+          "expert_cache_bytes": {
+            "limit": 4294967296,
+            "resident_limit": 4227858432,
+            "staging_reserved": 67108864,
+            "peak_staging_reserved": 51937280,
+            "after_prefill": 4221423616,
+            "after_decode": 1070043136,
+            "resident_base": 22221908649,
+            "base_limit": 34359738368
+          },
+          "disk_reads": {
+            "prefill": 42542948352,
+            "decode": 1285677056
+          },
+          "resources": {
+            "before": {
+              "disk_read_bytes": 71393865728,
+              "disk_written_bytes": 757760,
+              "physical_footprint_bytes": 40391131432,
+              "lifetime_peak_physical_footprint_bytes": 40391131432,
+              "mlx_active_bytes": 17506622216,
+              "mlx_peak_bytes": 18821266088,
+              "mlx_cached_bytes": 473514872,
+              "mps_driver_allocated_bytes": 37161631744,
+              "mps_allocated_bytes": 18034924544
+            },
+            "after_prefill": {
+              "disk_read_bytes": 113936814080,
+              "disk_written_bytes": 1134592,
+              "physical_footprint_bytes": 49456175352,
+              "lifetime_peak_physical_footprint_bytes": 49456175352,
+              "mlx_active_bytes": 26190235534,
+              "mlx_peak_bytes": 26644768800,
+              "mlx_cached_bytes": 480670826,
+              "mps_driver_allocated_bytes": 46162477056,
+              "mps_allocated_bytes": 18184573184
+            },
+            "after_decode": {
+              "disk_read_bytes": 115222491136,
+              "disk_written_bytes": 1134592,
+              "physical_footprint_bytes": 46531959032,
+              "lifetime_peak_physical_footprint_bytes": 49457453304,
+              "mlx_active_bytes": 23297542825,
+              "mlx_peak_bytes": 26644768800,
+              "mlx_cached_bytes": 465069142,
+              "mps_driver_allocated_bytes": 43229265920,
+              "mps_allocated_bytes": 18184590080
+            }
+          },
+          "decode_hot_expert_fraction": 0.13392857142857142,
+          "decode_desired_hot_expert_fraction": 0.23511904761904762,
+          "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+          "backbone_device": "mps",
+          "thinking": false,
+          "policy": {
+            "base_bits": 1.5,
+            "hot_bits": 4,
+            "slots": 242,
+            "fixed": 48,
+            "jt_mix": 0.75,
+            "refresh_tokens": 1,
+            "prefill_bits": 4,
+            "prefill_chunk_size": 8,
+            "resident_base": true,
+            "resident_hot": false,
+            "hot_set_capacity_bytes": 2008899584,
+            "wired_memory": false,
+            "async_refinements": true,
+            "base_cache_gib": 32.0,
+            "process_memory_limit_bytes": 90194313216
+          },
+          "limitations": [
+            "text only",
+            "single sequence",
+            "4096 token validation ceiling",
+            "no speculative decoding",
+            "synchronous prefill SSD reads",
+            "readiness-dependent decode precision",
+            "greedy sampling",
+            "unquantized attention cache",
+            "synchronous base-cache misses"
+          ]
+        }
+      },
+      {
+        "name": "ordering",
+        "passed": true,
+        "expected": [
+          1,
+          2,
+          3
+        ],
+        "generation": {
+          "text": "[1, 2, 3]",
+          "generated_ids": [
+            58,
+            16,
+            11,
+            220,
+            17,
+            11,
+            220,
+            18,
+            60,
+            154827
+          ],
+          "prompt_tokens": 29,
+          "generated_tokens": 10,
+          "ttft_seconds": 80.0394335000019,
+          "decode_step_seconds": [
+            2.4057376249984372,
+            2.195434374996694,
+            1.2577251250040717,
+            0.6976150409900583,
+            1.0932787909987383,
+            1.3780127920035738,
+            0.8415919999824837,
+            0.8979763750103302,
+            0.9284110000007786
+          ],
+          "decode_tokens_per_second": 0.7695081128465199,
+          "elapsed_seconds": 91.73699649999617,
+          "first_decode_step_seconds": 2.4057376249984372,
+          "subsequent_decode_tokens_per_second": 0.8611367943109176,
+          "predictor_seconds": 0.044143041071947664,
+          "prefetch_drain_seconds": 8.625007467344403e-06,
+          "prefill_tokens_per_second": 0.36232140498594745,
+          "expert_metrics": {
+            "hits": 4663,
+            "misses": 5773,
+            "load_seconds": 68.6165661321138,
+            "expert_forward_seconds": 84.63823042894364,
+            "base_tensor_bytes": 9174376448,
+            "refinement_tensor_bytes": 35912196096,
+            "hot_sync_seconds": 0.0,
+            "base_hits": 2051,
+            "base_misses": 1769,
+            "refinement_hits": 2612,
+            "refinement_misses": 4004,
+            "async_load_seconds": 4.2082462094549555,
+            "async_loaded": 230,
+            "async_discarded": 0,
+            "async_fallbacks": 35,
+            "async_install_seconds": 0.1071947508607991,
+            "base_evictions": 0
+          },
+          "expert_metrics_by_phase": {
+            "prefill": {
+              "hits": 2054,
+              "misses": 5358,
+              "load_seconds": 62.468546462099766,
+              "expert_forward_seconds": 76.73834441998042,
+              "base_tensor_bytes": 7019528192,
+              "refinement_tensor_bytes": 33957265408,
+              "hot_sync_seconds": 0.0,
+              "base_hits": 0,
+              "base_misses": 1354,
+              "refinement_hits": 2054,
+              "refinement_misses": 4004,
+              "async_load_seconds": 0.0,
+              "async_loaded": 0,
+              "async_discarded": 0,
+              "async_fallbacks": 0,
+              "async_install_seconds": 0.0,
+              "base_evictions": 0
+            },
+            "decode": {
+              "hits": 2609,
+              "misses": 415,
+              "load_seconds": 6.148019670014037,
+              "expert_forward_seconds": 7.899886008963222,
+              "base_tensor_bytes": 2154848256,
+              "refinement_tensor_bytes": 1954930688,
+              "hot_sync_seconds": 0.0,
+              "base_hits": 2051,
+              "base_misses": 415,
+              "refinement_hits": 558,
+              "refinement_misses": 0,
+              "async_load_seconds": 4.2082462094549555,
+              "async_loaded": 230,
+              "async_discarded": 0,
+              "async_fallbacks": 35,
+              "async_install_seconds": 0.1071947508607991,
+              "base_evictions": 0
+            }
+          },
+          "expert_cache_bytes": {
+            "limit": 4294967296,
+            "resident_limit": 4227858432,
+            "staging_reserved": 67108864,
+            "peak_staging_reserved": 51937280,
+            "after_prefill": 4222152704,
+            "after_decode": 1982009344,
+            "resident_base": 30858310224,
+            "base_limit": 34359738368
+          },
+          "disk_reads": {
+            "prefill": 51376222208,
+            "decode": 5440274432
+          },
+          "resources": {
+            "before": {
+              "disk_read_bytes": 115222491136,
+              "disk_written_bytes": 1150976,
+              "physical_footprint_bytes": 46532008184,
+              "lifetime_peak_physical_footprint_bytes": 49457453304,
+              "mlx_active_bytes": 23297542825,
+              "mlx_peak_bytes": 26644768800,
+              "mlx_cached_bytes": 465069142,
+              "mps_driver_allocated_bytes": 43229265920,
+              "mps_allocated_bytes": 18034924544
+            },
+            "after_prefill": {
+              "disk_read_bytes": 166598713344,
+              "disk_written_bytes": 1331200,
+              "physical_footprint_bytes": 56672251120,
+              "lifetime_peak_physical_footprint_bytes": 56672251120,
+              "mlx_active_bytes": 33061751295,
+              "mlx_peak_bytes": 33516284631,
+              "mlx_cached_bytes": 481014802,
+              "mps_driver_allocated_bytes": 53319892992,
+              "mps_allocated_bytes": 18184708352
+            },
+            "after_decode": {
+              "disk_read_bytes": 172038987776,
+              "disk_written_bytes": 1331200,
+              "physical_footprint_bytes": 56601275680,
+              "lifetime_peak_physical_footprint_bytes": 56673512688,
+              "mlx_active_bytes": 32848212560,
+              "mlx_peak_bytes": 33516284631,
+              "mlx_cached_bytes": 472917058,
+              "mps_driver_allocated_bytes": 53157429248,
+              "mps_allocated_bytes": 18184860416
+            }
+          },
+          "decode_hot_expert_fraction": 0.18452380952380953,
+          "decode_desired_hot_expert_fraction": 0.19543650793650794,
+          "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+          "backbone_device": "mps",
+          "thinking": false,
+          "policy": {
+            "base_bits": 1.5,
+            "hot_bits": 4,
+            "slots": 242,
+            "fixed": 48,
+            "jt_mix": 0.75,
+            "refresh_tokens": 1,
+            "prefill_bits": 4,
+            "prefill_chunk_size": 8,
+            "resident_base": true,
+            "resident_hot": false,
+            "hot_set_capacity_bytes": 2008899584,
+            "wired_memory": false,
+            "async_refinements": true,
+            "base_cache_gib": 32.0,
+            "process_memory_limit_bytes": 90194313216
+          },
+          "limitations": [
+            "text only",
+            "single sequence",
+            "4096 token validation ceiling",
+            "no speculative decoding",
+            "synchronous prefill SSD reads",
+            "readiness-dependent decode precision",
+            "greedy sampling",
+            "unquantized attention cache",
+            "synchronous base-cache misses"
+          ]
+        }
+      }
+    ]
+  },
+  "isolation": {
+    "state": "complete",
+    "started_at": 1793788593.3835342,
+    "command": [
+      "verify_generation.py",
+      "--model",
+      "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+      "--resident-base",
+      "--base-cache-gib",
+      "32",
+      "--async-refinements",
+      "--hot-fraction",
+      "0.02",
+      "--cache-gib",
+      "4",
+      "--memory-limit-gib",
+      "84",
+      "--prefill-chunk-size",
+      "8",
+      "--output",
+      "/Users/codeninja/Models/GLM/generation-async-base32-2pct-chunk8.json"
+    ],
+    "baseline_pid": 53859,
+    "paused_jobs": [],
+    "preserved_pauses": [
+      75012,
+      8419
+    ],
+    "baseline_restored": true,
+    "memory_limit_bytes": 90194313216,
+    "peak_observed_footprint_bytes": 56673512688,
+    "minimum_free_percent": 70,
+    "configuration": {
+      "resident_base": true,
+      "resident_hot": false,
+      "cache_gib": 4.0,
+      "base_cache_gib": 32.0,
+      "memory_limit_gib": 84.0
+    },
+    "preflight": {
+      "pressure_level": 1,
+      "free_percent": 85,
+      "supervisor_footprint_bytes": 14107056,
+      "open_file_limit": [
+        1048575,
+        9223372036854775807
+      ]
+    },
+    "before_child": {
+      "pressure_level": 1,
+      "free_percent": 85
+    },
+    "child_pid": 31975,
+    "last_pressure_level": 1,
+    "model_exit_code": 0,
+    "resumed_jobs": [],
+    "finished_at": 1793788864.412859,
+    "error": null
+  }
+}

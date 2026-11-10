@@ -1,0 +1,119 @@
+{
+  "owner": "Andru",
+  "date": "2026-11-05",
+  "scope": "CPU-only analysis of two recorded reference traces. First access means not previously referenced in this request, including prefill. A cold demand-filled cache must load each of these once. Prior residency or valid predictive loading can move that work earlier; this is not a universal lower bound for prefilled caches. No new model run or TPS estimate.",
+  "reports": [
+    {
+      "source": "glm-nestquant-cache-replay-32.json",
+      "source_sha256": "63a8abd7e7936c5a7aca291347b63fd48832a9156052a61007eb31ff8528b7d9",
+      "observed_32GiB_reconciles": true,
+      "first_accesses": {
+        "prefill": {
+          "accesses": 6108,
+          "first_seen": 4040,
+          "first_seen_bytes": 19726429368
+        },
+        "decode": {
+          "accesses": 43008,
+          "first_seen": 4817,
+          "first_seen_bytes": 23515224639
+        }
+      },
+      "decode_by_cache_GiB": {
+        "32": {
+          "accesses": 43008,
+          "misses": 5641,
+          "miss_bytes": 27539249799,
+          "evictions": 2644
+        },
+        "36": {
+          "accesses": 43008,
+          "misses": 4993,
+          "miss_bytes": 24374736015,
+          "evictions": 1116
+        },
+        "40": {
+          "accesses": 43008,
+          "misses": 4817,
+          "miss_bytes": 23515224639,
+          "evictions": 60
+        },
+        "44": {
+          "accesses": 43008,
+          "misses": 4817,
+          "miss_bytes": 23515224639,
+          "evictions": 0
+        },
+        "48": {
+          "accesses": 43008,
+          "misses": 4817,
+          "miss_bytes": 23515224639,
+          "evictions": 0
+        },
+        "56": {
+          "accesses": 43008,
+          "misses": 4817,
+          "miss_bytes": 23515224639,
+          "evictions": 0
+        }
+      },
+      "unique_experts_total": 8857
+    },
+    {
+      "source": "glm-nestquant-cache-replay-32-async.json",
+      "source_sha256": "e87fe8f9d2bb98502ea3f95d9ffff2ececa503dd774e82482bc4fbc4383e91b4",
+      "observed_32GiB_reconciles": true,
+      "first_accesses": {
+        "prefill": {
+          "accesses": 6108,
+          "first_seen": 4040,
+          "first_seen_bytes": 19726429368
+        },
+        "decode": {
+          "accesses": 43008,
+          "first_seen": 4844,
+          "first_seen_bytes": 23647075284
+        }
+      },
+      "decode_by_cache_GiB": {
+        "32": {
+          "accesses": 43008,
+          "misses": 5677,
+          "miss_bytes": 27714870435,
+          "evictions": 2680
+        },
+        "36": {
+          "accesses": 43008,
+          "misses": 5018,
+          "miss_bytes": 24496817670,
+          "evictions": 1141
+        },
+        "40": {
+          "accesses": 43008,
+          "misses": 4844,
+          "miss_bytes": 23647075284,
+          "evictions": 87
+        },
+        "44": {
+          "accesses": 43008,
+          "misses": 4844,
+          "miss_bytes": 23647075284,
+          "evictions": 0
+        },
+        "48": {
+          "accesses": 43008,
+          "misses": 4844,
+          "miss_bytes": 23647075284,
+          "evictions": 0
+        },
+        "56": {
+          "accesses": 43008,
+          "misses": 4844,
+          "miss_bytes": 23647075284,
+          "evictions": 0
+        }
+      },
+      "unique_experts_total": 8884
+    }
+  ]
+}

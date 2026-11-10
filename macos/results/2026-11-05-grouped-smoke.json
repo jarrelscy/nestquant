@@ -1,0 +1,55 @@
+{
+  "source_commit": "b5c37f468478366030f25d5d2716dc4751df3621",
+  "checkpoint_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+  "report": {
+    "status": "passed",
+    "async_refinements": true,
+    "wired_memory": false,
+    "hot_fraction": 0.02,
+    "resident_base": true,
+    "resident_hot": false,
+    "scope": "Three short text smoke checks, not a general quality evaluation",
+    "checks": [
+      {
+        "name": "exact_reply",
+        "passed": true,
+        "expected": "GLM_MAC_OK",
+        "text": "GLM_MAC_OK"
+      },
+      {
+        "name": "arithmetic",
+        "passed": true,
+        "expected": "42",
+        "text": "42"
+      },
+      {
+        "name": "ordering",
+        "passed": true,
+        "expected": [
+          1,
+          2,
+          3
+        ],
+        "text": "[1, 2, 3]"
+      }
+    ]
+  },
+  "isolation": {
+    "state": "complete",
+    "started_at": 1793820245.415501,
+    "finished_at": 1793820438.607616,
+    "baseline_restored": true,
+    "last_pressure_level": 1,
+    "minimum_free_percent": 66,
+    "model_exit_code": 0,
+    "peak_observed_footprint_bytes": 58491662920,
+    "memory_limit_bytes": 90194313216,
+    "configuration": {
+      "resident_base": true,
+      "resident_hot": false,
+      "cache_gib": 4.0,
+      "base_cache_gib": 32.0,
+      "memory_limit_gib": 84
+    }
+  }
+}

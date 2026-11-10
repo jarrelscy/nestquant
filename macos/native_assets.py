@@ -1,0 +1,152 @@
+"""Pack one layer at a time for bounded NestQuant resident loading."""
+
+import argparse
+import fcntl
+import hashlib
+import json
+from pathlib import Path
+import shutil
+
+import mlx.core as mx
+
+FORMAT = 'nestquant-resident-base-v1'
+COMPACT_FORMAT = 'nestquant-resident-base-v2'
+REVISION = '4023870a6f2c6097e37fa5d2e54040db64b011e9'
+
+
+def fingerprint(path):
+    stat = path.stat()
+    return dict(bytes=stat.st_size, inode=stat.st_ino, device=stat.st_dev, mtime_ns=stat.st_mtime_ns)
+
+
+def paths(directory, layer):
+    return directory / f'L{layer}.safetensors', directory / f'L{layer}.json'
+
+
+def bank_storage_bytes(bank):
+    arrays = {id(value): value for planes, _ in bank.values() for value in planes.values()}
+    return sum(value.nbytes for value in arrays.values())
+
+
+def restore_compact_alias(values, geometry, aliases):
+    if (aliases != {'up.lrV': 'gate.lrV'} or set(geometry) != {'gate', 'up', 'down'}
+            or 'up.lrV' in values or 'gate.lrV' not in values):
+        raise ValueError('Invalid compact base alias')
+    for name, meta in geometry.items():
+        bits = meta.get('var_bits')
+        array = values.get(f'{name}.var')
+        tk, tn = meta.get('tk'), meta.get('tn')
+        if (type(bits) is not int or bits != 1 or type(tk) is not int or type(tn) is not int
+                or tk <= 0 or tn <= 0 or array is None or array.dtype != mx.uint8
+                or array.ndim != 2 or array.shape != (values[f'{name}.base'].shape[0], tk * tn)):
+            raise ValueError('Invalid packed sign plane')
+    gate, up = geometry['gate'], geometry['up']
+    correction = values['gate.lrV']
+    if (gate['k'] != up['k'] or correction.ndim != 3 or correction.shape[-1] != gate['k']
+            or correction.shape[0] != values['up.base'].shape[0]):
+        raise ValueError('Incompatible compact correction alias')
+    values['up.lrV'] = correction
+
+
+def build(model, directory):
+    from experts import ExpertStore
+    from metrics import MemoryGuard
+    from packed_expert_bank import pack
+    from checkpoint import validate
+
+    validate(model)
+    directory.mkdir(exist_ok=True)
+    mx.set_cache_limit(256 * 1024**2)
+    guard = MemoryGuard(7)
+    store = ExpertStore(model, cache_gib=0)
+    store.memory_check = guard.check
+    try:
+        for number in range(3, 45):
+            file, sidecar = paths(directory, number)
+            if file.exists() and sidecar.exists():
+                data = json.loads(sidecar.read_text())
+                if data['revision'] == REVISION and data['state'] == fingerprint(file):
+                    continue
+                raise RuntimeError(f'Resident archive changed: {file.name}')
+            if shutil.disk_usage(directory).free < 102 * 1024**3:
+                raise RuntimeError('Insufficient disk reserve for another resident bank')
+            experts = [store.get(number, expert, 2) for expert in range(288)]
+            arrays = {}
+            geometry = {}
+            for name, (_, meta) in experts[0].items():
+                if any(expert[name][1] != meta for expert in experts):
+                    raise RuntimeError(f'Projection geometry differs within layer {number}')
+                geometry[name] = meta
+                arrays.update({f'{name}.{key}': value
+                               for key, value in pack([expert[name][0] for expert in experts]).items()})
+            mx.eval(arrays)
+            del experts
+            guard.check(force=True)
+            temporary = file.with_suffix('.tmp.safetensors')
+            mx.save_safetensors(temporary, arrays, metadata=dict(
+                format=FORMAT, revision=REVISION, layer=str(number), geometry=json.dumps(geometry)))
+            del arrays
+            with temporary.open('rb') as handle:
+                fcntl.fcntl(handle.fileno(), fcntl.F_NOCACHE, 1)
+                digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+            temporary.replace(file)
+            stage = sidecar.with_suffix('.tmp')
+            stage.write_text(json.dumps(dict(revision=REVISION, state=fingerprint(file), sha256=digest), indent=2) + '\n')
+            stage.replace(sidecar)
+            print(json.dumps(dict(event='resident_archive_written', layer=number, bytes=file.stat().st_size)), flush=True)
+            store.close()
+    finally:
+        store.close()
+
+
+def read_bank(directory, layer, reader='mlx'):
+    from safetensors import safe_open
+
+    file, sidecar = paths(directory, layer)
+    evidence = json.loads(sidecar.read_text())
+    if evidence['revision'] != REVISION or evidence['state'] != fingerprint(file):
+        raise RuntimeError(f'Resident archive changed: {file.name}')
+    if reader == 'mlx':
+        values, meta = mx.load(file, format='safetensors', return_metadata=True)
+    elif reader == 'mlx-nocache':
+        with file.open('rb', buffering=0) as handle:
+            fcntl.fcntl(handle.fileno(), fcntl.F_NOCACHE, 1)
+            values, meta = mx.load(handle, format='safetensors', return_metadata=True)
+            mx.eval(values)
+    elif reader == 'mmap':
+        from mapped_weights import load_mapped
+
+        values, meta = load_mapped(file)
+    elif reader == 'metal':
+        with safe_open(file, framework='mlx', device='mps', backend='pread') as handle:
+            meta = handle.metadata()
+            values = {}
+            for key in handle.keys():
+                values[key] = handle.get_tensor(key)
+                mx.eval(values[key])
+    else:
+        raise ValueError('Unsupported resident bank reader')
+    if (meta['format'] not in (FORMAT, COMPACT_FORMAT)
+            or (meta['revision'], meta['layer']) != (REVISION, str(layer))):
+        raise RuntimeError(f'Resident archive metadata mismatch: {file.name}')
+    geometry = json.loads(meta['geometry'])
+    if meta['format'] == COMPACT_FORMAT:
+        restore_compact_alias(values, geometry, json.loads(meta.get('aliases', '{}')))
+    elif any('var_bits' in item for item in geometry.values()):
+        raise ValueError('Packed signs require the compact base format')
+    bank = {name: ({}, item) for name, item in geometry.items()}
+    for key, value in values.items():
+        name, field = key.split('.', 1)
+        mx.eval(value)
+        bank[name][0][field] = value
+    if evidence['state'] != fingerprint(file):
+        raise RuntimeError(f'Resident archive changed during read: {file.name}')
+    return bank
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', required=True, type=Path)
+    parser.add_argument('--output-dir', required=True, type=Path)
+    args = parser.parse_args()
+    build(args.model, args.output_dir)

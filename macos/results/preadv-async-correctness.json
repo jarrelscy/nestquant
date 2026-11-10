@@ -1,0 +1,81 @@
+{
+  "result": {
+    "status": "passed",
+    "checks": [
+      "Decode completed with base weights while the SSD worker was blocked",
+      "Background-loaded tensors exactly match the independent synchronous loader",
+      "Decode uses installed refinements and stays within cache and staging budgets"
+    ],
+    "metrics": {
+      "hits": 9,
+      "misses": 3,
+      "load_seconds": 0.09876833399175666,
+      "expert_forward_seconds": 0.0052118760359007865,
+      "base_load_seconds": 0.09876833399175666,
+      "base_tensor_bytes": 15773696,
+      "refinement_tensor_bytes": 25636864,
+      "hot_sync_seconds": 0.0,
+      "base_hits": 3,
+      "base_misses": 3,
+      "refinement_hits": 6,
+      "refinement_misses": 0,
+      "async_load_seconds": 0.07600366699625738,
+      "async_loaded": 3,
+      "async_discarded": 0,
+      "async_fallbacks": 3,
+      "async_install_seconds": 0.002114250004524365,
+      "base_evictions": 0
+    },
+    "cache_bytes": 24891392,
+    "staging_budget": 67108864,
+    "peak_staging_reserved": 51888128,
+    "scope": "Three real layer 3 experts; asynchronous fallback and installation, not a full-model benchmark"
+  },
+  "isolation": {
+    "state": "complete",
+    "started_at": 1793792986.457581,
+    "command": [
+      "verify_async.py",
+      "--model",
+      "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+      "--output",
+      "/Users/codeninja/Models/GLM/preadv-async-correctness.json"
+    ],
+    "baseline_pid": 7208,
+    "paused_jobs": [],
+    "preserved_pauses": [
+      75012,
+      8419
+    ],
+    "baseline_restored": true,
+    "memory_limit_bytes": 8589934592,
+    "peak_observed_footprint_bytes": 457704552,
+    "minimum_free_percent": 85,
+    "configuration": {
+      "resident_base": false,
+      "resident_hot": false,
+      "cache_gib": 4,
+      "base_cache_gib": null,
+      "memory_limit_gib": 84
+    },
+    "preflight": {
+      "pressure_level": 1,
+      "free_percent": 85,
+      "supervisor_footprint_bytes": 17629664,
+      "open_file_limit": [
+        1048575,
+        9223372036854775807
+      ]
+    },
+    "before_child": {
+      "pressure_level": 1,
+      "free_percent": 85
+    },
+    "child_pid": 60180,
+    "last_pressure_level": 1,
+    "model_exit_code": 0,
+    "resumed_jobs": [],
+    "finished_at": 1793792992.5426471,
+    "error": null
+  }
+}

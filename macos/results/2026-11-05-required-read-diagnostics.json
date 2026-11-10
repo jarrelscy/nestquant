@@ -1,0 +1,404 @@
+{
+  "glm-native-required-read-scaling.json": {
+    "sha256": "0890263601e81347f47fb4b255956ac7f8c7ce9e540d8df5000bfb6bb68b795a",
+    "data": {
+      "trace_sha256": "89dff321cf1bea33c74db8c0e5d509da77311d3f21b6264f30d4076c1926b86c",
+      "warmup_reads_per_trial": 8,
+      "measurements": [
+        {
+          "bytes": 1890576000,
+          "active_batch_seconds": 0.24156140792183578,
+          "wall_seconds": 0.24600920800003223,
+          "process_disk_read_bytes": 1896628224,
+          "sequence": 0,
+          "width": 1,
+          "reads": 384,
+          "active_batch_GB_s": 7.8264819544840165,
+          "wall_GB_s": 7.684980636983931,
+          "median_read_seconds": 0.000578041494009085,
+          "read_count": 384,
+          "physical_requested_ratio": 1.0032012592987534
+        },
+        {
+          "bytes": 1890576000,
+          "active_batch_seconds": 0.1285598379035946,
+          "wall_seconds": 0.13139566700556315,
+          "process_disk_read_bytes": 402538496,
+          "sequence": 1,
+          "width": 2,
+          "reads": 384,
+          "active_batch_GB_s": 14.705805723072855,
+          "wall_GB_s": 14.388419672316553,
+          "median_read_seconds": 0.0006038119900040329,
+          "read_count": 384,
+          "physical_requested_ratio": 0.21291844178705327
+        },
+        {
+          "bytes": 1890576000,
+          "active_batch_seconds": 0.08506874815793708,
+          "wall_seconds": 0.08649508300004527,
+          "process_disk_read_bytes": 402538496,
+          "sequence": 2,
+          "width": 4,
+          "reads": 384,
+          "active_batch_GB_s": 22.224095698340257,
+          "wall_GB_s": 21.857612414789063,
+          "median_read_seconds": 0.0007780625019222498,
+          "read_count": 384,
+          "physical_requested_ratio": 0.21291844178705327
+        },
+        {
+          "bytes": 1890576000,
+          "active_batch_seconds": 0.09908383287256584,
+          "wall_seconds": 0.1007510409981478,
+          "process_disk_read_bytes": 402538496,
+          "sequence": 3,
+          "width": 4,
+          "reads": 384,
+          "active_batch_GB_s": 19.08056990923551,
+          "wall_GB_s": 18.764828445144865,
+          "median_read_seconds": 0.000804250012151897,
+          "read_count": 384,
+          "physical_requested_ratio": 0.21291844178705327
+        },
+        {
+          "bytes": 1890576000,
+          "active_batch_seconds": 0.15994009005953558,
+          "wall_seconds": 0.16322704197955318,
+          "process_disk_read_bytes": 402538496,
+          "sequence": 4,
+          "width": 2,
+          "reads": 384,
+          "active_batch_GB_s": 11.820526043822147,
+          "wall_GB_s": 11.582492564172211,
+          "median_read_seconds": 0.0006376249948516488,
+          "read_count": 384,
+          "physical_requested_ratio": 0.21291844178705327
+        },
+        {
+          "bytes": 1890576000,
+          "active_batch_seconds": 0.199429202999454,
+          "wall_seconds": 0.20349833299405873,
+          "process_disk_read_bytes": 402538496,
+          "sequence": 5,
+          "width": 1,
+          "reads": 384,
+          "active_batch_GB_s": 9.479935594012158,
+          "wall_GB_s": 9.290375858043006,
+          "median_read_seconds": 0.0004974375042365864,
+          "read_count": 384,
+          "physical_requested_ratio": 0.21291844178705327
+        }
+      ],
+      "buffer_bytes": 19808316,
+      "limitations": [
+        "This measures CPU reads into private buffers, not full-model throughput or GPU-bank writes.",
+        "Every trial uses the same distinct rows and uncached handles; operating-system caching is not assumed absent.",
+        "Boundary samples verify row addressing; the separate archive verifier supplies complete byte equality.",
+        "Active batch time includes dispatch, completion, and boundary validation. Wall time also includes guard checks."
+      ],
+      "status": "passed",
+      "memory": {
+        "physical_bytes": 49840824,
+        "lifetime_peak_physical_bytes": 49988328,
+        "pressure_level": 1
+      },
+      "vm_before": {
+        "page_size_bytes": 16384,
+        "counters": {
+          "Pages free": 56504,
+          "Pages active": 3013670,
+          "Pages inactive": 3005516,
+          "Pages speculative": 6546,
+          "Pages throttled": 0,
+          "Pages wired down": 883077,
+          "Pages purgeable": 102539,
+          "\"Translation faults\"": 11856251179,
+          "Pages copy-on-write": 1287584463,
+          "Pages zero filled": 6702583274,
+          "Pages reactivated": 471178165,
+          "Pages purged": 88866581,
+          "File-backed pages": 3890540,
+          "Anonymous pages": 2135192,
+          "Pages stored in compressor": 2620573,
+          "Pages occupied by compressor": 1371433,
+          "Decompressions": 451216047,
+          "Compressions": 549954818,
+          "Pageins": 1150012155,
+          "Pageouts": 172958,
+          "Swapins": 13830753,
+          "Swapouts": 17180451,
+          "Pages tagged": 267879,
+          "Pages tagged resident": 214718,
+          "Pages tagged compressed": 53161,
+          "Pages tag-storage": 262144,
+          "Pages tag-storage holding tags": 18048,
+          "Pages tag-storage free": 326,
+          "Pages tag-storage non-tag pageable": 243647,
+          "Pages tag-storage non-tag wired": 11,
+          "Bytes of compressed tags": 7823360,
+          "Tagged compressions": 4161243,
+          "Tagged decompressions": 3783252
+        }
+      },
+      "vm_after": {
+        "page_size_bytes": 16384,
+        "counters": {
+          "Pages free": 8487,
+          "Pages active": 3002981,
+          "Pages inactive": 2907430,
+          "Pages speculative": 94285,
+          "Pages throttled": 0,
+          "Pages wired down": 934924,
+          "Pages purgeable": 96767,
+          "\"Translation faults\"": 11856303867,
+          "Pages copy-on-write": 1287595007,
+          "Pages zero filled": 6702633296,
+          "Pages reactivated": 471255005,
+          "Pages purged": 88866666,
+          "File-backed pages": 3962666,
+          "Anonymous pages": 2042030,
+          "Pages stored in compressor": 2655837,
+          "Pages occupied by compressor": 1388639,
+          "Decompressions": 451216229,
+          "Compressions": 549991515,
+          "Pageins": 1150105571,
+          "Pageouts": 172958,
+          "Swapins": 13830757,
+          "Swapouts": 17180451,
+          "Pages tagged": 267226,
+          "Pages tagged resident": 213199,
+          "Pages tagged compressed": 54027,
+          "Pages tag-storage": 262144,
+          "Pages tag-storage holding tags": 18035,
+          "Pages tag-storage free": 295,
+          "Pages tag-storage non-tag pageable": 243678,
+          "Pages tag-storage non-tag wired": 11,
+          "Bytes of compressed tags": 7867776,
+          "Tagged compressions": 4162111,
+          "Tagged decompressions": 3783254
+        }
+      }
+    }
+  },
+  "glm-native-required-read-scaling-isolation.json": {
+    "sha256": "5fdba4ad4358115f87b78028ae68777fb72ea9f897bc5c776a411112d31a256f",
+    "data": {
+      "state": "complete",
+      "started_at": 1793859230.930497,
+      "command": [
+        "probe_required_reads.py",
+        "--archive",
+        "/Users/codeninja/Models/GLM/expert-major-banks-v1",
+        "--reads",
+        "384",
+        "--output",
+        "/Users/codeninja/Models/GLM/glm-native-required-read-scaling.json"
+      ],
+      "baseline": "Qwen",
+      "baseline_port": 18084,
+      "baseline_pid": 58142,
+      "paused_jobs": [],
+      "preserved_pauses": [
+        75012,
+        8419
+      ],
+      "baseline_restored": true,
+      "memory_limit_bytes": 8589934592,
+      "peak_observed_footprint_bytes": 49988328,
+      "minimum_free_percent": 72,
+      "configuration": {
+        "resident_base": false,
+        "resident_hot": false,
+        "cache_gib": 4,
+        "base_cache_gib": null,
+        "memory_limit_gib": 84
+      },
+      "preflight": {
+        "pressure_level": 1,
+        "free_percent": 72,
+        "supervisor_footprint_bytes": 21086712,
+        "open_file_limit": [
+          1048575,
+          9223372036854775807
+        ]
+      },
+      "forwarded_ports": [
+        18080
+      ],
+      "before_isolation_owners": [
+        {
+          "pid": 58142,
+          "physical_bytes": 1315677872,
+          "resident_bytes": 54092464128,
+          "wired_bytes": 0
+        }
+      ],
+      "before_child": {
+        "pressure_level": 1,
+        "free_percent": 72,
+        "vm_pages": {
+          "page_size": 16384,
+          "File-backed pages": 3889600,
+          "Anonymous pages": 2131708,
+          "Pages wired down": 882598,
+          "Pages occupied by compressor": 1371433,
+          "Compressions": 549954818,
+          "Decompressions": 451216036,
+          "Pageouts": 172958,
+          "Swapins": 13830753,
+          "Swapouts": 17180451
+        }
+      },
+      "child_pid": 72702,
+      "peak_observed_wired_bytes": 0,
+      "peak_observed_resident_bytes": 68648960,
+      "last_pressure_level": 1,
+      "model_exit_code": 0,
+      "after_child_vm_pages": {
+        "page_size": 16384,
+        "File-backed pages": 3962698,
+        "Anonymous pages": 2111693,
+        "Pages wired down": 853137,
+        "Pages occupied by compressor": 1388631,
+        "Compressions": 549991515,
+        "Decompressions": 451216300,
+        "Pageouts": 172958,
+        "Swapins": 13830757,
+        "Swapouts": 17180451
+      },
+      "resumed_jobs": [],
+      "finished_at": 1793859238.030348,
+      "error": null
+    }
+  },
+  "source_commit": "a206d8e249aa497c51a47ddf7280317a1c203f2b",
+  "decision": "The identical-row width sweep is confounded by cache reuse. Do not use its width ratios to project model TPS. A later disjoint same-file layout comparison must verify actual physical read bytes.",
+  "glm-native-miss-batches-p3-isolation.json": {
+    "sha256": "06d8e51d54952aea3b73fa32e3efe13f8cb37cebe1f9817c33e0dd92eeec7389",
+    "data": {
+      "state": "failed",
+      "started_at": 1793859466.743361,
+      "command": [
+        "native_generate.py",
+        "--model",
+        "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+        "--archive",
+        "/Users/codeninja/Models/GLM/expert-major-banks-v1",
+        "--backbone",
+        "/Users/codeninja/Models/GLM/backbone-affine8-v1",
+        "--rows",
+        "160",
+        "--base-budget-gib",
+        "32",
+        "--chunk-size",
+        "16",
+        "--refinements",
+        "--prefill-rows",
+        "128",
+        "--prompt",
+        "Write a Python function that merges overlapping intervals. Explain its algorithm, edge cases, and time complexity. Include examples.",
+        "--max-tokens",
+        "128",
+        "--fixed-json",
+        "/Users/codeninja/Models/GLM/grouped-2pct-128-retry/run-1.json",
+        "--output",
+        "/Users/codeninja/Models/GLM/glm-native-miss-batches-p3.json",
+        "--hot-fraction",
+        "0.03"
+      ],
+      "baseline": "Qwen",
+      "baseline_port": 18084,
+      "baseline_pid": 72911,
+      "paused_jobs": [],
+      "preserved_pauses": [
+        75012,
+        8419
+      ],
+      "baseline_restored": true,
+      "memory_limit_bytes": 90194313216,
+      "peak_observed_footprint_bytes": 49862381712,
+      "minimum_free_percent": 36,
+      "configuration": {
+        "resident_base": false,
+        "resident_hot": false,
+        "cache_gib": 4,
+        "base_cache_gib": null,
+        "memory_limit_gib": 84
+      },
+      "preflight": {
+        "pressure_level": 1,
+        "free_percent": 70,
+        "supervisor_footprint_bytes": 21185016,
+        "open_file_limit": [
+          1048575,
+          9223372036854775807
+        ]
+      },
+      "forwarded_ports": [
+        18080
+      ],
+      "before_isolation_owners": [
+        {
+          "pid": 72911,
+          "physical_bytes": 1314023112,
+          "resident_bytes": 56021647360,
+          "wired_bytes": 0
+        }
+      ],
+      "before_child": {
+        "pressure_level": 1,
+        "free_percent": 70,
+        "vm_pages": {
+          "page_size": 16384,
+          "File-backed pages": 3956983,
+          "Anonymous pages": 1849010,
+          "Pages wired down": 957314,
+          "Pages occupied by compressor": 1489804,
+          "Compressions": 550494453,
+          "Decompressions": 451478322,
+          "Pageouts": 172965,
+          "Swapins": 13837886,
+          "Swapouts": 17180451
+        }
+      },
+      "child_pid": 96422,
+      "peak_observed_wired_bytes": 10806853632,
+      "peak_observed_resident_bytes": 38272466944,
+      "last_pressure_level": 2,
+      "guard_trip": {
+        "peak_bytes": 49862381712,
+        "free_percent": 41,
+        "pressure_level": 2,
+        "vm_pages": {
+          "page_size": 16384,
+          "File-backed pages": 1265337,
+          "Anonymous pages": 2191224,
+          "Pages wired down": 1344558,
+          "Pages occupied by compressor": 3526185,
+          "Compressions": 554463430,
+          "Decompressions": 453030956,
+          "Pageouts": 174569,
+          "Swapins": 13838054,
+          "Swapouts": 17185775
+        }
+      },
+      "after_child_vm_pages": {
+        "page_size": 16384,
+        "File-backed pages": 1301974,
+        "Anonymous pages": 1463258,
+        "Pages wired down": 991842,
+        "Pages occupied by compressor": 1649821,
+        "Compressions": 554466246,
+        "Decompressions": 453095736,
+        "Pageouts": 174569,
+        "Swapins": 13838054,
+        "Swapouts": 17185775
+      },
+      "resumed_jobs": [],
+      "finished_at": 1793859804.259304,
+      "error": "MemoryError: Memory guard stopped the run to preserve desktop headroom"
+    }
+  },
+  "model_decision": "Histogram replay failed at pressure2, below footprintcap. No complete histogram or throughput result. Qwen restored; do not retry unchanged. Next stage is bounded single-layer layout probe only."
+}

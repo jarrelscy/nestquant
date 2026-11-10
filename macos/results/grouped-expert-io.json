@@ -1,0 +1,196 @@
+{
+  "source_commit": "b5c37f468478366030f25d5d2716dc4751df3621",
+  "checkpoint_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+  "io": {
+    "result": {
+      "status": "passed",
+      "expert_tensors": 1536,
+      "expert_tensor_bytes": 82427904,
+      "backbone": [
+        {
+          "name": "model.language_model.layers.0.hc_attn_base",
+          "dtype": "torch.float32",
+          "bytes": 96
+        },
+        {
+          "name": "model.language_model.layers.0.hc_attn_fn",
+          "dtype": "torch.bfloat16",
+          "bytes": 786432
+        },
+        {
+          "name": "model.language_model.layers.0.hc_attn_scale",
+          "dtype": "torch.float32",
+          "bytes": 12
+        },
+        {
+          "name": "model.language_model.layers.0.hc_ffn_base",
+          "dtype": "torch.float32",
+          "bytes": 96
+        },
+        {
+          "name": "model.language_model.layers.0.hc_ffn_fn",
+          "dtype": "torch.bfloat16",
+          "bytes": 786432
+        },
+        {
+          "name": "model.language_model.layers.0.input_layernorm.weight",
+          "dtype": "torch.bfloat16",
+          "bytes": 8192
+        },
+        {
+          "name": "model.language_model.layers.10.mlp.shared_experts.down_proj.weight",
+          "dtype": "torch.float8_e4m3fn",
+          "bytes": 8388608
+        },
+        {
+          "name": "model.language_model.layers.10.mlp.shared_experts.gate_proj.weight",
+          "dtype": "torch.float8_e4m3fn",
+          "bytes": 8388608
+        },
+        {
+          "name": "model.language_model.layers.10.mlp.shared_experts.up_proj.weight",
+          "dtype": "torch.float8_e4m3fn",
+          "bytes": 8388608
+        }
+      ],
+      "expert_read_calls": {
+        "base_grouped": 216,
+        "base_individual": 408,
+        "refinement_grouped": 192,
+        "refinement_individual": 360,
+        "all_grouped": 72,
+        "all_individual": 768
+      },
+      "scope": "Exact grouped/individual expert bytes for three layer 3 experts across eight shards, and exact mmap/pread agreement for nine backbone tensors; no throughput claim"
+    },
+    "model_exit_code": 0,
+    "initial_service_restore": "failed: existing launcher rejected an unrelated listener on port 18080; service health was verified after correcting the launcher"
+  },
+  "store": {
+    "result": {
+      "status": "passed",
+      "checks": [
+        "All layer 3 base experts loaded without refinement reads",
+        "Expert 0: tensors and outputs match, base buffers are shared",
+        "Expert 7: tensors and outputs match, base buffers are shared",
+        "Expert 287: tensors and outputs match, base buffers are shared",
+        "Evicted refinement reloads without rereading base tensors",
+        "Hot-set synchronization retains overlapping refinements and serves hot and cold experts without reads",
+        "Oversized hot sets fail before mutation; clearing refinements preserves base storage"
+      ],
+      "layer3_resident_base_bytes": 1409732832,
+      "refinement_cache_bytes": 8294400,
+      "metrics": {
+        "hits": 9,
+        "misses": 292,
+        "load_seconds": 2.3531756630400196,
+        "expert_forward_seconds": 0.0,
+        "base_load_seconds": 2.3256490810599644,
+        "base_tensor_bytes": 1514553344,
+        "refinement_tensor_bytes": 34160640,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 6,
+        "base_misses": 288,
+        "refinement_hits": 3,
+        "refinement_misses": 4,
+        "async_load_seconds": 0.0,
+        "async_loaded": 0,
+        "async_discarded": 0,
+        "async_fallbacks": 0,
+        "async_install_seconds": 0.0,
+        "base_evictions": 0
+      },
+      "hot_set_metrics": {
+        "hits": 3,
+        "misses": 6,
+        "load_seconds": 0.1221540010010358,
+        "expert_forward_seconds": 0.0,
+        "base_load_seconds": 0.10153250000439584,
+        "base_tensor_bytes": 15773696,
+        "refinement_tensor_bytes": 25636864,
+        "hot_sync_seconds": 0.11581074999412522,
+        "base_hits": 1,
+        "base_misses": 3,
+        "refinement_hits": 2,
+        "refinement_misses": 3,
+        "async_load_seconds": 0.0,
+        "async_loaded": 0,
+        "async_discarded": 0,
+        "async_fallbacks": 0,
+        "async_install_seconds": 0.0,
+        "base_evictions": 0
+      },
+      "scope": "All layer 3 base experts; three full experts at both levels; bounded eviction and hot-set residency"
+    },
+    "isolation": {
+      "state": "complete",
+      "started_at": 1793820194.5795069,
+      "finished_at": 1793820202.6927638,
+      "baseline_restored": true,
+      "last_pressure_level": 1,
+      "minimum_free_percent": 82,
+      "model_exit_code": 0,
+      "peak_observed_footprint_bytes": 1706018808,
+      "memory_limit_bytes": 12884901888,
+      "configuration": {
+        "resident_base": false,
+        "resident_hot": false,
+        "cache_gib": 4,
+        "base_cache_gib": null,
+        "memory_limit_gib": 84
+      }
+    }
+  },
+  "async_refinements": {
+    "result": {
+      "status": "passed",
+      "checks": [
+        "Decode completed with base weights while the SSD worker was blocked",
+        "Background-loaded tensors exactly match the independent synchronous loader",
+        "Decode uses installed refinements and stays within cache and staging budgets"
+      ],
+      "metrics": {
+        "hits": 9,
+        "misses": 3,
+        "load_seconds": 0.05605604100855999,
+        "expert_forward_seconds": 0.01697191598941572,
+        "base_load_seconds": 0.05605604100855999,
+        "base_tensor_bytes": 15773696,
+        "refinement_tensor_bytes": 25636864,
+        "hot_sync_seconds": 0.0,
+        "base_hits": 3,
+        "base_misses": 3,
+        "refinement_hits": 6,
+        "refinement_misses": 0,
+        "async_load_seconds": 0.05479704201570712,
+        "async_loaded": 3,
+        "async_discarded": 0,
+        "async_fallbacks": 3,
+        "async_install_seconds": 0.0019127080158796161,
+        "base_evictions": 0
+      },
+      "cache_bytes": 24891392,
+      "staging_budget": 67108864,
+      "peak_staging_reserved": 51888128,
+      "scope": "Three real layer 3 experts; asynchronous fallback and installation, not a full-model benchmark"
+    },
+    "isolation": {
+      "state": "complete",
+      "started_at": 1793820202.9358542,
+      "finished_at": 1793820208.024422,
+      "baseline_restored": true,
+      "last_pressure_level": 1,
+      "minimum_free_percent": 82,
+      "model_exit_code": 0,
+      "peak_observed_footprint_bytes": 295032,
+      "memory_limit_bytes": 12884901888,
+      "configuration": {
+        "resident_base": false,
+        "resident_hot": false,
+        "cache_gib": 4,
+        "base_cache_gib": null,
+        "memory_limit_gib": 84
+      }
+    }
+  }
+}

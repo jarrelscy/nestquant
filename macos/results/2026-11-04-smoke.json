@@ -1,0 +1,775 @@
+{
+  "date": "2026-11-04",
+  "model": "jarrelscy/GLM-5.3-Flash-NestQuant-1.5-4bit",
+  "model_revision": "4023870a6f2c6097e37fa5d2e54040db64b011e9",
+  "source_commit": "1df658845a0d10129c04d76e6c210d437e96a9e8",
+  "hardware": {
+    "chip": "Apple M5 Max",
+    "memory_gib": 128,
+    "gpu_cores": 40,
+    "macos": "27.2"
+  },
+  "scope": "Three short deterministic smoke checks per allocation. Diagnostic timings are not a formal throughput benchmark or a general quality evaluation.",
+  "runs": {
+    "generation-all-hot": {
+      "status": "passed",
+      "hot_fraction": 1.0,
+      "resident_base": true,
+      "resident_hot": false,
+      "scope": "Three short text smoke checks, not a general quality evaluation",
+      "checks": [
+        {
+          "name": "exact_reply",
+          "passed": true,
+          "expected": "GLM_MAC_OK",
+          "generation": {
+            "text": "GLM_MAC_OK",
+            "generated_ids": [
+              3825,
+              44,
+              27979,
+              8374,
+              154827
+            ],
+            "prompt_tokens": 17,
+            "generated_tokens": 5,
+            "ttft_seconds": 152.98254575001192,
+            "decode_step_seconds": [
+              7.850670208019437,
+              6.504803042014828,
+              7.1589947910106275,
+              4.175977875012904
+            ],
+            "decode_tokens_per_second": 0.1556999054461644,
+            "elapsed_seconds": 178.6824150000175,
+            "prefill_tokens_per_second": 0.11112378812011418,
+            "expert_metrics": {
+              "hits": 4231,
+              "misses": 3953,
+              "load_seconds": 92.75607534890878,
+              "expert_forward_seconds": 126.82137499703094,
+              "base_tensor_bytes": 0,
+              "refinement_tensor_bytes": 33524953088,
+              "hot_sync_seconds": 0.0
+            },
+            "expert_metrics_by_phase": {
+              "prefill": {
+                "hits": 2887,
+                "misses": 2887,
+                "load_seconds": 80.64879011793528,
+                "expert_forward_seconds": 111.29715066301287,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 24487972864,
+                "hot_sync_seconds": 0.0
+              },
+              "decode": {
+                "hits": 1344,
+                "misses": 1066,
+                "load_seconds": 12.107285230973503,
+                "expert_forward_seconds": 15.524224334018072,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 9036980224,
+                "hot_sync_seconds": 0.0
+              }
+            },
+            "expert_cache_bytes": {
+              "limit": 4294967296,
+              "after_prefill": 4287328256,
+              "after_decode": 4293591040,
+              "resident_base": 59052758208
+            },
+            "disk_reads": {
+              "prefill": 47358488576,
+              "decode": 3742629888
+            },
+            "resources": {
+              "before": {
+                "disk_read_bytes": 77703204864,
+                "disk_written_bytes": 131072,
+                "physical_footprint_bytes": 82485936976,
+                "lifetime_peak_physical_footprint_bytes": 84765329576,
+                "mlx_active_bytes": 59053102272,
+                "mlx_peak_bytes": 59053102272,
+                "mps_allocated_bytes": 18034924544
+              },
+              "after_prefill": {
+                "disk_read_bytes": 125061693440,
+                "disk_written_bytes": 6586368,
+                "physical_footprint_bytes": 87562407928,
+                "lifetime_peak_physical_footprint_bytes": 87604350968,
+                "mlx_active_bytes": 63340561600,
+                "mlx_peak_bytes": 63804938092,
+                "mps_allocated_bytes": 18184505600
+              },
+              "after_decode": {
+                "disk_read_bytes": 128804323328,
+                "disk_written_bytes": 7979008,
+                "physical_footprint_bytes": 87585968120,
+                "lifetime_peak_physical_footprint_bytes": 87604350968,
+                "mlx_active_bytes": 63346791616,
+                "mlx_peak_bytes": 63804938092,
+                "mps_allocated_bytes": 18184573184
+              }
+            },
+            "decode_hot_expert_fraction": 1.0,
+            "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+            "backbone_device": "mps",
+            "thinking": false,
+            "policy": {
+              "base_bits": 1.5,
+              "hot_bits": 4,
+              "slots": 12096,
+              "fixed": 2419,
+              "jt_mix": 0.75,
+              "refresh_tokens": 1,
+              "prefill_bits": 4,
+              "prefill_chunk_size": 256,
+              "resident_base": true,
+              "resident_hot": false,
+              "hot_set_capacity_bytes": null
+            },
+            "limitations": [
+              "text only",
+              "single sequence",
+              "4096 token validation ceiling",
+              "no speculative decoding",
+              "synchronous expert SSD reads",
+              "greedy sampling",
+              "unquantized attention cache"
+            ]
+          }
+        },
+        {
+          "name": "arithmetic",
+          "passed": true,
+          "expected": "42",
+          "generation": {
+            "text": "42",
+            "generated_ids": [
+              101961,
+              154827
+            ],
+            "prompt_tokens": 21,
+            "generated_tokens": 2,
+            "ttft_seconds": 117.25533820901182,
+            "decode_step_seconds": [
+              7.936586208990775
+            ],
+            "decode_tokens_per_second": 0.1259987573583178,
+            "elapsed_seconds": 125.19303654201212,
+            "prefill_tokens_per_second": 0.17909632363659853,
+            "expert_metrics": {
+              "hits": 3544,
+              "misses": 3518,
+              "load_seconds": 90.54136935228598,
+              "expert_forward_seconds": 114.3386440880131,
+              "base_tensor_bytes": 0,
+              "refinement_tensor_bytes": 29837393920,
+              "hot_sync_seconds": 0.0
+            },
+            "expert_metrics_by_phase": {
+              "prefill": {
+                "hits": 3208,
+                "misses": 3202,
+                "load_seconds": 87.08459421925363,
+                "expert_forward_seconds": 109.77223745899391,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 27158937600,
+                "hot_sync_seconds": 0.0
+              },
+              "decode": {
+                "hits": 336,
+                "misses": 316,
+                "load_seconds": 3.4567751330323517,
+                "expert_forward_seconds": 4.566406629019184,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 2678456320,
+                "hot_sync_seconds": 0.0
+              }
+            },
+            "expert_cache_bytes": {
+              "limit": 4294967296,
+              "after_prefill": 4287746048,
+              "after_decode": 4287115264,
+              "resident_base": 59052758208
+            },
+            "disk_reads": {
+              "prefill": 33717460992,
+              "decode": 1083183104
+            },
+            "resources": {
+              "before": {
+                "disk_read_bytes": 128804388864,
+                "disk_written_bytes": 7987200,
+                "physical_footprint_bytes": 87586066424,
+                "lifetime_peak_physical_footprint_bytes": 87604350968,
+                "mlx_active_bytes": 63346791616,
+                "mlx_peak_bytes": 63804938092,
+                "mps_allocated_bytes": 18034924544
+              },
+              "after_prefill": {
+                "disk_read_bytes": 162521849856,
+                "disk_written_bytes": 8052736,
+                "physical_footprint_bytes": 87600451600,
+                "lifetime_peak_physical_footprint_bytes": 87604350968,
+                "mlx_active_bytes": 63340987584,
+                "mlx_peak_bytes": 63806469824,
+                "mps_allocated_bytes": 18184573184
+              },
+              "after_decode": {
+                "disk_read_bytes": 163605032960,
+                "disk_written_bytes": 8052736,
+                "physical_footprint_bytes": 87604711440,
+                "lifetime_peak_physical_footprint_bytes": 87605121040,
+                "mlx_active_bytes": 63340356800,
+                "mlx_peak_bytes": 63806469824,
+                "mps_allocated_bytes": 18184590080
+              }
+            },
+            "decode_hot_expert_fraction": 1.0,
+            "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+            "backbone_device": "mps",
+            "thinking": false,
+            "policy": {
+              "base_bits": 1.5,
+              "hot_bits": 4,
+              "slots": 12096,
+              "fixed": 2419,
+              "jt_mix": 0.75,
+              "refresh_tokens": 1,
+              "prefill_bits": 4,
+              "prefill_chunk_size": 256,
+              "resident_base": true,
+              "resident_hot": false,
+              "hot_set_capacity_bytes": null
+            },
+            "limitations": [
+              "text only",
+              "single sequence",
+              "4096 token validation ceiling",
+              "no speculative decoding",
+              "synchronous expert SSD reads",
+              "greedy sampling",
+              "unquantized attention cache"
+            ]
+          }
+        },
+        {
+          "name": "ordering",
+          "passed": true,
+          "expected": [
+            1,
+            2,
+            3
+          ],
+          "generation": {
+            "text": "[1, 2, 3]",
+            "generated_ids": [
+              58,
+              16,
+              11,
+              220,
+              17,
+              11,
+              220,
+              18,
+              60,
+              154827
+            ],
+            "prompt_tokens": 29,
+            "generated_tokens": 10,
+            "ttft_seconds": 149.56323658299516,
+            "decode_step_seconds": [
+              8.958453750004992,
+              7.4986992919875775,
+              8.967452792014228,
+              8.427929249999579,
+              8.3970865830197,
+              7.785915582993766,
+              7.405122665979434,
+              5.91256075000274,
+              6.886015416996088
+            ],
+            "decode_tokens_per_second": 0.12813351200695236,
+            "elapsed_seconds": 219.80656295799417,
+            "prefill_tokens_per_second": 0.19389791677788018,
+            "expert_metrics": {
+              "hits": 7051,
+              "misses": 6372,
+              "load_seconds": 149.52329687331803,
+              "expert_forward_seconds": 185.28169699205318,
+              "base_tensor_bytes": 0,
+              "refinement_tensor_bytes": 54034292736,
+              "hot_sync_seconds": 0.0
+            },
+            "expert_metrics_by_phase": {
+              "prefill": {
+                "hits": 4027,
+                "misses": 4020,
+                "load_seconds": 114.5736591440218,
+                "expert_forward_seconds": 141.52872975092032,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 34091737088,
+                "hot_sync_seconds": 0.0
+              },
+              "decode": {
+                "hits": 3024,
+                "misses": 2352,
+                "load_seconds": 34.94963772929623,
+                "expert_forward_seconds": 43.752967241132865,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 19942555648,
+                "hot_sync_seconds": 0.0
+              }
+            },
+            "expert_cache_bytes": {
+              "limit": 4294967296,
+              "after_prefill": 4288352256,
+              "after_decode": 4293844992,
+              "resident_base": 59052758208
+            },
+            "disk_reads": {
+              "prefill": 42467610624,
+              "decode": 10622222336
+            },
+            "resources": {
+              "before": {
+                "disk_read_bytes": 163605032960,
+                "disk_written_bytes": 8060928,
+                "physical_footprint_bytes": 87604760592,
+                "lifetime_peak_physical_footprint_bytes": 87605121040,
+                "mlx_active_bytes": 63340356800,
+                "mlx_peak_bytes": 63806469824,
+                "mps_allocated_bytes": 18034924544
+              },
+              "after_prefill": {
+                "disk_read_bytes": 206072643584,
+                "disk_written_bytes": 8142848,
+                "physical_footprint_bytes": 87617277968,
+                "lifetime_peak_physical_footprint_bytes": 87618097168,
+                "mlx_active_bytes": 63341601984,
+                "mlx_peak_bytes": 63807232428,
+                "mps_allocated_bytes": 18184708352
+              },
+              "after_decode": {
+                "disk_read_bytes": 216694865920,
+                "disk_written_bytes": 8699904,
+                "physical_footprint_bytes": 87626797072,
+                "lifetime_peak_physical_footprint_bytes": 87633563664,
+                "mlx_active_bytes": 63347045568,
+                "mlx_peak_bytes": 63807232428,
+                "mps_allocated_bytes": 18184860416
+              }
+            },
+            "decode_hot_expert_fraction": 1.0,
+            "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+            "backbone_device": "mps",
+            "thinking": false,
+            "policy": {
+              "base_bits": 1.5,
+              "hot_bits": 4,
+              "slots": 12096,
+              "fixed": 2419,
+              "jt_mix": 0.75,
+              "refresh_tokens": 1,
+              "prefill_bits": 4,
+              "prefill_chunk_size": 256,
+              "resident_base": true,
+              "resident_hot": false,
+              "hot_set_capacity_bytes": null
+            },
+            "limitations": [
+              "text only",
+              "single sequence",
+              "4096 token validation ceiling",
+              "no speculative decoding",
+              "synchronous expert SSD reads",
+              "greedy sampling",
+              "unquantized attention cache"
+            ]
+          }
+        }
+      ]
+    },
+    "generation-canonical": {
+      "status": "passed",
+      "hot_fraction": 0.21742724867724866,
+      "resident_base": true,
+      "resident_hot": false,
+      "scope": "Three short text smoke checks, not a general quality evaluation",
+      "checks": [
+        {
+          "name": "exact_reply",
+          "passed": true,
+          "expected": "GLM_MAC_OK",
+          "generation": {
+            "text": "GLM_MAC_OK",
+            "generated_ids": [
+              3825,
+              44,
+              27979,
+              8374,
+              154827
+            ],
+            "prompt_tokens": 17,
+            "generated_tokens": 5,
+            "ttft_seconds": 123.06088795899996,
+            "decode_step_seconds": [
+              4.742486542003462,
+              2.263865084009012,
+              1.795018540986348,
+              1.7082349999982398
+            ],
+            "decode_tokens_per_second": 0.38060421266453065,
+            "elapsed_seconds": 133.57221791701159,
+            "prefill_tokens_per_second": 0.13814299800651422,
+            "expert_metrics": {
+              "hits": 4231,
+              "misses": 3445,
+              "load_seconds": 86.07386627839878,
+              "expert_forward_seconds": 117.2306061630079,
+              "base_tensor_bytes": 0,
+              "refinement_tensor_bytes": 29220900864,
+              "hot_sync_seconds": 0.0
+            },
+            "expert_metrics_by_phase": {
+              "prefill": {
+                "hits": 2887,
+                "misses": 2887,
+                "load_seconds": 82.74624943535309,
+                "expert_forward_seconds": 110.81278258096427,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 24487972864,
+                "hot_sync_seconds": 0.0
+              },
+              "decode": {
+                "hits": 1344,
+                "misses": 558,
+                "load_seconds": 3.327616843045689,
+                "expert_forward_seconds": 6.4178235820436385,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 4732928000,
+                "hot_sync_seconds": 0.0
+              }
+            },
+            "expert_cache_bytes": {
+              "limit": 4294967296,
+              "after_prefill": 4287328256,
+              "after_decode": 4293935104,
+              "resident_base": 59052758208
+            },
+            "disk_reads": {
+              "prefill": 37385023488,
+              "decode": 1185714176
+            },
+            "resources": {
+              "before": {
+                "disk_read_bytes": 93004517376,
+                "disk_written_bytes": 77824,
+                "physical_footprint_bytes": 82486821712,
+                "lifetime_peak_physical_footprint_bytes": 84769245352,
+                "mlx_active_bytes": 59053102272,
+                "mlx_peak_bytes": 59053102272,
+                "mps_allocated_bytes": 18034924544
+              },
+              "after_prefill": {
+                "disk_read_bytes": 130389540864,
+                "disk_written_bytes": 77824,
+                "physical_footprint_bytes": 87557328912,
+                "lifetime_peak_physical_footprint_bytes": 87592079352,
+                "mlx_active_bytes": 63340561600,
+                "mlx_peak_bytes": 63804954476,
+                "mps_allocated_bytes": 18184505600
+              },
+              "after_decode": {
+                "disk_read_bytes": 131575255040,
+                "disk_written_bytes": 143360,
+                "physical_footprint_bytes": 87577956368,
+                "lifetime_peak_physical_footprint_bytes": 87592079352,
+                "mlx_active_bytes": 63347135680,
+                "mlx_peak_bytes": 63804954476,
+                "mps_allocated_bytes": 18184573184
+              }
+            },
+            "decode_hot_expert_fraction": 0.6495535714285714,
+            "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+            "backbone_device": "mps",
+            "thinking": false,
+            "policy": {
+              "base_bits": 1.5,
+              "hot_bits": 4,
+              "slots": 2630,
+              "fixed": 526,
+              "jt_mix": 0.75,
+              "refresh_tokens": 1,
+              "prefill_bits": 4,
+              "prefill_chunk_size": 256,
+              "resident_base": true,
+              "resident_hot": false,
+              "hot_set_capacity_bytes": null
+            },
+            "limitations": [
+              "text only",
+              "single sequence",
+              "4096 token validation ceiling",
+              "no speculative decoding",
+              "synchronous expert SSD reads",
+              "greedy sampling",
+              "unquantized attention cache"
+            ]
+          }
+        },
+        {
+          "name": "arithmetic",
+          "passed": true,
+          "expected": "42",
+          "generation": {
+            "text": "42",
+            "generated_ids": [
+              101961,
+              154827
+            ],
+            "prompt_tokens": 21,
+            "generated_tokens": 2,
+            "ttft_seconds": 73.81696041699615,
+            "decode_step_seconds": [
+              4.760466166975675
+            ],
+            "decode_tokens_per_second": 0.21006346120831695,
+            "elapsed_seconds": 78.57827912500943,
+            "prefill_tokens_per_second": 0.2844874657716847,
+            "expert_metrics": {
+              "hits": 3544,
+              "misses": 3419,
+              "load_seconds": 46.6216257539927,
+              "expert_forward_seconds": 69.71110767012578,
+              "base_tensor_bytes": 0,
+              "refinement_tensor_bytes": 28998004736,
+              "hot_sync_seconds": 0.0
+            },
+            "expert_metrics_by_phase": {
+              "prefill": {
+                "hits": 3208,
+                "misses": 3202,
+                "load_seconds": 45.48274797137128,
+                "expert_forward_seconds": 67.46194362803362,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 27158937600,
+                "hot_sync_seconds": 0.0
+              },
+              "decode": {
+                "hits": 336,
+                "misses": 217,
+                "load_seconds": 1.138877782621421,
+                "expert_forward_seconds": 2.2491640420921613,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 1839067136,
+                "hot_sync_seconds": 0.0
+              }
+            },
+            "expert_cache_bytes": {
+              "limit": 4294967296,
+              "after_prefill": 4287746048,
+              "after_decode": 4287713280,
+              "resident_base": 59052758208
+            },
+            "disk_reads": {
+              "prefill": 17966166016,
+              "decode": 457056256
+            },
+            "resources": {
+              "before": {
+                "disk_read_bytes": 131575255040,
+                "disk_written_bytes": 151552,
+                "physical_footprint_bytes": 87578071056,
+                "lifetime_peak_physical_footprint_bytes": 87592079352,
+                "mlx_active_bytes": 63347135680,
+                "mlx_peak_bytes": 63804954476,
+                "mps_allocated_bytes": 18034924544
+              },
+              "after_prefill": {
+                "disk_read_bytes": 149541421056,
+                "disk_written_bytes": 151552,
+                "physical_footprint_bytes": 87596060688,
+                "lifetime_peak_physical_footprint_bytes": 87599730704,
+                "mlx_active_bytes": 63340987584,
+                "mlx_peak_bytes": 63806469824,
+                "mps_allocated_bytes": 18184573184
+              },
+              "after_decode": {
+                "disk_read_bytes": 149998477312,
+                "disk_written_bytes": 151552,
+                "physical_footprint_bytes": 87599861776,
+                "lifetime_peak_physical_footprint_bytes": 87599878160,
+                "mlx_active_bytes": 63340954816,
+                "mlx_peak_bytes": 63806469824,
+                "mps_allocated_bytes": 18184590080
+              }
+            },
+            "decode_hot_expert_fraction": 0.7232142857142857,
+            "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+            "backbone_device": "mps",
+            "thinking": false,
+            "policy": {
+              "base_bits": 1.5,
+              "hot_bits": 4,
+              "slots": 2630,
+              "fixed": 526,
+              "jt_mix": 0.75,
+              "refresh_tokens": 1,
+              "prefill_bits": 4,
+              "prefill_chunk_size": 256,
+              "resident_base": true,
+              "resident_hot": false,
+              "hot_set_capacity_bytes": null
+            },
+            "limitations": [
+              "text only",
+              "single sequence",
+              "4096 token validation ceiling",
+              "no speculative decoding",
+              "synchronous expert SSD reads",
+              "greedy sampling",
+              "unquantized attention cache"
+            ]
+          }
+        },
+        {
+          "name": "ordering",
+          "passed": true,
+          "expected": [
+            1,
+            2,
+            3
+          ],
+          "generation": {
+            "text": "[1, 2, 3]",
+            "generated_ids": [
+              58,
+              16,
+              11,
+              220,
+              17,
+              11,
+              220,
+              18,
+              60,
+              154827
+            ],
+            "prompt_tokens": 29,
+            "generated_tokens": 10,
+            "ttft_seconds": 121.83761175000109,
+            "decode_step_seconds": [
+              5.698577208007919,
+              2.8842652500024997,
+              2.84473141701892,
+              2.522857042000396,
+              2.8236956670007203,
+              2.147781625011703,
+              1.7266715000150725,
+              1.9642574169847649,
+              2.538258999993559
+            ],
+            "decode_tokens_per_second": 0.357837286888006,
+            "elapsed_seconds": 146.9912719159911,
+            "prefill_tokens_per_second": 0.2380217371586795,
+            "expert_metrics": {
+              "hits": 7051,
+              "misses": 5004,
+              "load_seconds": 95.16876534398762,
+              "expert_forward_seconds": 131.68873338325648,
+              "base_tensor_bytes": 0,
+              "refinement_tensor_bytes": 42438516736,
+              "hot_sync_seconds": 0.0
+            },
+            "expert_metrics_by_phase": {
+              "prefill": {
+                "hits": 4027,
+                "misses": 4021,
+                "load_seconds": 85.00543929546257,
+                "expert_forward_seconds": 114.33398587288684,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 34100326400,
+                "hot_sync_seconds": 0.0
+              },
+              "decode": {
+                "hits": 3024,
+                "misses": 983,
+                "load_seconds": 10.16332604852505,
+                "expert_forward_seconds": 17.354747510369634,
+                "base_tensor_bytes": 0,
+                "refinement_tensor_bytes": 8338190336,
+                "hot_sync_seconds": 0.0
+              }
+            },
+            "expert_cache_bytes": {
+              "limit": 4294967296,
+              "after_prefill": 4288352256,
+              "after_decode": 4294246400,
+              "resident_base": 59052758208
+            },
+            "disk_reads": {
+              "prefill": 32051134464,
+              "decode": 3940581376
+            },
+            "resources": {
+              "before": {
+                "disk_read_bytes": 149998477312,
+                "disk_written_bytes": 159744,
+                "physical_footprint_bytes": 87599861776,
+                "lifetime_peak_physical_footprint_bytes": 87599878160,
+                "mlx_active_bytes": 63340954816,
+                "mlx_peak_bytes": 63806469824,
+                "mps_allocated_bytes": 18034924544
+              },
+              "after_prefill": {
+                "disk_read_bytes": 182049611776,
+                "disk_written_bytes": 159744,
+                "physical_footprint_bytes": 87612166184,
+                "lifetime_peak_physical_footprint_bytes": 87612952616,
+                "mlx_active_bytes": 63341601984,
+                "mlx_peak_bytes": 63807232428,
+                "mps_allocated_bytes": 18184708352
+              },
+              "after_decode": {
+                "disk_read_bytes": 185990193152,
+                "disk_written_bytes": 159744,
+                "physical_footprint_bytes": 87620309032,
+                "lifetime_peak_physical_footprint_bytes": 87620309032,
+                "mlx_active_bytes": 63347479744,
+                "mlx_peak_bytes": 63807232428,
+                "mps_allocated_bytes": 18184860416
+              }
+            },
+            "decode_hot_expert_fraction": 0.6220238095238095,
+            "runtime": "NestQuant Metal experts with Transformers MPS backbone",
+            "backbone_device": "mps",
+            "thinking": false,
+            "policy": {
+              "base_bits": 1.5,
+              "hot_bits": 4,
+              "slots": 2630,
+              "fixed": 526,
+              "jt_mix": 0.75,
+              "refresh_tokens": 1,
+              "prefill_bits": 4,
+              "prefill_chunk_size": 256,
+              "resident_base": true,
+              "resident_hot": false,
+              "hot_set_capacity_bytes": null
+            },
+            "limitations": [
+              "text only",
+              "single sequence",
+              "4096 token validation ceiling",
+              "no speculative decoding",
+              "synchronous expert SSD reads",
+              "greedy sampling",
+              "unquantized attention cache"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

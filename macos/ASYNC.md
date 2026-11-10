@@ -1,0 +1,94 @@
+# Bounded asynchronous decode
+
+The asynchronous decode path is experimental. Bounded-base configurations at 1%, 2%, and 4% passed three full-model answer checks with multi-chunk prefill. The grouped expert reader reached 1.638 tokens/s median across three 128-token requests at 2% and a 59.96 GiB process peak. The first attempt stopped under system memory pressure. The retry used the same guards and completed. See [performance measurements](PERFORMANCE.md).
+
+## Memory budget
+
+The operator's total runtime ceiling is 96 GB, including the KV cache. On the tested 128 GiB Mac, use the stricter 84 GiB process guard (about 90.2 GB). Base weights, the text backbone, refinements, staging, KV state, and temporary allocations all count toward process footprint. The guard also refuses macOS memory-pressure states. These are sampled checks, not an operating-system allocation quota.
+
+The runtime constructs `Glm5NextTextModel`. It does not instantiate or load the vision tower. The original checkpoint files remain intact on disk.
+
+The first guarded 2% trial stopped during base loading when macOS reported pressure level 2. Its observed process peak was 42.89 GiB, below the 84 GiB cap. It produced no generated answer or throughput result. The supervisor restored the existing model service. See the [failed trial](results/2026-11-04-async-mmap-guard-trip.json).
+
+The [subsequent `pread` trial](results/2026-11-04-async-pread-guard-trip.json) also stopped under system pressure, after loading through layer 43, at 78.55 GiB. It produced no generated answer. The [backbone diagnostic](results/backbone-allocator-diagnostic.json) found no memory reduction from PyTorch cache release or macOS allocator relief. Both diagnostics restored the existing service.
+
+The backbone uses the Safetensors 0.8 `pread` backend. Expert reads use positional readers. Both request `F_NOCACHE` on macOS to avoid retaining memory-mapped source pages. File-cache duplication may have contributed to the failed load. Exact byte comparisons and bounded full-model checks cover both readers. See the [Safetensors implementation](https://github.com/huggingface/safetensors/blob/v0.8.0/bindings/python/src/lib.rs).
+
+`pread` keeps file descriptors open. The serving store and worker can hold 672 expert shard descriptors together. Check `ulimit -n` before launching and use a soft limit of at least 1,024. The tested launcher inherits a limit of 1,048,575 and passed a 700-handle read test. The local supervisor rejects lower limits before stopping the existing service.
+
+The positional reader validates bounded headers, dtypes, shapes, and file ranges. It groups adjacent tensor ranges before calling `os.preadv`, which releases Python's interpreter lock. Each gap is at most 4 KiB. The reader allows at most 32 KiB of gap bytes per shard request and at most 64 MiB in a single range. Arrays reference the owned read buffers until assembly finishes. Logical tensor-byte counters exclude gap bytes.
+
+The store shares positional readers between synchronous loads and upgrades. The background worker uses a separate set of readers. Both sets keep parsed headers, which add fixed overhead outside the tensor cache. Real-weight async and synchronous regression checks pass. See [performance measurements](PERFORMANCE.md).
+
+The backend change also changes file-cache behavior. Do not attribute differences from the historical `mmap` benchmark solely to asynchronous delivery.
+
+`--cache-gib` covers resident refinements and a fixed 64 MiB staging allowance. The reader reserves three times each expected payload plus 1 MiB for shard copies, merged arrays, and installation. There is one worker and at most two pending reads. Handles and metadata add fixed overhead outside the tensor budget.
+
+Use `--resident-base --base-cache-gib 32` for the tested bounded configuration. This bounds base tensors separately and loads missing bases on demand instead of preloading all 55 GiB. Base eviction removes any refinement that references it. The least-recently-used order includes both base and refinement hits. A base miss performs a synchronous SSD read and can reduce speed. The change preserves weight precision; it does not establish full-model quality or performance.
+
+The 32 GiB base cache, roughly 16.8 GiB text backbone, and 4 GiB refinement/staging budget total about 52.8 GiB of tensor storage. This is a capacity estimate, not measured process footprint. The 84 GiB process guard still includes framework overhead, transient tensors, and KV state. Both requested reviewers cleared this configuration before its full-model smoke. The smoke passed without reaching the cap. A subsequent 128-token comparison exercised thousands of evictions per request and peaked at 58.29 GiB before the worker correction.
+
+The full desired set must fit within the resident portion of the cache. Capacity is checked before loading the backbone. With a 4 GiB budget, initial candidates are:
+
+| Hot fraction | Slots | Maximum refinement bytes |
+|---|---|---|
+| 1% | 121 | 1,004,744,704 |
+| 2% | 242 | 2,008,899,584 |
+| 4% | 484 | 4,016,562,176 |
+
+The 67,108,864-byte staging allowance fits beside each allocation. All three candidates passed short answer checks and controlled 16-token measurements. These checks do not establish general quality. The canonical 21.74% pool does not fit this budget. The earlier 24 GiB resident-hot experiment was stopped under memory pressure and must not be treated as a recommended configuration.
+
+## Execution contract
+
+The serving thread obtains the current jT desired set and delivery priorities. The background worker reads missing refinements into owned NumPy arrays through private positional readers. It does not call MLX or mutate the serving cache.
+
+At layer boundaries, the serving thread installs completed refinements. An old resident remains available until a replacement arrives, subject to the configured per-layer slot count. Decode uses the ready level, falling back to the resident 1.5-bit base when a refinement is unavailable. Desired and executed hot shares are reported separately. This follows Spark's readiness behavior rather than its diagnostic wait-for-upgrades mode.
+
+The scheduler reads refinements only for resident bases. It discards completed reads if their base was evicted or they are no longer desired. Worker errors propagate. Request completion cancels queued reads and waits for the current read before reporting resource counters. Shutdown joins the worker before closing its handles or clearing storage.
+
+Read-ahead overlaps refinement reads with decode. GPU installation and base-cache misses still run on the serving thread. The predictor still runs on CPU in float32. Prefill remains layer-major with synchronous reads and 4-bit selected experts. Asynchronous prefill, base prefetch, and GPU predictor execution are not implemented.
+
+Readiness depends on timing, so generated tokens can differ between otherwise identical runs. The existing deterministic wait-for-upgrades path remains available for diagnostics. Preserving the same predictor does not establish equal output quality between these modes.
+
+## Validation and tuning
+
+Run the bounded component checks first:
+
+```sh
+.venv-macos/bin/python -m unittest discover -s macos -p 'test_*.py' -v
+.venv-macos/bin/python macos/verify_async.py --model "$MODEL_ROOT" --output async-experts.json
+.venv-macos/bin/python macos/verify_io.py --model "$MODEL_ROOT" --output pread-io.json
+.venv-macos/bin/python macos/verify_base_cache.py --model "$MODEL_ROOT" --output bounded-base.json
+```
+
+After code review, run a full-model smoke check with multiple prompt chunks:
+
+```sh
+.venv-macos/bin/python macos/verify_generation.py \
+  --model "$MODEL_ROOT" --output generation-async-2pct.json \
+  --resident-base --base-cache-gib 32 --async-refinements --hot-fraction 0.02 \
+  --cache-gib 4 --memory-limit-gib 84 --prefill-chunk-size 8
+```
+
+Stop other model servers and downloads before measuring throughput. Use the same prompt, token count, chunk size, cache budget, and wiring setting for each candidate. A benchmark example is:
+
+```sh
+.venv-macos/bin/python macos/benchmark.py \
+  --model "$MODEL_ROOT" --output-dir benchmark-async-2pct \
+  --resident-base --base-cache-gib 32 --async-refinements --hot-fraction 0.02 \
+  --cache-gib 4 --memory-limit-gib 84 --prefill-chunk-size 8 --tokens 16 --runs 3
+```
+
+Record peak process footprint and system headroom. Include a separate process watchdog when testing on an active desktop. The local test supervisor stops at 84 GiB footprint, a macOS pressure warning, or less than 20% reported free memory. It restores the normal model service afterward.
+
+The local watchdog passed a live stop-and-restore test with a 128 MiB allocation and a 64 MiB limit. The test exercised native memory probes and terminated the child. It restored the existing service and preserved previously paused workers. This proves the supervisor lifecycle, not full-model memory safety. Its launch validation now requires a bounded base cache of at most 32 GiB. It rejects resident-hot mode, refinement budgets above 4 GiB, and runtime limits above the watchdog limit.
+
+Begin with the short multi-chunk smoke above. Run a 16-token comparison only after the smoke passes and its recorded memory peak leaves headroom. Extend to 128 tokens after inspecting the short comparison. Keep the same prompt and generation length across compared candidates. A guard trip is a failed trial and must remain in the results.
+
+Keep inclusive decode throughput as the request-level measurement. The reports also expose the first decode step, throughput after that step, predictor time, reader time, installation time, and final reader-drain time. Reader time overlaps computation and must not be added to wall time. Separating early steps does not prove steady-state performance.
+
+The benchmark summary includes desired and executed hot-expert fractions, asynchronous fallback counts, base misses, base evictions, and synchronous base-load time. Compare these alongside speed because readiness changes the precision actually used. Keep the base budget fixed across hot-fraction comparisons.
+
+Reject candidates that fail the required answer or coding checks. Three short smoke cases do not replace broader quality evaluation or a teacher comparison. Do not increase cache residency to rescue a candidate that exceeds the memory budget.
+
+The [async microbenchmark](microbench_async.py) fixes eight experts in every routed layer. It measures resident cycles, blocked-worker fallback, and read-delivery intervals under a 10 GiB process guard. It excludes the backbone, predictor, base misses, and autoregressive generation. Do not label these cycle timings as model tokens/s.

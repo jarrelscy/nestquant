@@ -1,0 +1,104 @@
+{
+  "result": {
+    "status": "passed",
+    "checks": [
+      "All layer 3 base experts loaded without refinement reads",
+      "Expert 0: tensors and outputs match, base buffers are shared",
+      "Expert 7: tensors and outputs match, base buffers are shared",
+      "Expert 287: tensors and outputs match, base buffers are shared",
+      "Evicted refinement reloads without rereading base tensors",
+      "Hot-set synchronization retains overlapping refinements and serves hot and cold experts without reads",
+      "Oversized hot sets fail before mutation; clearing refinements preserves base storage"
+    ],
+    "layer3_resident_base_bytes": 1409732832,
+    "refinement_cache_bytes": 8294400,
+    "metrics": {
+      "hits": 9,
+      "misses": 292,
+      "load_seconds": 3.9847464989870787,
+      "expert_forward_seconds": 0.0,
+      "base_load_seconds": 3.937585540988948,
+      "base_tensor_bytes": 1514553344,
+      "refinement_tensor_bytes": 34160640,
+      "hot_sync_seconds": 0.0,
+      "base_hits": 6,
+      "base_misses": 288,
+      "refinement_hits": 3,
+      "refinement_misses": 4,
+      "async_load_seconds": 0.0,
+      "async_loaded": 0,
+      "async_discarded": 0,
+      "async_fallbacks": 0,
+      "async_install_seconds": 0.0,
+      "base_evictions": 0
+    },
+    "hot_set_metrics": {
+      "hits": 3,
+      "misses": 6,
+      "load_seconds": 0.11894891699193977,
+      "expert_forward_seconds": 0.0,
+      "base_load_seconds": 0.07749799999874085,
+      "base_tensor_bytes": 15773696,
+      "refinement_tensor_bytes": 25636864,
+      "hot_sync_seconds": 0.10532783399685286,
+      "base_hits": 1,
+      "base_misses": 3,
+      "refinement_hits": 2,
+      "refinement_misses": 3,
+      "async_load_seconds": 0.0,
+      "async_loaded": 0,
+      "async_discarded": 0,
+      "async_fallbacks": 0,
+      "async_install_seconds": 0.0,
+      "base_evictions": 0
+    },
+    "scope": "All layer 3 base experts; three full experts at both levels; bounded eviction and hot-set residency"
+  },
+  "isolation": {
+    "state": "complete",
+    "started_at": 1793793052.827614,
+    "command": [
+      "verify_store.py",
+      "--model",
+      "/Users/codeninja/Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit",
+      "--output",
+      "/Users/codeninja/Models/GLM/preadv-resident-store-correctness.json"
+    ],
+    "baseline_pid": 60382,
+    "paused_jobs": [],
+    "preserved_pauses": [
+      75012,
+      8419
+    ],
+    "baseline_restored": true,
+    "memory_limit_bytes": 8589934592,
+    "peak_observed_footprint_bytes": 2840479904,
+    "minimum_free_percent": 82,
+    "configuration": {
+      "resident_base": false,
+      "resident_hot": false,
+      "cache_gib": 4,
+      "base_cache_gib": null,
+      "memory_limit_gib": 84
+    },
+    "preflight": {
+      "pressure_level": 1,
+      "free_percent": 39,
+      "supervisor_footprint_bytes": 17580512,
+      "open_file_limit": [
+        1048575,
+        9223372036854775807
+      ]
+    },
+    "before_child": {
+      "pressure_level": 1,
+      "free_percent": 85
+    },
+    "child_pid": 64595,
+    "last_pressure_level": 1,
+    "model_exit_code": 0,
+    "resumed_jobs": [],
+    "finished_at": 1793793062.925539,
+    "error": null
+  }
+}
