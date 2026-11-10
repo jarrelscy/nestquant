@@ -1,5 +1,40 @@
 # Mac performance measurements
 
+## KL divergence on generated traces
+
+The [10 November measurements](results/2026-11-10-kld-traces.json) score the reference runtime with teacher-forced KL divergence. Layer-major prefill measured **0.0342** against the BF16 teacher, under the 0.05 goal. Streamed decode fell from 0.155 to 0.102 as the hot allocation rose from 2 to 11.5 four-bit experts per layer. No decode arm is established under 0.1. The full-resident-base arm did not run: the host admitted 59.8 GiB and that configuration needs about 82 GiB.
+
+| Arm | Four-bit experts per layer | Mean KLD | 95% interval | Top-1 agreement | Decode tokens/s | Peak footprint |
+|---|---:|---:|---:|---:|---:|---:|
+| Prefill against BF16, 8,188 positions | 288 | 0.0342 | 0.027 to 0.043 | 94.1% | not applicable | 65.6 GiB |
+| Decode, all experts at 4 bits | 288 | 0.0061 | 0.005 to 0.008 | 98.5% | 0.30 to 0.37 | 59.9 GiB |
+| Decode, hot fraction 2/288 | 2 | 0.1548 | 0.120 to 0.194 | 90.3% | 1.36 to 2.16 | 60.0 GiB |
+| Decode, asynchronous 1% | 2.9 | 0.1460 | 0.110 to 0.189 | 90.3% | 1.55 to 2.16 | 61.7 GiB |
+| Decode, asynchronous 2% | 5.8 | 0.1260 | 0.094 to 0.161 | 90.2% | 1.54 to 2.19 | 61.7 GiB |
+| Decode, asynchronous 4% | 11.5 | 0.1017 | 0.077 to 0.129 | 92.2% | 1.39 to 2.06 | 61.7 GiB |
+
+Prefill windows 0000 to 0003 measured 0.0275, 0.0487, 0.0272 and 0.0333. Each is 0.006 to 0.012 above the model card's value for the same window. The cause is not identified.
+
+Decode arms score the first 160 generated tokens of eight greedy GLM-5.3-Flash Q4_K traces, 1,280 positions per arm. Their reference is the all-4-bit layer-major prefill of the same trace, a proxy for the BF16 model. The all-4-bit decode arm is the noise floor of that comparison. Its 0.0061 shows that decode and prefill agree when precision is equal.
+
+The decode mean depends on a small tail. The median position is at or below 0.005 in every arm, and the 95th percentile is 0.48 to 0.75 in the mixed arms. Code and arithmetic traces measured 0.02 to 0.08 at 4%. Prose and planning traces measured 0.14 to 0.16. The 4% interval spans 0.1, so that arm neither passes nor fails a 0.1 goal.
+
+All decode arms used `--base-cache-gib 32`. Each trace made 3,400 to 5,900 synchronous base reads, which explains the low decode rates. Those reads also give the asynchronous loader more time than a resident base would. In the 4% arm, 205 to 364 refinements per trace were not ready and executed at 1.5 bits, against 881 to 1,302 loaded. The 2/288 arm still executed 7% to 12% of routed expert calls at 4 bits, so it is not an all-1.5-bit measurement.
+
+### Full-base admission on a working desktop
+
+The full-resident-base arm with a 4 GiB refinement cache stopped during base loading at layer 29. The guard acted correctly. Free plus file-backed memory was 75.5 GiB. After the 16 GiB host reserve, the supervisor admitted 59.8 GiB. The reference runtime needs about 82 GiB for that arm: 55.46 GiB of base, a 16.8 GiB backbone, the 4 GiB cache and about 5 GiB of working memory.
+
+The operating system reported 86% free memory before that launch. That figure counts inactive anonymous pages, which are not reclaimable without compression or swap. The desktop held about 51 GiB in anonymous, compressed and wired pages. An earlier estimate of 18 GiB came from the largest process sizes and was wrong.
+
+| Refinement cache | Estimated peak | Free plus file-backed memory needed at launch |
+|---:|---:|---:|
+| 4 GiB | 82 GiB | 98 GiB |
+| 8 GiB | 86 GiB | 102 GiB |
+| 16 GiB | 94 GiB | 110 GiB |
+
+Full-base residency with streamed refinements therefore remains unproven on this desktop. No benchmark relaxed the reserve or stopped unrelated applications.
+
 ## Split-loop model trial remains experimental
 
 The [four-run model comparison](results/2026-11-06-native-split-model.json) measured a 4.38 tokens/s split-loop median, versus 3.81 for inline controls. That is a 15.2% gain on one fixed-input replay. Both split runs were faster than both controls. The predeclared screening rule passed, but the two controls differed by 0.54 tokens/s. Confidence is moderate in generalizing this result. The 15-30 tokens/s target remains unmet.

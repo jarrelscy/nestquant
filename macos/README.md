@@ -362,6 +362,74 @@ The MTP verifier loads and checks the checkpoint's FP8 draft shards. It runs the
   --output "$RESULTS/mtp1.json"
 ```
 
+## KL divergence harness
+
+`kld_harness.py` scores the reference runtime with teacher-forced KL divergence. It reports pooled and per-item divergence, top-1 agreement, decode rate, desired and executed hot share, and expert-store counters. Use a fresh `--arm` name for each run.
+
+Score layer-major prefill against stored BF16 teacher logits. Each teacher file holds `[n - 1, vocabulary]` logits for an `n`-token window, where row `i` predicts token `i + 1`:
+
+```sh
+.venv-macos/bin/python macos/kld_harness.py \
+  --model "$MODEL_ROOT" --output-dir kld-results --arm teacher-prefill --mode teacher-prefill \
+  --tokens window-0000.tokens.npy --teacher-logits window-0000.safetensors \
+  --resident-base --base-cache-gib 32 --cache-gib 4 --memory-limit-gib 84 --prefill-chunk-size 64
+```
+
+Score decode on generated traces in two steps. A trace is a JSON file with `prompt_ids` and `token_ids`, where the prompt is a prefix of the tokens. The [10 November traces](results/2026-11-10-kld-traces/) are examples. First save the all-4-bit prefill logits of each complete trace:
+
+```sh
+.venv-macos/bin/python macos/kld_harness.py \
+  --model "$MODEL_ROOT" --output-dir kld-results --arm reference --mode reference-prefill \
+  --tokens traces/*.json --reference-dir kld-reference \
+  --resident-base --base-cache-gib 32 --cache-gib 4 --memory-limit-gib 84 --prefill-chunk-size 64
+```
+
+Then prefill each prompt, force the generated tokens through single-token decode, and compare each step with the reference row at the same input position:
+
+```sh
+.venv-macos/bin/python macos/kld_harness.py \
+  --model "$MODEL_ROOT" --output-dir kld-results --arm async-4pct --mode decode \
+  --tokens traces/*.json --reference-dir kld-reference --max-decode-tokens 160 \
+  --resident-base --base-cache-gib 32 --cache-gib 4 --memory-limit-gib 84 \
+  --async-refinements --hot-fraction 0.04 --prefill-chunk-size 64
+```
+
+Omit `--base-cache-gib` to load the complete 55.46 GiB base. `--guard-above-default-cap` raises the process guard to `--memory-limit-gib` after loading. Use it only under an external host watchdog.
+
+The arithmetic and row alignment have unit tests:
+
+```sh
+cd macos && ../.venv-macos/bin/python -m unittest test_kld_math test_kld_alignment -v
+```
+
+## Recommended practice on a 128 GiB Mac Studio
+
+These rules come from the measurements in [performance measurements](PERFORMANCE.md).
+
+**Before a run**
+
+- Verify the checkpoint checksums again after any download or deletion. A stored verification record can outlive the files it describes.
+- Measure free plus file-backed memory with `vm_stat`. Do not rely on the free percentage from `memory_pressure`, which counts inactive anonymous pages. On 10 November it reported 86% free while only 75.5 GiB was reclaimable.
+- Keep a 16 GiB host reserve. Full-base residency on the reference runtime needs about 98 GiB of free plus file-backed memory at launch for a 4 GiB refinement cache.
+- Do not stop unrelated applications from a benchmark. The machine's owner decides that.
+- Set `LC_ALL=C` for any script that compares `ps -o lstart` output. The date format follows the locale, and a mismatch reads as a missing process.
+
+**Sizing**
+
+- One refinement slot uses about 8.3 MB. One GiB of refinement cache holds about 1% of the 12,096 slots, or 2.9 experts per layer.
+- Increase the refinement cache in steps. Inspect the peak footprint and the lowest host headroom after each step.
+- Use layer-major prefill for prompts. It executes every routed expert at 4 bits within a bounded footprint.
+
+**Measuring quality**
+
+- Check the KL arithmetic against published tokenwise values before trusting new numbers. `kld_math.tokenwise_kld` reproduced a published window mean to 4e-15.
+- Score decode on text that the model generated, with thinking off, not on stock text.
+- Check reference alignment before scoring. The reference's top prediction matched the generated next token at 92% to 99% of positions. A one-position shift matched under 1%.
+- Run an all-4-bit decode arm. It gives the noise floor between decode and prefill.
+- Report an interval for each mean. With 1,280 positions, the 95% interval is about ±0.03, so the third decimal does not decide a goal.
+- Report desired and executed hot share, asynchronous fallbacks and synchronous base reads with each decode value. A bounded base cache slows steps and flatters asynchronous readiness.
+- State the reference. A decode value against a 4-bit reference excludes the 4-bit error against BF16.
+
 ## Benchmark requirements
 
 Verify the checkpoint and run the short answer checks before benchmarking a configuration:
