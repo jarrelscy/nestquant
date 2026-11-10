@@ -24,6 +24,9 @@ def snapshot():
 
 
 class MemoryGuard:
+    # Normal pressure only. A caller under an external host watchdog may widen this.
+    allowed_pressure = (1,)
+
     def __init__(self, limit_gib=84):
         if not math.isfinite(limit_gib) or limit_gib <= 0:
             raise ValueError('Process memory limit must be positive and finite')
@@ -40,5 +43,5 @@ class MemoryGuard:
         if footprint > self.limit_bytes:
             raise MemoryError(f'Process footprint {footprint / 1024**3:.2f} GiB exceeds '
                               f'{self.limit_bytes / 1024**3:.2f} GiB guard')
-        if system_pressure() != 1:
+        if system_pressure() not in self.allowed_pressure:
             raise MemoryError('macOS reports memory pressure; stop inference and reduce memory use')

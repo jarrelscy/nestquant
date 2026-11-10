@@ -16,7 +16,7 @@ import torch
 import generate as reference
 from kld_alignment import decode_reference_rows, load_tokens, teacher_rows
 from kld_math import summarize, tokenwise_kld
-from metrics import snapshot
+from metrics import MemoryGuard, snapshot
 
 ROWS = 128
 
@@ -110,7 +110,7 @@ def main():
     parser.add_argument('--async-refinements', action='store_true')
     parser.add_argument('--memory-limit-gib', type=float, default=84)
     parser.add_argument('--guard-above-default-cap', action='store_true',
-                        help='After loading, raise the process guard to --memory-limit-gib under an external host watchdog')
+                        help='Under an external host watchdog: tolerate warning memory pressure, and after loading raise the process guard to --memory-limit-gib')
     parser.add_argument('--hot-fraction', type=float, default=0.02)
     parser.add_argument('--prefill-chunk-size', type=int, default=64)
     args = parser.parse_args()
@@ -122,6 +122,8 @@ def main():
     if args.mode != 'teacher-prefill' and args.reference_dir is None:
         parser.error('Trace scoring requires a reference directory')
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.guard_above_default_cap:
+        MemoryGuard.allowed_pressure = (1, 2)
     runtime = reference.Runtime(
         args.model, args.cache_gib, 'mps', args.hot_fraction, args.resident_base, False, False,
         args.async_refinements, args.memory_limit_gib, args.base_cache_gib)
