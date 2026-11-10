@@ -2,7 +2,7 @@
 
 ## KL divergence on generated traces
 
-The [10 November measurements](results/2026-11-10-kld-traces.json) score the reference runtime with teacher-forced KL divergence. Layer-major prefill measured **0.0342** against the BF16 teacher, under the 0.05 goal. Streamed decode fell from 0.155 to 0.102 as the hot allocation rose from 2 to 11.5 four-bit experts per layer. No decode arm is established under 0.1. The full-resident-base arm did not run: the host admitted 59.8 GiB and that configuration needs about 82 GiB.
+The [10 November measurements](results/2026-11-10-kld-traces.json) score the reference runtime with teacher-forced KL divergence. Layer-major prefill measured **0.0342** against the BF16 teacher, under the 0.05 goal. Streamed decode fell from 0.155 to 0.066 as the hot allocation rose from 2 to 46 four-bit experts per layer. The 23, 35 and 46 expert arms measured 0.080, 0.072 and 0.066, inside or below the 0.07 to 0.09 decode goal, but with only part of the base resident. The full-resident-base arm did not run: the host admitted 59.8 GiB and that configuration needs about 82 GiB.
 
 | Arm | Four-bit experts per layer | Mean KLD | 95% interval | Top-1 agreement | Decode tokens/s | Peak footprint |
 |---|---:|---:|---:|---:|---:|---:|
@@ -12,14 +12,19 @@ The [10 November measurements](results/2026-11-10-kld-traces.json) score the ref
 | Decode, asynchronous 1% | 2.9 | 0.1460 | 0.110 to 0.189 | 90.3% | 1.55 to 2.16 | 61.7 GiB |
 | Decode, asynchronous 2% | 5.8 | 0.1260 | 0.094 to 0.161 | 90.2% | 1.54 to 2.19 | 61.7 GiB |
 | Decode, asynchronous 4% | 11.5 | 0.1017 | 0.077 to 0.129 | 92.2% | 1.39 to 2.06 | 61.7 GiB |
+| Decode, 8 GiB cache, 20 GiB base cache | 23.0 | 0.0802 | 0.059 to 0.103 | 93.2% | 0.86 to 1.11 | 53.2 GiB |
+| Decode, 12 GiB cache, 16 GiB base cache | 34.6 | 0.0716 | 0.051 to 0.095 | 93.2% | 0.58 to 0.82 | 53.0 GiB |
+| Decode, 16 GiB cache, 12 GiB base cache | 46.1 | 0.0656 | 0.049 to 0.085 | 93.1% | 0.38 to 0.73 | 52.9 GiB |
 
 Prefill windows 0000 to 0003 measured 0.0275, 0.0487, 0.0272 and 0.0333. Each is 0.006 to 0.012 above the model card's value for the same window. The cause is not identified.
 
 Decode arms score the first 160 generated tokens of eight greedy GLM-5.3-Flash Q4_K traces, 1,280 positions per arm. Their reference is the all-4-bit layer-major prefill of the same trace, a proxy for the BF16 model. The all-4-bit decode arm is the noise floor of that comparison. Its 0.0061 shows that decode and prefill agree when precision is equal.
 
-The decode mean depends on a small tail. The median position is at or below 0.005 in every arm, and the 95th percentile is 0.48 to 0.75 in the mixed arms. Code and arithmetic traces measured 0.02 to 0.08 at 4%. Prose and planning traces measured 0.14 to 0.16. The 4% interval spans 0.1, so that arm neither passes nor fails a 0.1 goal.
+The decode mean depends on a small tail. The median position is at or below 0.005 in every arm, and the 95th percentile is 0.48 to 0.75 in the mixed arms. Code and arithmetic traces measured 0.02 to 0.08 at 4%. Prose and planning traces measured 0.14 to 0.16. The 4% interval spans 0.1, so that arm neither passes nor fails a 0.1 goal. From 23 experts per layer the interval is mostly or wholly under 0.1. The gain flattens: doubling the allocation from 23 to 46 experts per layer improved the mean by 0.015, less than either interval's half-width.
 
-All decode arms used `--base-cache-gib 32`. Each trace made 3,400 to 5,900 synchronous base reads, which explains the low decode rates. Those reads also give the asynchronous loader more time than a resident base would. In the 4% arm, 205 to 364 refinements per trace were not ready and executed at 1.5 bits, against 881 to 1,302 loaded. The 2/288 arm still executed 7% to 12% of routed expert calls at 4 bits, so it is not an all-1.5-bit measurement.
+The three largest allocations traded base cache for refinement cache to stay inside a 53 to 61 GiB admission. They made 10,000 to 21,000 synchronous base reads per trace and decoded at 0.4 to 1.1 tokens/s. Asynchronous readiness also fell behind: at 16 GiB, 4,953 to 6,445 refinements per trace were not ready against 5,516 to 6,878 loaded, and the executed 4-bit share was 38% to 49% against 49% to 57% desired. These arms measure quality against hot allocation. They do not demonstrate a resident base, and a resident base would change both the speed and the readiness. Half of the 16 GiB arm ran while an unrelated download wrote to the same SSD.
+
+The other decode arms used `--base-cache-gib 32`. Each trace made 3,400 to 5,900 synchronous base reads, which explains the low decode rates. Those reads also give the asynchronous loader more time than a resident base would. In the 4% arm, 205 to 364 refinements per trace were not ready and executed at 1.5 bits, against 881 to 1,302 loaded. The 2/288 arm still executed 7% to 12% of routed expert calls at 4 bits, so it is not an all-1.5-bit measurement.
 
 ### Full-base admission on a working desktop
 
