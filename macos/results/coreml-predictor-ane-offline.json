@@ -1,0 +1,188 @@
+{
+ "fraction": 0.15,
+ "torch_threads": 4,
+ "events": "runs/torch1.events.pkl",
+ "compute_plan_rows1": {
+  "ane": {
+   "unknown": 794,
+   "MLNeuralEngineComputeDevice": 397
+  }
+ },
+ "event_counts": {
+  "reset": 7,
+  "preforward": 312,
+  "commit": 310
+ },
+ "agreement_vs_torch": {
+  "coreml:ane": {
+   "wanted_layer_steps": 26124,
+   "wanted_jaccard_mean": 0.9939946753682866,
+   "wanted_jaccard_min": 0.8888888888888888,
+   "wanted_layer_steps_identical": 0.8725310059715204,
+   "wanted_steps_all_layers_identical": 0.003215434083601286,
+   "block_topbudget_overlap_mean": 0.9986126181858578,
+   "block_topbudget_overlap_min": 0.9428571428571428,
+   "block_top8_overlap_mean": 0.9981291149900474,
+   "block_top8_overlap_min": 0.875,
+   "block_abs_error_max": 0.002794504165649414,
+   "block_abs_error_mean": 6.300938341848797e-06,
+   "block_relative_rms": 0.002157430574634427
+  },
+  "torch-noise:0.003": {
+   "wanted_layer_steps": 26124,
+   "wanted_jaccard_mean": 0.9916681869313728,
+   "wanted_jaccard_min": 0.8888888888888888,
+   "wanted_layer_steps_identical": 0.8221175930179145,
+   "wanted_steps_all_layers_identical": 0.003215434083601286,
+   "block_topbudget_overlap_mean": 0.9981302023468464,
+   "block_topbudget_overlap_min": 0.9487179487179487,
+   "block_top8_overlap_mean": 0.9976027790537437,
+   "block_top8_overlap_min": 0.875,
+   "block_abs_error_max": 0.002779543399810791,
+   "block_abs_error_mean": 8.12047734082381e-06,
+   "block_relative_rms": 0.002521550610899615
+  }
+ },
+ "replay_timing": {
+  "torch": {
+   "preforward": {
+    "calls": 312,
+    "wall_ms_median": 5.669666497851722,
+    "cpu_ms_median": 6.375999999999493,
+    "wall_s_total": 1.8307942410174292,
+    "cpu_s_total": 2.0252940000000157
+   },
+   "commit_decode": {
+    "calls": 304,
+    "wall_ms_median": 6.251979502849281,
+    "cpu_ms_median": 6.971499999998798,
+    "wall_s_total": 2.5100204690388637,
+    "cpu_s_total": 2.784665000000027
+   },
+   "commit_prefill": {
+    "calls": 6,
+    "wall_ms_median": 418.98935450444696,
+    "cpu_ms_median": 474.040500000001,
+    "wall_s_total": 2.043067584010714,
+    "cpu_s_total": 2.3088780000000018
+   }
+  },
+  "coreml:ane": {
+   "preforward": {
+    "calls": 312,
+    "wall_ms_median": 2.78116649860749,
+    "cpu_ms_median": 1.1650000000003047,
+    "wall_s_total": 0.8752604120381875,
+    "cpu_s_total": 0.36832500000001644
+   },
+   "commit_decode": {
+    "calls": 304,
+    "wall_ms_median": 3.0966045014793053,
+    "cpu_ms_median": 1.4660000000006335,
+    "wall_s_total": 1.0846937899696059,
+    "cpu_s_total": 0.6899679999999968
+   },
+   "commit_prefill": {
+    "calls": 6,
+    "wall_ms_median": 325.26747950032586,
+    "cpu_ms_median": 312.9790000000003,
+    "wall_s_total": 1.5846446260111406,
+    "cpu_s_total": 1.5230710000000016
+   }
+  },
+  "torch-noise:0.003": {
+   "preforward": {
+    "calls": 312,
+    "wall_ms_median": 5.742291501519503,
+    "cpu_ms_median": 6.46699999999889,
+    "wall_s_total": 1.8892725389596308,
+    "cpu_s_total": 2.07565099999999
+   },
+   "commit_decode": {
+    "calls": 304,
+    "wall_ms_median": 6.494666999060428,
+    "cpu_ms_median": 7.221499999999992,
+    "wall_s_total": 2.6884589660112397,
+    "cpu_s_total": 2.9589650000000196
+   },
+   "commit_prefill": {
+    "calls": 6,
+    "wall_ms_median": 456.7548545055615,
+    "cpu_ms_median": 510.5709999999997,
+    "wall_s_total": 2.2231983770107036,
+    "cpu_s_total": 2.4876609999999975
+   }
+  }
+ },
+ "desired_coverage": {
+  "torch": {
+   "calls": 877296,
+   "call_fraction": 0.2950383906913972,
+   "salience_fraction": 0.472215663441277
+  },
+  "coreml:ane": {
+   "calls": 877296,
+   "call_fraction": 0.2951136218562492,
+   "salience_fraction": 0.4726188137909588
+  },
+  "torch-noise:0.003": {
+   "calls": 877296,
+   "call_fraction": 0.29490160675530264,
+   "salience_fraction": 0.4719883362798204
+  }
+ },
+ "network_latency": {
+  "torch": {
+   "single_row": {
+    "calls": 200,
+    "wall_ms_median": 4.328292001446243,
+    "cpu_ms_median": 5.033000000000953,
+    "wall_ms_p90": 4.642462499032263
+   },
+   "commit_7_rows": {
+    "calls": 40,
+    "wall_ms_median": 10.153187002288178,
+    "cpu_ms_median": 12.064499999999256,
+    "wall_ms_p90": 10.69335889769718
+   },
+   "commit_8_rows": {
+    "calls": 40,
+    "wall_ms_median": 11.18818699978874,
+    "cpu_ms_median": 13.37599999999739,
+    "wall_ms_p90": 13.237558294349583
+   },
+   "prefill_512_rows": {
+    "calls": 10,
+    "wall_ms_median": 135.2649795007892,
+    "cpu_ms_median": 212.04799999999935,
+    "wall_ms_p90": 147.5037963995419
+   }
+  },
+  "coreml:ane": {
+   "single_row": {
+    "calls": 200,
+    "wall_ms_median": 1.9094585004495457,
+    "cpu_ms_median": 0.38200000000188084,
+    "wall_ms_p90": 2.2352035994117614
+   },
+   "commit_7_rows": {
+    "calls": 40,
+    "wall_ms_median": 2.3266460011655,
+    "cpu_ms_median": 0.6709999999969796,
+    "wall_ms_p90": 2.6972538958943915
+   },
+   "commit_8_rows": {
+    "calls": 40,
+    "wall_ms_median": 2.229062498372514,
+    "cpu_ms_median": 0.5670000000037589,
+    "wall_ms_p90": 2.4229874994489364
+   },
+   "prefill_512_rows": {
+    "calls": 10,
+    "wall_ms_median": 23.987291497178376,
+    "cpu_ms_median": 9.911500000001183,
+    "wall_ms_p90": 25.297174703882774
+   }
+  }
+ }
+}

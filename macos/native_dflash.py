@@ -343,6 +343,8 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
     gc_enabled = gc.isenabled()
     gc.disable()
     start = round_start = time.perf_counter()
+    process_cpu_start = time.process_time()
+    predictor_start = (hot.seconds, hot.cpu_seconds)
     original_next = dflash_loop._dflash_next_block_size
     original_verify = dflash_loop._dflash_verify_greedy
     last_captured = []
@@ -438,6 +440,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         if pending_hook is not None:
             pending_hook.result()
         decode_end = time.perf_counter()
+        process_cpu = time.process_time() - process_cpu_start
     finally:
         hook_pool.shutdown(wait=True)
         dflash_loop._dflash_next_block_size = original_next
@@ -468,7 +471,10 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                 adaptive_cost_ms=((round(adaptive.fixed_ms, 1), round(adaptive.per_row_ms, 1))
                                   if adaptive is not None else None),
                 refinement_installs=hot.reads['installed'], publication_seconds=hot.reads['decode_publication_seconds'],
-                ready_call_fraction=hot.report()['coverage']['call_fractions']['ready'])
+                ready_call_fraction=hot.report()['coverage']['call_fractions']['ready'],
+                predictor_backend=hot.predictor_backend, decode_process_cpu_seconds=process_cpu,
+                decode_predictor_seconds=hot.seconds - predictor_start[0],
+                decode_predictor_cpu_seconds=hot.cpu_seconds - predictor_start[1])
 
 
 def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size):
@@ -508,6 +514,8 @@ def main():
     parser.add_argument('--draft-rows-base', action='store_true',
                         help='Verify draft rows with the 1.5-bit base only (faster; quality not yet validated)')
     parser.add_argument('--capture-streams', choices=('mean', 'first'), default='mean')
+    parser.add_argument('--predictor-backend', default=None,
+                        help="jT predictor: torch (default) or coreml[:ane|:cpu|:all]; env NQ_PREDICTOR_BACKEND")
     args = parser.parse_args()
     global CAPTURE_SHIFT
     CAPTURE_SHIFT = args.capture_shift
@@ -521,7 +529,8 @@ def main():
     torch.set_num_threads(4)
     guard = MemoryGuard(98, 0.8)
     guard.allowed_pressure = (1, 2)
-    hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, 4, 32, 512)
+    hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, 4, 32, 512,
+                               predictor_backend=args.predictor_backend)
     model, banks = ng.load_runtime(args.model, args.backbone, args.archive, [288] * 42, guard, hot, True, 56)
     global BATCHED
     if args.batched_prefill:

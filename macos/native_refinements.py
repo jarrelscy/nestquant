@@ -37,7 +37,14 @@ class LockedRefinementReader(RefinementReader):
 
 
 class NativeHotRefinements:
-    def __init__(self, root, fraction, prefill_rows, budget_gib=4, readers=1, pending=2, staging_mib=64):
+    def __init__(self, root, fraction, prefill_rows, budget_gib=4, readers=1, pending=2, staging_mib=64,
+                 predictor_backend=None):
+        # 'torch' (default) runs jT on the CPU with PyTorch; 'coreml' (or 'coreml:cpu', 'coreml:all') runs it
+        # through Core ML, by default on the CPU and Neural Engine. NQ_PREDICTOR_BACKEND sets the default.
+        predictor_backend = predictor_backend or os.environ.get('NQ_PREDICTOR_BACKEND', 'torch')
+        backend, _, units = predictor_backend.partition(':')
+        if backend not in ('torch', 'coreml') or (units and backend != 'coreml'):
+            raise ValueError(f'Unknown predictor backend {predictor_backend!r}')
         if type(budget_gib) is not int or not 4 <= budget_gib <= 32:
             raise ValueError('Use a refinement budget between 4 and 32 GiB')
         if type(readers) is not int or not 1 <= readers <= 8 or type(pending) is not int or not readers <= pending <= 64:
@@ -48,6 +55,12 @@ class NativeHotRefinements:
         self.predictor = module.CommittedPredictor(
             root, preset='spark_256K_U_2630_flat50', device='cpu', dtype=torch.float32, fixed_fraction=0.2)
         configure_slots(self.predictor, module, root, fraction)
+        self.predictor_backend = predictor_backend
+        if backend == 'coreml':
+            from coreml_predictor import install
+            install(self.predictor, root / 'serving/predictor/jt', compute_units=units or 'ane')
+        record = os.environ.get('NQ_PREDICTOR_RECORD')
+        self.record = open(record, 'ab') if record else None
         self.reader = LockedRefinementReader(root) if readers > 1 else RefinementReader(root)
         self.worker = BoundedReader(self.reader.read, staging_mib * 1024**2, pending, readers)
         self.prefill_rows = prefill_rows
@@ -107,9 +120,15 @@ class NativeHotRefinements:
     def reserved_bytes(self):
         return sum(bank.bytes for bank in self.banks.values())
 
+    def _record(self, *event):
+        if getattr(self, 'record', None) is not None:
+            import pickle
+            pickle.dump(event, self.record, protocol=5)
+
     def reset(self):
         self.worker.discard()
         self.predictor.reset()
+        self._record('reset')
         self.position = 0
         self.wanted = np.zeros((42, 288), dtype=bool)
         self.ready = np.zeros((42, 288), dtype=bool)
@@ -121,6 +140,7 @@ class NativeHotRefinements:
         self.chunk_index = 0
         self.traces = {}
         self.seconds = 0.0
+        self.cpu_seconds = 0.0
         self.reads = dict(prefill_bytes=0, decode_bytes=0, installed=0, discarded=0, decode_worker_seconds=0.0,
                           prefill_reader_seconds=0.0, prefill_install_seconds=0.0, decode_publication_seconds=0.0)
         self.metrics = PredictorMetrics([self.predictor.budgets[layer] for layer in range(3, 45)],
@@ -169,9 +189,12 @@ class NativeHotRefinements:
         self.prefill_bank = None
         self.chunk_index = 0
         self.ready.fill(False)
+        self._record('preforward', int(token), self.position)
         started = time.perf_counter()
+        cpu = time.process_time()
         self.wanted = self.predictor.preforward(token, self.position)
         self.seconds += time.perf_counter() - started
+        self.cpu_seconds = getattr(self, "cpu_seconds", 0.0) + time.process_time() - cpu
         # Publish completed reads at the token boundary. The previous token has been evaluated, so slot
         # buffers and the device slot tables can change without waiting on queued GPU work.
         self.worker.poll(self._publish)
@@ -198,9 +221,12 @@ class NativeHotRefinements:
 
         This only changes host state, so it can run while the GPU evaluates the current token.
         """
+        self._record('preforward', int(token), self.position)
         started = time.perf_counter()
+        cpu = time.process_time()
         self.wanted = self.predictor.preforward(token, self.position)
         self.seconds += time.perf_counter() - started
+        self.cpu_seconds = getattr(self, "cpu_seconds", 0.0) + time.process_time() - cpu
         self._plan_reads()
 
     def start_pipelined_decode(self):
@@ -311,10 +337,13 @@ class NativeHotRefinements:
         if self.phase == 'decode':
             self.metrics.observe(self.wanted, self.ready, selected[0], weights[0], self.predictor.block,
                                  np.stack([policy.state for policy in self.predictor.policies]))
+        rows = [(self.position + i, int(token), selected[i], weights[i], norms[i]) for i, token in enumerate(tokens)]
+        self._record('commit', rows)
         started = time.perf_counter()
-        self.predictor.commit([(self.position + i, token, selected[i], weights[i], norms[i])
-                               for i, token in enumerate(tokens)])
+        cpu = time.process_time()
+        self.predictor.commit(rows)
         self.seconds += time.perf_counter() - started
+        self.cpu_seconds = getattr(self, "cpu_seconds", 0.0) + time.process_time() - cpu
         self.position += len(tokens)
 
     def report(self):
@@ -331,7 +360,8 @@ class NativeHotRefinements:
                     prefill_max_bytes=self.prefill_max_bytes, budget_bytes=self.budget_bytes,
                     prefill_staging_peak_bytes=self.prefill_peak_bytes,
                     staging_peak_bytes=self.worker.peak_reserved_bytes,
-                    predictor_seconds=self.seconds, predictor_memory=predictor_memory(self.predictor),
+                    predictor_seconds=self.seconds, predictor_process_cpu_seconds=self.cpu_seconds,
+                    predictor_backend=self.predictor_backend, predictor_memory=predictor_memory(self.predictor),
                     **self.reads, unpublished_at_end=completed, coverage=self.metrics.report())
 
     def readiness_digest(self):
@@ -355,6 +385,9 @@ class NativeHotRefinements:
     def close(self):
         if getattr(self, '_prefill_pool', None) is not None:
             self._prefill_pool.shutdown(wait=True)
+        if getattr(self, 'record', None) is not None:
+            self.record.close()
+            self.record = None
         try:
             self.worker.close()
         finally:

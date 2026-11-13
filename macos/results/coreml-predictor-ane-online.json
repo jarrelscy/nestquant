@@ -1,0 +1,254 @@
+{
+ "scope": "native_dflash.py --prompt-dir /tmp/codebench (6 prompts) --blocks -8 --batched-prefill --tokens 192, hot fraction 0.15, M5 Max",
+ "note": "process CPU is time.process_time over the decode loop (all threads). Predictor CPU is process_time during predictor calls (includes concurrent threads, upper bound). Generations diverge between runs because readiness changes which experts run at 4 bits, so per-prompt tok/s mixes acceptance differences with speed.",
+ "runs": {
+  "torch1": {
+   "backend": "torch",
+   "tokens": 1026,
+   "decode_seconds": 30.855664333997993,
+   "aggregate_decode_tps": 33.25159325347964,
+   "mean_prompt_decode_tps": 38.450600220244844,
+   "mean_ready_call_fraction": 0.3089489620318157,
+   "decode_predictor_wall_seconds": 6.4670560729719,
+   "decode_predictor_process_cpu_seconds": 12.74096200000018,
+   "decode_process_cpu_seconds": 40.823042999999984,
+   "hook_wait_seconds": 0.08199146601691609,
+   "prompts": [
+    {
+     "prompt": "1_copy_edit",
+     "decode_tps": 50.13955290574676,
+     "ready_call_fraction": 0.20261904761904762,
+     "rounds": 25,
+     "mean_accepted": 6.68,
+     "median_round_ms": 134.4957080000313
+    },
+    {
+     "prompt": "2_new_function",
+     "decode_tps": 26.232532295470563,
+     "ready_call_fraction": 0.36019736842105265,
+     "rounds": 75,
+     "mean_accepted": 1.56,
+     "median_round_ms": 79.65045899618417
+    },
+    {
+     "prompt": "3_bug_fix",
+     "decode_tps": 51.269175368581735,
+     "ready_call_fraction": 0.25595238095238093,
+     "rounds": 10,
+     "mean_accepted": 6.1,
+     "median_round_ms": 140.29904199560406
+    },
+    {
+     "prompt": "4_refactor",
+     "decode_tps": 49.87412603563892,
+     "ready_call_fraction": 0.27609126984126986,
+     "rounds": 30,
+     "mean_accepted": 5.4,
+     "median_round_ms": 132.76954100001603
+    },
+    {
+     "prompt": "5_write_tests",
+     "decode_tps": 29.606423099027,
+     "ready_call_fraction": 0.37374441964285715,
+     "rounds": 64,
+     "mean_accepted": 2.0,
+     "median_round_ms": 81.62487499794224
+    },
+    {
+     "prompt": "6_explain",
+     "decode_tps": 23.58179161700407,
+     "ready_call_fraction": 0.3850892857142857,
+     "rounds": 100,
+     "mean_accepted": 0.92,
+     "median_round_ms": 68.86879100056831
+    }
+   ]
+  },
+  "torch2": {
+   "backend": "torch",
+   "tokens": 1029,
+   "decode_seconds": 31.23832849899918,
+   "aggregate_decode_tps": 32.940302808870435,
+   "mean_prompt_decode_tps": 36.02674288259169,
+   "mean_ready_call_fraction": 0.30301422963821545,
+   "decode_predictor_wall_seconds": 6.495887038916408,
+   "decode_predictor_process_cpu_seconds": 12.790124000000127,
+   "decode_process_cpu_seconds": 40.055578,
+   "hook_wait_seconds": 0.15787029600323876,
+   "prompts": [
+    {
+     "prompt": "1_copy_edit",
+     "decode_tps": 49.75273304547257,
+     "ready_call_fraction": 0.20976190476190476,
+     "rounds": 25,
+     "mean_accepted": 6.64,
+     "median_round_ms": 135.38108299690066
+    },
+    {
+     "prompt": "2_new_function",
+     "decode_tps": 26.138750577980232,
+     "ready_call_fraction": 0.36830357142857145,
+     "rounds": 75,
+     "mean_accepted": 1.56,
+     "median_round_ms": 80.85229200514732
+    },
+    {
+     "prompt": "3_bug_fix",
+     "decode_tps": 39.48878301773987,
+     "ready_call_fraction": 0.265625,
+     "rounds": 15,
+     "mean_accepted": 4.0,
+     "median_round_ms": 140.7767079945188
+    },
+    {
+     "prompt": "4_refactor",
+     "decode_tps": 44.572612532819086,
+     "ready_call_fraction": 0.28191707717569786,
+     "rounds": 29,
+     "mean_accepted": 5.620689655172414,
+     "median_round_ms": 144.364540996321
+    },
+    {
+     "prompt": "5_write_tests",
+     "decode_tps": 32.49794588906992,
+     "ready_call_fraction": 0.35466269841269843,
+     "rounds": 54,
+     "mean_accepted": 2.537037037037037,
+     "median_round_ms": 113.36033300176496
+    },
+    {
+     "prompt": "6_explain",
+     "decode_tps": 23.709632232468483,
+     "ready_call_fraction": 0.3378151260504202,
+     "rounds": 85,
+     "mean_accepted": 1.2470588235294118,
+     "median_round_ms": 81.54949999880046
+    }
+   ]
+  },
+  "coreml1": {
+   "backend": "coreml",
+   "tokens": 1034,
+   "decode_seconds": 33.582957124999666,
+   "aggregate_decode_tps": 30.78942679619701,
+   "mean_prompt_decode_tps": 34.58209769781029,
+   "mean_ready_call_fraction": 0.3049148214148278,
+   "decode_predictor_wall_seconds": 2.682177738905011,
+   "decode_predictor_process_cpu_seconds": 3.3472749999996196,
+   "decode_process_cpu_seconds": 33.928251999999986,
+   "hook_wait_seconds": 0.0009895859402604401,
+   "prompts": [
+    {
+     "prompt": "1_copy_edit",
+     "decode_tps": 50.033903863911945,
+     "ready_call_fraction": 0.20857142857142857,
+     "rounds": 25,
+     "mean_accepted": 6.64,
+     "median_round_ms": 136.35662500018952
+    },
+    {
+     "prompt": "2_new_function",
+     "decode_tps": 23.627629180668094,
+     "ready_call_fraction": 0.3482510288065844,
+     "rounds": 80,
+     "mean_accepted": 1.4,
+     "median_round_ms": 81.73216700379271
+    },
+    {
+     "prompt": "3_bug_fix",
+     "decode_tps": 35.713092328662825,
+     "ready_call_fraction": 0.2608082706766917,
+     "rounds": 18,
+     "mean_accepted": 3.4444444444444446,
+     "median_round_ms": 128.2359169999836
+    },
+    {
+     "prompt": "4_refactor",
+     "decode_tps": 44.80873941251019,
+     "ready_call_fraction": 0.29305555555555557,
+     "rounds": 30,
+     "mean_accepted": 5.4,
+     "median_round_ms": 148.47133299917914
+    },
+    {
+     "prompt": "5_write_tests",
+     "decode_tps": 33.05077730646666,
+     "ready_call_fraction": 0.3596136567834681,
+     "rounds": 53,
+     "mean_accepted": 2.6226415094339623,
+     "median_round_ms": 102.47612500097603
+    },
+    {
+     "prompt": "6_explain",
+     "decode_tps": 20.25844409464203,
+     "ready_call_fraction": 0.3591889880952381,
+     "rounds": 80,
+     "mean_accepted": 1.3875,
+     "median_round_ms": 104.6491250017425
+    }
+   ]
+  },
+  "coreml2": {
+   "backend": "coreml",
+   "tokens": 1029,
+   "decode_seconds": 30.086883332995058,
+   "aggregate_decode_tps": 34.20095024836081,
+   "mean_prompt_decode_tps": 37.22699897041462,
+   "mean_ready_call_fraction": 0.3085621613596076,
+   "decode_predictor_wall_seconds": 2.542849459008721,
+   "decode_predictor_process_cpu_seconds": 3.2898599999998694,
+   "decode_process_cpu_seconds": 33.743696000000014,
+   "hook_wait_seconds": 0.0009460839355597273,
+   "prompts": [
+    {
+     "prompt": "1_copy_edit",
+     "decode_tps": 50.431559489040566,
+     "ready_call_fraction": 0.20464285714285715,
+     "rounds": 25,
+     "mean_accepted": 6.64,
+     "median_round_ms": 139.6824999974342
+    },
+    {
+     "prompt": "2_new_function",
+     "decode_tps": 26.948629281253357,
+     "ready_call_fraction": 0.3575201207243461,
+     "rounds": 70,
+     "mean_accepted": 1.7285714285714286,
+     "median_round_ms": 81.40608300163876
+    },
+    {
+     "prompt": "3_bug_fix",
+     "decode_tps": 40.760002389866855,
+     "ready_call_fraction": 0.26209077380952384,
+     "rounds": 15,
+     "mean_accepted": 4.0,
+     "median_round_ms": 144.56141700065928
+    },
+    {
+     "prompt": "4_refactor",
+     "decode_tps": 45.8200027762363,
+     "ready_call_fraction": 0.30069444444444443,
+     "rounds": 30,
+     "mean_accepted": 5.366666666666666,
+     "median_round_ms": 142.81599999958416
+    },
+    {
+     "prompt": "5_write_tests",
+     "decode_tps": 34.644408549086975,
+     "ready_call_fraction": 0.36041666666666666,
+     "rounds": 50,
+     "mean_accepted": 2.82,
+     "median_round_ms": 96.79524999955902
+    },
+    {
+     "prompt": "6_explain",
+     "decode_tps": 24.757391337003668,
+     "ready_call_fraction": 0.3660081053698075,
+     "rounds": 94,
+     "mean_accepted": 1.0425531914893618,
+     "median_round_ms": 69.7223329989356
+    }
+   ]
+  }
+ }
+}

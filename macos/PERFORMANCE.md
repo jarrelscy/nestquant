@@ -710,7 +710,23 @@ The [TensorOps probe](results/tensorops-projection-timing.json) evaluated one re
 
 The [Core ML probe](results/coreml-predictor-timing.json) converted the actual jT predictor and evaluated one step with 32 cached positions. PyTorch CPU took 3.347 ms median, Core ML CPU took 1.359 ms, and Core ML CPU plus Neural Engine took 1.331 ms. The compute plan preferred the Neural Engine for 389 operations and CPU for 16; another 561 had unknown placement. This is anticipated placement, not hardware-counter evidence. The Neural Engine configuration preserved all top-eight choices on the synthetic input, with 0.258% relative RMS error in probability values. That single input does not validate recurrent drift, full-window operation, or model quality. Core ML tools 9.0 warned that the installed PyTorch 2.15 version was untested.
 
-The measurements do not justify integrating either probe into the production path yet. The packed TensorOps path regressed single-token latency, while Core ML CPU and Neural Engine timings were close. Confidence is high in these recorded observations and low in any projected full-model benefit.
+The measurements do not justify integrating either probe into the production path yet. (The Core ML predictor was later integrated as an opt-in backend; see the next section.)
+
+### Core ML predictor backend (opt-in)
+
+`--predictor-backend coreml` (or `NQ_PREDICTOR_BACKEND=coreml`) runs jT through [coreml_predictor.py](coreml_predictor.py). PyTorch remains the default. The package is a stateful fp16 ML program with one function each for 1, 8 and 128 rows. The functions share their weights and a 256-slot key/value ring per block, which is held as Core ML state. The host computes the token embedding, a dense routing-share matrix, the RoPE angles, the mask and a one-hot ring write. The model computes everything else. The compute plan places every operation of the 1-row function on the Neural Engine. On this macOS, Core ML cannot build a CPU-only plan for the stateful program, so it supports only CPU_AND_NE (the default) and ALL. Prefix checkpoints read and write the ring through the existing `net.cache` interface.
+
+The [offline replay](results/coreml-predictor-ane-offline.json) used [verify_coreml_predictor.py](verify_coreml_predictor.py). It replayed the routing recorded from a real six-prompt DFlash run: 312 preforwards and 310 commits. Mean per-layer Jaccard between the wanted sets was 0.994, and 87% of layer-steps were identical. As a sensitivity floor, PyTorch with 0.3% multiplicative noise gave 0.992 and 82%. The hysteretic policy amplifies tiny score differences at the budget boundary. Block-head relative RMS error was 0.22%, and the maximum absolute error was 0.0028. Top-budget overlap was 99.86%, and top-8 overlap was 99.81%. The wanted set covered 29.51% of routed calls (47.26% of salience) with Core ML and 29.50% (47.22%) with PyTorch.
+
+Network latency on an M5 Max, median wall / process CPU, with PyTorch on 4 threads:
+
+| Call | PyTorch CPU | Core ML CPU+NE |
+|---|---|---|
+| 1 row, full window | 4.33 / 5.03 ms | 1.91 / 0.38 ms |
+| 8-row commit | 11.19 / 13.38 ms | 2.23 / 0.57 ms |
+| 512-row prefill (4 x 128) | 135 / 212 ms | 24 / 9.9 ms |
+
+The [online comparison](results/coreml-predictor-ane-online.json) ran two runs per backend of `native_dflash.py --prompt-dir /tmp/codebench --blocks -8 --batched-prefill --tokens 192`. Predictor wall time during decode fell from 6.5 s to 2.6 s. Whole-process CPU during decode fell from 40.4 s to 33.8 s, or from 1.30 to 1.06 cores. Aggregate decode speed was 33.25 and 32.94 tok/s with PyTorch, and 30.79 and 34.20 tok/s with Core ML. Ready-call fractions were 0.309/0.303 with PyTorch and 0.305/0.309 with Core ML. The predictor hook already overlaps GPU work, so decode speed is unchanged within run-to-run noise. Different readiness changes which experts run at 4 bits, so generations diverge after a few tokens; this noise dominates. Core ML also releases the GIL for most of a call. Against a competing Python thread, a one-row PyTorch call took 326 ms, and a Core ML call took 5 ms. The packed TensorOps path regressed single-token latency, while Core ML CPU and Neural Engine timings were close. Confidence is high in these recorded observations and low in any projected full-model benefit.
 
 ## MTP remains a separate implementation task
 

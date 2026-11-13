@@ -56,10 +56,16 @@ def predictor_memory(predictor):
             storages[storage.data_ptr()] = storage.nbytes()
         return sum(storages.values())
 
-    model = predictor.net.model
-    history = [tensor for pair in predictor.net.cache if pair is not None for tensor in pair]
+    net = predictor.net
     policy = [predictor.previous_ids, predictor.previous_q, predictor.block,
               *predictor.defaults, *predictor.fixed_ids, *(p.state for p in predictor.policies)]
+    if net.model is None:
+        # Core ML backend: host embedding tables; Core ML holds the network weights and the fp16 history ring.
+        return dict(model_bytes=net.token_table.nbytes,
+                    attention_history_bytes=2 * net.nl * net.zeros.size * 2,
+                    policy_array_bytes=sum(x.nbytes for x in policy if x is not None))
+    model = net.model
+    history = [tensor for pair in net.cache if pair is not None for tensor in pair]
     return dict(model_bytes=storage_bytes([*model.parameters(), *model.buffers()]),
                 attention_history_bytes=storage_bytes(history),
                 policy_array_bytes=sum(x.nbytes for x in policy if x is not None))

@@ -170,7 +170,8 @@ class DFlashSession:
         torch.set_num_threads(4)
         self.guard = MemoryGuard(args.guard_gib, 0.8)
         self.guard.allowed_pressure = (1, 2)
-        self.hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, 4, 32, 512)
+        self.hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, 4, 32, 512,
+                                        predictor_backend=args.predictor_backend)
         self.model, self.banks = ng.load_runtime(args.model, args.backbone, args.archive, [288] * 42, self.guard,
                                                  self.hot, True, 56)
         try:
@@ -540,6 +541,8 @@ def main():
     p.add_argument('--max-context', type=int, default=32768, help='Prompt plus completion tokens (up to 65536)')
     p.add_argument('--block-size', type=int, default=-8, help='DFlash verify block; negative = adaptive up to N')
     p.add_argument('--hot-fraction', type=float, default=0.15)
+    p.add_argument('--predictor-backend', default=None,
+                   help="jT predictor: torch (default) or coreml[:ane|:cpu|:all]; env NQ_PREDICTOR_BACKEND")
     p.add_argument('--budget-gib', type=int, default=16)
     p.add_argument('--guard-gib', type=float, default=98)
     p.add_argument('--queue-timeout', type=float, default=900)
