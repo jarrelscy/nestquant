@@ -337,7 +337,8 @@ class DFlashSession:
                 raise RuntimeError('Reused cache does not hold the expected prefix')
             self.checkpoint, cache = None, None
         suffix = ids[reused:]
-        logits, hidden = nd.capture_prefill(self.model, self.drafter, suffix, self.cache, self.hot, self.guard)
+        logits, hidden = nd.capture_prefill(self.model, self.drafter, suffix, self.cache, self.hot, self.guard,
+                                            suffix=reused > 0)
         ctx = hidden if self.ctx_hidden is None else mx.concatenate([self.ctx_hidden, hidden], axis=1)
         self.ctx_hidden = self._trim_ctx(ctx)
         mx.eval(self.ctx_hidden)
@@ -353,6 +354,7 @@ class DFlashSession:
                                self.hot, self.guard, self.block_size, should_stop=should_stop, on_token=on_token,
                                record_hidden=self.reuse)
         stats = dict(mode=mode, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
+                     prefill_path=nd.LAST_PREFILL_PATH,
                      common_prefix=lcp,
                      prefill_seconds=round(prefill_seconds, 3),
                      prefill_tok_s=round(len(suffix) / prefill_seconds, 1) if prefill_seconds > 0 else None,

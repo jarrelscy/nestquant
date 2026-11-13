@@ -305,7 +305,9 @@ class BatchedPrefill:
             raise ValueError('Batched prefill requires the fully resident base bank')
         stream = None
         decode_banks = hot.banks if hot is not None else {}
-        if hot is not None:
+        # stream_refinements=False: experts without an in-memory hot-set refinement run on the 1.5-bit base
+        # instead of streaming their refinement from SSD (decode precision, no SSD fixed cost).
+        if hot is not None and getattr(self, 'stream_refinements', True):
             self._ensure_staging()
             keys = [(mlp._bank.layer, expert) for mlp in routed for expert in range(288)
                     if expert not in decode_banks[mlp._bank.layer].slots]
@@ -452,14 +454,20 @@ class BatchedPrefill:
         used = counts > 0
         moe_stats['rows'] += int(flat.size)
         moe_stats['unused_experts'] += int((~used).sum())
+        base_only = []
         if decode_bank is not None:
             resident = [e for e in range(288) if used[e] and e in decode_bank.slots]
             streamed = [e for e in range(288) if e not in decode_bank.slots]
-            stream.skip([(layer, e) for e in streamed if not used[e]])
-            streamed = [e for e in streamed if used[e]]
+            if stream is None:
+                base_only = [e for e in streamed if used[e]]
+                streamed = []
+            else:
+                stream.skip([(layer, e) for e in streamed if not used[e]])
+                streamed = [e for e in streamed if used[e]]
         else:
             resident = [e for e in range(288) if used[e]]
             streamed = []
+        moe_stats['base_only_experts'] = moe_stats.get('base_only_experts', 0) + len(base_only)
         moe_stats['decode_bank_experts'] += len(resident)
         moe_stats['streamed_experts'] += len(streamed)
         # Each group's down-projection kernel adds its rows into Y in place (see prefill_kernels).
@@ -484,7 +492,8 @@ class BatchedPrefill:
             if group:
                 yield group
 
-        sources = [('decode', resident)] + ([('stream', streamed)] if streamed else [])
+        sources = ([('decode', resident)] + ([('stream', streamed)] if streamed else [])
+                   + ([('base', base_only)] if base_only else []))
         timings['moe_host'] += time.perf_counter() - host_started
         for source, experts in sources:
             for group in groups(experts):
@@ -494,7 +503,7 @@ class BatchedPrefill:
                     slots = [stream.take((layer, e)) for e in group]
                     timings['moe_wait'] += time.perf_counter() - wait_started
                     refinements = self.staging.planes
-                elif decode_bank is not None:
+                elif source == 'decode' and decode_bank is not None:
                     slots = [decode_bank.slots[e] for e in group]
                     refinements = decode_bank.planes
                 else:

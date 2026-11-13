@@ -236,15 +236,67 @@ class AdaptiveBlocks:
 ADAPTIVE = None
 
 
-def capture_prefill(model, drafter, ids, cache, hot, guard):
-    """Prefill `ids` on top of whatever `cache` already holds, capturing the drafter's target hidden states.
+FAST_SUFFIX_MAX = int(__import__('os').environ.get('NQ_FAST_SUFFIX_MAX', '256'))
+FAST_CHUNK = int(__import__('os').environ.get('NQ_FAST_CHUNK', '256'))
+HOT_BATCHED_MAX = int(__import__('os').environ.get('NQ_HOT_BATCHED_MAX', '8192'))
+LAST_PREFILL_PATH = None
 
-    Returns (logits of the last token, captured hidden rows (1, len(ids), layers * hidden)).
+
+def hot_set_prefill(model, drafter, ids, cache, hot, guard, chunk_size=FAST_CHUNK):
+    """Prefill a short prompt or suffix through the ordinary multi-token forward with the hot set's 4-bit
+    refinements already in memory (decode precision), instead of the batched path that streams every routed
+    expert's refinement from SSD. Commits each chunk's routing to the predictor and captures drafter states.
     """
     wanted = target_layers(drafter)
+    hot.phase = 'decode'
+    hot.prefill_bank = None
+    hot.chunk_index = 0
+    hot.traces.clear()
+    hidden_parts, logits = [], None
+    for start in range(0, len(ids), chunk_size):
+        chunk = ids[start:start + chunk_size]
+        hot.plan(chunk[0])
+        hot.publish()
+        out = model(mx.array([chunk]), cache=cache, capture_layer_ids=wanted)
+        logits = out.logits[:, -1:]
+        part = mx.concatenate(out.hidden_states, axis=-1)
+        mx.eval(logits, part, [entry.state for entry in cache])
+        hidden_parts.append(part)
+        trace = hot.take_trace()
+        trace = {layer: tuple(np.asarray(value) for value in entry) for layer, entry in trace.items()}
+        hot.commit(chunk, trace=trace, rows=len(chunk))
+        guard.check()
+    hidden = hidden_parts[0] if len(hidden_parts) == 1 else mx.concatenate(hidden_parts, axis=1)
+    mx.eval(hidden)
+    # Every chunk is committed, so the state is a clean prefill boundary (decode re-plans its first token).
+    hot.phase = 'prefill'
+    hot.traces.clear()
+    if hot.predictor.ahead is not None or hot.position != hot.predictor.t:
+        raise RuntimeError('Hot-set prefill left the predictor ahead of the committed tokens')
+    return logits, hidden
+
+
+def capture_prefill(model, drafter, ids, cache, hot, guard, suffix=False):
+    """Prefill `ids` on top of whatever `cache` already holds, capturing the drafter's target hidden states.
+
+    Short prompts and suffixes (at most FAST_SUFFIX_MAX tokens) use the hot-set path; longer ones use the
+    batched path with every routed expert at 4 bits. Returns (logits of the last token, captured hidden rows
+    (1, len(ids), layers * hidden)).
+    """
+    global LAST_PREFILL_PATH
+    wanted = target_layers(drafter)
+    if 0 < len(ids) <= FAST_SUFFIX_MAX:
+        LAST_PREFILL_PATH = 'hot_set'
+        return hot_set_prefill(model, drafter, ids, cache, hot, guard)
+    stream = not (suffix and len(ids) <= HOT_BATCHED_MAX)
+    LAST_PREFILL_PATH = ('batched' if stream else 'batched_hot') if BATCHED is not None else 'layer_major'
     chunks = [ids[i:i + 8] for i in range(0, len(ids), 8)]
     if BATCHED is not None:
-        logits = BATCHED(model, chunks, cache, guard, hot, capture=(wanted, _collapse))
+        BATCHED.stream_refinements = stream
+        try:
+            logits = BATCHED(model, chunks, cache, guard, hot, capture=(wanted, _collapse))
+        finally:
+            BATCHED.stream_refinements = True
         hidden = mx.concatenate([BATCHED.captured[index] for index in wanted], axis=-1)
         BATCHED.captured = {}
         mx.eval(hidden)
