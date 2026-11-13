@@ -1,6 +1,7 @@
 """Run GLM Flash with bounded native MLX expert banks."""
 
 import argparse
+import gc
 import json
 import os
 from pathlib import Path
@@ -12,8 +13,9 @@ from mlx.utils import tree_flatten
 from mlx_vlm.models.glm5_next.language import create_ssm_mask
 from transformers import AutoTokenizer
 
+import backbone_fast
 from checkpoint import validate
-from decoder import projection_matvec_banked
+from decoder import projection_fused, projection_matvec_banked
 from metrics import MemoryGuard
 from native_assets import REVISION, fingerprint, paths
 from native_backbone import RoutedPlaceholder, load_prepared
@@ -22,12 +24,15 @@ from packed_expert_bank import BaseReadStaging, PackedExpertBank
 from resources import process_usage, system_pressure, vm_snapshot
 
 
+PIPELINE = True
+
+
 class PagedExperts(nn.Module):
     def __init__(self, layer, bank, hot, cold_fastpath=False, diagnostics=None, decoder_loop='inline'):
         super().__init__()
         self.gate = layer.gate
         self.shared_experts = layer.shared_experts
-        if decoder_loop not in ('inline', 'split'):
+        if decoder_loop not in ('inline', 'split', 'window'):
             raise ValueError('Use inline or split decoder loops')
         self._decoder_loop = decoder_loop
         self._bank = bank
@@ -51,8 +56,13 @@ class PagedExperts(nn.Module):
         started = time.perf_counter()
         if measure:
             gate_graph_seconds = started - entered
-        if self._bank.fully_resident and self._hot is None:
-            route = self._bank.select_device(ids.reshape(-1).astype(mx.uint32))
+        device_hot = self._hot is not None and self._hot.phase == 'decode'
+        experts = None
+        if self._bank.fully_resident and (self._hot is None or device_hot):
+            # The resident base needs no host-side slot selection, and decode refinements are looked up
+            # through each bank's device slot table, so the CPU does not wait for routing at this layer.
+            flat = ids.reshape(-1).astype(mx.uint32)
+            route = self._bank.select_device(flat)
             self._forward_to_route_seconds += time.perf_counter() - started
         else:
             experts = tuple(ids.reshape(-1).tolist())
@@ -66,11 +76,15 @@ class PagedExperts(nn.Module):
         hot, hot_route = None, None
         if self._hot is not None:
             norms = mx.square(tokens.astype(mx.float32)).sum(axis=-1)
-            hot, hot_route = self._hot.route(self._bank.layer, planes, experts, weights, norms)
+            if experts is None:
+                hot, hot_route = self._hot.route_device(self._bank.layer, flat, weights, norms)
+            else:
+                hot, hot_route = self._hot.route(self._bank.layer, planes, experts, weights, norms)
         if measure:
             refined_at = time.perf_counter()
         use_refinements = hot is not None
-        if hot is not None and self._hot.phase == 'decode' and not any(expert in hot.slots for expert in experts):
+        if (hot is not None and experts is not None and self._hot.phase == 'decode'
+                and not any(expert in hot.slots for expert in experts)):
             self._cold_only_calls += 1
             if self._cold_fastpath:
                 use_refinements = False
@@ -79,6 +93,10 @@ class PagedExperts(nn.Module):
         rows = mx.broadcast_to(rounded[:, None, :], (tokens.shape[0], ids.shape[-1], width)).reshape(route.size, width)
 
         def project(name, value):
+            if self._decoder_loop == 'window':
+                return projection_fused(*planes[name], value, route,
+                                        refinements=hot.planes[name] if use_refinements else None,
+                                        refined_route=hot_route if use_refinements else None)
             return projection_matvec_banked(*planes[name], value, route, 2,
                                             refinements=hot.planes[name] if use_refinements else None,
                                             refined_route=hot_route if use_refinements else None,
@@ -119,8 +137,8 @@ class PagedExperts(nn.Module):
 
 
 def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0,
-                 cold_fastpath=False, base_read_mode='scatter', diagnostics=None, decoder_loop='inline'):
-    if decoder_loop not in ('inline', 'split'):
+                 cold_fastpath=False, base_read_mode='scatter', diagnostics=None, decoder_loop='window'):
+    if decoder_loop not in ('inline', 'split', 'window'):
         raise ValueError('Use inline or split decoder loops')
     if base_read_mode not in ('scatter', 'staged') or (full_base and base_read_mode != 'scatter'):
         raise ValueError('Staged required reads support paged expert-major execution only')
@@ -128,8 +146,6 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
         raise ValueError('Use a 32, 40, or 44 GiB paged budget, or 56 GiB for the full base')
     if full_base and (len(rows) != 42 or any(row != 288 for row in rows)):
         raise ValueError('Full base residency requires all 288 experts in each routed layer')
-    if full_base and hot is not None:
-        raise ValueError('Full base residency currently supports base-only execution')
     if preload_mib_s not in (0, 256, 512, 1024) or (preload_mib_s and not full_base):
         raise ValueError('Preload pacing requires a supported full-base loading rate')
     def backbone_loaded(name, size):
@@ -174,6 +190,9 @@ def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, bas
             guard.check(force=True)
         if len(banks) != 42:
             raise RuntimeError('Expected 42 packed routed layers')
+        if os.environ.get('NQ_FAST_BACKBONE', '1') != '0':
+            # Fused hyper-connections, block attention and early GPU start for steps of 1-8 tokens.
+            backbone_fast.install(model)
         return model, banks
     except BaseException:
         for bank in banks:
@@ -286,7 +305,60 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
     times = []
     greedy_ids = [token]
     replay_steps = []
-    for index in range(max_tokens):
+    routed = [layer.mlp for layer in getattr(model, 'layers', []) if isinstance(layer.mlp, PagedExperts)]
+    pipelined = (PIPELINE and hot is not None and diagnostics is None and base_prefetch is None
+                 and bool(routed) and all(mlp._bank.fully_resident for mlp in routed))
+    if pipelined:
+        # Device routing reads only the slot tables, which change only in publish(). The predictor
+        # commit for token t - 1 and its plan for token t therefore run on the CPU while the GPU
+        # evaluates token t, instead of before and after it.
+        hot.start_pipelined_decode()
+        pending = None
+        phases = dict(publish=[], build=[], launch=[], host_overlap=[], wait=[])
+        # A full collection over the predictor's many small objects can stall a step for hundreds of
+        # milliseconds. Collect once afterwards instead.
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        for index in range(max_tokens):
+            token = greedy_ids[-1] if forced is None else forced[index]
+            if forced is None and token in eos:
+                break
+            output.append(token)
+            if forced is None and index + 1 == max_tokens:
+                break
+            start = time.perf_counter()
+            hot.publish()
+            t1 = time.perf_counter()
+            logits = model(mx.array([[token]]), cache=cache).logits
+            trace = hot.take_trace()
+            t2 = time.perf_counter()
+            # The router weights and norms in the trace feed only the predictor, not the logits, so
+            # evaluate them with this token. Otherwise commit() would force them behind the next forward.
+            mx.async_eval(logits, [entry.state for entry in cache],
+                          [value for layer in trace.values() for value in layer[1:3]])
+            t3 = time.perf_counter()
+            if pending is not None:
+                hot.commit(*pending)
+            hot.plan(token)
+            pending = ([token], 0, trace)
+            t4 = time.perf_counter()
+            greedy_ids.append(greedy(logits))
+            t5 = time.perf_counter()
+            for name, value in zip(phases, (t1 - start, t2 - t1, t3 - t2, t4 - t3, t5 - t4)):
+                phases[name].append(value)
+            times.append(t5 - start)
+            if forced is not None:
+                replay_steps.append(dict(ready_mask=hot.readiness_digest(), logit_margin=top_margin(logits)))
+            guard.check()
+        if pending is not None:
+            hot.commit(*pending)
+        if gc_was_enabled:
+            gc.enable()
+        gc.collect()
+        pipeline_phases = {name: sorted(values)[len(values) // 2] if values else 0.0
+                           for name, values in phases.items()}
+        pipeline_phases.update({name + '_max': max(values) if values else 0.0 for name, values in phases.items()})
+    for index in range(0 if pipelined else max_tokens):
         token = greedy_ids[-1] if forced is None else forced[index]
         if forced is None and token in eos:
             break
@@ -340,7 +412,8 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
                 decode_step_seconds=times, replay_steps=replay_steps,
                 prefill=diff(after_prefill, before), decode=diff(stats(model), after_prefill),
                 cache_bytes_by_type=cache_bytes, memory=memory,
-                refinement=hot.report() if hot is not None else None)
+                refinement=hot.report() if hot is not None else None,
+                pipeline_phase_seconds=pipeline_phases if pipelined else None)
 
 
 def verify_prefill(model, ids, chunk, guard, hot):
@@ -377,6 +450,62 @@ def verify_prefill(model, ids, chunk, guard, hot):
                 layered_seconds=layered_seconds)
 
 
+def compare_prefill(model, ids, chunk, guard, hot, batched):
+    """Compare batched prefill with the existing layer-major prefill on the same prompt.
+
+    The two are not bitwise equal: the batched path accumulates each expert's matmul in a different order
+    and rounds its partial products to fp16, and long chunks use GEMM attention paths. Report how far apart
+    the final logits are.
+    """
+    chunks = [ids[i:i + chunk] for i in range(0, len(ids), chunk)]
+    results = {}
+    for name, prefill in (('layer_major', layer_major_prefill), ('batched', batched)):
+        if hot is not None:
+            hot.reset()
+        cache = model.make_cache()
+        started = time.perf_counter()
+        logits = prefill(model, chunks, cache, guard, hot).astype(mx.float32).reshape(-1)
+        mx.eval(logits)
+        results[name] = (logits, time.perf_counter() - started)
+        del cache
+        gc.collect()
+    reference, reference_seconds = results['layer_major']
+    candidate, candidate_seconds = results['batched']
+    log_p = reference - mx.logsumexp(reference)
+    log_q = candidate - mx.logsumexp(candidate)
+    kld = (mx.exp(log_p) * (log_p - log_q)).sum()
+    top_reference = mx.argsort(-reference)[:10]
+    top_candidate = mx.argsort(-candidate)[:10]
+    overlap = len(set(top_reference.tolist()) & set(top_candidate.tolist()))
+    return dict(status='compared', prompt_tokens=len(ids), layer_major_seconds=reference_seconds,
+                batched_seconds=candidate_seconds, top1_equal=bool((top_reference[0] == top_candidate[0]).item()),
+                top10_overlap=overlap, kld=float(kld.item()),
+                max_abs_logit_difference=float(mx.abs(reference - candidate).max().item()),
+                reference_top_margin=top_margin(reference), batched_report=batched.report)
+
+
+def prompt_ids(tokenizer, template, prompt, prompt_tokens=None):
+    """Chat-template a prompt, optionally truncating its text so the templated prompt has about N tokens."""
+    def encode(text):
+        return tokenizer.apply_chat_template([{'role': 'user', 'content': text}], tokenize=True,
+                                             return_dict=False, add_generation_prompt=True, chat_template=template)
+
+    if prompt_tokens is None:
+        return encode(prompt)
+    overhead = len(encode('')) + 32
+    words = tokenizer.encode(prompt, add_special_tokens=False)
+    if len(words) + overhead < prompt_tokens:
+        raise ValueError(f'The prompt text has only {len(words)} tokens')
+    suffix = '\n\nSummarize the material above in three sentences.'
+    budget = prompt_tokens - overhead
+    ids = encode(tokenizer.decode(words[:budget]) + suffix)
+    # Decoding and re-encoding can merge tokens differently; trim the text until the prompt fits.
+    while len(ids) > prompt_tokens:
+        budget -= len(ids) - prompt_tokens
+        ids = encode(tokenizer.decode(words[:budget]) + suffix)
+    return ids
+
+
 def main():
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument('--model', type=Path, required=True)
@@ -388,14 +517,22 @@ def main():
     parser.add_argument('--chunk-size', type=int, choices=(4, 8, 16), default=4)
     parser.add_argument('--rows', type=int, choices=(64, 96, 128, 160, 192, 224, 288), default=96)
     parser.add_argument('--full-base', action='store_true')
-    parser.add_argument('--full-base-wired-gib', type=int, choices=(0, 32, 56, 68))
+    parser.add_argument('--full-base-wired-gib', type=int, choices=(0, 32, 56, 68, 72, 80, 88, 92, 96))
+    parser.add_argument('--memory-limit-gib', type=int, choices=(76, 80, 84, 88, 92, 96), default=76)
+    parser.add_argument('--guard-gib', type=int, choices=(82, 86, 89, 94, 98, 102), default=82)
     parser.add_argument('--paged-wired-gib', type=int, choices=(0, 32))
     parser.add_argument('--preload-mib-s', type=int, choices=(0, 256, 512, 1024), default=0)
     parser.add_argument('--base-budget-gib', type=int, choices=(32, 40, 44, 56), default=32)
     parser.add_argument('--row-plan', type=Path)
     parser.add_argument('--refinements', action='store_true')
-    parser.add_argument('--refinement-budget-gib', type=int, choices=(4, 6), default=4)
-    parser.add_argument('--hot-fraction', type=float, choices=(0.01, 0.02, 0.03, 0.05), default=0.02)
+    parser.add_argument('--refinement-budget-gib', type=int, choices=(4, 6, 8, 12, 16, 20, 22, 24), default=4)
+    parser.add_argument('--hot-fraction', type=float, choices=(0.01, 0.02, 0.03, 0.05, 0.1, 0.15, 0.2174),
+                        default=0.02)
+    parser.add_argument('--warm-refinements', action='store_true')
+    parser.add_argument('--allow-warning-pressure', action='store_true')
+    parser.add_argument('--refinement-readers', type=int, choices=(1, 2, 4, 8), default=1)
+    parser.add_argument('--refinement-pending', type=int, choices=(2, 4, 8, 16, 32, 64), default=2)
+    parser.add_argument('--refinement-staging-mib', type=int, choices=(64, 128, 256, 512), default=64)
     parser.add_argument('--prefill-rows', type=int, choices=(64, 128, 160, 192, 240), default=64)
     parser.add_argument('--token-major', action='store_true')
     parser.add_argument('--verify-prefill', action='store_true')
@@ -404,12 +541,34 @@ def main():
     parser.add_argument('--base-prefetch', type=int, choices=(1, 2, 4))
     parser.add_argument('--base-read-mode', choices=('scatter', 'staged'), default='scatter')
     parser.add_argument('--cold-fastpath', action='store_true')
-    parser.add_argument('--decoder-loop', choices=('inline', 'split'), default='inline')
+    parser.add_argument('--decoder-loop', choices=('inline', 'split', 'window'), default='window')
     parser.add_argument('--diagnostics', type=Path)
     parser.add_argument('--profile-sync', action='store_true')
+    parser.add_argument('--batched-prefill', action='store_true')
+    parser.add_argument('--prefill-attention-chunk', type=int, choices=(1024, 2048, 4096, 8192), default=4096)
+    parser.add_argument('--prefill-staging-rows', type=int, choices=(16, 24, 32, 48, 64, 96, 128), default=16)
+    parser.add_argument('--prefill-readers', type=int, choices=(8, 16, 32), default=16)
+    parser.add_argument('--predictor-tail', type=int, choices=(256, 512, 1024, 2048, 4096), default=512)
+    parser.add_argument('--dense-attention-max-keys', type=int, choices=(0, 8192, 16384, 24576, 28672, 32768, 65536),
+                        default=28672)
+    parser.add_argument('--max-context', type=int, choices=(4096, 8192, 16384, 32768, 49152, 65536), default=4096)
+    parser.add_argument('--prompt-file', type=Path)
+    parser.add_argument('--prompt-tokens', type=int)
+    parser.add_argument('--compare-prefill', action='store_true')
+    parser.add_argument('--bench-prefill-lengths')
     args = parser.parse_args()
     if args.output.exists() or not 0 < args.max_tokens <= 4096:
         parser.error('Use a fresh output and a positive token budget of at most 4096')
+    if args.batched_prefill and (not args.full_base or args.token_major or args.verify_prefill
+                                 or args.diagnostics is not None):
+        parser.error('Batched prefill requires --full-base and excludes token-major, verification and diagnostics')
+    if args.max_context > 4096 and not args.batched_prefill:
+        parser.error('Contexts beyond 4096 tokens require --batched-prefill')
+    if (args.compare_prefill or args.bench_prefill_lengths) and (not args.batched_prefill or args.fixed_json
+                                                                 or args.replay_passes != 1):
+        parser.error('Prefill comparison and benchmarks require --batched-prefill and no fixed trace')
+    if args.prompt_tokens is not None and (args.prompt_file is None or not 64 <= args.prompt_tokens <= args.max_context):
+        parser.error('--prompt-tokens requires --prompt-file and must fit the context bound')
     if args.diagnostics is not None and (args.diagnostics.exists() or args.diagnostics.resolve() == args.output.resolve()):
         parser.error('Use a fresh diagnostic path separate from the result')
     if args.diagnostics is not None and (args.token_major or args.verify_prefill):
@@ -425,8 +584,15 @@ def main():
         parser.error('Full residency requires --full-base --rows 288 and excludes a row plan')
     if args.full_base != (args.base_budget_gib == 56):
         parser.error('The full base requires a 56 GiB base budget; paged banks allow at most 44 GiB')
-    if args.full_base and args.refinements:
-        parser.error('Full base residency currently supports base-only execution')
+    if args.refinement_pending < args.refinement_readers:
+        parser.error('Use at least one pending refinement read per reader')
+    if (args.refinement_readers != 1 or args.refinement_pending != 2 or args.refinement_staging_mib != 64) \
+            and not args.refinements:
+        parser.error('Refinement reader settings require --refinements')
+    if args.warm_refinements and not args.refinements:
+        parser.error('Warm refinement pools require --refinements')
+    if args.guard_gib < args.memory_limit_gib:
+        parser.error('The process guard must not be below the MLX memory limit')
     if args.full_base and args.base_read_mode != 'scatter':
         parser.error('Staged required reads support paged expert-major execution only')
     if not args.full_base and (args.full_base_wired_gib is not None or args.preload_mib_s):
@@ -435,8 +601,10 @@ def main():
         parser.error('The paged residency limit excludes --full-base')
     if args.refinement_budget_gib != 4 and not args.refinements:
         parser.error('A refinement budget requires --refinements')
-    if args.hot_fraction == 0.05 and (not args.refinements or args.refinement_budget_gib != 6):
-        parser.error('Five-percent hot allocation requires --refinements --refinement-budget-gib 6')
+    minimum_budget = {0.05: 6, 0.1: 8, 0.15: 12, 0.2174: 22}.get(args.hot_fraction)
+    if minimum_budget is not None and (not args.refinements or args.refinement_budget_gib < minimum_budget):
+        parser.error(f'{args.hot_fraction:.2%} hot allocation requires --refinements and at least '
+                     f'{minimum_budget} GiB of refinement budget')
     if args.base_prefetch and (not args.refinements or args.verify_prefill or args.full_base):
         parser.error('Base prediction requires the committed refinement predictor during generation')
     if args.cold_fastpath and not args.refinements:
@@ -452,12 +620,24 @@ def main():
             parser.error('The row plan must contain 42 bounded counts at the selected total budget')
     validate(args.model)
     mx.set_cache_limit(256 * 1024**2)
-    mx.set_memory_limit(76 * 1024**3)
-    wired_gib = ((68 if args.full_base_wired_gib is None else args.full_base_wired_gib)
+    mx.set_memory_limit(args.memory_limit_gib * 1024**3)
+    # The full base plus backbone is about 65 GiB. With refinements, wire up to the MLX memory limit so
+    # macOS cannot compress idle base planes or refinement slots.
+    default_wired = args.memory_limit_gib if args.refinements else 68
+    wired_gib = ((default_wired if args.full_base_wired_gib is None else args.full_base_wired_gib)
                  if args.full_base else (args.paged_wired_gib or 0))
     if args.full_base or args.paged_wired_gib is not None:
+        recommended = mx.device_info()['max_recommended_working_set_size']
+        if wired_gib * 1024**3 > recommended:
+            parser.error(f'Requested wired limit exceeds the GPU working set of {recommended / 1024**3:.1f} GiB; '
+                         'raise iogpu.wired_limit_mb first')
         mx.set_wired_limit(wired_gib * 1024**3)
-    guard = MemoryGuard(82)
+    # Above 89 GiB the guard needs more than its default 70% share of physical memory. It still stops
+    # the run as soon as system pressure leaves the normal level.
+    guard = MemoryGuard(args.guard_gib, 0.8 if args.guard_gib > 89 else 0.7)
+    if args.allow_warning_pressure:
+        # Tolerate warning pressure and still stop at critical, as kld_harness.py --guard-above-default-cap does.
+        guard.allowed_pressure = (1, 2)
     config = json.loads((args.model / 'config.json').read_text())['text_config']
     if config['swiglu_limit'] != 10:
         raise RuntimeError('Unexpected activation clamp in model configuration')
@@ -465,6 +645,7 @@ def main():
     eos = {eos} if isinstance(eos, int) else set(eos)
     hot = None
     diagnostics = None
+    batched = None
     banks = []
     base_prefetch = None
     try:
@@ -473,13 +654,18 @@ def main():
         if args.refinements:
             from native_refinements import NativeHotRefinements
 
-            hot = NativeHotRefinements(args.model, args.hot_fraction, args.prefill_rows, args.refinement_budget_gib)
+            hot = NativeHotRefinements(args.model, args.hot_fraction, args.prefill_rows, args.refinement_budget_gib,
+                                       args.refinement_readers, args.refinement_pending, args.refinement_staging_mib)
             if diagnostics is not None:
                 diagnostics.record('predictor_ready', memory=memory_sample())
         start = time.perf_counter()
         model, banks = load_runtime(args.model, args.backbone, args.archive, rows, guard, hot,
                                     args.full_base, args.base_budget_gib, args.preload_mib_s, args.cold_fastpath,
                                     args.base_read_mode, diagnostics, args.decoder_loop)
+        warm = None
+        if args.warm_refinements:
+            warm = hot.warm(max(4, args.refinement_readers), lambda: guard.check(force=True))
+            print(json.dumps(dict(event='refinement_pools_warm', **warm, memory=memory_sample())), flush=True)
         if args.base_prefetch:
             from native_base_prefetch import NativeBasePrefetch
 
@@ -487,19 +673,54 @@ def main():
         startup_stats = stats(model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True, trust_remote_code=False)
         template = (Path(__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
-        ids = tokenizer.apply_chat_template([{'role': 'user', 'content': args.prompt}], tokenize=True,
-                                           return_dict=False, add_generation_prompt=True, chat_template=template)
-        if not ids or len(ids) + args.max_tokens > 4096:
-            parser.error('Prompt and output must fit the 4096-token validation bound')
+        text = args.prompt_file.read_text() if args.prompt_file is not None else args.prompt
+        # Benchmarks template their own prompt lengths from the same text.
+        ids = [0] if args.bench_prefill_lengths and not args.compare_prefill else prompt_ids(tokenizer, template, text, args.prompt_tokens)
+        if not ids or len(ids) + args.max_tokens > args.max_context:
+            parser.error(f'Prompt and output must fit the {args.max_context}-token validation bound')
+        if args.batched_prefill:
+            from native_prefill import BatchedPrefill
+
+            batched = BatchedPrefill(args.model, args.prefill_attention_chunk, args.prefill_staging_rows,
+                                     args.prefill_readers, predictor_tail=args.predictor_tail,
+                                     dense_max_keys=args.dense_attention_max_keys)
         if args.verify_prefill:
             result = verify_prefill(model, ids, args.chunk_size, guard, hot)
+        elif args.compare_prefill or args.bench_prefill_lengths:
+            comparison = None
+            if args.compare_prefill:
+                comparison = compare_prefill(model, ids, args.chunk_size, guard, hot, batched)
+                print(json.dumps(dict(event='prefill_comparison', **{key: value for key, value in comparison.items()
+                                                                     if key != 'batched_report'})), flush=True)
+            lengths = [int(value) for value in args.bench_prefill_lengths.split(',')] if args.bench_prefill_lengths else []
+            if any(not 64 <= length or length + args.max_tokens > args.max_context for length in lengths):
+                parser.error('Benchmark lengths must fit the context bound')
+            runs = []
+            for length in lengths:
+                guard.check(force=True)
+                run_ids = prompt_ids(tokenizer, template, text, length)
+                current = generate(model, tokenizer, run_ids, args.max_tokens, eos, batched, args.chunk_size, hot,
+                                   guard)
+                current['prefill_tps'] = len(run_ids) / current['ttft_seconds']
+                current['batched_report'] = batched.report
+                current.pop('decode_step_seconds', None)
+                runs.append(current)
+                print(json.dumps(dict(event='prefill_benchmark', prompt_tokens=len(run_ids),
+                                      ttft_seconds=current['ttft_seconds'], prefill_tps=current['prefill_tps'],
+                                      decode_tps=current['decode_tps'], text=current['text'][:200],
+                                      report=batched.report, memory=current['memory']['after_prefill'])),
+                      flush=True)
+                gc.collect()
+            result = dict(status='benchmarked', comparison=comparison, runs=runs, memory_limit_bytes=args.memory_limit_gib * 1024**3,
+                          guard_gib=args.guard_gib, hot_fraction=args.hot_fraction if hot is not None else None)
         else:
             forced = None
             if args.fixed_json:
                 forced = json.loads(args.fixed_json.read_text())['generated_ids'][:args.max_tokens]
                 if len(forced) != args.max_tokens or any(type(i) is not int or not 0 <= i < config['vocab_size'] for i in forced):
                     parser.error('The fixed token trace is invalid or too short')
-            prefill = token_major_prefill if args.token_major else layer_major_prefill
+            prefill = (batched if args.batched_prefill else
+                       token_major_prefill if args.token_major else layer_major_prefill)
             startup = time.perf_counter() - start
             for pass_index in range(args.replay_passes):
                 guard.check(force=True)
@@ -522,10 +743,15 @@ def main():
                           requested_wired_bytes=wired_gib * 1024**3, preload_mib_s=args.preload_mib_s,
                           residency_refresh_interval_ms=os.environ.get('MLX_METAL_RESIDENCY_REFRESH_INTERVAL_MS'),
                           route_timing_includes_device_sync=not args.full_base,
+                          memory_limit_bytes=args.memory_limit_gib * 1024**3, guard_gib=args.guard_gib,
+                          refinement_warm=warm,
+                          refinement_readers=args.refinement_readers if hot is not None else None,
+                          refinement_pending=args.refinement_pending if hot is not None else None,
                           route_timing_includes_base_load=False,
                           base_prefetch=base_prefetch.report() if base_prefetch is not None else None,
                           cold_fastpath=args.cold_fastpath, decoder_loop=args.decoder_loop,
-                          hot_fraction=args.hot_fraction if hot is not None else None)
+                          hot_fraction=args.hot_fraction if hot is not None else None,
+                          batched_prefill=batched.report if args.batched_prefill else None)
             if diagnostics is not None:
                 result['diagnostics'] = dict(file=str(args.diagnostics), synchronize_layers=args.profile_sync,
                                              timings_are_diagnostic=True,
@@ -539,6 +765,8 @@ def main():
             try:
                 if base_prefetch is not None:
                     base_prefetch.close()
+                if batched is not None:
+                    batched.close()
             finally:
                 if hot is not None:
                     hot.close()

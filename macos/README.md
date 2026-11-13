@@ -475,3 +475,57 @@ The optional `microbench_banked.py --stages` probe compares full, compiled, and 
 Use `microbench_banked.py --decoder-variants` to compare the original integer decoder with packed reads and a sum lookup. The probe checks eight cached experts at layers 3 and 44. It covers base, refined, mixed, and cold modes under the same 4 GiB guards. It does not change generation defaults.
 
 The decoder comparison also includes a cooperative SIMD variant. Each lane group loads a compressed ring once and shares its words through lane shuffles. The byte decoder remains the default.
+
+## Fast decode with DFlash2 speculative decoding (2026-11-14)
+
+This section records the fastest configuration measured so far on the 128 GiB M5 Max, on AC power. It keeps
+the full 1.5-bit base resident and the 4-bit refinement hot set at 15% of expert slots.
+
+### What changed
+
+- `decoder.py`: the routed-expert kernel decodes each lane's 16 consecutive ring positions from directly
+  loaded 32-bit words, builds the fp16 value `1024 + code` from its bits (`0x6400 + code`), applies the
+  affine map with one `half2` fma per weight pair, reads (A', C) for 4-bit rows from a 65,536-entry table,
+  and shares one decode across rows routed to the same expert (verify blocks). Outputs are bit-identical to
+  the previous kernel except for float32 summation order (`LANE_POSITIONS = 8` restores bit-exact output).
+- `native_generate.py` / `native_refinements.py`: decode routes 4-bit refinements on the GPU through a
+  per-layer slot table, so a decode step has no per-layer host round trip; refinement reads are published at
+  token boundaries; the predictor runs while the GPU evaluates the next token (pipelined loop).
+- `backbone_fast.py`: fused hyper-connection kernels, block attention and earlier GPU submission for steps of
+  1–8 tokens.
+- `native_prefill.py`: batched layer-major prefill (all routed experts at 4 bits), up to 64K tokens.
+- `native_dflash.py`: DFlash2 (`incoai/GLM-5.3-Flash-DFlash2`) and DSpark drafters through mlx-vlm's DFlash
+  loop, with target hidden-state capture for glm5_next (output of layer i, hyper-connection streams
+  averaged), an adaptive verify-block policy fitted to measured round cost, and predictor commits of accepted
+  rows only.
+
+### Recommended command
+
+```sh
+.venv-macos/bin/python macos/native_dflash.py --model "$MODEL" --archive "$BASE_ARCHIVE" \
+  --backbone "$HOME/Models/GLM/backbone-affine4-e8-v1" --drafter "$HOME/Models/GLM/drafters/dflash2" \
+  --hot-fraction 0.15 --budget-gib 16 --batched-prefill --blocks -8 \
+  --prompt-file prompt.txt --tokens 512 --output result.json
+```
+
+Prepare the 4-bit backbone with `native_backbone.py --bits 4 --embedding-bits 8`. Add `--draft-rows-base`
+to verify draft rows with the 1.5-bit base only; it is faster, but it raises acceptance on some tasks, which
+means some committed tokens are effectively decided at 1.5 bits. Its task quality has not been validated.
+
+### Coding benchmark (192 generated tokens per task, decode tok/s)
+
+| Task | Plain decode | DFlash2 adaptive | DFlash2 adaptive, `--draft-rows-base` |
+|---|---:|---:|---:|
+| Copy and edit a class | 20.3 | 40.1 | 62.7 |
+| Fix a bug | 18.5 | 46.9 | 51.1 |
+| Refactor with type hints | 21.3 | 38.3 | 55.2 |
+| New function from a spec | 22.7 | 26.3 | 42.3 |
+| Write unit tests | 22.6 | 30.1 | 35.0 |
+| Explain code in prose | 22.6 | 22.0 | 25.3 |
+| Average | 21.3 | 33.9 | 45.3 |
+
+Peak process footprint was 84.5 GiB. Batched prefill brought time to first token to 9–18 s for prompts of
+100–1,300 tokens; on long prompts it measured 403 tok/s at 45K tokens. Single runs vary by about ±15%
+because different outputs change the acceptance path. The audit in `dflash_diag.py` found acceptance
+consistent with the drafter itself: target precision changes it by 1–3%, and prompts change it from 51% to
+75% per draft.

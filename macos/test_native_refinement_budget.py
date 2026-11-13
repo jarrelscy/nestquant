@@ -10,9 +10,9 @@ GIB = 1024**3
 
 class RefinementBudgetTest(unittest.TestCase):
     def test_invalid_budget_fails_before_predictor_or_worker_allocation(self):
-        for budget in (None, 0, 5, 8, True, 4.0, float('inf')):
+        for budget in (None, 0, 3, 33, True, 4.0, float('inf')):
             with self.subTest(budget=budget), patch('native_refinements.staged_predictor') as staged:
-                with self.assertRaisesRegex(ValueError, '4 or 6 GiB'):
+                with self.assertRaisesRegex(ValueError, 'between 4 and 32 GiB'):
                     NativeHotRefinements(None, .05, 128, budget_gib=budget)
                 staged.assert_not_called()
 

@@ -27,10 +27,12 @@ class MemoryGuard:
     # Normal pressure only. A caller under an external host watchdog may widen this.
     allowed_pressure = (1,)
 
-    def __init__(self, limit_gib=84):
+    def __init__(self, limit_gib=84, ram_fraction=0.7):
         if not math.isfinite(limit_gib) or limit_gib <= 0:
             raise ValueError('Process memory limit must be positive and finite')
-        self.limit_bytes = min(int(limit_gib * 1024**3), int(mx.device_info()['memory_size'] * 0.7))
+        if not 0 < ram_fraction <= 0.8:
+            raise ValueError('The process guard may use at most 80% of physical memory')
+        self.limit_bytes = min(int(limit_gib * 1024**3), int(mx.device_info()['memory_size'] * ram_fraction))
         self.last_check = 0.0
         self.check(force=True)
 

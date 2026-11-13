@@ -48,6 +48,9 @@ def _shared_plane(rows, shape, dtype):
     return mapping, raw, array
 
 
+MLX_OWNED_RESIDENT_BASE = True
+
+
 class BaseReadStaging:
     def __init__(self):
         self.storage = bytearray(MAX_ROW_BYTES)
@@ -215,9 +218,31 @@ class PackedExpertBank:
                 checks.append(array.reshape(-1)[indices].astype(mx.float32).sum())
         mx.eval(checks)
         check()
+        if MLX_OWNED_RESIDENT_BASE:
+            self._adopt_into_mlx(check)
         self.slots.update((expert, expert) for expert in range(288))
         self.free_slots.clear()
         self.fully_resident = True
+
+    def _adopt_into_mlx(self, check):
+        # Imported mmap buffers sit outside MLX's wired residency set, so macOS may compress idle base
+        # rows. A complete base is never rewritten, so copy each plane into an MLX-owned buffer that
+        # mx.set_wired_limit keeps resident, then release the mapping.
+        for name, (raw, _, _) in list(self.host.items()):
+            projection, field = name.split('.', 1)
+            current = self.planes[projection][0][field]
+            owned = mx.array(raw).view(current.dtype).reshape(current.shape)
+            mx.eval(owned)
+            self.planes[projection][0][field] = owned
+            del current
+            check()
+        self.host.clear()
+        for mapping in self.handles:
+            try:
+                mapping.close()
+            except BufferError:
+                pass
+        self.handles.clear()
 
     def select_device(self, experts):
         if not self.fully_resident:
@@ -312,10 +337,14 @@ class PackedRefinementBank:
         return rows * sum(math.prod(shape) * dtype.size for _, fields in cls.fields(base)
                           for shape, dtype, _ in fields.values())
 
+    COLD_SLOT = 0xffffffff
+
     def __init__(self, base, rows):
         if not 1 <= rows <= 240:
             raise ValueError('Expected between 1 and 240 refinement rows')
         self.slots = {}
+        self.table = np.full(288, self.COLD_SLOT, dtype=np.uint32)
+        self._device_table = None
         self.available = list(reversed(range(rows)))
         self.host = {}
         self.planes = {}
@@ -348,6 +377,8 @@ class PackedRefinementBank:
             self.available.pop()
         else:
             del self.slots[victim]
+            self.table[victim] = self.COLD_SLOT
+            self._device_table = None
         try:
             for name, fields in self.host.items():
                 if set(payload[name]) - set(fields):
@@ -369,7 +400,23 @@ class PackedRefinementBank:
             self.available.append(slot)
             raise
         self.slots[expert] = slot
+        self.table[expert] = slot
+        self._device_table = None
         return True
+
+    def copy_from(self, other, expert, wanted):
+        """Install an expert's refinement from another bank of the same layer, without an SSD read."""
+        slot = other.slots[expert]
+        payload = {name: {field: storage[slot] for field, storage in fields.items()}
+                   for name, fields in other.host.items()}
+        return self.install(expert, payload, wanted)
+
+    def device_table(self):
+        # Rebuilt only after an install changes the slot map. Installs run between tokens, so no queued
+        # GPU work can observe a partially updated table.
+        if self._device_table is None:
+            self._device_table = mx.array(self.table)
+        return self._device_table
 
     def retain(self, output):
         self.previous_output = output

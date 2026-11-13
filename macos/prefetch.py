@@ -2,8 +2,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 class BoundedReader:
-    def __init__(self, read, budget_bytes, max_pending=2):
-        if budget_bytes < 1 or max_pending < 1:
+    def __init__(self, read, budget_bytes, max_pending=2, max_workers=1):
+        if budget_bytes < 1 or max_pending < 1 or max_workers < 1:
             raise ValueError('Read-ahead limits must be positive')
         self.read = read
         self.budget_bytes = budget_bytes
@@ -11,7 +11,7 @@ class BoundedReader:
         self.pending = {}
         self.reserved_bytes = 0
         self.peak_reserved_bytes = 0
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='nestquant-ssd')
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='nestquant-ssd')
 
     def submit(self, key, payload_bytes):
         if self.executor is None:

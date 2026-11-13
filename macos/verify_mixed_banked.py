@@ -11,7 +11,7 @@ from microbench_banked import EXPERTS, pack
 from resources import process_usage, system_pressure
 
 
-def compare(store, layer):
+def compare(store, layer, loop_mode='inline'):
     weights = [store.get(layer, expert, 4) for expert in EXPERTS]
     cold_fields = ('base', 'var', 'suh2', 'svh2', 'lrV', 'lrU2')
     hot_fields = ('p4', 'word', 'suh4', 'svh4', 'lrU4')
@@ -35,28 +35,29 @@ def compare(store, layer):
         expected = mx.stack([projection_matvec(*weights[i][name], x[j], 4 if i in hot_indices else 2)
                              for j, i in enumerate(route)])
         actual = projection_matvec_banked(base, meta, x, route, 2,
-                                           refinements=upgraded, refined_route=hot_route)
+                                           refinements=upgraded, refined_route=hot_route, loop_mode=loop_mode)
         relative = (mx.linalg.norm(actual - expected) / mx.linalg.norm(expected)).item()
         if not relative < 0.001:
             raise RuntimeError(f'Mixed bank mismatch at layer {layer} {name}: {relative}')
         invalid_route = mx.concatenate([mx.array([len(hot_indices)], dtype=mx.uint32), hot_route[1:]])
         invalid = projection_matvec_banked(base, meta, x, route, 2, refinements=upgraded,
-                                           refined_route=invalid_route)
+                                           refined_route=invalid_route, loop_mode=loop_mode)
         if not mx.isnan(invalid[0]).all().item() or not mx.isfinite(invalid[1:]).all().item():
             raise RuntimeError('Invalid refinement slot did not fail locally')
         all_cold = mx.full((len(route),), cold, dtype=mx.uint32)
         mixed_cold = projection_matvec_banked(base, meta, x, route, 2,
-                                              refinements=upgraded, refined_route=all_cold)
-        base_only = projection_matvec_banked(base, meta, x, route, 2)
+                                              refinements=upgraded, refined_route=all_cold, loop_mode=loop_mode)
+        base_only = projection_matvec_banked(base, meta, x, route, 2, loop_mode=loop_mode)
         if not mx.array_equal(mixed_cold, base_only).item():
             raise RuntimeError(f'All-cold mixed projection differs from base at layer {layer} {name}')
         results[name] = dict(mixed_relative_rms=relative, all_cold_identical=True)
-    return dict(layer=layer, relative_rms=results)
+    return dict(layer=layer, loop_mode=loop_mode, relative_rms=results)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=Path, required=True)
+    parser.add_argument('--loop-mode', choices=('inline', 'split', 'window'), default='inline')
     args = parser.parse_args()
     mx.random.seed(42)
     mx.set_cache_limit(256 * 1024**2)
@@ -64,7 +65,7 @@ if __name__ == '__main__':
     store = ExpertStore(args.model, cache_gib=0.5)
     store.memory_check = lambda: guard.check(force=True)
     try:
-        checks = [compare(store, layer) for layer in (3, 44)]
+        checks = [compare(store, layer, args.loop_mode) for layer in (3, 44)]
         guard.check(force=True)
     finally:
         store.close()
