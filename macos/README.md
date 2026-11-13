@@ -529,3 +529,13 @@ Peak process footprint was 84.5 GiB. Batched prefill brought time to first token
 because different outputs change the acceptance path. The audit in `dflash_diag.py` found acceptance
 consistent with the drafter itself: target precision changes it by 1–3%, and prompts change it from 51% to
 75% per draft.
+
+### Quality checks (DFlash2 adaptive, full 4-bit verify, 15% hot experts)
+
+| Benchmark | Problems | Result | Decode tok/s |
+|---|---:|---:|---:|
+| GSM8K (test set, first 100, greedy, thinking off) | 100 | 99/100 | 34.0 mean |
+| HumanEval (first 27, paused; sandboxed local grader) | 27 | 27/27 in all three modes (plain, full verify, 1.5-bit draft rows) | ~23 / ~49 / ~59 |
+
+Run them with `eval_gsm8k.py` and `eval_humaneval.py`. HumanEval completions run with their tests under
+`sandbox-exec` with networking denied and writes limited to a temporary directory.
