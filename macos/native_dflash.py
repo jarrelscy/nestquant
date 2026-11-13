@@ -236,12 +236,13 @@ class AdaptiveBlocks:
 ADAPTIVE = None
 
 
-def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size):
-    cache = model.make_cache()
-    hot.reset()
+def capture_prefill(model, drafter, ids, cache, hot, guard):
+    """Prefill `ids` on top of whatever `cache` already holds, capturing the drafter's target hidden states.
+
+    Returns (logits of the last token, captured hidden rows (1, len(ids), layers * hidden)).
+    """
     wanted = target_layers(drafter)
     chunks = [ids[i:i + 8] for i in range(0, len(ids), 8)]
-    started = time.perf_counter()
     if BATCHED is not None:
         logits = BATCHED(model, chunks, cache, guard, hot, capture=(wanted, _collapse))
         hidden = mx.concatenate([BATCHED.captured[index] for index in wanted], axis=-1)
@@ -249,12 +250,37 @@ def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size)
         mx.eval(hidden)
     else:
         logits, hidden = layer_major_prefill_capture(model, chunks, cache, guard, hot, wanted)
-    first = ng.greedy(logits)
-    ttft = time.perf_counter() - started
+    return logits, hidden
+
+
+def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, guard, block_size,
+                  should_stop=None, on_token=None, record_hidden=False):
+    """DFlash rounds after a prefill whose last-token logits gave `first`.
+
+    `hidden` holds the target hidden rows of the context the drafter should see (the drafters use a 2,047-row
+    sliding window, so the last rows suffice). Generation stops at an EOS token, at max_tokens, or when
+    should_stop(generated_ids) returns True; tokens of the current round after the stop point are still
+    consumed so that the target cache, the predictor and the returned bookkeeping end on a round boundary.
+
+    Returns a dict with:
+      generated_ids  -- output tokens, ending with the stop/EOS token if one was produced
+      committed_ids  -- tokens fed through the target cache by the rounds, in order (first .. accepted drafts)
+      committed_hidden -- (record_hidden) target hidden rows for committed_ids
+      stopped        -- 'eos', 'stop' or None (length)
+    """
     hot.start_pipelined_decode()
     hot.plan(first)
     hot.publish()
     generated, current, previous = [first], [], first
+    committed_ids, committed_hidden = [], []
+    output_count = None
+    stopped = None
+    if first in eos:
+        output_count, stopped = 1, 'eos'
+    elif should_stop is not None and should_stop(generated):
+        output_count, stopped = 1, 'stop'
+    if on_token is not None:
+        on_token(generated[:output_count] if output_count else generated)
     rounds_seen, round_times, unique_rows = 0, [], []
     from concurrent.futures import ThreadPoolExecutor
     hook_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='nestquant-dflash-hooks')
@@ -266,61 +292,96 @@ def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size)
     gc.disable()
     start = round_start = time.perf_counter()
     original_next = dflash_loop._dflash_next_block_size
+    original_verify = dflash_loop._dflash_verify_greedy
+    last_captured = []
+
+    def recording_verify(*args, **kwargs):
+        captured, states, tokens = original_verify(*args, **kwargs)
+        last_captured[:] = [captured]
+        return captured, states, tokens
+
     global ADAPTIVE
+    adaptive = None
     if block_size < 0:
-        ADAPTIVE = AdaptiveBlocks(ceiling=-block_size)
+        adaptive = ADAPTIVE = AdaptiveBlocks(ceiling=-block_size)
         dflash_loop._dflash_next_block_size = (
-            lambda draft_model, total, remaining, initial=None: ADAPTIVE.choose(draft_model, total, remaining))
+            lambda draft_model, total, remaining, initial=None: adaptive.choose(draft_model, total, remaining))
         block_size = -block_size
+    if record_hidden:
+        dflash_loop._dflash_verify_greedy = recording_verify
+
+    def finish_round(accepted):
+        # The round fed [previous] + its first `accepted` drafts through the target cache.
+        nonlocal previous, current, pending_hook, hook_wait, round_start, rounds_seen
+        rounds_seen += 1
+        now = time.perf_counter()
+        round_times.append(now - round_start)
+        if adaptive is not None and getattr(drafter, 'draft_lens', None):
+            adaptive.record_round(int(drafter.draft_lens[-1]) + 1, now - round_start)
+        committed = ([previous] + current)[:accepted + 1]
+        committed_ids.extend(committed)
+        if record_hidden:
+            rows = mx.concatenate(last_captured[0], axis=-1)[:, :len(committed)]
+            mx.async_eval(rows)
+            committed_hidden.append(rows)
+        t_trace = time.perf_counter()
+        trace = hot.take_trace()
+        mx.eval([value for entry in trace.values() for value in entry])
+        trace = {layer: tuple(np.asarray(value) for value in entry) for layer, entry in trace.items()}
+        ids_rows = [entry[0].reshape(-1) for entry in trace.values()]
+        unique_rows.append(sum(len(set(row.tolist())) for row in ids_rows) / len(ids_rows))
+        between['trace'] += time.perf_counter() - t_trace
+        previous, current = current[-1], []
+        # Commit and plan touch only host state, so they overlap the next round's draft and verify.
+        # Finished refinement reads are installed here, after the previous hook has completed.
+        if pending_hook is not None:
+            waited = time.perf_counter()
+            pending_hook.result()
+            hook_wait += time.perf_counter() - waited
+        t_publish = time.perf_counter()
+        hot.publish()
+        between['publish'] += time.perf_counter() - t_publish
+
+        def hook(committed=committed, trace=trace, previous=previous):
+            hot.commit(committed, trace=trace, rows=len(committed))
+            hot.plan(previous)
+
+        pending_hook = hook_pool.submit(hook)
+        t_guard = time.perf_counter()
+        guard.check()
+        between['guard'] += time.perf_counter() - t_guard
+        round_start = time.perf_counter()
+
     try:
-        rounds = dflash_loop._dflash_rounds(model, drafter, cache, hidden, first_bonus=first, max_tokens=max_tokens,
-                                            sampler=lambda value: value.argmax(axis=-1), draft_block_size=block_size,
-                                            greedy_sampling=True)
-        for token, _ in rounds:
-            if last_yield is not None:
-                between['generator_gap'] += time.perf_counter() - last_yield
-            token = int(token)
-            generated.append(token)
-            current.append(token)
-            accepted = int(drafter.accept_lens[-1]) if len(drafter.accept_lens) > rounds_seen else -1
-            if len(current) == accepted + 1:
-                rounds_seen += 1
-                now = time.perf_counter()
-                round_times.append(now - round_start)
-                if ADAPTIVE is not None and getattr(drafter, 'draft_lens', None):
-                    ADAPTIVE.record_round(int(drafter.draft_lens[-1]) + 1, now - round_start)
-                committed = [previous] + current[:-1]
-                t_trace = time.perf_counter()
-                trace = hot.take_trace()
-                mx.eval([value for entry in trace.values() for value in entry])
-                trace = {layer: tuple(np.asarray(value) for value in entry) for layer, entry in trace.items()}
-                ids_rows = [entry[0].reshape(-1) for entry in trace.values()]
-                unique_rows.append(sum(len(set(row.tolist())) for row in ids_rows) / len(ids_rows))
-                between['trace'] += time.perf_counter() - t_trace
-                previous, current = current[-1], []
-                # Commit and plan touch only host state, so they overlap the next round's draft and verify.
-                # Finished refinement reads are installed here, after the previous hook has completed.
-                if pending_hook is not None:
-                    waited = time.perf_counter()
-                    pending_hook.result()
-                    hook_wait += time.perf_counter() - waited
-                t_publish = time.perf_counter()
-                hot.publish()
-                between['publish'] += time.perf_counter() - t_publish
-
-                def hook(committed=committed, trace=trace, previous=previous):
-                    hot.commit(committed, trace=trace, rows=len(committed))
-                    hot.plan(previous)
-
-                pending_hook = hook_pool.submit(hook)
-                t_guard = time.perf_counter()
-                guard.check()
-                between['guard'] += time.perf_counter() - t_guard
-                round_start = time.perf_counter()
-            if token in eos:
-                rounds.close()
-                break
-            last_yield = time.perf_counter()
+        if stopped is None and max_tokens > 1:
+            rounds = dflash_loop._dflash_rounds(model, drafter, cache, hidden, first_bonus=first,
+                                                max_tokens=max_tokens, sampler=lambda value: value.argmax(axis=-1),
+                                                draft_block_size=block_size, greedy_sampling=True)
+            for token, _ in rounds:
+                if last_yield is not None:
+                    between['generator_gap'] += time.perf_counter() - last_yield
+                token = int(token)
+                generated.append(token)
+                current.append(token)
+                if stopped is None:
+                    if token in eos:
+                        output_count, stopped = len(generated), 'eos'
+                    elif should_stop is not None and should_stop(generated):
+                        output_count, stopped = len(generated), 'stop'
+                    if on_token is not None:
+                        on_token(generated)
+                accepted = int(drafter.accept_lens[-1]) if len(drafter.accept_lens) > rounds_seen else -1
+                if len(current) == accepted + 1:
+                    finish_round(accepted)
+                    if stopped is not None:
+                        rounds.close()
+                        break
+                last_yield = time.perf_counter()
+            if current and len(drafter.accept_lens) > rounds_seen:
+                # max_tokens cut the last round's bonus token: its drafts are committed but unprocessed.
+                finish_round(int(drafter.accept_lens[-1]))
+        else:
+            rounds = None
         mx.synchronize()
         if pending_hook is not None:
             pending_hook.result()
@@ -328,16 +389,21 @@ def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size)
     finally:
         hook_pool.shutdown(wait=True)
         dflash_loop._dflash_next_block_size = original_next
+        dflash_loop._dflash_verify_greedy = original_verify
         if gc_enabled:
             gc.enable()
         gc.collect()
     cleanup_seconds = time.perf_counter() - decode_end
     decode = decode_end - start
     hot.traces.clear()
-    accepts = [float(a) for a in drafter.accept_lens]
-    drafts = [int(d) for d in getattr(drafter, 'draft_lens', [])]
-    return dict(generated_ids=generated, ttft_seconds=ttft, decode_seconds=decode,
-                decode_tps=(len(generated) - 1) / decode, rounds=len(accepts),
+    accepts = [float(a) for a in drafter.accept_lens] if rounds is not None else []
+    drafts = [int(d) for d in getattr(drafter, 'draft_lens', [])] if rounds is not None else []
+    output = generated[:output_count] if output_count else generated
+    return dict(generated_ids=output, committed_ids=committed_ids,
+                committed_hidden=committed_hidden if record_hidden else None, stopped=stopped,
+                decode_seconds=decode,
+                decode_tps=(len(output) - 1) / decode if len(output) > 1 and decode > 0 else None,
+                rounds=len(accepts),
                 mean_accepted=sum(accepts) / max(len(accepts), 1),
                 mean_drafted=sum(drafts) / max(len(drafts), 1),
                 position_acceptance=position_acceptance([int(a) for a in accepts], drafts),
@@ -346,11 +412,26 @@ def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size)
                 hook_wait_seconds=hook_wait, round_seconds_total=sum(round_times),
                 between_seconds={k: round(v, 3) for k, v in between.items()}, cleanup_seconds=cleanup_seconds,
                 first_round_seconds=round_times[0] if round_times else None,
-                adaptive_blocks=(ADAPTIVE.chosen if ADAPTIVE is not None and block_size > 0 else None),
-                adaptive_cost_ms=((round(ADAPTIVE.fixed_ms, 1), round(ADAPTIVE.per_row_ms, 1)) if ADAPTIVE is not None else None),
+                adaptive_blocks=(adaptive.chosen if adaptive is not None else None),
+                adaptive_cost_ms=((round(adaptive.fixed_ms, 1), round(adaptive.per_row_ms, 1))
+                                  if adaptive is not None else None),
                 refinement_installs=hot.reads['installed'], publication_seconds=hot.reads['decode_publication_seconds'],
                 ready_call_fraction=hot.report()['coverage']['call_fractions']['ready'])
 
+
+def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size):
+    cache = model.make_cache()
+    hot.reset()
+    started = time.perf_counter()
+    logits, hidden = capture_prefill(model, drafter, ids, cache, hot, guard)
+    first = ng.greedy(logits)
+    ttft = time.perf_counter() - started
+    out = dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, guard, block_size)
+    out.pop('committed_hidden')
+    out.pop('committed_ids')
+    out.pop('stopped')
+    out['ttft_seconds'] = ttft
+    return out
 
 def main():
     parser = argparse.ArgumentParser()

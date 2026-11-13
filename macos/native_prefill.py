@@ -547,12 +547,14 @@ class BatchedPrefill:
         if not trace:
             return
         if tail_start:
-            # Start the predictor clocks at the first committed row so positions match a full commit.
+            # Start the predictor clocks at the first committed row so positions match a full commit. A
+            # suffix prefill on top of earlier committed tokens starts from the current clock.
+            base = hot.position
             predictor = hot.predictor
-            predictor.t = tail_start
+            predictor.t = base + tail_start
             predictor.prepared_t = -1
-            predictor.net.position = tail_start
+            predictor.net.position = base + tail_start
             # The policies keep their own row count only for the refresh cadence; leaving it at zero makes
             # the first committed row skip the refresh, which needs the previous row's jT block.
-            hot.position = tail_start
+            hot.position = base + tail_start
         hot.commit(ids[tail_start:], trace=trace)
