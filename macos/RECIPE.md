@@ -29,6 +29,23 @@ the older staged copies (about 3% faster decode, about 3 points fewer 4-bit call
 A 4-bit expert call decodes two trellises instead of one, so more 4-bit calls means slower verify rounds.
 Single benchmark runs vary by about ±15% because generated text, and with it draft acceptance, changes.
 
+### Sustained speed
+
+The numbers above are from short runs (192 tokens, a few minutes of GPU work). All measurements used the
+96 W USB-C adapter. Under sustained load the GPU slows down while macOS still reports a normal thermal state:
+
+- A plain fp16 matmul runs at about 54 TFLOPS when the GPU is fresh, about 21 TFLOPS under continuous load,
+  and at worst about 5 TFLOPS.
+- The same 192-token benchmark repeated six times in one process gave 52, 44, 39, 40, 35 and 11 tok/s.
+  Acceptance and the 4-bit share did not change.
+- When the server runs nonstop (MMLU-Pro, 130–1,024-token answers), decode is mostly 25–34 tok/s, with dips to
+  7–16 tok/s on long answers.
+
+Expect lower and more variable decode than the table when the server runs for a long time. The most likely
+reason is the adapter's power limit, but this is not confirmed. To check on your machine, run
+`sudo powermetrics --samplers gpu_power,thermal -i 2000` during decode and compare GPU frequency and power
+with decode speed. The Speed preset does less GPU work per token and should slow down less.
+
 ## 1. Requirements
 
 - Apple silicon Mac with 128 GB of unified memory. Close other large applications; the process needs
@@ -150,6 +167,10 @@ What to expect:
 .venv-macos/bin/python macos/eval_gsm8k.py --model "$MODEL" --archive "$HOME/Models/GLM/resident-banks-v1" \
   --backbone "$HOME/Models/GLM/backbone-affine4-e8-v1" --drafter "$HOME/Models/GLM/drafters/dflash2" \
   --problems test.jsonl --limit 100 --output gsm8k.json
+
+# MMLU-Pro through a running server (questions: a JSON list of rows from TIGER-Lab/MMLU-Pro, test split)
+.venv-macos/bin/python macos/eval_mmlu_pro.py --questions mmlu_pro.json \
+  --url http://127.0.0.1:18090/v1/chat/completions --output mmlu-pro.json   # add --resume to continue a run
 ```
 
 `--blocks 0` is plain decode and `-8` is DFlash2 with the adaptive verify block (up to 8).
