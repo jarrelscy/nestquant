@@ -82,9 +82,21 @@ class FakeCache:
         self.position = position    # position of the next token to feed (the bonus)
 
 
-def run(loop, max_tokens, stop_at=None):
+class ConfidentDrafter(SequenceDrafter):
+    """SequenceDrafter that reports its proposals through sampler.sample_proposal like DFlash2's selector:
+    confident on correct drafts, unsure (p = 0.5) on the wrong ones."""
+
+    def draft_block(self, last_bonus, hidden, cache, block_size, sampler, token_dtype=mx.int32):
+        drafts = super().draft_block(last_bonus, hidden, cache, block_size, sampler, token_dtype)
+        bonus_position = int(hidden[0, -1, 0].item()) + 1
+        for p in range(bonus_position + 1, bonus_position + block_size):
+            sampler.sample_proposal(mx.array([[20.0, 0.0]] if p % 5 else [[0.0, 0.0]]))
+        return drafts
+
+
+def run(loop, max_tokens, stop_at=None, drafter=None, prune=False):
     prompt = 12
-    cache, hot, drafter = FakeCache(prompt), FakeHot(), SequenceDrafter()
+    cache, hot, drafter = FakeCache(prompt), FakeHot(), drafter or SequenceDrafter()
     hidden = mx.arange(prompt, dtype=mx.float32).reshape(1, prompt, 1)
 
     def verify(lm, inputs, prompt_cache, target_layer_ids, sampler):
@@ -105,7 +117,7 @@ def run(loop, max_tokens, stop_at=None):
             mock.patch.object(dflash_loop, 'commit_speculative_round', commit), \
             mock.patch.object(dflash_loop, '_reserve_dflash_target_cache', lambda *a: None), \
             mock.patch.object(dflash_loop, 'generation_stream', mx.default_stream(mx.cpu)), \
-            mock.patch.object(nd, 'FAST_LOOP', loop == 'fast'):
+            mock.patch.object(nd, 'FAST_LOOP', loop == 'fast'), mock.patch.object(nd, 'DRAFT_PRUNE', prune):
         out = nd.dflash_decode(SimpleNamespace(), drafter, cache, hidden, truth(prompt), max_tokens, {999}, hot,
                                SimpleNamespace(check=lambda: None), -8, should_stop=should_stop, record_hidden=True)
     return out, cache, hot, drafter
@@ -141,6 +153,39 @@ class FastLoopTest(unittest.TestCase):
         self.assertEqual(fast['generated_ids'], ref['generated_ids'])
         self.assertEqual(fast['generated_ids'][-1], target)
         self.assertEqual(fast['committed_ids'], ref['committed_ids'])
+
+
+class PruneTest(unittest.TestCase):
+    def setUp(self):
+        self.device = mx.default_device()
+        mx.set_default_device(mx.cpu)
+
+    def tearDown(self):
+        mx.set_default_device(self.device)
+
+    def test_prune_length(self):
+        self.assertEqual(nd.prune_length([0.999] * 7), 7)
+        self.assertEqual(nd.prune_length([0.3] * 7), 1)
+        # An unsure token stops the verified prefix even when later tokens look confident.
+        self.assertEqual(nd.prune_length([0.999, 0.999, 0.5, 0.999, 0.999, 0.999, 0.999]), 2)
+
+    def test_calibration(self):
+        with mock.patch.object(nd, 'PRUNE_CALIBRATION', 'table'):
+            self.assertEqual(nd.calibrated(0.92), 0.73)
+            self.assertEqual(nd.calibrated(0.995), 0.99)
+        with mock.patch.object(nd, 'PRUNE_CALIBRATION', 'raw'):
+            self.assertEqual(nd.calibrated(0.92), 0.92)
+
+    def test_pruned_rounds_keep_the_greedy_output(self):
+        for max_tokens in (2, 7, 40):
+            pruned, cache, hot, drafter = run('fast', max_tokens, drafter=ConfidentDrafter(), prune=True)
+            self.assertEqual(pruned['generated_ids'], [truth(12 + i) for i in range(max_tokens)])
+            self.assertEqual(pruned['committed_ids'], [truth(p) for p in range(12, cache.position)])
+            self.assertEqual(sum(row.shape[1] for row in pruned['committed_hidden']), cache.position - 12)
+            if max_tokens == 40:
+                # Every unsure (wrong) draft was cut before verification, so each verified draft was accepted.
+                self.assertTrue(all(a == d for a, d in zip(drafter.accept_lens, drafter.draft_lens)))
+                self.assertLess(max(drafter.draft_lens), 7)
 
 
 if __name__ == '__main__':

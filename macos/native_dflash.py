@@ -168,6 +168,55 @@ READERS = int(__import__('os').environ.get('NQ_REFINEMENT_READERS', '8'))
 PENDING = __import__('hot_policy').settings()['pending']
 GC_GENERATION = int(__import__('os').environ.get('NQ_GC_GENERATION', '1'))
 FAST_LOOP = __import__('os').environ.get('NQ_DFLASH_LOOP', 'fast') != 'mlx'
+# NQ_ROUND_TIMING=1 records host timestamps per round; =2 also waits for each draft to measure its GPU time.
+ROUND_TIMING = int(__import__('os').environ.get('NQ_ROUND_TIMING', '0'))
+LAST_ROUND_TIMING = []
+# Draft pruning (default; NQ_DRAFT_PRUNE=0 disables): draft the full block, then verify only the prefix that maximises expected committed tokens
+# per millisecond given the drafter's own per-token confidence (round cost = PRUNE_FIXED_MS + PRUNE_ROW_MS * rows).
+DRAFT_PRUNE = __import__('os').environ.get('NQ_DRAFT_PRUNE', '1') != '0'
+PRUNE_FIXED_MS = float(__import__('os').environ.get('NQ_PRUNE_FIXED_MS', '26'))
+PRUNE_ROW_MS = float(__import__('os').environ.get('NQ_PRUNE_ROW_MS', '20'))
+PRUNE_POWER = float(__import__('os').environ.get('NQ_PRUNE_POWER', '1'))
+PRUNE_LOG = []      # (confidences, verified draft tokens, accepted) per round
+# Measured acceptance of a reached draft token by drafter confidence (DFlash2 on GLM-5.3-Flash, 6 coding prompts,
+# 493 rounds): the drafter is overconfident between 0.4 and 0.99. NQ_PRUNE_CALIBRATION=raw uses the confidence as is.
+PRUNE_CALIBRATION = __import__('os').environ.get('NQ_PRUNE_CALIBRATION', 'table')
+CALIBRATION_TABLE = ((0.99, 0.99), (0.95, 0.75), (0.90, 0.73), (0.80, 0.66), (0.70, 0.54), (0.60, 0.40), (0.0, 0.30))
+
+
+def calibrated(p):
+    if PRUNE_CALIBRATION == 'raw':
+        return min(1.0, max(0.0, p))
+    return next(value for floor, value in CALIBRATION_TABLE if p >= floor)
+
+
+class ConfidenceSampler:
+    """Greedy sampler that also keeps the drafter's probability for each proposed token."""
+
+    def __init__(self):
+        self.probs = []
+
+    def __call__(self, value):
+        return value.argmax(axis=-1)
+
+    def sample_proposal(self, scores):
+        self.probs.append(mx.softmax(scores.astype(mx.float32), axis=-1).max(axis=-1))
+        return mx.argmax(scores, axis=-1)
+
+
+def prune_length(confidences, fixed_ms=None, row_ms=None, power=None):
+    """Number of draft tokens to verify (at least 1) that maximises expected tokens per millisecond."""
+    fixed_ms = PRUNE_FIXED_MS if fixed_ms is None else fixed_ms
+    row_ms = PRUNE_ROW_MS if row_ms is None else row_ms
+    power = PRUNE_POWER if power is None else power
+    best, best_rate, expected, survive = 1, 0.0, 1.0, 1.0
+    for k, p in enumerate(confidences, 1):
+        survive *= calibrated(p) ** power
+        expected += survive
+        rate = expected / (fixed_ms + row_ms * (k + 1))
+        if rate > best_rate:
+            best, best_rate = k, rate
+    return best
 
 
 class AdaptiveBlocks:
@@ -491,20 +540,45 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         with mx.stream(stream):
             dflash_loop._reserve_dflash_target_cache(cache, block_total)
         draft_fn = getattr(drafter, 'draft_block_greedy', drafter.draft_block)
-        sampler = lambda value: value.argmax(axis=-1)
+        # Pruning needs the candidate selector's scores, so draft through draft_block (draft_block_greedy only
+        # differs when the target provides its own argmax head).
+        prune = DRAFT_PRUNE and not callable(getattr(drafter, 'argmax_from_hidden', None))
+        if prune:
+            draft_fn = drafter.draft_block
+        sampler = ConfidenceSampler() if prune else (lambda value: value.argmax(axis=-1))
+        confidence = [None]
+        PRUNE_LOG.clear()
 
         def launch(bonus, context, emitted):
-            bs = dflash_loop._dflash_next_block_size(drafter, block_total, max_tokens - emitted + 1, initial)
+            if prune:
+                bs = min(block_total, max_tokens - emitted + 1)
+            else:
+                bs = dflash_loop._dflash_next_block_size(drafter, block_total, max_tokens - emitted + 1, initial)
             if bs <= 1:
                 return bs, None
+            if prune:
+                sampler.probs.clear()
             draft = draft_fn(bonus, context, draft_cache, bs, sampler, mx.int32)
-            mx.async_eval(draft)
+            if prune and len(sampler.probs) == bs - 1:
+                confidence[0] = mx.concatenate([value.reshape(-1) for value in sampler.probs])
+                mx.async_eval(draft, confidence[0])
+            else:
+                confidence[0] = None
+                mx.async_eval(draft)
             return bs, draft
 
         emitted, bonus, context = 1, first, hidden
         bs, draft = launch(bonus, context, emitted)
+        LAST_ROUND_TIMING.clear()
         while draft is not None:
             state = None
+            t_top = time.perf_counter()
+            confidences = None
+            if prune and confidence[0] is not None and bs > 2:
+                confidences = confidence[0].tolist()
+                keep = prune_length(confidences)
+                if keep < bs - 1:
+                    draft, bs = draft[:, :keep], keep + 1
             # Refinement copies started at the last publish that have finished by now join this verify.
             hot.flip_for_verify()
             try:
@@ -515,17 +589,29 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                     verified_hidden = mx.concatenate(captured, axis=-1)
                 # The routing trace feeds only the predictor; evaluating it with the verify keeps its readback
                 # from waiting behind the next draft.
+                t_built = time.perf_counter()
                 trace_arrays = [value for entry in hot.traces.get(hot.chunk_index, {}).values() for value in entry]
                 mx.async_eval(target, verified_hidden, trace_arrays)
+                if ROUND_TIMING:
+                    t_submit = time.perf_counter()
+                    mx.eval(target)
+                    t_ready = time.perf_counter()
                 draft_row = draft.reshape(-1).tolist()
                 accepted, new_tokens = dflash_loop._speculative_walk(draft, target, max_tokens - emitted)
                 dflash_loop._record_speculative_round(drafter, accepted, bs - 1)
+                if confidences is not None:
+                    PRUNE_LOG.append((confidences, bs - 1, accepted))
                 context = verified_hidden[:, :accepted + 1] if accepted < bs - 1 else verified_hidden
                 committed = [bonus] + draft_row[:accepted]
                 bonus = new_tokens[-1] if new_tokens else bonus
                 after = emitted + len(new_tokens)
                 ends = after >= max_tokens or any(token in eos for token in new_tokens)
                 bs_next, draft = (None, None) if ends else launch(bonus, context, after)
+                if ROUND_TIMING:
+                    t_launch = time.perf_counter()
+                    if ROUND_TIMING > 1 and draft is not None:
+                        mx.eval(draft)
+                    t_draft = time.perf_counter()
                 with mx.stream(stream):
                     dflash_loop.commit_speculative_round(lm, cache, state, accepted, bs)
                 state = None
@@ -542,6 +628,10 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                     break
             emitted = after
             finish_round(accepted, committed)
+            if ROUND_TIMING:
+                LAST_ROUND_TIMING.append(dict(rows=bs, build=t_built - t_top, encode=t_submit - t_top, wait=t_ready - t_submit,
+                                              walk_launch=t_launch - t_ready, draft_gpu=t_draft - t_launch,
+                                              host_after=time.perf_counter() - t_draft))
             if stop:
                 break
             bs = bs_next

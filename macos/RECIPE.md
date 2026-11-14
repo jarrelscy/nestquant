@@ -6,7 +6,7 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 
 | Workload | Decode tok/s | Notes |
 |---|---:|---|
-| DFlash2, coding benchmark, 6 tasks (average) | ~32 | edit, refactor and fix tasks 35–45, new code 23–27, prose ~21 |
+| DFlash2, coding benchmark, 6 tasks (average) | ~37 | edit, refactor and fix tasks 41–52, new code and tests 30–34, prose ~26 |
 | Plain decode, coding benchmark (average) | ~25.5 | |
 | GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build, 15% hot set) |
 | MMLU-Pro, first 152 test questions, through the server | 26.2 (median 30) | 128/152 correct (84.2%), sustained load |
@@ -24,11 +24,12 @@ the older staged copies (about 3% faster decode, about 3 points fewer 4-bit call
 
 | Preset | Settings | 4-bit expert calls (coding) | DFlash2 decode (coding avg) | Peak memory |
 |---|---|---:|---:|---:|
-| **Quality (default)** | `--hot-fraction 0.2 --budget-gib 22`, archive, spare-slot delivery | ~47% | ~32 tok/s (plain ~25.5) | ~86 GiB |
+| **Quality (default)** | `--hot-fraction 0.2 --budget-gib 22`, archive, spare-slot delivery | ~47% | ~37 tok/s (plain ~25.5) | ~86 GiB |
 | Speed | `--hot-fraction 0.15 --budget-gib 16` and `NQ_REFINEMENT_DIRECT=staged` | ~30% | ~36–39 tok/s | ~84 GiB |
 
 A 4-bit expert call decodes two trellises instead of one, so more 4-bit calls means slower verify rounds.
 Single benchmark runs vary by about ±15% because generated text, and with it draft acceptance, changes.
+The DFlash2 numbers were measured before the MMLU-Pro run below, on short runs with a rested GPU.
 
 ### Sustained speed
 
@@ -188,9 +189,11 @@ MMLU-Pro uses a zero-shot chain-of-thought prompt, greedy decoding and up to 1,0
   the same expert share one decode. The 4-bit hot set is predicted by the checkpoint's jT predictor and
   streamed from SSD in the background.
 - **Backbone:** fused hyper-connection kernels and block attention for 1–8 token steps.
-- **Speculative decoding:** DFlash2 drafts up to 7 tokens per round; the main model verifies them in one
-  forward pass at full precision. An adaptive policy picks the block size from measured acceptance and round
-  cost.
+- **Speculative decoding:** DFlash2 drafts 7 tokens per round; the main model verifies them in one forward
+  pass at full precision. Each verified row costs about 20 ms (it pulls in more distinct experts), so the
+  runtime verifies only the prefix of the draft that maximises expected tokens per millisecond, using the
+  drafter's own per-token confidence (calibrated against measured acceptance). This added about 11% on coding
+  and MMLU-Pro prompts, most on prose and new code. `NQ_DRAFT_PRUNE=0` restores the older adaptive block policy.
 - **Prefill:** batched layer-major prefill decodes each used expert once per layer and runs dense matmuls.
 
 Details, measurements and history: [README.md](README.md) and [PERFORMANCE.md](PERFORMANCE.md).
