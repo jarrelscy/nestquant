@@ -14,6 +14,11 @@ floating-point reassociation:
 * Sparse attention: the latent is shared by all heads, so all queries of a block attend in one pass
   with heads in the matmul rows, and embed_q/unembed_out run once per block instead of once per token.
 * Narrow (128-input) quantized projections of a block run as one matmul (bit-identical rows).
+* Indexer (FAST_INDEXER): after the same projections, cache updates and score matmul, pool selection, ordering,
+  expansion and the partial tail run as two Metal kernels (sparse_kernels.index_select) instead of ~35 small
+  kernels per layer. Same selected indices (ties at the k-th score aside); NQ_FAST_INDEXER=0 restores the
+  original attention call. With TRIM_TOPK the always -1 columns of contexts under 2,048 tokens are dropped, so
+  attention runs over the valid slots only (float32 summation-order equality only; off by default, NQ_TRIM_TOPK=1).
 
 `install(model)` switches the text model and its sparse attention layers to this path. Prefill, batched
 inputs and any attention mask keep the original code.
@@ -26,11 +31,20 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx_vlm.models import linear as linear_module
 from mlx_vlm.models.glm5_next import language
+from mlx_vlm.models.cache import PoolingCache
 from mlx_vlm.models.quantized_verifier import optimized_affine_linear
+
+import sparse_kernels
 
 
 MAX_BLOCK = 8          # longest token block (decode or speculative verify) that takes the fast path
 WEIGHT_ONCE = __import__('os').environ.get('NQ_WEIGHT_ONCE', '0') != '0'
+FAST_INDEXER = __import__('os').environ.get('NQ_FAST_INDEXER', '1') != '0'
+# Drop the top-k columns that are -1 for every row (contexts under 2,048 tokens). Attention then sums fewer exact
+# zeros, which changes MLX's float32 reduction partition: outputs are equal up to summation order, not bitwise
+# (full model, 1K context, 1-token block: logits up to 1.9 apart, same argmax), and the full-runtime gain was
+# within noise. Off by default.
+TRIM_TOPK = __import__('os').environ.get('NQ_TRIM_TOPK', '0') != '0'
 ASYNC_EVERY = 4        # start the GPU on the first layers while later layers are still being built
 _PARTIAL_COLUMNS = 64  # threads (and columns) per partial threadgroup
 _PARTIAL_STRIDE = 32   # floats per partial row: 24 mix dot products, the sum of squares, padding
@@ -368,7 +382,75 @@ def _sparse_block_attend(attn, q, latent, topk, kv_cache):
     return attn.unembed_out(output)
 
 
+def _fast_indexer_supported(indexer, x, pool_cache):
+    return (x.shape[0] == 1 and 1 <= x.shape[1] <= MAX_BLOCK and indexer.index_kpool == 4
+            and indexer.always_select_tail and not indexer.training
+            and type(pool_cache) is PoolingCache and pool_cache.buf_kv is not None)
+
+
+def fast_indexer(indexer, x, q_resid, cache, pool_cache, offset):
+    """Glm5NextIndexer.__call__ for one unpadded sequence with a cache (padding_mask None): the same
+    projections, cache updates and float32 score matmul, then sparse_kernels.index_select instead of the
+    ~35 small kernels of pool selection, ordering, expansion and tail. With TRIM_TOPK the columns that are -1
+    for every row because fewer than 512 pools exist are left out (see sparse_kernels)."""
+    batch, length, _ = x.shape
+    k, gate = indexer._project_keys(x)
+    valid_state, _ = cache.update_and_fetch(
+        mx.ones((batch, 1, length, 1), dtype=mx.bool_), mx.zeros((batch, 1, length, 0), dtype=mx.bool_))
+    key_valid = valid_state[0, 0, :, 0]
+    ready_k, ready_gate, _ = pool_cache.accumulate_windows(k, gate.astype(k.dtype), offset)
+    pool_keys = pool_cache.update_and_fetch(indexer._compress_pools(ready_k, ready_gate))
+    pools = pool_keys.shape[1]
+    select_k = min(indexer.index_topk // indexer.index_kpool, pools)
+    if select_k < pools:
+        q, weights = indexer._project_queries(x, q_resid)
+        raw = q.astype(mx.float32) @ pool_keys[:, None].astype(mx.float32).swapaxes(-1, -2)
+        return sparse_kernels.index_select(
+            raw[0], weights[0], _scale_array(indexer.softmax_scale), key_valid, pools, pools, select_k, length,
+            index_topk=indexer.index_topk, trim=TRIM_TOPK)[None]
+    return sparse_kernels.index_select(None, None, None, key_valid, pools, pools, select_k, length,
+                                       index_topk=indexer.index_topk, trim=TRIM_TOPK)[None]
+
+
+@lru_cache(maxsize=None)
+def _scale_array(value):
+    return mx.array([value], dtype=mx.float32)
+
+
+def run_indexer(attn, x, q_resid, index_cache, pool_cache, offset):
+    if FAST_INDEXER and _fast_indexer_supported(attn.indexer, x, pool_cache):
+        return fast_indexer(attn.indexer, x, q_resid, index_cache, pool_cache, offset)
+    return attn.indexer(x, q_resid, None, index_cache, pool_cache, offset)
+
+
 class FastAttention(language.Glm5NextAttention):
+    def __call__(self, x, padding_mask=None, cache=None, prev_topk_indices=None, last_only=False):
+        if not (FAST_INDEXER and _ACTIVE and padding_mask is None and cache is not None and not last_only
+                and not self.training and x.shape[0] == 1 and 1 <= x.shape[1] <= MAX_BLOCK):
+            return super().__call__(x, padding_mask, cache, prev_topk_indices, last_only)
+        # Glm5NextAttention.__call__ with the short-block indexer (run_indexer).
+        batch, length, _ = x.shape
+        q_a, kv_a = mx.split(language.linear(self.qkv_a_proj, x), (self.q_lora_rank,), axis=-1)
+        q_resid = self.q_a_layernorm(q_a)
+        q = (language.linear(self.q_b_proj, q_resid)
+             .reshape(batch, length, self.num_heads, self.q_head_dim).transpose(0, 2, 1, 3))
+        new_latent = self.kv_a_layernorm(kv_a)[:, None]
+        kv_cache = cache[0]
+        cache_offset = kv_cache.offset
+        if self.indexer is None:
+            projected_cache = cache[1]
+        else:
+            index_cache, pool_cache, projected_cache = cache[1], cache[2], cache[3]
+        latent, _ = kv_cache.update_and_fetch(new_latent, mx.zeros((batch, 1, length, 0), dtype=new_latent.dtype))
+        if self.indexer is None:
+            if prev_topk_indices is None:
+                raise ValueError('Shared indexer layer has no previous top-k indices.')
+            topk = prev_topk_indices
+        else:
+            topk = run_indexer(self, x, q_resid, index_cache, pool_cache, cache_offset)
+        out, topk = self._attend(q, latent, new_latent, topk, kv_cache, projected_cache, last_only)
+        return language.linear(self.o_proj, out), topk
+
     def _attend(self, q, latent, new_latent, topk, kv_cache, projected_cache, last_only=False):
         length = q.shape[2]
         if (_ACTIVE and not last_only and not self.training and q.shape[0] == 1 and 1 <= length <= MAX_BLOCK
