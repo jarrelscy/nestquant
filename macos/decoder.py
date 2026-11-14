@@ -908,13 +908,13 @@ WINDOW_CHUNKS = 16
 # accumulation in the window kernel; larger groups use the predicated MAXR loop (refined rows: only it).
 # NQ_REFINED_SPECIALIZED overrides the refined count (1 pairs well with NQ_REFINED_MAXR=2: a one-row refined copy
 # plus a two-member predicated copy).
-SPECIALIZED_MEMBERS = (4, int(__import__('os').environ.get('NQ_REFINED_SPECIALIZED', '0')))
+SPECIALIZED_MEMBERS = (4, int(__import__('os').environ.get('NQ_REFINED_SPECIALIZED', '1')))
 USE_AC_TABLE = True
 # Chunks per gate/up window threadgroup in expert_mlp_fused (NQ_GATE_UP_CHUNKS; 0 = WINDOW_CHUNKS). 32 covers the whole
 # 4096-wide input in one threadgroup: half the threadgroups and partial sums, but a different float32 summation order.
 # Largest group of refined rows sharing one decode (NQ_REFINED_MAXR; 0 = the same MAXR as base rows). Base rows keep
 # MAXR (specialized copies); the refined copy is one predicated loop whose member arrays scale with its MAXR.
-REFINED_MAXR = int(__import__('os').environ.get('NQ_REFINED_MAXR', '0'))
+REFINED_MAXR = int(__import__('os').environ.get('NQ_REFINED_MAXR', '2'))
 WINDOW_PREFETCH = __import__('os').environ.get('NQ_WINDOW_PREFETCH', '0') != '0'
 GATE_UP_CHUNKS = int(__import__('os').environ.get('NQ_GATE_UP_CHUNKS', '0'))
 
@@ -1012,7 +1012,7 @@ _FWHT_SIMD = """
     }
     value = value * 0.08838834764831845f;
 """
-FWHT_SIMD = __import__('os').environ.get('NQ_FWHT_SIMD', '0') != '0'
+FWHT_SIMD = __import__('os').environ.get('NQ_FWHT_SIMD', '1') != '0'
 
 
 def _fwht(decl=True):
