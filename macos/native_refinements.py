@@ -61,7 +61,7 @@ class NativeHotRefinements:
         predictor_backend = predictor_backend or os.environ.get('NQ_PREDICTOR_BACKEND', 'auto')
         if predictor_backend == 'auto':
             # Core ML (Neural Engine) when its converted package and coremltools are available, else PyTorch.
-            predictor_backend = 'coreml' if _coreml_available() else 'torch'
+            predictor_backend = 'coreml' if root is not None and _coreml_available() else 'torch'
         backend, _, units = predictor_backend.partition(':')
         if backend not in ('torch', 'coreml') or (units and backend != 'coreml'):
             raise ValueError(f'Unknown predictor backend {predictor_backend!r}')
@@ -78,7 +78,7 @@ class NativeHotRefinements:
         self.predictor_backend = predictor_backend
         if backend == 'coreml':
             from coreml_predictor import install
-            install(self.predictor, root / 'serving/predictor/jt', compute_units=units or 'ane')
+            install(self.predictor, Path(root) / 'serving/predictor/jt', compute_units=units or 'ane')
         record = os.environ.get('NQ_PREDICTOR_RECORD')
         self.record = open(record, 'ab') if record else None
         self.reader = LockedRefinementReader(root) if readers > 1 else RefinementReader(root)
