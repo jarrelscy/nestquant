@@ -170,7 +170,7 @@ class DFlashSession:
         torch.set_num_threads(4)
         self.guard = MemoryGuard(args.guard_gib, 0.8)
         self.guard.allowed_pressure = (1, 2)
-        self.hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, nd.READERS, 48, 512,
+        self.hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, nd.READERS, nd.PENDING, 512,
                                         predictor_backend=args.predictor_backend)
         self.model, self.banks = ng.load_runtime(args.model, args.backbone, args.archive, [288] * 42, self.guard,
                                                  self.hot, True, 56)

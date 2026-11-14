@@ -164,6 +164,8 @@ BATCHED = None   # native_prefill.BatchedPrefill when --batched-prefill is set
 # Reordered round loop (fast_rounds in dflash_decode); NQ_DFLASH_LOOP=mlx selects mlx-vlm's generator loop.
 # Refinement reader threads (SSD reads are latency bound; 4 threads delivered ~0.35 GiB/s each).
 READERS = int(__import__('os').environ.get('NQ_REFINEMENT_READERS', '8'))
+# Decode refinement reads in flight (hot_policy.DEFAULTS['pending'], env NQ_REFINEMENT_PENDING).
+PENDING = __import__('hot_policy').settings()['pending']
 GC_GENERATION = int(__import__('os').environ.get('NQ_GC_GENERATION', '1'))
 FAST_LOOP = __import__('os').environ.get('NQ_DFLASH_LOOP', 'fast') != 'mlx'
 
@@ -286,31 +288,10 @@ SEED_WEIGHT = float(__import__('os').environ.get('NQ_SEED_WEIGHT', '1.0'))
 
 
 def seed_hot_from_prompt(hot, salience, weight=SEED_WEIGHT):
-    """Seed each layer's hot pool from whole-prompt routing, as Spark's policy allows for prompt prefills.
-
-    The prompt's salience share is blended into the policy's moving average (weight 1.0 = equal mass to the
-    current average) and the pool is reset to the top experts by that score, keeping fixed experts. The
-    predictor's usual updates and hysteresis take over from there; new pool members are read in the background.
-    """
-    predictor = hot.predictor
-    changed = 0
-    for index, layer in enumerate(predictor.layers):
-        if layer not in salience:
-            continue
-        share = salience[layer] / max(float(salience[layer].sum()), 1e-30)
-        policy = predictor.policies[index]
-        inner = getattr(policy, 'inner', policy)
-        mass = float(inner.state.sum()) or 1.0
-        inner.state = inner.state + weight * mass * share
-        fixed = getattr(policy, 'fixed', np.zeros(288, dtype=bool))
-        score = inner.state / max(float(inner.state.sum()), 1e-30)
-        order = np.argsort(-score, kind='stable')
-        candidates = order[~fixed[order]]
-        new = fixed.copy()
-        new[candidates[:inner.nf - int(fixed.sum())]] = True
-        changed += int((new & ~inner.cur).sum())
-        inner.cur = new
-    return changed
+    """Seed each layer's hot pool from whole-prompt routing, as Spark's policy allows for prompt prefills
+    (hot_policy.seed_from_prompt). Off by default: on recorded coding traces it lowered the 4-bit share."""
+    from hot_policy import seed_from_prompt
+    return seed_from_prompt(hot.predictor, salience, weight)
 
 
 def refinement_supply(hot, decode_seconds):
@@ -327,6 +308,7 @@ def refinement_supply(hot, decode_seconds):
                 decode_read_gib=read_bytes / 2**30,
                 decode_read_gib_per_s=read_bytes / 2**30 / decode_seconds if decode_seconds else None,
                 reader_busy_seconds=hot.reads.get('decode_worker_seconds', 0.0),
+                verify_wait_seconds=hot.reads.get('verify_wait_seconds', 0.0),
                 installs=hot.reads.get('installed', 0), discarded=hot.reads.get('discarded', 0),
                 reader=hot.reader_info() if hasattr(hot, 'reader_info') else None)
 
@@ -352,6 +334,8 @@ def capture_prefill(model, drafter, ids, cache, hot, guard, suffix=False):
             logits = BATCHED(model, chunks, cache, guard, hot, capture=(wanted, _collapse))
         finally:
             BATCHED.stream_refinements = True
+        if getattr(hot, 'record', None) is not None and getattr(BATCHED, 'prompt_salience', None):
+            hot._record('prompt_salience', {layer: np.asarray(value) for layer, value in BATCHED.prompt_salience.items()})
         if SEED_PROMPT and not suffix and getattr(BATCHED, 'prompt_salience', None):
             seed_hot_from_prompt(hot, BATCHED.prompt_salience)
         hidden = mx.concatenate([BATCHED.captured[index] for index in wanted], axis=-1)
@@ -378,6 +362,8 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
       stopped        -- 'eos', 'stop' or None (length)
     """
     hot.start_pipelined_decode()
+    if getattr(hot, 'record', None) is not None:
+        hot._record('decode_start', time.perf_counter())
     hot.plan(first)
     hot.publish()
     generated, current, previous = [first], [], first
@@ -515,7 +501,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         while draft is not None:
             state = None
             # Refinement copies started at the last publish that have finished by now join this verify.
-            hot.flip()
+            hot.flip_for_verify()
             try:
                 with mx.stream(stream):
                     verify_input = mx.concatenate([mx.array([[bonus]], dtype=mx.int32), draft], axis=1)
@@ -676,7 +662,7 @@ def main():
     torch.set_num_threads(4)
     guard = MemoryGuard(98, 0.8)
     guard.allowed_pressure = (1, 2)
-    hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, READERS, 48, 512,
+    hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, READERS, PENDING, 512,
                                predictor_backend=args.predictor_backend)
     model, banks = ng.load_runtime(args.model, args.backbone, args.archive, [288] * 42, guard, hot, True, 56)
     global BATCHED

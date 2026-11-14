@@ -13,6 +13,7 @@ import numpy as np
 
 from mapped_weights import read_layouts
 from expert_major_base import FORMAT as EXPERT_MAJOR_FORMAT, MAX_ROW_BYTES, plane_layouts, read_into
+from hot_policy import choose_victim
 
 
 def pack(projections):
@@ -366,10 +367,10 @@ class PackedRefinementBank:
         # expert -> reserved slot whose payload is being written (not yet in the table)
         return self.__dict__.setdefault('_staging', {})
 
-    def install(self, expert, payload, wanted):
+    def install(self, expert, payload, wanted, scores=None):
         if expert in self.slots or expert in self.staging:
             return True
-        slot = self.reserve(expert, wanted)
+        slot = self.reserve(expert, wanted, scores)
         if slot is None:
             return False
         try:
@@ -380,9 +381,11 @@ class PackedRefinementBank:
         self.activate(expert, slot)
         return True
 
-    def reserve(self, expert, wanted):
+    def reserve(self, expert, wanted, scores=None):
         """Take a slot for `expert`: a free one, else the slot of a resident expert outside `wanted`, which
         leaves the slot table at once. Returns None if the expert is resident or staged, or no slot is free.
+        The victim is the oldest install outside `wanted`, or with `scores` ([288] loading priorities) the
+        lowest-scoring one (hot_policy.choose_victim).
 
         Call between steps (no queued GPU work may read the table or the victim's slot). The slot is then
         referenced by no table, so write() may fill it from any thread while later steps run, and activate()
@@ -392,7 +395,7 @@ class PackedRefinementBank:
         if self.available:
             slot = self.available.pop()
         else:
-            victim = next((key for key in self.slots if key not in wanted), None)
+            victim = choose_victim(self.slots, wanted, scores)
             if victim is None:
                 return None
             self.finish()

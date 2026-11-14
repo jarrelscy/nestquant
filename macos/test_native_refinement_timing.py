@@ -53,7 +53,7 @@ class NativeRefinementTimingTest(unittest.TestCase):
             publish((3, 2), (payload, 256, 1.5))
             publish((3, 9), (object(), 512, 2.0))
 
-        def install(expert, value, wanted):
+        def install(expert, value, wanted, scores=None):
             self.assertIs(value, payload)
             self.assertEqual(wanted, {2})
             hot.banks[3].slots[expert] = 1

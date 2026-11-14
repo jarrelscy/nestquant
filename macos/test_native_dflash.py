@@ -64,6 +64,9 @@ class FakeHot:
     def flip(self, wait=False):
         pass
 
+    def flip_for_verify(self):
+        pass
+
     def take_trace(self, chunk_index=0):
         return self.traces.pop(chunk_index)
 

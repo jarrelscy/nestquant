@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from experts import ExpertStore, RefinementReader
+import hot_policy
 from packed_expert_bank import PackedRefinementBank
 from predictor import configure_slots, predictor_memory, staged_predictor
 from predictor_metrics import PredictorMetrics
@@ -20,6 +21,13 @@ from prefetch import BoundedReader
 
 
 COLD_SLOT = 0xffffffff
+
+
+def bank_layer(hot, bank):
+    layers = hot.__dict__.setdefault('_bank_layers', {})
+    if id(bank) not in layers:
+        layers.update({id(value): key for key, value in hot.banks.items()})
+    return layers.get(id(bank))
 
 
 class LockedRefinementReader(RefinementReader):
@@ -71,7 +79,11 @@ class NativeHotRefinements:
         if type(readers) is not int or not 1 <= readers <= 16 or type(pending) is not int or not readers <= pending <= 64:
             raise ValueError('Use one to sixteen readers and at least one pending read per reader, at most 64')
         self.budget_bytes = budget_gib * 1024**3
-        os.environ.setdefault('NQ_FLASH_JT_PARAMS', json.dumps(dict(mix=0.75, hm=4.0, G=1, half_life=64.0)))
+        # jT policy parameters and the eviction / verify-wait settings: hot_policy.DEFAULTS, env overrides.
+        os.environ['NQ_FLASH_JT_PARAMS'] = hot_policy.jt_parameters_json()
+        policy = hot_policy.settings()
+        self.evict = policy['evict']
+        self.verify_wait = policy['verify_wait']
         module, self.staging = staged_predictor()
         self.predictor = module.CommittedPredictor(
             root, preset='spark_256K_U_2630_flat50', device='cpu', dtype=torch.float32, fixed_fraction=0.2)
@@ -92,7 +104,9 @@ class NativeHotRefinements:
         # straight into it; the slot table still changes only at a later flip().
         self.direct_reads = (hasattr(self.reader, 'read_into_slot') and os.environ.get('NQ_REFINEMENT_DIRECT') == '1'
                              and os.environ.get('NQ_BACKGROUND_INSTALLS', '1') != '0')
-        self.install_threads = readers if self.direct_reads else 2
+        # Background install copies (host memcpy into the slot planes); with verify_wait the next verify waits
+        # for them, so a few threads keep that wait short. Direct reads use one thread per reader.
+        self.install_threads = readers if self.direct_reads else int(os.environ.get('NQ_INSTALL_THREADS', '4'))
         self._direct_lock = threading.Lock()
         self.worker = BoundedReader(self._deferred if self.direct_reads else self.reader.read,
                                     staging_mib * 1024**2, pending, readers)
@@ -162,7 +176,15 @@ class NativeHotRefinements:
     def _record(self, *event):
         if getattr(self, 'record', None) is not None:
             import pickle
-            pickle.dump(event, self.record, protocol=5)
+            # One write per event: the predictor hook thread and the main thread both record.
+            self.record.write(pickle.dumps(event, protocol=5))
+
+    def _record_residency(self, tag):
+        # Hot-policy traces: the slot tables a step will route through (all 42 layers, packed bits), with a
+        # timestamp. Replay tools that only understand reset/preforward/commit skip these events.
+        if getattr(self, 'record', None) is not None and self.banks:
+            resident = np.stack([self.banks[layer].table != COLD_SLOT for layer in range(3, 45)])
+            self._record('resident', tag, time.perf_counter(), np.packbits(resident, axis=-1))
 
     def reset(self):
         self.drain()
@@ -171,6 +193,7 @@ class NativeHotRefinements:
         self._record('reset')
         self.position = 0
         self.wanted = np.zeros((42, 288), dtype=bool)
+        self.priority = None
         self.ready = np.zeros((42, 288), dtype=bool)
         self.order = []
         self.phase = 'prefill'
@@ -217,6 +240,8 @@ class NativeHotRefinements:
                 continue
             if not self.worker.submit(key, self._size(layer, expert), self._reservation(layer, expert)):
                 break
+            if getattr(self, 'record', None) is not None:
+                self.__dict__.setdefault('_submitted', {})[key] = time.perf_counter()
 
     _direct_lock = threading.Lock()  # instances built without __init__ (tests)
 
@@ -239,7 +264,7 @@ class NativeHotRefinements:
         self.reads['decode_worker_seconds'] += elapsed
         started = time.perf_counter()
         installed = bool(self.wanted[target - 3, expert]) and self.banks[target].install(
-            expert, payload, set(np.flatnonzero(self.wanted[target - 3])))
+            expert, payload, set(np.flatnonzero(self.wanted[target - 3])), self._victim_scores(target))
         self.reads['decode_publication_seconds'] += time.perf_counter() - started
         if installed:
             self.reads['installed'] += 1
@@ -269,7 +294,9 @@ class NativeHotRefinements:
             resident = bank.table != COLD_SLOT
             missing[layer - 3, resident] = False
         layers, experts = np.nonzero(missing)
-        priority = self.predictor.loading_priority()[layers, experts]
+        # The same scores rank reads here and choose eviction victims at the next publish (evict='score').
+        self.priority = self.predictor.loading_priority()
+        priority = self.priority[layers, experts]
         order = np.lexsort((experts, layers, -priority))
         self.order = list(zip((layers[order] + 3).tolist(), experts[order].tolist()))
         self._queue()
@@ -285,9 +312,27 @@ class NativeHotRefinements:
             self.worker.poll(self._publish)
             return
         started = time.perf_counter()
+        self._record_residency('publish')
         self.flip()
         self.worker.poll(self._stage)
         self.reads['decode_publication_seconds'] += time.perf_counter() - started
+
+    def _victim_scores(self, layer):
+        priority = getattr(self, 'priority', None)
+        if getattr(self, 'evict', 'fifo') != 'score' or priority is None:
+            return None
+        return priority[layer - 3]
+
+    def flip_for_verify(self):
+        """Activate finished copies before a verify. With verify_wait (and copy-based installs), wait for the
+        copies started at the last publish so their experts join this verify instead of the next one."""
+        wait = getattr(self, 'verify_wait', False) and not getattr(self, 'direct_reads', False) and bool(self._copies)
+        started = time.perf_counter()
+        self.flip(wait=wait)
+        if wait:
+            self.reads['verify_wait_seconds'] = self.reads.get('verify_wait_seconds', 0.0) + time.perf_counter() - started
+        if getattr(self, 'record', None) is not None:
+            self._record_residency('verify')
 
     def flip(self, wait=False):
         """Activate finished background copies (all of them with wait=True). Call between steps."""
@@ -306,6 +351,8 @@ class NativeHotRefinements:
                 raise
             bank.activate(expert, slot)
             self.reads['installed'] += 1
+            if getattr(self, 'record', None) is not None:
+                self._record('activate', bank_layer(self, bank), expert, time.perf_counter())
         self._copies = remaining
 
     def drain(self):
@@ -316,13 +363,17 @@ class NativeHotRefinements:
         payload, count, elapsed = value
         self.reads['decode_bytes'] += count
         self.reads['decode_worker_seconds'] += elapsed
+        if getattr(self, 'record', None) is not None:
+            submitted = self.__dict__.get('_submitted', {}).pop(key, None)
+            self._record('read', target, expert, submitted, time.perf_counter(), count, elapsed,
+                         bool(self.wanted[target - 3, expert]))
         bank = self.banks[target]
         if expert in bank.slots or expert in bank.staging:
             self.reads['installed'] += 1
             return
         slot = None
         if self.wanted[target - 3, expert]:
-            slot = bank.reserve(expert, set(np.flatnonzero(self.wanted[target - 3])))
+            slot = bank.reserve(expert, set(np.flatnonzero(self.wanted[target - 3])), self._victim_scores(target))
         if slot is None:
             self.reads['discarded'] += 1
             return
@@ -347,6 +398,7 @@ class NativeHotRefinements:
         self.wanted = self.predictor.preforward(token, self.position)
         self.seconds += time.perf_counter() - started
         self.cpu_seconds = getattr(self, "cpu_seconds", 0.0) + time.process_time() - cpu
+        self._record('wanted', time.perf_counter(), np.packbits(self.wanted, axis=-1))
         self._plan_reads()
 
     def start_pipelined_decode(self):

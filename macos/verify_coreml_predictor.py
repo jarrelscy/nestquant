@@ -27,7 +27,8 @@ HOME = Path.home()
 
 
 def build(root, fraction, backend):
-    os.environ.setdefault('NQ_FLASH_JT_PARAMS', json.dumps(dict(mix=0.75, hm=4.0, G=1, half_life=64.0)))
+    from hot_policy import jt_parameters_json
+    os.environ.setdefault('NQ_FLASH_JT_PARAMS', jt_parameters_json())
     module, staging = staged_predictor()
     predictor = module.CommittedPredictor(root, preset='spark_256K_U_2630_flat50', device='cpu',
                                           dtype=torch.float32, fixed_fraction=0.2)
@@ -158,6 +159,8 @@ def replay(predictors, events):
     wanted = {}
     for event in events:
         kind = event[0]
+        if kind not in ('reset', 'preforward', 'commit'):
+            continue  # hot-policy trace events (residency, reads, wanted sets)
         if kind == 'commit' and wanted:
             for name, mask in wanted.items():
                 for _, _, ids, w, xn in event[1]:
