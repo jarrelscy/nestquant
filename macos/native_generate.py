@@ -15,7 +15,7 @@ from transformers import AutoTokenizer
 
 import backbone_fast
 from checkpoint import validate
-from decoder import projection_fused, projection_matvec_banked
+from decoder import expert_mlp_fused, projection_fused, projection_matvec_banked
 from metrics import MemoryGuard
 from native_assets import REVISION, fingerprint, paths
 from native_backbone import RoutedPlaceholder, load_prepared
@@ -90,6 +90,13 @@ class PagedExperts(nn.Module):
                 use_refinements = False
                 self._cold_fastpath_calls += 1
         rounded = tokens.astype(mx.float16).astype(mx.float32)
+        if FUSED_MLP and self._decoder_loop == 'window':
+            # Gate and up share launches and the SwiGLU is fused into down's input rotation (same arithmetic).
+            routed = expert_mlp_fused(planes, rounded, route, ids.shape[-1],
+                                      refinements=hot.planes if use_refinements else None,
+                                      refined_route=hot_route if use_refinements else None)
+            return self._finish(x, ids, weights, routed, width, hot, norms if hot is not None else None,
+                                measure and locals())
         rows = mx.broadcast_to(rounded[:, None, :], (tokens.shape[0], ids.shape[-1], width)).reshape(route.size, width)
 
         def project(name, value):
@@ -134,6 +141,25 @@ class PagedExperts(nn.Module):
                 output_eval_wait_seconds=evaluated_at - evaluate_at,
                 call_wall_seconds=evaluated_at - entered)
         return output
+
+
+    def _finish(self, x, ids, weights, routed, width, hot, norms, measured):
+        if measured:
+            raise ValueError('Synchronized diagnostics use the unfused expert path (NQ_FUSED_MLP=0)')
+        routed = routed.reshape(*ids.shape, width)
+        routed = (routed * weights[..., None].astype(mx.float16).astype(mx.float32)).sum(axis=-2)
+        output = routed.astype(x.dtype) + self.shared_experts(x)
+        self._bank.retain(output)
+        if hot is not None:
+            hot.retain(output)
+            if self._hot.phase == 'prefill':
+                mx.eval(output, norms, weights)
+        return output
+
+
+FUSED_MLP = os.environ.get('NQ_FUSED_MLP', '1') != '0'
+# Pipelined decode runs the predictor commit/plan on a thread during the forward build.
+HOOK_THREAD = os.environ.get('NQ_DECODE_HOOK_THREAD', '1') != '0'
 
 
 def load_runtime(root, backbone, archive, rows, guard, hot, full_base=False, base_budget_gib=32, preload_mib_s=0,
@@ -319,6 +345,10 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
         # milliseconds. Collect once afterwards instead.
         gc_was_enabled = gc.isenabled()
         gc.disable()
+        hook_pool = None
+        if HOOK_THREAD:
+            from concurrent.futures import ThreadPoolExecutor
+            hook_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='nestquant-decode-hook')
         for index in range(max_tokens):
             token = greedy_ids[-1] if forced is None else forced[index]
             if forced is None and token in eos:
@@ -328,6 +358,15 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
                 break
             start = time.perf_counter()
             hot.publish()
+            job = None
+            if hook_pool is not None:
+                # The forward's graph build waits on the GPU (MLX bounds the work queued ahead), so the commit
+                # of token t - 1 and the plan for t run on a thread meanwhile instead of after the build.
+                def host(pending=pending, token=token):
+                    if pending is not None:
+                        hot.commit(*pending)
+                    hot.plan(token)
+                job = hook_pool.submit(host)
             t1 = time.perf_counter()
             logits = model(mx.array([[token]]), cache=cache).logits
             trace = hot.take_trace()
@@ -337,9 +376,12 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
             mx.async_eval(logits, [entry.state for entry in cache],
                           [value for layer in trace.values() for value in layer[1:3]])
             t3 = time.perf_counter()
-            if pending is not None:
-                hot.commit(*pending)
-            hot.plan(token)
+            if job is not None:
+                job.result()
+            else:
+                if pending is not None:
+                    hot.commit(*pending)
+                hot.plan(token)
             pending = ([token], 0, trace)
             t4 = time.perf_counter()
             greedy_ids.append(greedy(logits))
@@ -350,11 +392,13 @@ def generate(model, tokenizer, ids, max_tokens, eos, prefill, chunk, hot, guard,
             if forced is not None:
                 replay_steps.append(dict(ready_mask=hot.readiness_digest(), logit_margin=top_margin(logits)))
             guard.check()
+        if hook_pool is not None:
+            hook_pool.shutdown(wait=True)
         if pending is not None:
             hot.commit(*pending)
         if gc_was_enabled:
             gc.enable()
-        gc.collect()
+        gc.collect(1)
         pipeline_phases = {name: sorted(values)[len(values) // 2] if values else 0.0
                            for name, values in phases.items()}
         pipeline_phases.update({name + '_max': max(values) if values else 0.0 for name, values in phases.items()})

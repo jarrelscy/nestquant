@@ -37,6 +37,11 @@ class LockedRefinementReader(RefinementReader):
 
 
 class NativeHotRefinements:
+    # Defaults for instances built without __init__ (tests); __init__ enables background installs.
+    background_installs = False
+    _copies = ()
+    _copy_pool = None
+
     def __init__(self, root, fraction, prefill_rows, budget_gib=4, readers=1, pending=2, staging_mib=64,
                  predictor_backend=None):
         # 'torch' (default) runs jT on the CPU with PyTorch; 'coreml' (or 'coreml:cpu', 'coreml:all') runs it
@@ -47,8 +52,8 @@ class NativeHotRefinements:
             raise ValueError(f'Unknown predictor backend {predictor_backend!r}')
         if type(budget_gib) is not int or not 4 <= budget_gib <= 32:
             raise ValueError('Use a refinement budget between 4 and 32 GiB')
-        if type(readers) is not int or not 1 <= readers <= 8 or type(pending) is not int or not readers <= pending <= 64:
-            raise ValueError('Use one to eight readers and at least one pending read per reader, at most 64')
+        if type(readers) is not int or not 1 <= readers <= 16 or type(pending) is not int or not readers <= pending <= 64:
+            raise ValueError('Use one to sixteen readers and at least one pending read per reader, at most 64')
         self.budget_bytes = budget_gib * 1024**3
         os.environ.setdefault('NQ_FLASH_JT_PARAMS', json.dumps(dict(mix=0.75, hm=4.0, G=1, half_life=64.0)))
         module, self.staging = staged_predictor()
@@ -65,6 +70,11 @@ class NativeHotRefinements:
         self.worker = BoundedReader(self.reader.read, staging_mib * 1024**2, pending, readers)
         self.prefill_rows = prefill_rows
         self.draft_rows_base = False
+        # Decode publication copies finished reads into reserved slots on these threads and flips the slot
+        # tables at the next step boundary, instead of copying on the main thread between steps.
+        self.background_installs = os.environ.get('NQ_BACKGROUND_INSTALLS', '1') != '0'
+        self._copies = []
+        self._copy_pool = None
         self.prefill_max_bytes = 0
         self.banks = {}
         self.position = 0
@@ -126,6 +136,7 @@ class NativeHotRefinements:
             pickle.dump(event, self.record, protocol=5)
 
     def reset(self):
+        self.drain()
         self.worker.discard()
         self.predictor.reset()
         self._record('reset')
@@ -165,7 +176,7 @@ class NativeHotRefinements:
     def _queue(self):
         for key in self.order:
             layer, expert = key
-            if expert in self.banks[layer].slots or key in self.worker.pending:
+            if expert in self.banks[layer].slots or expert in self.banks[layer].staging or key in self.worker.pending:
                 continue
             if not self.worker.submit(key, self._size(layer, expert)):
                 break
@@ -213,8 +224,61 @@ class NativeHotRefinements:
         self._queue()
 
     def publish(self):
-        """Install completed reads. Call only while no queued GPU work uses the refinement banks."""
-        self.worker.poll(self._publish)
+        """Install completed reads. Call only while no queued GPU work uses the refinement banks.
+
+        With background installs, this activates the copies that have finished, then reserves slots for newly
+        completed reads (evicting as install() would) and starts copying them on worker threads. Their table
+        entries change at a later publish() or flip(), so every step reads either the old or the new expert,
+        never a slot being written."""
+        if not self.background_installs:
+            self.worker.poll(self._publish)
+            return
+        started = time.perf_counter()
+        self.flip()
+        self.worker.poll(self._stage)
+        self.reads['decode_publication_seconds'] += time.perf_counter() - started
+
+    def flip(self, wait=False):
+        """Activate finished background copies (all of them with wait=True). Call between steps."""
+        if not self._copies:
+            return
+        remaining = []
+        for bank, expert, slot, future in self._copies:
+            if not (wait or future.done()):
+                remaining.append((bank, expert, slot, future))
+                continue
+            try:
+                future.result()
+            except BaseException:
+                bank.release(expert, slot)
+                self._copies = remaining
+                raise
+            bank.activate(expert, slot)
+            self.reads['installed'] += 1
+        self._copies = remaining
+
+    def drain(self):
+        self.flip(wait=True)
+
+    def _stage(self, key, value):
+        target, expert = key
+        payload, count, elapsed = value
+        self.reads['decode_bytes'] += count
+        self.reads['decode_worker_seconds'] += elapsed
+        bank = self.banks[target]
+        if expert in bank.slots or expert in bank.staging:
+            self.reads['installed'] += 1
+            return
+        slot = None
+        if self.wanted[target - 3, expert]:
+            slot = bank.reserve(expert, set(np.flatnonzero(self.wanted[target - 3])))
+        if slot is None:
+            self.reads['discarded'] += 1
+            return
+        if self._copy_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            self._copy_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='nestquant-install')
+        self._copies = list(self._copies) + [(bank, expert, slot, self._copy_pool.submit(bank.write, slot, payload))]
 
     def plan(self, token):
         """Advance the predictor to the next target token and queue reads, without touching slot buffers.
@@ -383,6 +447,11 @@ class NativeHotRefinements:
         return digest.hexdigest()
 
     def close(self):
+        try:
+            self.drain()
+        finally:
+            if self._copy_pool is not None:
+                self._copy_pool.shutdown(wait=True)
         if getattr(self, '_prefill_pool', None) is not None:
             self._prefill_pool.shutdown(wait=True)
         if getattr(self, 'record', None) is not None:

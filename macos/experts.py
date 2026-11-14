@@ -488,7 +488,9 @@ class RefinementReader:
                 raise ValueError('Invalid refinement plane dtypes')
             if np.any((merged['word'] & 255) == 0):
                 raise ValueError('Invalid zero denominator in refinement block')
-            result[projection] = {name: np.array(value, copy=True) for name, value in merged.items()}
+            # Concatenated planes already own their memory; copy only views into the shard read buffers.
+            result[projection] = {name: value if value.base is None else np.array(value, copy=True)
+                                  for name, value in merged.items()}
         return result, bytes_read, time.perf_counter() - started
 
     def close(self):

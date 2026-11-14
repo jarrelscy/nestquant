@@ -361,48 +361,78 @@ class PackedRefinementBank:
                 self.handles.append(mapping)
         mx.eval([array for planes in self.planes.values() for array in planes.values()])
 
+    @property
+    def staging(self):
+        # expert -> reserved slot whose payload is being written (not yet in the table)
+        return self.__dict__.setdefault('_staging', {})
+
     def install(self, expert, payload, wanted):
-        if expert in self.slots:
+        if expert in self.slots or expert in self.staging:
             return True
-        victim = None
+        slot = self.reserve(expert, wanted)
+        if slot is None:
+            return False
+        try:
+            self.write(slot, payload)
+        except BaseException:
+            self.release(expert, slot)
+            raise
+        self.activate(expert, slot)
+        return True
+
+    def reserve(self, expert, wanted):
+        """Take a slot for `expert`: a free one, else the slot of a resident expert outside `wanted`, which
+        leaves the slot table at once. Returns None if the expert is resident or staged, or no slot is free.
+
+        Call between steps (no queued GPU work may read the table or the victim's slot). The slot is then
+        referenced by no table, so write() may fill it from any thread while later steps run, and activate()
+        publishes it at a later step boundary."""
+        if expert in self.slots or expert in self.staging:
+            return None
         if self.available:
-            slot = self.available[-1]
+            slot = self.available.pop()
         else:
             victim = next((key for key in self.slots if key not in wanted), None)
             if victim is None:
-                return False
-            slot = self.slots[victim]
-        self.finish()
-        if victim is None:
-            self.available.pop()
-        else:
-            del self.slots[victim]
+                return None
+            self.finish()
+            slot = self.slots.pop(victim)
             self.table[victim] = self.COLD_SLOT
             self._device_table = None
-        try:
-            for name, fields in self.host.items():
-                if set(payload[name]) - set(fields):
-                    raise ValueError('Unexpected refinement plane')
-                for field, storage in fields.items():
-                    value = payload[name].get(field)
-                    target = storage[slot]
-                    if field == 'lrU4':
-                        target.fill(0)
-                        if value is not None:
-                            if value.ndim != 2 or value.shape[0] > target.shape[0] or value.shape[1] != target.shape[1]:
-                                raise ValueError('Unexpected low-rank refinement shape')
-                            np.copyto(target[:value.shape[0]], value, casting='no')
-                    elif value is None or value.shape != target.shape:
-                        raise ValueError('Missing or malformed refinement plane')
-                    else:
-                        np.copyto(target, value, casting='no')
-        except BaseException:
-            self.available.append(slot)
-            raise
+        self.staging[expert] = slot
+        return slot
+
+    def write(self, slot, payload):
+        """Copy one refinement payload into a reserved slot (host memory only; safe off the main thread)."""
+        for name, fields in self.host.items():
+            if set(payload[name]) - set(fields):
+                raise ValueError('Unexpected refinement plane')
+            for field, storage in fields.items():
+                value = payload[name].get(field)
+                target = storage[slot]
+                if field == 'lrU4':
+                    target.fill(0)
+                    if value is not None:
+                        if value.ndim != 2 or value.shape[0] > target.shape[0] or value.shape[1] != target.shape[1]:
+                            raise ValueError('Unexpected low-rank refinement shape')
+                        np.copyto(target[:value.shape[0]], value, casting='no')
+                elif value is None or value.shape != target.shape:
+                    raise ValueError('Missing or malformed refinement plane')
+                else:
+                    np.copyto(target, value, casting='no')
+
+    def activate(self, expert, slot):
+        """Publish a written slot. Call between steps, like reserve()."""
+        if self.staging.pop(expert) != slot:
+            raise RuntimeError('Refinement slot was not reserved for this expert')
         self.slots[expert] = slot
         self.table[expert] = slot
         self._device_table = None
-        return True
+
+    def release(self, expert, slot):
+        if self.staging.pop(expert) != slot:
+            raise RuntimeError('Refinement slot was not reserved for this expert')
+        self.available.append(slot)
 
     def copy_from(self, other, expert, wanted):
         """Install an expert's refinement from another bank of the same layer, without an SSD read."""

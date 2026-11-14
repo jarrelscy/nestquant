@@ -223,6 +223,31 @@ class PackedExpertBankTest(unittest.TestCase):
         self.assertTrue(bank.install(20, {'gate': first}, {20}))
         self.assertEqual(bank.slots, {20: 0})
 
+    def test_staged_refinement_is_published_only_on_activation(self):
+        geometry = dict(k=4, n=8, tk=1, tn=1, res_rule={'K': 2})
+        bank = PackedRefinementBank({'gate': ({}, geometry)}, 2)
+        payload = {'gate': {'p4': np.full((512,), 5, dtype=np.uint8), 'word': np.ones((1,), dtype=np.int32),
+                            'suh4': np.ones((4,), dtype=np.float16), 'svh4': np.ones((8,), dtype=np.float16)}}
+        self.assertTrue(bank.install(10, payload, {10}))
+        self.assertTrue(mx.array_equal(bank.device_table()[10], mx.array(bank.slots[10], dtype=mx.uint32)).item())
+        slot = bank.reserve(20, {10, 20})
+        self.assertEqual(slot, 1)
+        self.assertIsNone(bank.reserve(20, {10, 20}))
+        self.assertTrue(bank.install(20, payload, {10, 20}))    # already staged: no second slot
+        self.assertNotIn(20, bank.slots)
+        self.assertEqual(int(bank.device_table()[20].item()), PackedRefinementBank.COLD_SLOT)
+        bank.write(slot, {'gate': {**payload['gate'], 'p4': np.full((512,), 9, dtype=np.uint8)}})
+        bank.activate(20, slot)
+        self.assertEqual(bank.slots, {10: 0, 20: 1})
+        self.assertEqual(int(bank.device_table()[20].item()), 1)
+        self.assertEqual(bank.planes['gate']['p4'][1].sum().item(), 512 * 9)
+        # Full bank: the next reservation evicts an unwanted expert, which leaves the table immediately.
+        self.assertEqual(bank.reserve(30, {20, 30}), 0)
+        self.assertNotIn(10, bank.slots)
+        self.assertEqual(int(bank.device_table()[10].item()), PackedRefinementBank.COLD_SLOT)
+        bank.release(30, 0)
+        self.assertEqual(bank.available, [0])
+
 
 if __name__ == '__main__':
     unittest.main()

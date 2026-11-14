@@ -161,6 +161,11 @@ def target_layers(drafter):
 
 
 BATCHED = None   # native_prefill.BatchedPrefill when --batched-prefill is set
+# Reordered round loop (fast_rounds in dflash_decode); NQ_DFLASH_LOOP=mlx selects mlx-vlm's generator loop.
+# Refinement reader threads (SSD reads are latency bound; 4 threads delivered ~0.35 GiB/s each).
+READERS = int(__import__('os').environ.get('NQ_REFINEMENT_READERS', '8'))
+GC_GENERATION = int(__import__('os').environ.get('NQ_GC_GENERATION', '1'))
+FAST_LOOP = __import__('os').environ.get('NQ_DFLASH_LOOP', 'fast') != 'mlx'
 
 
 class AdaptiveBlocks:
@@ -310,7 +315,8 @@ def seed_hot_from_prompt(hot, salience, weight=SEED_WEIGHT):
 
 def refinement_supply(hot, decode_seconds):
     """Separate prediction misses from delivery misses for the hot set during decode."""
-    fractions = hot.metrics.report()['call_fractions'] if hasattr(hot, 'metrics') else {}
+    metrics = getattr(hot, 'metrics', None)
+    fractions = metrics.report()['call_fractions'] if metrics is not None else {}
     wanted = fractions.get('wanted', 0.0)
     delivered = fractions.get('wanted_ready', 0.0)
     read_bytes = hot.reads.get('decode_bytes', 0)
@@ -394,7 +400,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
     gc.disable()
     start = round_start = time.perf_counter()
     process_cpu_start = time.process_time()
-    predictor_start = (hot.seconds, hot.cpu_seconds)
+    predictor_start = (getattr(hot, 'seconds', 0.0), getattr(hot, 'cpu_seconds', 0.0))
     original_next = dflash_loop._dflash_next_block_size
     original_verify = dflash_loop._dflash_verify_greedy
     last_captured = []
@@ -414,7 +420,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
     if record_hidden:
         dflash_loop._dflash_verify_greedy = recording_verify
 
-    def finish_round(accepted):
+    def finish_round(accepted, committed=None):
         # The round fed [previous] + its first `accepted` drafts through the target cache.
         nonlocal previous, current, pending_hook, hook_wait, round_start, rounds_seen
         rounds_seen += 1
@@ -422,9 +428,10 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         round_times.append(now - round_start)
         if adaptive is not None and getattr(drafter, 'draft_lens', None):
             adaptive.record_round(int(drafter.draft_lens[-1]) + 1, now - round_start)
-        committed = ([previous] + current)[:accepted + 1]
+        if committed is None:
+            committed = ([previous] + current)[:accepted + 1]
         committed_ids.extend(committed)
-        if record_hidden:
+        if record_hidden and last_captured:
             rows = mx.concatenate(last_captured[0], axis=-1)[:, :len(committed)]
             mx.async_eval(rows)
             committed_hidden.append(rows)
@@ -435,7 +442,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         ids_rows = [entry[0].reshape(-1) for entry in trace.values()]
         unique_rows.append(sum(len(set(row.tolist())) for row in ids_rows) / len(ids_rows))
         between['trace'] += time.perf_counter() - t_trace
-        previous, current = current[-1], []
+        previous, current = (current[-1] if current else previous), []
         # Commit and plan touch only host state, so they overlap the next round's draft and verify.
         # Finished refinement reads are installed here, after the previous hook has completed.
         if pending_hook is not None:
@@ -456,8 +463,102 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         between['guard'] += time.perf_counter() - t_guard
         round_start = time.perf_counter()
 
+    def emit(token):
+        # Record one output token; returns True once generation should stop.
+        nonlocal output_count, stopped
+        generated.append(token)
+        current.append(token)
+        if stopped is None:
+            if token in eos:
+                output_count, stopped = len(generated), 'eos'
+            elif should_stop is not None and should_stop(generated):
+                output_count, stopped = len(generated), 'stop'
+            if on_token is not None:
+                on_token(generated)
+        return stopped is not None
+
+    def fast_rounds():
+        """mlx-vlm's greedy `_dflash_rounds` with the same drafts, verifies and cache transactions, reordered
+        so the GPU is not idle while the host does round bookkeeping: the next draft is launched as soon as
+        the walk has found the bonus token, and the cache commit, token emission (streaming, stop checks),
+        trace readback, refinement publication and predictor hook run while the drafter executes. The
+        verify of the next round is then encoded behind it."""
+        nonlocal rounds_seen
+        lm = model.language_model if hasattr(model, 'language_model') else model
+        target_ids = list(drafter.config.target_layer_ids)
+        block_total = dflash_loop._dflash_block_total(drafter, block_size)
+        choose_ceiling = getattr(drafter, 'choose_block_ceiling', None)
+        if callable(choose_ceiling):
+            block_total = choose_ceiling(int(hidden.shape[1]), block_total)
+        initial = getattr(drafter, 'dflash_initial_block_size', None)
+        choose_initial = getattr(drafter, 'choose_initial_block_size', None)
+        if callable(choose_initial):
+            initial = choose_initial(int(hidden.shape[1]), block_total)
+        draft_cache = drafter.reset(model)
+        stream = dflash_loop.generation_stream
+        with mx.stream(stream):
+            dflash_loop._reserve_dflash_target_cache(cache, block_total)
+        draft_fn = getattr(drafter, 'draft_block_greedy', drafter.draft_block)
+        sampler = lambda value: value.argmax(axis=-1)
+
+        def launch(bonus, context, emitted):
+            bs = dflash_loop._dflash_next_block_size(drafter, block_total, max_tokens - emitted + 1, initial)
+            if bs <= 1:
+                return bs, None
+            draft = draft_fn(bonus, context, draft_cache, bs, sampler, mx.int32)
+            mx.async_eval(draft)
+            return bs, draft
+
+        emitted, bonus, context = 1, first, hidden
+        bs, draft = launch(bonus, context, emitted)
+        while draft is not None:
+            state = None
+            # Refinement copies started at the last publish that have finished by now join this verify.
+            hot.flip()
+            try:
+                with mx.stream(stream):
+                    verify_input = mx.concatenate([mx.array([[bonus]], dtype=mx.int32), draft], axis=1)
+                    captured, state, target = dflash_loop._dflash_verify_greedy(lm, verify_input, cache, target_ids,
+                                                                                sampler)
+                    verified_hidden = mx.concatenate(captured, axis=-1)
+                # The routing trace feeds only the predictor; evaluating it with the verify keeps its readback
+                # from waiting behind the next draft.
+                trace_arrays = [value for entry in hot.traces.get(hot.chunk_index, {}).values() for value in entry]
+                mx.async_eval(target, verified_hidden, trace_arrays)
+                draft_row = draft.reshape(-1).tolist()
+                accepted, new_tokens = dflash_loop._speculative_walk(draft, target, max_tokens - emitted)
+                dflash_loop._record_speculative_round(drafter, accepted, bs - 1)
+                context = verified_hidden[:, :accepted + 1] if accepted < bs - 1 else verified_hidden
+                committed = [bonus] + draft_row[:accepted]
+                bonus = new_tokens[-1] if new_tokens else bonus
+                after = emitted + len(new_tokens)
+                ends = after >= max_tokens or any(token in eos for token in new_tokens)
+                bs_next, draft = (None, None) if ends else launch(bonus, context, after)
+                with mx.stream(stream):
+                    dflash_loop.commit_speculative_round(lm, cache, state, accepted, bs)
+                state = None
+            except BaseException:
+                from mlx_vlm.speculative.cache_state import abort_speculative_round
+                abort_speculative_round(state)
+                raise
+            if record_hidden:
+                last_captured[:] = [[context]]
+            stop = False
+            for token in new_tokens:
+                stop = emit(token) or stop
+                if stop:
+                    break
+            emitted = after
+            finish_round(accepted, committed)
+            if stop:
+                break
+            bs = bs_next
+
     try:
-        if stopped is None and max_tokens > 1:
+        if stopped is None and max_tokens > 1 and FAST_LOOP and not hasattr(drafter, 'prepare_target_hidden'):
+            rounds = True
+            fast_rounds()
+        elif stopped is None and max_tokens > 1:
             rounds = dflash_loop._dflash_rounds(model, drafter, cache, hidden, first_bonus=first,
                                                 max_tokens=max_tokens, sampler=lambda value: value.argmax(axis=-1),
                                                 draft_block_size=block_size, greedy_sampling=True)
@@ -465,15 +566,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                 if last_yield is not None:
                     between['generator_gap'] += time.perf_counter() - last_yield
                 token = int(token)
-                generated.append(token)
-                current.append(token)
-                if stopped is None:
-                    if token in eos:
-                        output_count, stopped = len(generated), 'eos'
-                    elif should_stop is not None and should_stop(generated):
-                        output_count, stopped = len(generated), 'stop'
-                    if on_token is not None:
-                        on_token(generated)
+                emit(token)
                 accepted = int(drafter.accept_lens[-1]) if len(drafter.accept_lens) > rounds_seen else -1
                 if len(current) == accepted + 1:
                     finish_round(accepted)
@@ -497,7 +590,9 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         dflash_loop._dflash_verify_greedy = original_verify
         if gc_enabled:
             gc.enable()
-        gc.collect()
+        # Young generations only: a full collection walks every long-lived object of the runtime (~0.8 s per
+        # request). Older cycles are left to the interpreter's own full collections.
+        gc.collect(GC_GENERATION)
     cleanup_seconds = time.perf_counter() - decode_end
     decode = decode_end - start
     hot.traces.clear()
@@ -523,9 +618,9 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                 refinement_installs=hot.reads['installed'], publication_seconds=hot.reads['decode_publication_seconds'],
                 ready_call_fraction=hot.report()['coverage']['call_fractions']['ready'],
                 refinement_supply=refinement_supply(hot, decode),
-                predictor_backend=hot.predictor_backend, decode_process_cpu_seconds=process_cpu,
-                decode_predictor_seconds=hot.seconds - predictor_start[0],
-                decode_predictor_cpu_seconds=hot.cpu_seconds - predictor_start[1])
+                predictor_backend=getattr(hot, 'predictor_backend', None), decode_process_cpu_seconds=process_cpu,
+                decode_predictor_seconds=getattr(hot, 'seconds', 0.0) - predictor_start[0],
+                decode_predictor_cpu_seconds=getattr(hot, 'cpu_seconds', 0.0) - predictor_start[1])
 
 
 def block_generate(model, drafter, ids, max_tokens, eos, hot, guard, block_size):
@@ -580,7 +675,7 @@ def main():
     torch.set_num_threads(4)
     guard = MemoryGuard(98, 0.8)
     guard.allowed_pressure = (1, 2)
-    hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, 4, 32, 512,
+    hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, READERS, 48, 512,
                                predictor_backend=args.predictor_backend)
     model, banks = ng.load_runtime(args.model, args.backbone, args.archive, [288] * 42, guard, hot, True, 56)
     global BATCHED

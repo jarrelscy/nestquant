@@ -291,9 +291,47 @@ LANE_POSITIONS = 16
 LOAD_MODE = 'direct_u32'
 
 
+# Integer arithmetic variants of the spark decode. All produce identical integer results (checked in
+# test_window_decoder); they differ only in which instructions the compiler emits. 'mul32' is the original.
+SUM_MODE = 'mul'      # 'mul': (p * 0x10001) >> 16 sums the two 16-bit lanes; 'add': (p & 0xFFFF) + (p >> 16)
+HASH_MODE = 'mul32'   # 'mul32': s * 0x83DCD12D; 'mul24': two 24-bit multiplies (s < 2^16)
+XV_FLOAT = False      # keep each lane's inputs in float registers (converted once at load) instead of fp16
+MAD_MODE = 'mul32'    # refined combination mb * sb + n * sr + c: 'mul32' or 'mad24' (all operands < 2^24)
+
+
+def _hash(s):
+    if HASH_MODE == 'mul24':
+        return f'(mul24({s}, 0xDCD12Du) + (mul24({s}, 0x83u) << 24))'
+    return f'{s} * 0x83DCD12Du'
+
+
+def _sum_lo(p):
+    if SUM_MODE == 'add':
+        return f'(({p} & 0xFFFFu) + ({p} >> 16))'
+    return f'(({p} * 0x00010001u) >> 16)'
+
+
+def _sum_hi(p):
+    if SUM_MODE == 'add':
+        return f'((({p} & 0xFFFFu) + ({p} >> 16)) << 16)'
+    return f'(({p} * 0x00010001u) & 0xFFFF0000u)'
+
+
+def _int_suffix():
+    variant = (SUM_MODE, HASH_MODE, MAD_MODE)
+    suffix = '' if variant == ('mul', 'mul32', 'mul32') else '_' + '_'.join(variant)
+    return suffix + ('_xf' if XV_FLOAT else '')
+
+
+def _mad(a, b, c):
+    if MAD_MODE == 'mad24':
+        return f'mad24({a}, {b}, {c})'
+    return f'{a} * {b} + {c}'
+
+
 @lru_cache(maxsize=None)
 def _window_kernel(base_k: float, residual_k: float, style: str = 'window', positions: int = 8,
-                   specialized_members=(1, 1)):
+                   specialized_members=(1, 1), pair: bool = False, only: int = 0):
     """Banked matvec where each lane decodes `positions` (8 or 16) consecutive ring positions from one bit window.
 
     The inline kernel gives each lane positions lane + 32 * j, so every weight needs three byte
@@ -393,19 +431,19 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
                 sr1 = state('residual_window', 'residual_shift', rka, rmask, j + 1)
                 return f"""
             {{
-                uint h0 = {sb0} * 0x83DCD12Du, h1 = {sb1} * 0x83DCD12Du;
+                uint h0 = {_hash(sb0)}, h1 = {_hash(sb1)};
                 uint p0 = (h0 & 0x00FF00FFu) + ((h0 >> 8) & 0x00FF00FFu);
                 uint p1 = (h1 & 0x00FF00FFu) + ((h1 >> 8) & 0x00FF00FFu);
                 half2 w;
                 if (refined) {{
-                    uint g0 = {sr0} * 0x83DCD12Du, g1 = {sr1} * 0x83DCD12Du;
+                    uint g0 = {_hash(sr0)}, g1 = {_hash(sr1)};
                     uint q0 = (g0 & 0x00FF00FFu) + ((g0 >> 8) & 0x00FF00FFu);
                     uint q1 = (g1 & 0x00FF00FFu) + ((g1 >> 8) & 0x00FF00FFu);
-                    uint t0 = mb * ((p0 * 0x00010001u) >> 16) + n * ((q0 * 0x00010001u) >> 16) + 0x640080u;
-                    uint t1 = mb * ((p1 * 0x00010001u) >> 16) + n * ((q1 * 0x00010001u) >> 16) + 0x640080u;
+                    uint t0 = {_mad('mb', _sum_lo('p0'), _mad('n', _sum_lo('q0'), '0x640080u'))};
+                    uint t1 = {_mad('mb', _sum_lo('p1'), _mad('n', _sum_lo('q1'), '0x640080u'))};
                     w = fma(as_type<half2>(((t0 >> 8) & 0xFFFFu) | ((t1 << 8) & 0xFFFF0000u)), a2, b2);
                 }} else {{
-                    uint bits = (((p0 * 0x00010001u) >> 16) | ((p1 * 0x00010001u) & 0xFFFF0000u)) + 0x64006400u;
+                    uint bits = ({_sum_lo('p0')} | {_sum_hi('p1')}) + 0x64006400u;
                     w = fma(as_type<half2>(bits), a2, b2);
                 }}
                 float wa = float(w.x), wb = float(w.y);
@@ -448,6 +486,7 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
         uint gbase = row * (MAXR + 1u);
         uint count = MAXR > 1 ? groups[gbase] : 1u;
         if (count == 0) return;
+        /*ONLY_SPLIT*/
         // {positions} consecutive ring positions per lane{'' if positions == 8 else '; lanes 0-15 take even chunks, 16-31 odd'}.
         uint p0 = {'lane * 8u' if positions == 8 else '(lane % 16u) * 16u'};
         uint kb = {'16u * (lane % 8u) + 2u * (lane / 8u)' if positions == 8 else '32u * (lane % 4u) + 2u * ((lane % 16u) / 4u)'};
@@ -512,7 +551,7 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
             float b1024 = fma(a, 1024.0f, b);
             half2 a2 = half2(half(a)), b2 = half2(half(b));
             // Inputs stay in their storage precision (fp16 for XHALF) until use: half the registers.
-            metal::conditional_t<XHALF, half, float> xv[MAXR][{positions // 2}];
+            {'float' if XV_FLOAT else 'metal::conditional_t<XHALF, half, float>'} xv[MAXR][{positions // 2}];
             for (uint m = 0; m < MAXR; ++m) {{
                 if (m < count) {{
                     uint member = MAXR > 1 ? groups[gbase + 1u + m] : row;
@@ -580,13 +619,54 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
         refined_cases = specialized(section.replace('(refined)', '(true)'), spec_refined)
     source = (preamble + '    if (refined) {\n' + refined_cases + '    } else {\n'
               + specialized(section.replace('(refined)', '(false)'), spec_base) + '    }\n')
+    name = (f'nq_matvec_{style}_{LOAD_MODE}_{int(base_k * 10000)}_{int(residual_k * 10000)}_m{spec_base}{spec_refined}'
+            f'_p{positions}' + _int_suffix())
+    inputs = ['base', 'residual', 'words', 'variants', 'inverse', 'x', 'expert_ids', 'refined_ids', 'groups', 'ac_table']
+    outputs = ['partial']
+    # only=1: refined rows only; only=2: base rows only, copying refined rows from `prior` (the only=1 output).
+    # Each launch then carries only its own path's registers.
+    split = {0: '', 1: '        if (!refined) return;\n', 2: '        if (refined) {\n            // The refined-only launch already wrote these rows: copy its partial sums through.\n            for (uint m = 0; m < count; ++m) {\n                uint member = MAXR > 1 ? groups[gbase + 1u + m] : row;\n                uint offset = ((member * TN + strip) * (TK / CHUNKS) + chunk_group) * 16u + g;\n                if (thread_index_in_simdgroup == 0) {\n                    partial[offset] = prior[offset];\n                    partial[offset + 8] = prior[offset + 8];\n                }\n            }\n            return;\n        }\n'}[only]
+    source = source.replace('        /*ONLY_SPLIT*/\n', split)
+    if only:
+        name += f'_only{only}'
+    if only == 2:
+        inputs = inputs + ['prior']
+    if pair:
+        # Two projections of the same rows (gate and up) in one launch: grid z selects the planes, the input
+        # and the output; everything else (routing, groups, geometry) is shared. Same arithmetic per row.
+        own = ('base', 'residual', 'words', 'variants', 'x', 'partial') + (('prior',) if only == 2 else ())
+        prefix = '    uint pair_z = threadgroup_position_in_grid.z;\n'
+        for item in own:
+            prefix += f'    auto {item} = pair_z ? {item}_u : {item}_g;\n'
+            if f'{item}_shape' in source:
+                prefix += f'    auto {item}_shape = {item}_g_shape;\n'
+        source = prefix + source
+        inputs = [f'{item}_{suffix}' if item in own else item for item in inputs
+                  for suffix in (('g', 'u') if item in own else ('',))]
+        outputs = ['partial_g', 'partial_u']
+        name += '_pair'
     return mx.fast.metal_kernel(
-        name=f'nq_matvec_{style}_{LOAD_MODE}_{int(base_k * 10000)}_{int(residual_k * 10000)}_m{spec_base}{spec_refined}_p{positions}',
-        input_names=['base', 'residual', 'words', 'variants', 'inverse', 'x', 'expert_ids', 'refined_ids', 'groups',
-                     'ac_table'],
-        output_names=['partial'], source=source, header=HEADER + WINDOW_HEADER,
+        name=name, input_names=inputs, output_names=outputs, source=source, header=HEADER + WINDOW_HEADER,
         compile_options={'math_mode': 'safe'},
     )
+
+
+SPLIT_PRECISION = __import__('os').environ.get('NQ_SPLIT_PRECISION', '0') != '0'
+
+
+SPLIT_MIN_ROWS = 9   # split only verify blocks; single-token decode (8 rows) measured no gain
+
+
+def _window(base_k, residual_k, positions, pair, inputs, mixed, **call):
+    """Run the window matvec; with SPLIT_PRECISION and mixed rows, as a refined-only launch followed by a
+    base-only launch (identical per-row arithmetic, smaller register footprint per launch)."""
+    if not (SPLIT_PRECISION and mixed and call['grid'][1] >= SPLIT_MIN_ROWS):
+        return _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS), pair)(
+            inputs=inputs, **call)
+    first = _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS), pair, 1)(
+        inputs=inputs, **call)
+    return _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS), pair, 2)(
+        inputs=inputs + list(first), **call)
 
 
 WINDOW_HEADER = r'''
@@ -858,10 +938,9 @@ def projection_fused(planes: dict, meta: dict, x: mx.array, route: mx.array, *,
     rotated = prepared[0]
     groups = prepared[1] if grouped else route
     positions = LANE_POSITIONS if chunks % 2 == 0 else 8
-    partial = _window_kernel(meta['base_K'], meta['res_rule']['K'], DECODE_STYLE, positions,
-                             tuple(SPECIALIZED_MEMBERS))(
-        inputs=[planes['base'], residual, words, planes['var'], _matrix_indices(tk, tn, meta['shard_axis'])[0],
-                rotated, route, refined, groups, _ac_table()],
+    partial = _window(meta['base_K'], meta['res_rule']['K'], positions, False,
+        [planes['base'], residual, words, planes['var'], _matrix_indices(tk, tn, meta['shard_axis'])[0],
+         rotated, route, refined, groups, _ac_table()], mixed,
         template=[('LEVEL', 2), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
                   ('PACKED_VAR', var_bits == 1), ('CHUNKS', chunks), ('MAXR', max_rows),
                   ('SHARD_N', meta['shard_axis'] == 'n'), ('XHALF', True), ('AC_TABLE', USE_AC_TABLE)],
@@ -1027,3 +1106,213 @@ def projection_matmul(planes: dict, meta: dict, x: mx.array, level: int) -> mx.a
         if level == 4:
             result = result + low @ planes['lrU4'].astype(mx.float32)
     return result
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Fused routed-expert MLP: gate and up in shared launches, SwiGLU fused into the down projection's input rotation.
+# Five launches per MoE layer instead of fifteen; every value is computed by the same arithmetic as
+# projection_fused + PagedExperts' SwiGLU (checked bit-for-bit in test_window_decoder).
+
+_FWHT_NODECL = _FWHT.replace('    threadgroup float buf[128];\n', '', 1)
+assert _FWHT_NODECL != _FWHT
+
+
+def _swiglu_source(gate, up, out):
+    # PagedExperts: g = minimum(gate, 10); u = clip(up, -10, 10); out = g * sigmoid(g) * u, with MLX's NaN
+    # propagation (Minimum/Maximum return x when x is NaN) and MLX's sigmoid.
+    return f"""
+    float swi_g = metal::isnan({gate}) ? {gate} : ({gate} < 10.0f ? {gate} : 10.0f);
+    float swi_u = metal::isnan({up}) ? {up} : ({up} > -10.0f ? {up} : -10.0f);
+    swi_u = metal::isnan(swi_u) ? swi_u : (swi_u < 10.0f ? swi_u : 10.0f);
+    float swi_y = 1 / (1 + metal::precise::exp(metal::abs(swi_g)));
+    float swi_s = (swi_g < 0) ? swi_y : 1 - swi_y;
+    float {out} = (swi_g * swi_s) * swi_u;
+"""
+
+
+@lru_cache(maxsize=None)
+def _prep_pair_kernel():
+    """_prep_kernel(grouped=True) for gate and up at once (grid z), reading each row's token directly."""
+    source = """
+    uint t = thread_position_in_threadgroup.x;
+    uint block = threadgroup_position_in_grid.x;
+    uint row = threadgroup_position_in_grid.y;
+    uint z = threadgroup_position_in_grid.z;
+    auto base_su = z ? base_su_u : base_su_g;
+    auto ref_su = z ? ref_su_u : ref_su_g;
+    uint e = min(route[row], uint(base_su_g_shape[0]) - 1u);
+    uint slot = MIXED ? refined[row] : 0xffffffffu;
+    bool ready = MIXED && slot < uint(ref_su_g_shape[0]);
+    uint k = block * 128u + t;
+    float su = ready ? float(ref_su[slot * K + k]) : float(base_su[e * K + k]);
+    float value = x[(row / E) * K + k] * su;
+""" + _FWHT + """
+    (z ? rotated_u : rotated_g)[row * K + k] = half(value);
+    if (GROUPED && z == 0 && block == 0 && t == 0) {
+""" + _GROUPS + """
+    }
+"""
+    return mx.fast.metal_kernel(
+        name='nq_prep_pair', input_names=['x', 'base_su_g', 'ref_su_g', 'base_su_u', 'ref_su_u', 'route', 'refined',
+                                          'variants', 'words'],
+        output_names=['rotated_g', 'rotated_u', 'groups'], source=source)
+
+
+def _post_body(tag, rank):
+    """The _post_kernel computation for one projection, leaving its masked output in `result_{tag}`."""
+    low_rank = '' if rank == 0 else f"""
+    float low_{tag}[{rank}];
+    for (uint r = 0; r < {rank}u; ++r) {{
+        float dot = 0.0f;
+        for (uint k = t; k < K; k += 128u)
+            dot += x[token * K + k] * float(lrV_{tag}[(e * {rank}u + r) * K + k]);
+        dot = simd_sum(dot);
+        if ((t & 31u) == 0) lows_{tag}[r][t / 32u] = dot;
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint r = 0; r < {rank}u; ++r) {{
+        low_{tag}[r] = lows_{tag}[r][0] + lows_{tag}[r][1] + lows_{tag}[r][2] + lows_{tag}[r][3];
+        result += low_{tag}[r] * float(lrU2_{tag}[(e * {rank}u + r) * N + n]);
+    }}
+    if (ready) {{
+        for (uint r = 0; r < {rank}u; ++r)
+            result += low_{tag}[r] * float(lrU4_{tag}[(slot * {rank}u + r) * N + n]);
+    }}
+"""
+    return f"""
+    {{
+    float value = 0.0f;
+    for (uint g = 0; g < G; ++g)
+        value += partial_{tag}[((row * TN + strip) * G + g) * 16u + j];
+""" + _FWHT_NODECL + f"""
+    float sv = ready ? float(ref_sv_{tag}[slot * N + n]) : float(base_sv_{tag}[e * N + n]);
+    float result = value * sv;
+""" + low_rank + f"""
+    result_{tag} = valid ? result : NAN;
+    }}
+"""
+
+
+@lru_cache(maxsize=None)
+def _post_pair_kernel(rank_g: int, rank_u: int):
+    """_post_kernel for gate and up, the SwiGLU, and _prep_kernel's input rotation for down, per 128 outputs.
+
+    Gate/up output n is down input k = n, so one threadgroup finishes a 128-wide block of all three."""
+    source = """
+    uint t = thread_position_in_threadgroup.x;
+    uint block = threadgroup_position_in_grid.x;
+    uint row = threadgroup_position_in_grid.y;
+    uint token = row / E;
+    uint raw = route[row];
+    uint depth = uint(base_sv_g_shape[0]);
+    uint e = min(raw, depth - 1u);
+    uint slot = MIXED ? refined[row] : 0xffffffffu;
+    bool ready = MIXED && slot < uint(ref_sv_g_shape[0]);
+    bool valid = raw < depth && (!MIXED || slot == 0xffffffffu || ready);
+    uint n = block * 128u + t;
+    uint strip = n / 16u, j = n % 16u;
+    threadgroup float buf[128];
+""" + (f"    threadgroup float lows_g[{rank_g}][4];\n" if rank_g else '') + (
+        f"    threadgroup float lows_u[{rank_u}][4];\n" if rank_u else '') + """
+    float result_g, result_u;
+""" + _post_body('g', rank_g) + _post_body('u', rank_u) + _swiglu_source('result_g', 'result_u', 'act') + """
+    act_out[row * N + n] = act;
+    uint ed = min(raw, uint(base_su_d_shape[0]) - 1u);
+    bool ready_d = MIXED && slot < uint(ref_su_d_shape[0]);
+    float su = ready_d ? float(ref_su_d[slot * N + n]) : float(base_su_d[ed * N + n]);
+    float value = act * su;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+""" + _FWHT_NODECL + """
+    rotated_d[row * N + n] = half(value);
+"""
+    names = ['partial_g', 'partial_u', 'base_sv_g', 'ref_sv_g', 'base_sv_u', 'ref_sv_u', 'base_su_d', 'ref_su_d',
+             'route', 'refined', 'x']
+    if rank_g:
+        names += ['lrV_g', 'lrU2_g', 'lrU4_g']
+    if rank_u:
+        names += ['lrV_u', 'lrU2_u', 'lrU4_u']
+    return mx.fast.metal_kernel(name=f'nq_post_pair_r{rank_g}_{rank_u}', input_names=names,
+                                output_names=['act_out', 'rotated_d'], source=source)
+
+
+def expert_mlp_fused(planes: dict, tokens: mx.array, route: mx.array, experts_per_token: int, *,
+                     refinements: dict | None = None, refined_route: mx.array | None = None) -> mx.array:
+    """Routed-expert MLP for `route` (experts_per_token rows per token): down(g * sigmoid(g) * u) with
+    g = min(gate(x), 10), u = clip(up(x), -10, 10), as PagedExperts computes it from projection_fused.
+
+    planes: name -> (base planes, meta) for 'gate', 'up', 'down'; refinements: name -> refinement planes.
+    tokens: (tokens, K) float32 inputs already rounded to fp16. Returns (rows, n_down) float32."""
+    rows = route.size
+    gate_planes, gate_meta = planes['gate']
+    up_planes, up_meta = planes['up']
+    down_planes, down_meta = planes['down']
+    if (gate_meta['k'], gate_meta['n'], gate_meta['tk'], gate_meta['tn'], gate_meta['shard_axis'], gate_meta['base_K'],
+            gate_meta['res_rule']['K'], gate_meta.get('var_bits', 8)) != (
+            up_meta['k'], up_meta['n'], up_meta['tk'], up_meta['tn'], up_meta['shard_axis'], up_meta['base_K'],
+            up_meta['res_rule']['K'], up_meta.get('var_bits', 8)) or down_meta['k'] != gate_meta['n']:
+        raise ValueError('Gate and up projections must share a geometry that feeds down')
+    mixed = refinements is not None
+    refined = refined_route if mixed else route
+    tk, tn, k, n = gate_meta['tk'], gate_meta['tn'], gate_meta['k'], gate_meta['n']
+    common = [('MIXED', mixed)]
+    ref = (lambda name, field, fallback: refinements[name][field] if mixed else planes[name][0][fallback])
+    max_rows = max(1, min(4 if rows <= 64 else 8, rows // 8)) if GROUP_SHARED_EXPERTS else 1
+    if GROUP_MAXR_OVERRIDE is not None and GROUP_SHARED_EXPERTS:
+        max_rows = GROUP_MAXR_OVERRIDE
+    grouped = max_rows > 1
+    words_g = refinements['gate']['word'] if mixed else gate_planes['word']
+    rot_g, rot_u, groups = _prep_pair_kernel()(
+        inputs=[tokens, gate_planes['suh2'], ref('gate', 'suh4', 'suh2'), up_planes['suh2'], ref('up', 'suh4', 'suh2'),
+                route, refined, gate_planes['var'], words_g],
+        template=[('K', k), ('E', experts_per_token), ('MAXR', max_rows), ('GROUPED', grouped), *common],
+        grid=(k, rows, 2), threadgroup=(128, 1, 1),
+        output_shapes=[(rows, k), (rows, k), (rows * (max_rows + 1),)],
+        output_dtypes=[mx.float16, mx.float16, mx.uint32])
+    if not grouped:
+        groups = route
+    chunks = WINDOW_CHUNKS if tk % WINDOW_CHUNKS == 0 else 1
+    positions = LANE_POSITIONS if chunks % 2 == 0 else 8
+    window_template = [('LEVEL', 2), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
+                       ('PACKED_VAR', gate_meta.get('var_bits', 8) == 1), ('CHUNKS', chunks), ('MAXR', max_rows),
+                       ('SHARD_N', gate_meta['shard_axis'] == 'n'), ('XHALF', True), ('AC_TABLE', USE_AC_TABLE)]
+    residual = (lambda name: (refinements[name]['p4'], refinements[name]['word']) if mixed
+                else (planes[name][0]['p4'], planes[name][0]['word']))
+    (res_g, word_g), (res_u, word_u) = residual('gate'), residual('up')
+    partial_g, partial_u = _window(gate_meta['base_K'], gate_meta['res_rule']['K'], positions, True,
+        [gate_planes['base'], up_planes['base'], res_g, res_u, word_g, word_u, gate_planes['var'],
+         up_planes['var'], _matrix_indices(tk, tn, gate_meta['shard_axis'])[0], rot_g, rot_u, route, refined,
+         groups, _ac_table()], mixed,
+        template=window_template, grid=(tn * (tk // chunks) * 256, rows, 2), threadgroup=(256, 1, 1),
+        output_shapes=[(rows, tn, tk // chunks, 16)] * 2, output_dtypes=[mx.float32] * 2)
+    rank_g = gate_planes['lrV'].shape[1] if 'lrV' in gate_planes else 0
+    rank_u = up_planes['lrV'].shape[1] if 'lrV' in up_planes else 0
+    inputs = [partial_g, partial_u, gate_planes['svh2'], ref('gate', 'svh4', 'svh2'), up_planes['svh2'],
+              ref('up', 'svh4', 'svh2'), down_planes['suh2'], ref('down', 'suh4', 'suh2'), route, refined, tokens]
+    if rank_g:
+        inputs += [gate_planes['lrV'], gate_planes['lrU2'], ref('gate', 'lrU4', 'lrU2')]
+    if rank_u:
+        inputs += [up_planes['lrV'], up_planes['lrU2'], ref('up', 'lrU4', 'lrU2')]
+    act, rot_d = _post_pair_kernel(rank_g, rank_u)(
+        inputs=inputs, template=[('K', k), ('N', n), ('TN', tn), ('G', tk // chunks), ('E', experts_per_token), *common],
+        grid=(n, rows, 1), threadgroup=(128, 1, 1), output_shapes=[(rows, n), (rows, n)],
+        output_dtypes=[mx.float32, mx.float16])
+    # Down: the existing window and output kernels on the rotated SwiGLU (groups depend only on the routing).
+    tk, tn, k, n = down_meta['tk'], down_meta['tn'], down_meta['k'], down_meta['n']
+    chunks = WINDOW_CHUNKS if tk % WINDOW_CHUNKS == 0 else 1
+    positions = LANE_POSITIONS if chunks % 2 == 0 else 8
+    res_d, word_d = residual('down')
+    partial = _window(down_meta['base_K'], down_meta['res_rule']['K'], positions, False,
+        [down_planes['base'], res_d, word_d, down_planes['var'], _matrix_indices(tk, tn, down_meta['shard_axis'])[0],
+         rot_d, route, refined, groups, _ac_table()], mixed,
+        template=[('LEVEL', 2), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
+                  ('PACKED_VAR', down_meta.get('var_bits', 8) == 1), ('CHUNKS', chunks), ('MAXR', max_rows),
+                  ('SHARD_N', down_meta['shard_axis'] == 'n'), ('XHALF', True), ('AC_TABLE', USE_AC_TABLE)],
+        grid=(tn * (tk // chunks) * 256, rows, 1), threadgroup=(256, 1, 1),
+        output_shapes=[(rows, tn, tk // chunks, 16)], output_dtypes=[mx.float32])[0]
+    rank = down_planes['lrV'].shape[1] if 'lrV' in down_planes else 0
+    inputs = [partial, down_planes['svh2'], ref('down', 'svh4', 'svh2'), route, refined, act]
+    if rank:
+        inputs += [down_planes['lrV'], down_planes['lrU2'], ref('down', 'lrU4', 'lrU2')]
+    return _post_kernel(rank)(
+        inputs=inputs, template=[('K', k), ('N', n), ('TN', tn), ('G', tk // chunks), ('RANK', max(rank, 1)), *common],
+        grid=(n, rows, 1), threadgroup=(128, 1, 1), output_shapes=[(rows, n)], output_dtypes=[mx.float32])[0]

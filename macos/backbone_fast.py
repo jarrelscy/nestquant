@@ -26,9 +26,11 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx_vlm.models import linear as linear_module
 from mlx_vlm.models.glm5_next import language
+from mlx_vlm.models.quantized_verifier import optimized_affine_linear
 
 
 MAX_BLOCK = 8          # longest token block (decode or speculative verify) that takes the fast path
+WEIGHT_ONCE = __import__('os').environ.get('NQ_WEIGHT_ONCE', '0') != '0'
 ASYNC_EVERY = 4        # start the GPU on the first layers while later layers are still being built
 _PARTIAL_COLUMNS = 64  # threads (and columns) per partial threadgroup
 _PARTIAL_STRIDE = 32   # floats per partial row: 24 mix dot products, the sum of squares, padding
@@ -276,6 +278,13 @@ def _block_linear(module, x):
     isolation, did not help inside the model.)"""
     if isinstance(module, nn.QuantizedLinear) and x.ndim == 3 and x.shape[-1] % 512:
         return module(x)
+    if WEIGHT_ONCE and isinstance(module, nn.QuantizedLinear) and x.ndim == 3 and 1 < x.shape[1] <= MAX_BLOCK:
+        # mlx-vlm's verify qmv reads the weights once per block instead of once per token. Off by default:
+        # it matched the per-token path on random inputs (check_verify_linear.py) but not inside the model
+        # (check_verify_exact.py: verify logits differ by up to ~2), so it is not an exact replacement.
+        out = optimized_affine_linear(module, x)
+        if out is not None:
+            return out
     return _ORIGINAL_LINEAR(module, x)
 
 
@@ -373,6 +382,9 @@ _ACTIVE = False
 
 
 def install(model):
+    if WEIGHT_ONCE and language.linear is _ORIGINAL_LINEAR:
+        # The output head (LanguageModel calls language.linear) also reads its weights once per verify block.
+        language.linear = _block_linear
     text = model.model
     if type(text) is language.Glm5NextTextModel:
         text.__class__ = FastTextModel
@@ -383,6 +395,8 @@ def install(model):
 
 
 def uninstall(model):
+    if language.linear is _block_linear:
+        language.linear = _ORIGINAL_LINEAR
     if type(model.model) is FastTextModel:
         model.model.__class__ = language.Glm5NextTextModel
     for layer in model.model.layers:
