@@ -581,11 +581,21 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
         fold_decl = ('\n            float fold_mb = 0.0f, fold_n = 0.0f, fold_c = 0.0f;' if float_fold else '')
         fold_setup = ('\n                fold_mb = float(mb) * 0.00390625f; fold_n = float(n) * 0.00390625f;'
                       '\n                fold_c = 1024.5f - 4.0f * float(mb + n);' if float_fold else '')
-        source = f"""
-        uint group = threadgroup_position_in_grid.x;
+        if WINDOW_TG == 256:
+            group_setup = """uint group = threadgroup_position_in_grid.x;
         uint row = threadgroup_position_in_grid.y;
-        uint g = simdgroup_index_in_threadgroup;
-        uint lane = thread_index_in_simdgroup;
+        uint g = simdgroup_index_in_threadgroup;"""
+        else:
+            # NQ_WINDOW_TG: WINDOW_TG / 32 SIMD groups per threadgroup; every SIMD group still decodes ring g of
+            # output group `group` with the same arithmetic (the kernel shares nothing across SIMD groups).
+            group_setup = f"""uint simd_flat = threadgroup_position_in_grid.x * {WINDOW_TG // 32}u + simdgroup_index_in_threadgroup;
+        uint group = simd_flat / 8u;
+        uint row = threadgroup_position_in_grid.y;
+        uint g = simd_flat % 8u;"""
+        lane_type = 'ushort' if NARROW else 'uint'
+        source = f"""
+        {group_setup}
+        {lane_type} lane = thread_index_in_simdgroup;
         uint strip = group % TN;
         uint chunk_group = group / TN;
         uint depth = uint(variants_shape[0]);
@@ -706,6 +716,15 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
         # per-member predicates. Rows without partners take the one-row copy, so grouping costs nothing
         # when experts do not repeat. The per-member arithmetic is identical in every copy, so results
         # do not depend on the copy taken.
+        if NARROW:
+            # NQ_NARROW: small per-lane values (lane mapping, bit offsets, member count, Mb and N) in 16-bit registers.
+            # Every use promotes them to 32 bits first, so the arithmetic is unchanged.
+            for old in ('uint count = ', 'uint p0 = ', 'uint kb = ', 'uint base_bit = ', 'uint base_shift = ',
+                        'uint base_offset = ', 'uint residual_bit = ', 'uint residual_shift = ',
+                        'uint residual_offset = ', 'uint residual_bitb = ', 'uint residual_shiftb = ',
+                        'uint residual_offsetb = ', 'uint mb = 0, n = 0;'):
+                if old in source:   # first occurrence only: the lane setup precedes the decode's own p0
+                    source = source.replace(old, 'ushort' + old[4:], 1)
         section_start = source.index('    // {positions} consecutive'.format(positions=positions)
                                      if lane_setup_in_section else '    float s0[MAXR], s1[MAXR];')
         section = source[section_start:]
@@ -744,12 +763,18 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
             # refined copy. Same per-row arithmetic.
             refined_cases = (f'    constexpr int RGMAX = MAXR < {REFINED_MAXR} ? MAXR : {REFINED_MAXR};\n'
                              + refined_cases.replace('MAXR', 'RGMAX'))
-    source = (preamble + '    if (refined) {\n' + refined_cases + '    } else {\n'
-              + specialized(section.replace('(refined)', '(false)'), spec_base) + '    }\n')
+    base_cases = specialized(section.replace('(refined)', '(false)'), spec_base)
+    if only and SPLIT_STATIC:
+        # NQ_SPLIT_PRECISION=static: each precision-split launch compiles only its own path (the runtime early
+        # return below alone leaves both paths, and the larger register allocation, in both launches).
+        source = preamble + (refined_cases if only == 1 else base_cases)
+    else:
+        source = preamble + '    if (refined) {\n' + refined_cases + '    } else {\n' + base_cases + '    }\n'
     name = (f'nq_matvec_{style}_{LOAD_MODE}_{int(base_k * 10000)}_{int(residual_k * 10000)}_m{spec_base}{spec_refined}'
             f'_p{positions}' + ('' if refined_group_positions == 8 else f'r{refined_group_positions}')
             + ('' if WRAP_SHUFFLE else '_fb') + _int_suffix() + ('_pf' if WINDOW_PREFETCH else '')
-            + (f'_rm{REFINED_MAXR}' if REFINED_MAXR else ''))
+            + (f'_rm{REFINED_MAXR}' if REFINED_MAXR else '') + ('' if WINDOW_TG == 256 else f'_tg{WINDOW_TG}')
+            + ('_nw' if NARROW else '') + ('_ss' if only and SPLIT_STATIC else ''))
     inputs = ['base', 'residual', 'words', 'variants', 'inverse', 'x', 'expert_ids', 'refined_ids', 'groups', 'ac_table']
     outputs = ['partial']
     # Precision-split launches (only=1: refined rows, only=2: base rows; the other rows' partial sums are
@@ -784,7 +809,20 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
 # one, and there the single launch with the one-copy refined path below is as fast or faster (latency: verify-4
 # -16% vs -13% split, verify-8 -11% both; full-model verify agrees), so it is off by default.
 SPLIT_PRECISION = __import__('os').environ.get('NQ_SPLIT_PRECISION', '0') != '0'
-SPLIT_MIN_ROWS = 9   # split only verify blocks; single-token decode (8 rows, no groups) measured slower split
+# NQ_SPLIT_PRECISION=static: the split launches compile only their own path (refined-only / base-only kernels).
+SPLIT_STATIC = __import__('os').environ.get('NQ_SPLIT_PRECISION', '0') == 'static'
+# split only verify blocks; single-token decode (8 rows, no groups) measured slower split
+SPLIT_MIN_ROWS = int(__import__('os').environ.get('NQ_SPLIT_MIN_ROWS', '9'))
+# Threads per window-kernel threadgroup (NQ_WINDOW_TG: 32, 64, 128, 256 or 512). Smaller threadgroups let a core
+# fill its register file in finer steps; the per-SIMD-group work and arithmetic are unchanged.
+WINDOW_TG = int(__import__('os').environ.get('NQ_WINDOW_TG', '256'))
+assert WINDOW_TG in (32, 64, 128, 256, 512)
+NARROW = __import__('os').environ.get('NQ_NARROW', '0') != '0'
+# Gate and up in one window launch (grid z picks the planes through per-thread pointer selects) or two (NQ_GATE_UP_PAIR=0).
+GATE_UP_PAIR = __import__('os').environ.get('NQ_GATE_UP_PAIR', '1') != '0'
+# Base-row specialized copies in launches that also hold the refined path (NQ_MIXED_BASE_SPECIALIZED; default: the
+# same as base-only launches).
+MIXED_BASE_SPECIALIZED = int(__import__('os').environ.get('NQ_MIXED_BASE_SPECIALIZED', '-1'))
 # Lane positions of refined rows with partners: 16 (the main mapping, same summation order as rows without
 # partners, so grouping changes no value) or 8 (the previous layout: 16 measured slower there only because the
 # kernel also held specialized refined copies; with one copy 16 is faster).
@@ -798,12 +836,34 @@ def _window(base_k, residual_k, positions, pair, inputs, mixed, **call):
     """Run the window matvec. Returns (outputs for refined rows, outputs for base rows): the same launch's
     outputs unless SPLIT_PRECISION splits a mixed call into a refined-only and a base-only launch
     (identical per-row arithmetic)."""
-    kernel = lambda only: _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS),
+    spec = tuple(SPECIALIZED_MEMBERS)
+    split = SPLIT_PRECISION and mixed and call['grid'][1] >= SPLIT_MIN_ROWS
+    if mixed and MIXED_BASE_SPECIALIZED >= 0 and not (split and SPLIT_STATIC):
+        spec = (MIXED_BASE_SPECIALIZED, spec[1])
+    kernel = lambda only: _window_kernel(base_k, residual_k, DECODE_STYLE, positions, spec,
                                          pair, only, REFINED_GROUP_POSITIONS)
-    if not (SPLIT_PRECISION and mixed and call['grid'][1] >= SPLIT_MIN_ROWS):
+    if WINDOW_TG != 256:
+        call = dict(call, threadgroup=(WINDOW_TG, 1, 1))
+    if not split:
         out = kernel(0)(inputs=inputs, **call)
         return out, out
     return kernel(1)(inputs=inputs, **call), kernel(2)(inputs=inputs, **call)
+
+
+def _window_gate_up(base_k, residual_k, positions, inputs, mixed, **call):
+    """Gate and up window matvecs: one paired launch, or (NQ_GATE_UP_PAIR=0) one launch per projection.
+    inputs as for the paired kernel; returns ((refined gate, refined up), (base gate, base up))."""
+    if GATE_UP_PAIR:
+        return _window(base_k, residual_k, positions, True, inputs, mixed, **call)
+    (base_g, base_u, res_g, res_u, word_g, word_u, var_g, var_u, inverse, x_g, x_u, route, refined, groups,
+     ac) = inputs
+    grid = (call['grid'][0], call['grid'][1], 1)
+    single = dict(call, grid=grid, output_shapes=call['output_shapes'][:1], output_dtypes=call['output_dtypes'][:1])
+    (rg,), (bg,) = _window(base_k, residual_k, positions, False,
+                           [base_g, res_g, word_g, var_g, inverse, x_g, route, refined, groups, ac], mixed, **single)
+    (ru,), (bu,) = _window(base_k, residual_k, positions, False,
+                           [base_u, res_u, word_u, var_u, inverse, x_u, route, refined, groups, ac], mixed, **single)
+    return (rg, ru), (bg, bu)
 
 
 WINDOW_HEADER = r'''
@@ -1259,7 +1319,7 @@ def projection_matvec_banked(planes: dict, meta: dict, x: mx.array,
             template=[('LEVEL', level), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
                       ('PACKED_VAR', var_bits == 1), ('CHUNKS', chunks), ('MAXR', 1),
                       ('SHARD_N', meta['shard_axis'] == 'n'), ('XHALF', False), ('AC_TABLE', False)],
-            grid=(tn * (tk // chunks) * 256, rows, 1), threadgroup=(256, 1, 1),
+            grid=(tn * (tk // chunks) * 256, rows, 1), threadgroup=(WINDOW_TG, 1, 1),
             output_shapes=[(rows, tn, tk // chunks, 16)], output_dtypes=[mx.float32],
         )[0]
     else:
@@ -1483,7 +1543,7 @@ def expert_mlp_fused(planes: dict, tokens: mx.array, route: mx.array, experts_pe
     residual = (lambda name: (refinements[name]['p4'], refinements[name]['word']) if mixed
                 else (planes[name][0]['p4'], planes[name][0]['word']))
     (res_g, word_g), (res_u, word_u) = residual('gate'), residual('up')
-    (partial_rg, partial_ru), (partial_g, partial_u) = _window(gate_meta['base_K'], gate_meta['res_rule']['K'], positions, True,
+    (partial_rg, partial_ru), (partial_g, partial_u) = _window_gate_up(gate_meta['base_K'], gate_meta['res_rule']['K'], positions,
         [gate_planes['base'], up_planes['base'], res_g, res_u, word_g, word_u, gate_planes['var'],
          up_planes['var'], _matrix_indices(tk, tn, gate_meta['shard_axis'])[0], rot_g, rot_u, route, refined,
          groups, _ac_table()], mixed,

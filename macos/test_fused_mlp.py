@@ -100,7 +100,16 @@ class FusedMlpTest(unittest.TestCase):
 
         variants = [dict(REFINED_MAXR=2), dict(REFINED_MAXR=1), dict(REFINED_MAXR=2, SPECIALIZED_MEMBERS=(4, 1)),
                     dict(FWHT_SIMD=True), dict(PAIR_SUM='bfi'), dict(PAIR_SUM='imadk'), dict(HALF_SUM='swar'),
-                    dict(REFINED_FOLD='float'), dict(WINDOW_PREFETCH=True)]
+                    dict(REFINED_FOLD='float'), dict(WINDOW_PREFETCH=True),
+                    # Register-pressure variants (NQ_WINDOW_TG, NQ_NARROW, NQ_GATE_UP_PAIR, NQ_SPLIT_PRECISION=static,
+                    # NQ_MIXED_BASE_SPECIALIZED).
+                    dict(WINDOW_TG=32), dict(WINDOW_TG=64), dict(WINDOW_TG=128), dict(WINDOW_TG=512),
+                    dict(NARROW=True), dict(GATE_UP_PAIR=False),
+                    dict(SPLIT_PRECISION=True, SPLIT_STATIC=True, SPLIT_MIN_ROWS=1),
+                    dict(SPLIT_PRECISION=True, SPLIT_STATIC=True, SPLIT_MIN_ROWS=9),
+                    dict(MIXED_BASE_SPECIALIZED=0), dict(MIXED_BASE_SPECIALIZED=1),
+                    dict(WINDOW_TG=64, NARROW=True, GATE_UP_PAIR=False, SPLIT_PRECISION=True, SPLIT_STATIC=True,
+                         SPLIT_MIN_ROWS=1)]
         cases = []
         for tokens in (1, 2, 8):
             ids = [e for _ in range(tokens) for e in random.sample(range(12), 8)]   # small pool: groups of 3-8
