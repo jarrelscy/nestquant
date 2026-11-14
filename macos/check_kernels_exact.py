@@ -20,14 +20,84 @@ import torch
 
 HOME = Path.home()
 FLAGS = ('FAST_INDEXER', 'TRIM_TOPK')
+# Routed-expert decoder settings selectable as config flags (decoder module attributes).
+DECODER_FLAGS = {
+    # The window kernels before precision-split launches, one-copy grouped refined rows and the shuffled
+    # 90-byte ring window.
+    'moe_old': dict(SPLIT_PRECISION=False, SPECIALIZED_MEMBERS=(4, 1), REFINED_GROUP_POSITIONS=8, WRAP_SHUFFLE=False,
+                    PACK_MODE='mask'),
+    'moe_split': dict(SPLIT_PRECISION=True),
+    'moe_ungrouped': dict(GROUP_SHARED_EXPERTS=False),
+}
 
 
 def configured(backbone_fast, enabled):
+    import decoder
     stack = ExitStack()
     for flag in FLAGS:
         if hasattr(backbone_fast, flag):
             stack.enter_context(patch.object(backbone_fast, flag, flag in enabled))
+    for flag in enabled & set(DECODER_FLAGS):
+        for name, value in DECODER_FLAGS[flag].items():
+            stack.enter_context(patch.object(decoder, name, value))
+    stack.callback(decoder._window_kernel.cache_clear)
+    decoder._window_kernel.cache_clear()
     return stack
+
+
+def moe_stats(run):
+    """Per MoE call of one run: rows, refined rows, distinct experts and refined experts, and rows sharing an
+    expert (summed over calls), from the routes passed to decoder.expert_mlp_fused (synchronizes; untimed)."""
+    import decoder
+    import native_generate as ng
+    calls = []
+    original = decoder.expert_mlp_fused
+
+    def recording(planes, tokens, route, experts_per_token, *, refinements=None, refined_route=None):
+        out = original(planes, tokens, route, experts_per_token, refinements=refinements, refined_route=refined_route)
+        experts = route.tolist()
+        hot = refinements['gate']['p4'].shape[0] if refinements is not None else 0
+        slots = refined_route.tolist() if refined_route is not None else [0xffffffff] * len(experts)
+        refined = [e for e, s in zip(experts, slots) if s < hot]
+        calls.append((len(experts), len(refined), len(set(experts)), len(set(refined))))
+        return out
+    with patch.object(ng, 'expert_mlp_fused', recording):
+        run()
+    total = [sum(c[i] for c in calls) for i in range(4)]
+    return dict(calls=len(calls), rows=total[0], refined_rows=total[1], experts=total[2], refined_experts=total[3],
+                refined_row_fraction=round(total[1] / max(1, total[0]), 4))
+
+
+def moe_replay(verify, blocks, configs, backbone_fast, repeat):
+    """Record the routed-expert MLP calls of one verify per block, then time all of them back to back (GPU only,
+    no backbone) under each config, interleaved. Median ms per verify."""
+    import decoder
+    import native_generate as ng
+    original = decoder.expert_mlp_fused
+    recorded = {}
+    for bs in blocks:
+        calls = []
+
+        def recording(*a, **k):
+            calls.append((a, k))
+            return original(*a, **k)
+        with patch.object(ng, 'expert_mlp_fused', recording):
+            verify(bs)
+        mx.eval([list(a) + list(k.values()) for a, k in calls])
+        recorded[bs] = calls
+    times = {name: {bs: [] for bs in blocks} for name, _ in configs}
+    for r in range(repeat):
+        for name, flags in (configs if r % 2 == 0 else configs[::-1]):
+            with configured(backbone_fast, flags):
+                for bs in blocks:
+                    run = lambda: [original(*a, **k) for a, k in recorded[bs]]
+                    mx.eval(run())
+                    for _ in range(3):
+                        mx.synchronize()
+                        start = time.perf_counter()
+                        mx.eval(run())
+                        times[name][bs].append(time.perf_counter() - start)
+    return {name: {bs: round(1000 * statistics.median(v), 2) for bs, v in per.items()} for name, per in times.items()}
 
 
 def main():
@@ -41,6 +111,12 @@ def main():
     parser.add_argument('--configs', default='ref:,new:FAST_INDEXER+TRIM_TOPK,notrim:FAST_INDEXER',
                         help='name:flag+flag,... ; the first is the reference')
     parser.add_argument('--repeat', type=int, default=6)
+    parser.add_argument('--stats', action='store_true',
+                        help='Record routed-expert row statistics in one untimed verify per block')
+    parser.add_argument('--replay', action='store_true',
+                        help='Also time the recorded routed-expert calls of one verify per block alone, per config')
+    parser.add_argument('--hot-fraction', type=float, default=0.15)
+    parser.add_argument('--budget-gib', type=int, default=16)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     import backbone_fast
@@ -69,7 +145,7 @@ def main():
     torch.set_num_threads(4)
     guard = MemoryGuard(98, 0.8)
     guard.allowed_pressure = (1, 2)
-    hot = NativeHotRefinements(args.model, 0.15, 128, 16, nd.READERS, 48, 512)
+    hot = NativeHotRefinements(args.model, args.hot_fraction, 128, args.budget_gib, nd.READERS, 48, 512)
     model, banks = ng.load_runtime(args.model, args.backbone, args.archive, [288] * 42, guard, hot, True, 56)
     results = []
     try:
@@ -105,6 +181,10 @@ def main():
                 return out.logits.astype(mx.float32), hidden.astype(mx.float32)
 
             row = dict(context=len(ids))
+            if args.stats:
+                row['moe_rows'] = {bs: moe_stats(lambda: verify(bs)) for bs in blocks}
+            if args.replay:
+                row['moe_replay_ms'] = moe_replay(verify, blocks, configs, backbone_fast, args.repeat)
             outputs = {}
             for name, flags in configs:
                 with configured(backbone_fast, flags):

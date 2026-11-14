@@ -79,14 +79,15 @@ class FusedMlpTest(unittest.TestCase):
                     self.case(rank, tokens, mode)
 
     def test_split_precision_launches(self):
-        saved = decoder.SPLIT_PRECISION
-        decoder.SPLIT_PRECISION = True
-        try:
-            for tokens in (1, 8):
-                for mode in ('mixed', 'refined'):
-                    self.case(6, tokens, mode)
-        finally:
-            decoder.SPLIT_PRECISION = saved
+        for split, min_rows in ((False, 9), (True, 1)):
+            saved = decoder.SPLIT_PRECISION, decoder.SPLIT_MIN_ROWS
+            decoder.SPLIT_PRECISION, decoder.SPLIT_MIN_ROWS = split, min_rows
+            try:
+                for tokens in (1, 8):
+                    for mode in ('mixed', 'refined'):
+                        self.case(6, tokens, mode)
+            finally:
+                decoder.SPLIT_PRECISION, decoder.SPLIT_MIN_ROWS = saved
 
     def test_grouping_disabled(self):
         saved = decoder.GROUP_SHARED_EXPERTS

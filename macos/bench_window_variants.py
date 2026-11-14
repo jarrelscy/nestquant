@@ -2,7 +2,9 @@
 
 Random packed planes with the GLM-5.3-Flash geometry. Each variant is checked bit-for-bit against the
 default kernel on the same inputs. Run inside the GPU lock:
-  /tmp/nq_model_lock.sh <owner> python bench_window_variants.py --variants default,sum_add,...
+  /tmp/nq_model_lock.sh <owner> python bench_window_variants.py --variants fused_old,fused --rounds 4 --chain
+--rounds interleaves the variants (cancels thermal drift); --chain makes each layer depend on the previous one,
+as in the model (latency), instead of timing independent layers (throughput, which overstates some gains).
 """
 import argparse
 import json
@@ -19,9 +21,15 @@ import decoder
 from microbench_window import make_layer
 
 COLD = 0xffffffff
-DEFAULTS = dict(SPLIT_MIN_ROWS=9, SPLIT_PRECISION=False, XV_FLOAT=False, SUM_MODE='mul', HASH_MODE='mul32', MAD_MODE='mul32', SPECIALIZED_MEMBERS=(4, 1),
-                LANE_POSITIONS=16, GROUP_MAXR_OVERRIDE=None)
+DEFAULTS = dict(SPLIT_MIN_ROWS=9, SPLIT_PRECISION=False, XV_FLOAT=False, SUM_MODE='mul', HASH_MODE='mul32', MAD_MODE='mul32',
+                SPECIALIZED_MEMBERS=(4, 0), LANE_POSITIONS=16, GROUP_MAXR_OVERRIDE=None, REFINED_GROUP_POSITIONS=16,
+                WRAP_SHUFFLE=True, PACK_MODE='nomask')
+# The kernels before precision-split launches, one-copy grouped refined rows and the shuffled 90-byte ring window.
+OLD = dict(SPLIT_PRECISION=False, SPECIALIZED_MEMBERS=(4, 1), REFINED_GROUP_POSITIONS=8, WRAP_SHUFFLE=False,
+           PACK_MODE='mask')
 VARIANTS = {
+    'old': OLD,
+    'fused_old': dict(OLD, FUSED=True),
     'default': {},
     'default2': {},
     'sum_add': dict(SUM_MODE='add'),
@@ -30,15 +38,16 @@ VARIANTS = {
     'int_all': dict(SUM_MODE='add', HASH_MODE='mul24', MAD_MODE='mad24'),
     'sum_add_mad24': dict(SUM_MODE='add', MAD_MODE='mad24'),
     'ref2': dict(SPECIALIZED_MEMBERS=(4, 2)),
-    'ref4': dict(SPECIALIZED_MEMBERS=(4, 4)),
     'maxr2': dict(GROUP_MAXR_OVERRIDE=2),
     'maxr8': dict(GROUP_MAXR_OVERRIDE=8),
     'xvf': dict(XV_FLOAT=True),
-    'split': dict(SPLIT_PRECISION=True),
     'fused_split_all': dict(FUSED=True, SPLIT_PRECISION=True, SPLIT_MIN_ROWS=1),
-    'fused_split': dict(FUSED=True, SPLIT_PRECISION=True),
     'fused': dict(FUSED=True),
     'fused_sum_add': dict(FUSED=True, SUM_MODE='add'),
+    'fused_ref2': dict(FUSED=True, SPECIALIZED_MEMBERS=(4, 2)),
+    'fused_nogroup': dict(FUSED=True, GROUP_MAXR_OVERRIDE=1),
+    'fused_split': dict(FUSED=True, SPLIT_PRECISION=True),
+    'fused_fallback': dict(FUSED=True, WRAP_SHUFFLE=False),
 }
 FUSED = [False]
 
@@ -67,6 +76,25 @@ def mlp(layer, x, ids, refined):
     return project('down', gate * mx.sigmoid(gate) * up)
 
 
+CHAIN = [False]
+
+
+def layers_fn(layers, x, ids, route):
+    """One MoE pass per layer. With --chain each layer's input depends on the previous layer's output (as in the
+    model), so the timing is per-layer latency instead of the throughput of independent layers."""
+    if not CHAIN[0]:
+        return lambda: [mlp(layer, x, ids, route) for layer in layers]
+
+    def run():
+        out, value = [], x
+        for layer in layers:
+            y = mlp(layer, value, ids, route)
+            out.append(y)
+            value = x + 0 * y[:1, :1]
+        return out
+    return run
+
+
 def timed(fn, n):
     for _ in range(4):
         mx.eval(fn())
@@ -80,12 +108,20 @@ def timed(fn, n):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--variants', default='default,sum_add,hash24,mad24,int_all,ref2,ref4')
+    parser.add_argument('--variants', default='fused_old,fused')
     parser.add_argument('--layers', type=int, default=4)
     parser.add_argument('--samples', type=int, default=25)
     parser.add_argument('--refined-fraction', type=float, default=0.4)
     parser.add_argument('--output')
+    parser.add_argument('--rounds', type=int, default=1,
+                        help='interleave variants round-robin, --samples per round (cancels thermal drift)')
+    parser.add_argument('--chain', action='store_true', help='make each layer depend on the previous one')
+    parser.add_argument('--extra', default='{}', help='JSON {name: {SETTING: value}} of ad-hoc variants')
+    parser.add_argument('--scenarios', default='', help='comma-separated label/precision keys to run (default all)')
     args = parser.parse_args()
+    CHAIN[0] = args.chain
+    for name, settings in json.loads(args.extra).items():
+        VARIANTS[name] = {k: tuple(v) if isinstance(v, list) else v for k, v in settings.items()}
     mx.random.seed(0)
     random.seed(3)
     layers = [make_layer(288, 64, 1) for _ in range(args.layers)]
@@ -105,6 +141,11 @@ def main():
         mx.eval(x, ids, refined, all_refined)
         for precision, route in (('base', None), ('mixed', refined), ('refined', all_refined)):
             scenarios.append((label, precision, x, ids, route))
+    if args.scenarios:
+        keep = set(args.scenarios.split(','))
+        scenarios = [s for s in scenarios if f'{s[0]}/{s[1]}' in keep]
+    if args.rounds > 1:
+        return interleaved(args, scenarios, layers)
     reference = {}
     results = []
     for name in args.variants.split(','):
@@ -133,6 +174,49 @@ def run_variant(args, name, row, scenarios, layers, reference):
             row['max_abs_diff'][key] = float(mx.max(mx.where(mx.isnan(diff), 0, diff)).item())
             ms = timed(lambda: [mlp(layer, x, ids, route) for layer in layers], args.samples) / args.layers * 1e3
             row['ms_per_layer'][key] = round(ms, 4)
+
+
+def interleaved(args, scenarios, layers):
+    names = args.variants.split(',')
+    reference, diffs, samples = {}, {n: {} for n in names}, {n: {} for n in names}
+    for name in names:   # compile and check every variant first
+        apply(VARIANTS[name])
+        for label, precision, x, ids, route in scenarios:
+            key = f'{label}/{precision}'
+            out = mx.stack([mlp(layer, x, ids, route) for layer in layers])
+            mx.eval(out)
+            reference.setdefault(key, out)
+            same = mx.array_equal(out, reference[key], equal_nan=True).item()
+            diff = mx.abs(out - reference[key])
+            rel = mx.sqrt(mx.mean(mx.square(mx.where(mx.isnan(diff), 0, diff))) /
+                          mx.mean(mx.square(mx.where(mx.isnan(reference[key]), 0, reference[key]))))
+            diffs[name][key] = 'bitwise' if same else f'max {mx.max(mx.where(mx.isnan(diff), 0, diff)).item():.3g} relrms {rel.item():.2g}'
+    for _ in range(args.rounds):
+        for name in names:
+            apply(VARIANTS[name])
+            for label, precision, x, ids, route in scenarios:
+                key = f'{label}/{precision}'
+                fn = layers_fn(layers, x, ids, route)
+                mx.eval(fn())
+                for _ in range(args.samples):
+                    start = time.perf_counter()
+                    mx.eval(fn())
+                    samples[name].setdefault(key, []).append((time.perf_counter() - start) / args.layers * 1e3)
+    apply({})
+    keys = [f'{s[0]}/{s[1]}' for s in scenarios]
+    print('scenario'.ljust(18) + ''.join(n[:16].rjust(17) for n in names))
+    for key in keys:
+        base = statistics.median(samples[names[0]][key])
+        cells = []
+        for n in names:
+            m = statistics.median(samples[n][key])
+            cells.append((f'{m:.3f}' if n == names[0] else f'{m:.3f} {100 * (m / base - 1):+.1f}%').rjust(17))
+        print(key.ljust(18) + ''.join(cells))
+    for n in names[1:]:
+        print(n, json.dumps(diffs[n]))
+    if args.output:
+        with open(args.output, 'w') as f:
+            json.dump(dict(samples=samples, diffs=diffs), f)
 
 
 if __name__ == '__main__':

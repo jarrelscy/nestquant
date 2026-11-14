@@ -158,21 +158,43 @@ class WindowVariantsTest(unittest.TestCase):
                 setattr(decoder, name, value)
 
     def test_group_sizes_are_bit_exact(self):
+        # Grouped rows (base and refined, one launch or split by precision) sum exactly as ungrouped rows.
         for positions in (8, 16):
-            expected = self.run_all(GROUP_SHARED_EXPERTS=False, LANE_POSITIONS=positions)
-            for maxr in (2, 3, 4, 5, 8):
-                actuals = self.run_all(GROUP_MAXR_OVERRIDE=maxr, LANE_POSITIONS=positions)
-                for index, (actual, reference) in enumerate(zip(actuals, expected)):
-                    with self.subTest(maxr=maxr, positions=positions, mixed=bool(index % 2)):
-                        if positions == 16 and index % 2:
-                            # Refined rows with partners decode eight positions per lane: equal up to
-                            # float32 summation order.
-                            self.assertTrue(mx.array_equal(mx.isnan(actual), mx.isnan(reference)).item())
-                            keep = mx.array([i for i, bad in enumerate(mx.isnan(reference).any(axis=1).tolist())
-                                             if not bad])
-                            self.assertLess(relative_rms(actual[keep], reference[keep]), 1e-6)
-                        else:
+            for split in (False, True):
+                expected = self.run_all(GROUP_SHARED_EXPERTS=False, LANE_POSITIONS=positions, SPLIT_PRECISION=split)
+                for maxr in (2, 3, 4, 5, 8):
+                    actuals = self.run_all(GROUP_MAXR_OVERRIDE=maxr, LANE_POSITIONS=positions, SPLIT_PRECISION=split)
+                    for index, (actual, reference) in enumerate(zip(actuals, expected)):
+                        with self.subTest(maxr=maxr, positions=positions, split=split, mixed=bool(index % 2)):
                             self.assertTrue(mx.array_equal(actual, reference, equal_nan=True).item())
+
+    def test_previous_grouped_refined_layout(self):
+        # Refined rows with partners at eight positions per lane (the previous kernel): equal up to float32
+        # summation order.
+        expected = self.run_all(GROUP_SHARED_EXPERTS=False)
+        for maxr in (2, 4, 8):
+            actuals = self.run_all(GROUP_MAXR_OVERRIDE=maxr, REFINED_GROUP_POSITIONS=8, SPECIALIZED_MEMBERS=(4, 1),
+                                   SPLIT_PRECISION=False, WRAP_SHUFFLE=False)
+            for index, (actual, reference) in enumerate(zip(actuals, expected)):
+                with self.subTest(maxr=maxr, mixed=bool(index % 2)):
+                    if index % 2:
+                        self.assertTrue(mx.array_equal(mx.isnan(actual), mx.isnan(reference)).item())
+                        keep = mx.array([i for i, bad in enumerate(mx.isnan(reference).any(axis=1).tolist())
+                                         if not bad])
+                        self.assertLess(relative_rms(actual[keep], reference[keep]), 1e-6)
+                    else:
+                        self.assertTrue(mx.array_equal(actual, reference, equal_nan=True).item())
+
+    def test_split_and_ring_window_are_bit_exact(self):
+        # Precision-split launches and the shuffled 90-byte ring window change no value. Slot 3 is the last
+        # refinement slot, so the last ring of the buffer (clamped words) is covered; slot 9 is invalid.
+        expected = self.run_all(SPLIT_PRECISION=False, WRAP_SHUFFLE=False)
+        for settings in (dict(SPLIT_PRECISION=True, WRAP_SHUFFLE=False), dict(SPLIT_PRECISION=False),
+                         dict(SPLIT_PRECISION=True), dict(SPLIT_PRECISION=True, SPECIALIZED_MEMBERS=(4, 1)),
+                         dict(SPLIT_PRECISION=True, SPLIT_MIN_ROWS=1, GROUP_MAXR_OVERRIDE=1)):
+            for index, (actual, reference) in enumerate(zip(self.run_all(**settings), expected)):
+                with self.subTest(settings=settings, index=index):
+                    self.assertTrue(mx.array_equal(actual, reference, equal_nan=True).item())
 
     def test_specializations_are_bit_exact(self):
         expected = self.run_all(SPECIALIZED_MEMBERS=(1, 1), GROUP_MAXR_OVERRIDE=8)

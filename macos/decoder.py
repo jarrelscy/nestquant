@@ -297,6 +297,9 @@ SUM_MODE = 'mul'      # 'mul': (p * 0x10001) >> 16 sums the two 16-bit lanes; 'a
 HASH_MODE = 'mul32'   # 'mul32': s * 0x83DCD12D; 'mul24': two 24-bit multiplies (s < 2^16)
 XV_FLOAT = False      # keep each lane's inputs in float registers (converted once at load) instead of fp16
 MAD_MODE = 'mul32'    # refined combination mb * sb + n * sr + c: 'mul32' or 'mad24' (all operands < 2^24)
+# Refined pair packing: t = mb * sb + n * sr + 0x640080 < 2^23 for any 8-bit mb, n and sb, sr <= 1020, so t >> 8
+# already fits 16 bits ('nomask'); 'mask' keeps the previous explicit & 0xFFFF. Identical bits.
+PACK_MODE = 'nomask'
 
 
 def _hash(s):
@@ -320,7 +323,7 @@ def _sum_hi(p):
 def _int_suffix():
     variant = (SUM_MODE, HASH_MODE, MAD_MODE)
     suffix = '' if variant == ('mul', 'mul32', 'mul32') else '_' + '_'.join(variant)
-    return suffix + ('_xf' if XV_FLOAT else '')
+    return suffix + ('_xf' if XV_FLOAT else '') + ('_nomask' if PACK_MODE == 'nomask' else '')
 
 
 def _mad(a, b, c):
@@ -331,7 +334,7 @@ def _mad(a, b, c):
 
 @lru_cache(maxsize=None)
 def _window_kernel(base_k: float, residual_k: float, style: str = 'window', positions: int = 8,
-                   specialized_members=(1, 1), pair: bool = False, only: int = 0):
+                   specialized_members=(1, 1), pair: bool = False, only: int = 0, refined_group_positions: int = 8):
     """Banked matvec where each lane decodes `positions` (8 or 16) consecutive ring positions from one bit window.
 
     The inline kernel gives each lane positions lane + 32 * j, so every weight needs three byte
@@ -400,12 +403,52 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
 
         base_load = load('base', 'ring', 'base_offset', base_bytes)
         residual_load = load('residual', 'refined_ring', 'residual_offset', residual_bytes)
+        # Rings that are not word-aligned (2.8125 bits: 90 bytes) and need more than one 64-bit window per lane:
+        # take a 96-bit window from three aligned words (clamped to the buffer) instead of a second window, and
+        # fill the bytes of the lanes whose states run past the ring end from the ring's first bytes, which
+        # the half-warp's first lane holds in its own window (one shuffle, no divergent byte-load fallback).
+        residual_wrap = residual_split and WRAP_SHUFFLE and LOAD_MODE == 'direct_u32' and residual_bytes % 4 != 0
+        wrap_lanes = {}
+        if residual_wrap:
+            need = max_shift(rka, rmask) + max(offsets(rka, rmask, positions - 1)) + 16   # bits of a lane's window
+            assert need <= 72, 'window wider than 72 bits'
+            for l in range(256 // positions):
+                bits = stream_bits(rka, rmask, l * positions)
+                valid = residual_bytes - bits // 8
+                if (bits % 8) + max(offsets(rka, rmask, positions - 1)) + 16 > 8 * valid:
+                    assert l > 0 and valid >= 1
+                    wrap_lanes[l] = valid
+            assert stream_bits(rka, rmask, 0) == 0
+        if residual_wrap:
+            patches = ''.join(
+                f'''                if ((lane & 15u) == {l}u) {{
+                    residual_high = uint(head >> {64 - 8 * v}u);
+                    residual_window = (residual_window & 0x{(1 << (8 * v)) - 1:X}ul) | (head << {8 * v}u);
+                }}
+''' for l, v in wrap_lanes.items())
+            residual_load_code = f'''residual_window = nq_direct_window_wide(residual, refined_ring * {residual_bytes}u, residual_offset,
+                    uint(residual_shape[0]) * uint(residual_shape[1]), residual_high);
+                {{
+                    // Lane 0 of each half-warp starts at its ring's first byte.
+                    ulong head = ulong(simd_shuffle(uint(residual_window), lane & 16u))
+                        | (ulong(simd_shuffle(uint(residual_window >> 32), lane & 16u)) << 32);
+{patches}                }}
+'''
+        else:
+            residual_load_code = f'residual_window = {residual_load};\n' + (
+                '            residual_windowb = ' + load('residual', 'refined_ring', 'residual_offsetb', residual_bytes) + ';\n'
+                if residual_split else '')
         def state(window, shift, ka, mask, j):
             # A 16-bit state needs at most shift + delta + 16 bits. Take it from a 32-bit slice of the
             # window starting at a byte chosen at compile time, instead of shifting the 64-bit window.
             low, high = offsets(ka, mask, j)
             top = max_shift(ka, mask)
             d = delta(ka, mask, j)
+            if window == 'residual_window' and residual_wrap:
+                for start in (0, 8, 16, 24, 32, 40):
+                    if all(start <= v and v + top + 16 - start <= 32 for v in (low, high)):
+                        return f'(({window}{start} >> ({shift} + {d} - {start}u)) & 65535u)'
+                raise AssertionError('no 32-bit slice covers the state')
             if window == 'residual_window' and residual_split and j >= 8:
                 low = high = stream_bits(ka, mask, j) - stream_bits(ka, mask, 8)
                 top, d = max_shift(ka, mask, 8), f'{low}u'
@@ -441,7 +484,7 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
                     uint q1 = (g1 & 0x00FF00FFu) + ((g1 >> 8) & 0x00FF00FFu);
                     uint t0 = {_mad('mb', _sum_lo('p0'), _mad('n', _sum_lo('q0'), '0x640080u'))};
                     uint t1 = {_mad('mb', _sum_lo('p1'), _mad('n', _sum_lo('q1'), '0x640080u'))};
-                    w = fma(as_type<half2>(((t0 >> 8) & 0xFFFFu) | ((t1 << 8) & 0xFFFF0000u)), a2, b2);
+                    w = fma(as_type<half2>({'(t0 >> 8)' if PACK_MODE == 'nomask' else '((t0 >> 8) & 0xFFFFu)'} | ((t1 << 8) & 0xFFFF0000u)), a2, b2);
                 }} else {{
                     uint bits = ({_sum_lo('p0')} | {_sum_hi('p1')}) + 0x64006400u;
                     w = fma(as_type<half2>(bits), a2, b2);
@@ -512,6 +555,7 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
             float b = float(as_type<half>(ushort(0xc931))) * sign;
             uint mb = 0, n = 0;
             ulong residual_window = 0, residual_windowb = 0;
+            uint residual_high = 0;
             if (refined) {{
                 uint refined_unit = hot * TK * TN + unit;
                 uint refined_ring = refined_unit * 8u + g;
@@ -533,8 +577,7 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
                 }}
                 a = float(ah) * sign;
                 b = float(ch) * sign;
-                residual_window = {residual_load};
-    {'            residual_windowb = ' + load('residual', 'refined_ring', 'residual_offsetb', residual_bytes) + ';' if residual_split else ''}
+                {residual_load_code}
             }}
             ulong base_window = {base_load};
             uint base_window0 = uint(base_window), base_window8 = uint(base_window >> 8),
@@ -542,7 +585,8 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
                  base_window32 = uint(base_window >> 32);
             uint residual_window0 = uint(residual_window), residual_window8 = uint(residual_window >> 8),
                  residual_window16 = uint(residual_window >> 16), residual_window24 = uint(residual_window >> 24),
-                 residual_window32 = uint(residual_window >> 32);
+                 residual_window32 = uint(residual_window >> 32),
+                 residual_window40 = uint(residual_window >> 40) | (residual_high << 24);
             uint residual_windowb0 = uint(residual_windowb), residual_windowb8 = uint(residual_windowb >> 8),
                  residual_windowb16 = uint(residual_windowb >> 16), residual_windowb24 = uint(residual_windowb >> 24),
                  residual_windowb32 = uint(residual_windowb >> 32);
@@ -597,6 +641,8 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
 
 
     def specialized(body, limit):
+        if limit == 0:
+            return body
         cases = ''.join(
             f'    {"if" if c == 1 else "else if"} (MAXR >= {c} && count == {c}) {{\n'
             + body.replace('m < count', f'm < {c}u').replace('MAXR', str(c)) + '    }\n'
@@ -607,34 +653,37 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
     # The lane setup stays ahead of the copies: computed inside each one, the kernel ran up to 30%
     # slower on multi-row calls.
     preamble, section = build(positions, False)
-    if positions != 8:
-        # Refined rows with partners keep eight positions per lane: sixteen double the member input
-        # registers on top of the second trellis, and measured slower there. That copy redefines
-        # the lane setup in its own scope.
+    if positions != 8 and refined_group_positions == 8:
+        # Previous layout: refined rows with partners at eight positions per lane, in a copy that redefines
+        # the lane setup in its own scope. It sums in a different order than a refined row without partners.
         _, section8 = build(8, True)
         single = section.replace('(refined)', '(true)').replace('m < count', 'm < 1u').replace('MAXR', '1')
         refined_cases = ('    if (count == 1) {\n' + single + '    } else {\n'
                          + specialized(section8.replace('(refined)', '(true)'), spec_refined) + '    }\n')
     else:
+        # Refined rows with and without partners at the main lane mapping, by default (spec_refined == 0)
+        # in one predicated copy: the refined decode is long, and each further unrolled copy measured
+        # slower (code size), while a refined launch holding only this copy runs grouped rows at the
+        # cost of one decode. Every row then sums in the same order whether or not it has partners.
         refined_cases = specialized(section.replace('(refined)', '(true)'), spec_refined)
     source = (preamble + '    if (refined) {\n' + refined_cases + '    } else {\n'
               + specialized(section.replace('(refined)', '(false)'), spec_base) + '    }\n')
     name = (f'nq_matvec_{style}_{LOAD_MODE}_{int(base_k * 10000)}_{int(residual_k * 10000)}_m{spec_base}{spec_refined}'
-            f'_p{positions}' + _int_suffix())
+            f'_p{positions}' + ('' if refined_group_positions == 8 else f'r{refined_group_positions}')
+            + ('' if WRAP_SHUFFLE else '_fb') + _int_suffix())
     inputs = ['base', 'residual', 'words', 'variants', 'inverse', 'x', 'expert_ids', 'refined_ids', 'groups', 'ac_table']
     outputs = ['partial']
-    # only=1: refined rows only; only=2: base rows only, copying refined rows from `prior` (the only=1 output).
-    # Each launch then carries only its own path's registers.
-    split = {0: '', 1: '        if (!refined) return;\n', 2: '        if (refined) {\n            // The refined-only launch already wrote these rows: copy its partial sums through.\n            for (uint m = 0; m < count; ++m) {\n                uint member = MAXR > 1 ? groups[gbase + 1u + m] : row;\n                uint offset = ((member * TN + strip) * (TK / CHUNKS) + chunk_group) * 16u + g;\n                if (thread_index_in_simdgroup == 0) {\n                    partial[offset] = prior[offset];\n                    partial[offset + 8] = prior[offset + 8];\n                }\n            }\n            return;\n        }\n'}[only]
+    # Precision-split launches (only=1: refined rows, only=2: base rows; the other rows' partial sums are
+    # left unwritten and the output kernels read each row from its own launch). Each launch then carries
+    # only its own path's registers and code.
+    split = {0: '', 1: '        if (!refined) return;\n', 2: '        if (refined) return;\n'}[only]
     source = source.replace('        /*ONLY_SPLIT*/\n', split)
     if only:
         name += f'_only{only}'
-    if only == 2:
-        inputs = inputs + ['prior']
     if pair:
         # Two projections of the same rows (gate and up) in one launch: grid z selects the planes, the input
         # and the output; everything else (routing, groups, geometry) is shared. Same arithmetic per row.
-        own = ('base', 'residual', 'words', 'variants', 'x', 'partial') + (('prior',) if only == 2 else ())
+        own = ('base', 'residual', 'words', 'variants', 'x', 'partial')
         prefix = '    uint pair_z = threadgroup_position_in_grid.z;\n'
         for item in own:
             prefix += f'    auto {item} = pair_z ? {item}_u : {item}_g;\n'
@@ -651,22 +700,31 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
     )
 
 
+# Optionally run mixed-precision verify blocks as a refined-only and a base-only launch. That wins when layers
+# run independently (throughput: verify-8 half-4-bit -26%), but in the model each layer waits for the previous
+# one, and there the single launch with the one-copy refined path below is as fast or faster (latency: verify-4
+# -16% vs -13% split, verify-8 -11% both; full-model verify agrees), so it is off by default.
 SPLIT_PRECISION = __import__('os').environ.get('NQ_SPLIT_PRECISION', '0') != '0'
-
-
-SPLIT_MIN_ROWS = 9   # split only verify blocks; single-token decode (8 rows) measured no gain
+SPLIT_MIN_ROWS = 9   # split only verify blocks; single-token decode (8 rows, no groups) measured slower split
+# Lane positions of refined rows with partners: 16 (the main mapping, same summation order as rows without
+# partners, so grouping changes no value) or 8 (the previous layout: 16 measured slower there only because the
+# kernel also held specialized refined copies; with one copy 16 is faster).
+REFINED_GROUP_POSITIONS = 16
+# 2.8125-bit (90-byte) rings: one 96-bit window per lane, ring-wrapping lanes filled by a shuffle (True), or a
+# second window with a divergent byte-load fallback (False, the previous code). Identical results.
+WRAP_SHUFFLE = True
 
 
 def _window(base_k, residual_k, positions, pair, inputs, mixed, **call):
-    """Run the window matvec; with SPLIT_PRECISION and mixed rows, as a refined-only launch followed by a
-    base-only launch (identical per-row arithmetic, smaller register footprint per launch)."""
+    """Run the window matvec. Returns (outputs for refined rows, outputs for base rows): the same launch's
+    outputs unless SPLIT_PRECISION splits a mixed call into a refined-only and a base-only launch
+    (identical per-row arithmetic)."""
+    kernel = lambda only: _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS),
+                                         pair, only, REFINED_GROUP_POSITIONS)
     if not (SPLIT_PRECISION and mixed and call['grid'][1] >= SPLIT_MIN_ROWS):
-        return _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS), pair)(
-            inputs=inputs, **call)
-    first = _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS), pair, 1)(
-        inputs=inputs, **call)
-    return _window_kernel(base_k, residual_k, DECODE_STYLE, positions, tuple(SPECIALIZED_MEMBERS), pair, 2)(
-        inputs=inputs + list(first), **call)
+        out = kernel(0)(inputs=inputs, **call)
+        return out, out
+    return kernel(1)(inputs=inputs, **call), kernel(2)(inputs=inputs, **call)
 
 
 WINDOW_HEADER = r'''
@@ -728,6 +786,19 @@ ulong nq_direct_window_unaligned(Buffer buf, uint start, uint offset, uint bytes
     return nq_window(buf, start, offset, bytes);
 }
 template <typename Buffer>
+ulong nq_direct_window_wide(Buffer buf, uint start, uint offset, uint total, thread uint& high) {
+    // Bytes [offset, offset + 8) of a ring as the window and bytes [offset + 8, offset + 12 - (start + offset) % 4)
+    // in `high`, from three aligned words. Words past the buffer end are clamped to its last word: they lie past
+    // the ring end, so the caller replaces those bytes.
+    uint a = start + offset;
+    uint q = a >> 2, last = total / 4u - 1u;
+    uint w0 = nq_word(buf, q), w1 = nq_word(buf, min(q + 1u, last)), w2 = nq_word(buf, min(q + 2u, last));
+    uint shift = (a & 3u) * 8u;
+    ulong low = ulong(w0) | (ulong(w1) << 32);
+    high = shift ? (w2 >> shift) : w2;
+    return shift ? (low >> shift) | (ulong(w2) << (64u - shift)) : low;
+}
+template <typename Buffer>
 ulong nq_shuffle_window(Buffer buf, uint start, uint offset, uint ring_words, uint lane) {
     // Lanes below ring_words each load one word of a word-aligned ring; every lane then assembles its
     // eight-byte window from three neighbouring words. Word indices wrap around the ring.
@@ -755,8 +826,8 @@ uint nq_sum_fast(uint state) {
 
 WINDOW_CHUNKS = 16
 # Member counts up to these (base-only rows, refined rows) get a compile-time specialized
-# accumulation in the window kernel; larger groups use the predicated MAXR loop.
-SPECIALIZED_MEMBERS = (4, 1)
+# accumulation in the window kernel; larger groups use the predicated MAXR loop (refined rows: only it).
+SPECIALIZED_MEMBERS = (4, 0)
 USE_AC_TABLE = True
 
 
@@ -888,15 +959,17 @@ def _post_kernel(rank: int):
     uint n = block * 128u + t;
     uint strip = n / 16u, j = n % 16u;
     float value = 0.0f;
+    // Refined rows' partial sums come from the refined launch (the same buffer unless split by precision).
+    auto source = ready ? partial_r : partial;
     for (uint g = 0; g < G; ++g)
-        value += partial[((row * TN + strip) * G + g) * 16u + j];
+        value += source[((row * TN + strip) * G + g) * 16u + j];
 """ + _FWHT + """
     float sv = ready ? float(ref_sv[slot * N + n]) : float(base_sv[e * N + n]);
     float result = value * sv;
 """ + low_rank + """
     out[row * N + n] = valid ? result : NAN;
     """
-    names = ['partial', 'base_sv', 'ref_sv', 'route', 'refined', 'x']
+    names = ['partial', 'base_sv', 'ref_sv', 'route', 'refined', 'x', 'partial_r']
     if rank:
         names += ['lrV', 'lrU2', 'lrU4']
     return mx.fast.metal_kernel(name=f'nq_post_r{rank}', input_names=names, output_names=['out'], source=source)
@@ -938,16 +1011,16 @@ def projection_fused(planes: dict, meta: dict, x: mx.array, route: mx.array, *,
     rotated = prepared[0]
     groups = prepared[1] if grouped else route
     positions = LANE_POSITIONS if chunks % 2 == 0 else 8
-    partial = _window(meta['base_K'], meta['res_rule']['K'], positions, False,
+    (partial_r,), (partial,) = _window(meta['base_K'], meta['res_rule']['K'], positions, False,
         [planes['base'], residual, words, planes['var'], _matrix_indices(tk, tn, meta['shard_axis'])[0],
          rotated, route, refined, groups, _ac_table()], mixed,
         template=[('LEVEL', 2), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
                   ('PACKED_VAR', var_bits == 1), ('CHUNKS', chunks), ('MAXR', max_rows),
                   ('SHARD_N', meta['shard_axis'] == 'n'), ('XHALF', True), ('AC_TABLE', USE_AC_TABLE)],
         grid=(tn * (tk // chunks) * 256, rows, 1), threadgroup=(256, 1, 1),
-        output_shapes=[(rows, tn, tk // chunks, 16)], output_dtypes=[mx.float32])[0]
+        output_shapes=[(rows, tn, tk // chunks, 16)], output_dtypes=[mx.float32])
     rank = planes['lrV'].shape[1] if 'lrV' in planes else 0
-    inputs = [partial, planes['svh2'], ref_sv, route, refined, x]
+    inputs = [partial, planes['svh2'], ref_sv, route, refined, x, partial_r]
     if rank:
         lr_u4 = refinements['lrU4'] if mixed else planes['lrU2']
         inputs += [planes['lrV'], planes['lrU2'], lr_u4]
@@ -1182,8 +1255,9 @@ def _post_body(tag, rank):
     return f"""
     {{
     float value = 0.0f;
+    auto source = ready ? partial_r{tag} : partial_{tag};
     for (uint g = 0; g < G; ++g)
-        value += partial_{tag}[((row * TN + strip) * G + g) * 16u + j];
+        value += source[((row * TN + strip) * G + g) * 16u + j];
 """ + _FWHT_NODECL + f"""
     float sv = ready ? float(ref_sv_{tag}[slot * N + n]) : float(base_sv_{tag}[e * N + n]);
     float result = value * sv;
@@ -1226,7 +1300,7 @@ def _post_pair_kernel(rank_g: int, rank_u: int):
     rotated_d[row * N + n] = half(value);
 """
     names = ['partial_g', 'partial_u', 'base_sv_g', 'ref_sv_g', 'base_sv_u', 'ref_sv_u', 'base_su_d', 'ref_su_d',
-             'route', 'refined', 'x']
+             'route', 'refined', 'x', 'partial_rg', 'partial_ru']
     if rank_g:
         names += ['lrV_g', 'lrU2_g', 'lrU4_g']
     if rank_u:
@@ -1278,7 +1352,7 @@ def expert_mlp_fused(planes: dict, tokens: mx.array, route: mx.array, experts_pe
     residual = (lambda name: (refinements[name]['p4'], refinements[name]['word']) if mixed
                 else (planes[name][0]['p4'], planes[name][0]['word']))
     (res_g, word_g), (res_u, word_u) = residual('gate'), residual('up')
-    partial_g, partial_u = _window(gate_meta['base_K'], gate_meta['res_rule']['K'], positions, True,
+    (partial_rg, partial_ru), (partial_g, partial_u) = _window(gate_meta['base_K'], gate_meta['res_rule']['K'], positions, True,
         [gate_planes['base'], up_planes['base'], res_g, res_u, word_g, word_u, gate_planes['var'],
          up_planes['var'], _matrix_indices(tk, tn, gate_meta['shard_axis'])[0], rot_g, rot_u, route, refined,
          groups, _ac_table()], mixed,
@@ -1287,7 +1361,8 @@ def expert_mlp_fused(planes: dict, tokens: mx.array, route: mx.array, experts_pe
     rank_g = gate_planes['lrV'].shape[1] if 'lrV' in gate_planes else 0
     rank_u = up_planes['lrV'].shape[1] if 'lrV' in up_planes else 0
     inputs = [partial_g, partial_u, gate_planes['svh2'], ref('gate', 'svh4', 'svh2'), up_planes['svh2'],
-              ref('up', 'svh4', 'svh2'), down_planes['suh2'], ref('down', 'suh4', 'suh2'), route, refined, tokens]
+              ref('up', 'svh4', 'svh2'), down_planes['suh2'], ref('down', 'suh4', 'suh2'), route, refined, tokens,
+              partial_rg, partial_ru]
     if rank_g:
         inputs += [gate_planes['lrV'], gate_planes['lrU2'], ref('gate', 'lrU4', 'lrU2')]
     if rank_u:
@@ -1301,16 +1376,16 @@ def expert_mlp_fused(planes: dict, tokens: mx.array, route: mx.array, experts_pe
     chunks = WINDOW_CHUNKS if tk % WINDOW_CHUNKS == 0 else 1
     positions = LANE_POSITIONS if chunks % 2 == 0 else 8
     res_d, word_d = residual('down')
-    partial = _window(down_meta['base_K'], down_meta['res_rule']['K'], positions, False,
+    (partial_r,), (partial,) = _window(down_meta['base_K'], down_meta['res_rule']['K'], positions, False,
         [down_planes['base'], res_d, word_d, down_planes['var'], _matrix_indices(tk, tn, down_meta['shard_axis'])[0],
          rot_d, route, refined, groups, _ac_table()], mixed,
         template=[('LEVEL', 2), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
                   ('PACKED_VAR', down_meta.get('var_bits', 8) == 1), ('CHUNKS', chunks), ('MAXR', max_rows),
                   ('SHARD_N', down_meta['shard_axis'] == 'n'), ('XHALF', True), ('AC_TABLE', USE_AC_TABLE)],
         grid=(tn * (tk // chunks) * 256, rows, 1), threadgroup=(256, 1, 1),
-        output_shapes=[(rows, tn, tk // chunks, 16)], output_dtypes=[mx.float32])[0]
+        output_shapes=[(rows, tn, tk // chunks, 16)], output_dtypes=[mx.float32])
     rank = down_planes['lrV'].shape[1] if 'lrV' in down_planes else 0
-    inputs = [partial, down_planes['svh2'], ref('down', 'svh4', 'svh2'), route, refined, act]
+    inputs = [partial, down_planes['svh2'], ref('down', 'svh4', 'svh2'), route, refined, act, partial_r]
     if rank:
         inputs += [down_planes['lrV'], down_planes['lrU2'], ref('down', 'lrU4', 'lrU2')]
     return _post_kernel(rank)(
