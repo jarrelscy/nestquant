@@ -25,7 +25,18 @@ def context_error(prompt_tokens, limit):
                         code='context_length_exceeded')
 
 
+def _image_source(part):
+    """URL of an OpenAI-style image part ({"type": "image_url", "image_url": {"url": ...}} or a plain string)."""
+    value = part.get('image_url', part.get('image'))
+    if isinstance(value, dict):
+        value = value.get('url')
+    if not isinstance(value, str) or not value:
+        raise RequestError('Image parts need an image_url.url')
+    return value
+
+
 def _text_content(content, role):
+    """Message content as a string, or as a list of text and image parts when it contains images."""
     if content is None:
         if role in ('assistant', 'tool'):
             return ''
@@ -33,17 +44,28 @@ def _text_content(content, role):
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
+        parts, has_image = [], False
         for part in content:
             if isinstance(part, str):
-                parts.append(part)
+                parts.append({'type': 'text', 'text': part})
             elif isinstance(part, dict) and part.get('type') in ('text', 'input_text') and isinstance(part.get('text'), str):
-                parts.append(part['text'])
-            elif isinstance(part, dict) and part.get('type') in ('image_url', 'image', 'input_audio', 'video_url'):
-                raise RequestError('Only text content is supported')
+                parts.append({'type': 'text', 'text': part['text']})
+            elif isinstance(part, dict) and part.get('type') in ('image_url', 'image', 'input_image'):
+                parts.append({'type': 'image', 'source': _image_source(part)})
+                has_image = True
+            elif isinstance(part, dict) and part.get('type') in ('input_audio', 'video_url', 'video'):
+                raise RequestError('Only text and image content is supported')
             # Anything else (e.g. cache_control-only parts) is ignored.
-        return ''.join(parts)
+        if has_image:
+            return parts
+        return ''.join(part['text'] for part in parts)
     raise RequestError('Unsupported message content')
+
+
+def image_sources(messages):
+    """Image URLs in the order the chat template renders them."""
+    return [part['source'] for message in messages if isinstance(message.get('content'), list)
+            for part in message['content'] if part.get('type') == 'image']
 
 
 def normalize_messages(messages):

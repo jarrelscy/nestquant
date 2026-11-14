@@ -275,6 +275,20 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(RequestError):
             parse_request({'messages': [{'role': 'user', 'content': [{'type': 'image_url', 'image_url': {}}]}]})
 
+    def test_image_parts_kept_in_order(self):
+        from dflash_protocol import image_sources
+        parsed = parse_request({'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'a'},
+                                         {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AA=='}},
+                                         {'type': 'text', 'text': 'b'}]},
+            {'role': 'assistant', 'content': 'ok'},
+            {'role': 'user', 'content': [{'type': 'image_url', 'image_url': 'https://example.com/x.png'}]}]})
+        self.assertEqual(parsed['messages'][0]['content'][1], {'type': 'image', 'source': 'data:image/png;base64,AA=='})
+        self.assertEqual(parsed['messages'][1]['content'], 'ok')
+        self.assertEqual(image_sources(parsed['messages']), ['data:image/png;base64,AA==', 'https://example.com/x.png'])
+        with self.assertRaises(RequestError):
+            parse_request({'messages': [{'role': 'user', 'content': [{'type': 'input_audio', 'input_audio': {}}]}]})
+
 
 if __name__ == '__main__':
     unittest.main()

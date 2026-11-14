@@ -26,10 +26,10 @@ import threading
 import time
 from concurrent.futures import Future
 
-from dflash_protocol import (MODEL, RequestError, SSE_DONE, chunk, completion_id, completion_response,
+from dflash_protocol import (MODEL, RequestError, image_sources, SSE_DONE, chunk, completion_id, completion_response,
                              common_prefix_length, context_error, find_stop, parse_request, plan_reuse, safe_prefix_length, sse)
 
-MAX_BODY = 16 * 1024**2
+MAX_BODY = 64 * 1024**2      # base64 images
 HOME = Path.home()
 
 
@@ -193,6 +193,12 @@ class DFlashSession:
             end = json.loads((args.model / 'generation_config.json').read_text())['eos_token_id']
             self.eos = {end} if isinstance(end, int) else set(end)
             self.tool_parser = load_tool_module('glm47')
+            self.vision = None
+            if not getattr(args, 'no_vision', False):
+                import native_vision
+                self.vision = native_vision.VisionInputs(args.model)
+                self.model.model.embed_tokens = native_vision.FeatureEmbedding(self.model.model.embed_tokens,
+                                                                               self.vision.image_token_id)
             # Long-lived runtime objects never need collecting; exclude them from every later collection.
             import gc
             gc.collect()
@@ -213,9 +219,20 @@ class DFlashSession:
 
     # ------------------------------------------------------------------ text
     def encode(self, messages, tools):
-        return list(self.tokenizer.apply_chat_template(messages, tools=tools or None, tokenize=True,
-                                                       return_dict=False, add_generation_prompt=True,
-                                                       chat_template=self.template))
+        sources = image_sources(messages)
+        if sources and self.vision is None:
+            raise RequestError('Image input is disabled on this server')
+        ids = list(self.tokenizer.apply_chat_template(messages, tools=tools or None, tokenize=True,
+                                                      return_dict=False, add_generation_prompt=True,
+                                                      chat_template=self.template))
+        if not sources:
+            return ids
+        import native_vision
+        try:
+            images = self.vision.prepare([native_vision.load_image_bytes(source) for source in sources])
+            return native_vision.expand_prompt(ids, self.vision.image_token_id, images)
+        except native_vision.ImageError as error:
+            raise RequestError(str(error)) from error
 
     def decode(self, ids):
         return self.tokenizer.decode(ids, skip_special_tokens=True)
@@ -344,8 +361,16 @@ class DFlashSession:
                 raise RuntimeError('Reused cache does not hold the expected prefix')
             self.checkpoint, cache = None, None
         suffix = ids[reused:]
-        logits, hidden = nd.capture_prefill(self.model, self.drafter, suffix, self.cache, self.hot, self.guard,
-                                            suffix=reused > 0)
+        rows = self.vision.rows_for(suffix) if self.vision is not None else None
+        if rows is not None:
+            import native_vision
+            with self.model.model.embed_tokens.supplying(rows):
+                logits, hidden = nd.capture_prefill(self.model, self.drafter,
+                                                    native_vision.real_ids(suffix, self.vision.image_token_id),
+                                                    self.cache, self.hot, self.guard, suffix=reused > 0)
+        else:
+            logits, hidden = nd.capture_prefill(self.model, self.drafter, suffix, self.cache, self.hot, self.guard,
+                                                suffix=reused > 0)
         ctx = hidden if self.ctx_hidden is None else mx.concatenate([self.ctx_hidden, hidden], axis=1)
         self.ctx_hidden = self._trim_ctx(ctx)
         mx.eval(self.ctx_hidden)
@@ -574,6 +599,7 @@ def main():
     p.add_argument('--guard-gib', type=float, default=98)
     p.add_argument('--queue-timeout', type=float, default=900)
     p.add_argument('--no-reuse', action='store_true', help='Fresh prefill for every request')
+    p.add_argument('--no-vision', action='store_true', help='Do not load the vision tower (saves ~1.1 GB)')
     a = p.parse_args()
     if not 1024 <= a.port <= 65535 or not 1024 <= a.max_context <= 65536 or a.block_size == 0:
         p.error('Use a port in 1024-65535, --max-context in 1024-65536 and a non-zero block size')

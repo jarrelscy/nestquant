@@ -150,9 +150,27 @@ curl http://127.0.0.1:18090/v1/chat/completions -H 'Content-Type: application/js
 
 With LiteLLM-based tools, use model `openai/glm-nestquant` and base URL `http://127.0.0.1:18090/v1`.
 
+Images work the OpenAI way: add `image_url` parts (base64 `data:` URLs or `http(s)://` links) to a message.
+
+```sh
+IMG=$(base64 -i photo.png)
+curl http://127.0.0.1:18090/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "glm-nestquant", "max_tokens": 256,
+  "messages": [{"role": "user", "content": [
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,'"$IMG"'"}},
+    {"type": "text", "text": "What is in this image?"}]}]}'
+```
+
+The checkpoint's bf16 vision tower (1.1 GB) loads with the server; `--no-vision` skips it. A 640×400 image
+is about 340 prompt tokens. Follow-up turns reuse the image from the cache, and a different image never
+matches a cached one. Up to 16 images per request, 20 MiB each.
+
 What to expect:
 - One request at a time; others queue.
 - Greedy decoding only (`temperature` and `top_p` are accepted and ignored). Thinking is off.
+- The backbone (attention, dense layers, shared experts, router, embeddings) runs as MLX 4-bit with 8-bit
+  embeddings. The checkpoint ships it as FP8/bf16 and the model card's reference runtime loads it as MLX 8-bit,
+  so this recipe's backbone is lower precision than the reference. The routed experts are NestQuant as shipped.
 - Multi-turn conversations reuse the previous turn's state: only the new text is prefilled. New text up to
   256 tokens prefills in about 1.5 s, up to 8,192 tokens at about 250–280 tok/s. Fresh prompts and longer
   additions prefill at about 260–400 tok/s with every routed expert at 4 bits.
