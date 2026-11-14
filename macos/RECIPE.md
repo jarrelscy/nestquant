@@ -9,6 +9,7 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 | DFlash2, coding benchmark, 6 tasks (average) | ~32 | edit, refactor and fix tasks 35–45, new code 23–27, prose ~21 |
 | Plain decode, coding benchmark (average) | ~25.5 | |
 | GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build, 15% hot set) |
+| MMLU-Pro, first 152 test questions, through the server | 26.2 (median 30) | 128/152 correct (84.2%), sustained load |
 | Agent turns (Terminal-Bench, 2K–20K context) | ~27 median | earlier build; prefix reuse, new turns prefill in ~1–8 s |
 
 Peak memory is about 86 GiB. Quality settings (the defaults): the full 1.5-bit expert base stays resident, 20%
@@ -38,8 +39,9 @@ The numbers above are from short runs (192 tokens, a few minutes of GPU work). A
   and at worst about 5 TFLOPS.
 - The same 192-token benchmark repeated six times in one process gave 52, 44, 39, 40, 35 and 11 tok/s.
   Acceptance and the 4-bit share did not change.
-- When the server runs nonstop (MMLU-Pro, 130–1,024-token answers), decode is mostly 25–34 tok/s, with dips to
-  7–16 tok/s on long answers.
+- When the server runs nonstop (MMLU-Pro, 136 requests over about an hour, 130–1,024-token answers), decode
+  averaged 26.2 tok/s: median 30, 10th percentile 24, 90th percentile 34, with dips to 7–16 tok/s on some long
+  answers.
 
 Expect lower and more variable decode than the table when the server runs for a long time. The most likely
 reason is the adapter's power limit, but this is not confirmed. To check on your machine, run
@@ -172,6 +174,10 @@ What to expect:
 .venv-macos/bin/python macos/eval_mmlu_pro.py --questions mmlu_pro.json \
   --url http://127.0.0.1:18090/v1/chat/completions --output mmlu-pro.json   # add --resume to continue a run
 ```
+
+MMLU-Pro uses a zero-shot chain-of-thought prompt, greedy decoding and up to 1,024 answer tokens. On the first
+152 test questions (all in the business category) the default preset scored 128/152 (84.2%). 24 answers hit the
+1,024-token limit and 6 gave no extractable answer, so a higher `--max-tokens` may score higher.
 
 `--blocks 0` is plain decode and `-8` is DFlash2 with the adaptive verify block (up to 8).
 
