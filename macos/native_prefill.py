@@ -275,7 +275,8 @@ class BatchedPrefill:
 
     def _ensure_staging(self):
         if self.reader is None:
-            self.reader = ShardedRefinementReader(self.root)
+            from refinement_archive import reader_from_env
+            self.reader = reader_from_env(self.root) or ShardedRefinementReader(self.root)
             self.reader.manifest(3)
         if self.staging is None:
             self.staging = RefinementStaging(self.reader.geometry, self.staging_rows)

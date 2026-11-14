@@ -327,7 +327,8 @@ def refinement_supply(hot, decode_seconds):
                 decode_read_gib=read_bytes / 2**30,
                 decode_read_gib_per_s=read_bytes / 2**30 / decode_seconds if decode_seconds else None,
                 reader_busy_seconds=hot.reads.get('decode_worker_seconds', 0.0),
-                installs=hot.reads.get('installed', 0), discarded=hot.reads.get('discarded', 0))
+                installs=hot.reads.get('installed', 0), discarded=hot.reads.get('discarded', 0),
+                reader=hot.reader_info() if hasattr(hot, 'reader_info') else None)
 
 
 def capture_prefill(model, drafter, ids, cache, hot, guard, suffix=False):

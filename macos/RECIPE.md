@@ -72,8 +72,27 @@ uv pip install --python .venv-coreml/bin/python coremltools torch==2.15.0 numpy 
 .venv-coreml/bin/python macos/coreml_predictor.py convert
 ```
 
-This writes `~/Models/GLM/predictor-coreml-v1/` (about 144 MB). The server's default paths match these
-locations.
+This writes `~/Models/GLM/predictor-coreml-v1/` (about 144 MB).
+
+Recommended: repack the 4-bit refinements expert by expert. The runtime then fetches each expert's upgrade
+with one read instead of assembling it from 8 shard files. The archive is byte-identical to the checkpoint's
+refinements (the converter verifies every record). It takes about 5 minutes and 94 GB of disk.
+
+```sh
+.venv-macos/bin/python macos/refinement_archive.py convert --model "$MODEL" \
+  --base "$HOME/Models/GLM/resident-banks-v1" --output "$HOME/Models/GLM/refinements-expert-major-v1"
+.venv-macos/bin/python macos/refinement_archive.py verify --model "$MODEL" \
+  --base "$HOME/Models/GLM/resident-banks-v1" --output "$HOME/Models/GLM/refinements-expert-major-v1"
+export NQ_REFINEMENT_ARCHIVE="$HOME/Models/GLM/refinements-expert-major-v1"
+```
+
+With the archive (15% hot experts, coding benchmark): prefill is about 2× faster (7–10 s instead of 14–17 s for
+360–1,700-token prompts), decode uses about 25% less CPU and about 3 GiB less memory, and more expert calls run
+at 4 bits (35% instead of 30%; late upgrades 8% instead of 14%). Because more calls take the 4-bit path, decode
+is about 5–10% slower. To keep today's decode speed and 4-bit share while still getting the faster prefill,
+also set `NQ_REFINEMENT_RESERVE=3x`. Leave `NQ_REFINEMENT_CACHE` unset (page caching made decode slower).
+
+The server's default paths match these locations.
 
 ## 4. Run the server
 

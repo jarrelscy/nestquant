@@ -15,6 +15,7 @@ from experts import ExpertStore, RefinementReader
 from packed_expert_bank import PackedRefinementBank
 from predictor import configure_slots, predictor_memory, staged_predictor
 from predictor_metrics import PredictorMetrics
+from refinement_archive import reader_from_env
 from prefetch import BoundedReader
 
 
@@ -81,8 +82,20 @@ class NativeHotRefinements:
             install(self.predictor, Path(root) / 'serving/predictor/jt', compute_units=units or 'ane')
         record = os.environ.get('NQ_PREDICTOR_RECORD')
         self.record = open(record, 'ab') if record else None
-        self.reader = LockedRefinementReader(root) if readers > 1 else RefinementReader(root)
-        self.worker = BoundedReader(self.reader.read, staging_mib * 1024**2, pending, readers)
+        # NQ_REFINEMENT_ARCHIVE=<dir> reads each refinement with one preadv from the expert-major archive
+        # (refinement_archive.py; NQ_REFINEMENT_CACHE / NQ_REFINEMENT_READAHEAD tune its page cache use).
+        self.reader = reader_from_env(root) if root is not None else None
+        if self.reader is None:
+            self.reader = LockedRefinementReader(root) if readers > 1 else RefinementReader(root)
+        # NQ_REFINEMENT_DIRECT=1 (archive reader, background installs): decode reads skip the staging buffer and
+        # the install copy. publish() reserves the slot first, then an install thread preadv's the record
+        # straight into it; the slot table still changes only at a later flip().
+        self.direct_reads = (hasattr(self.reader, 'read_into_slot') and os.environ.get('NQ_REFINEMENT_DIRECT') == '1'
+                             and os.environ.get('NQ_BACKGROUND_INSTALLS', '1') != '0')
+        self.install_threads = readers if self.direct_reads else 2
+        self._direct_lock = threading.Lock()
+        self.worker = BoundedReader(self._deferred if self.direct_reads else self.reader.read,
+                                    staging_mib * 1024**2, pending, readers)
         self.prefill_rows = prefill_rows
         self.draft_rows_base = False
         # Decode publication copies finished reads into reserved slots on these threads and flips the slot
@@ -116,7 +129,8 @@ class NativeHotRefinements:
                 for expert in pool if int(expert) not in self.banks[layer].slots]
         pools = {layer: {int(expert) for expert in pool}
                  for layer, pool in zip(self.predictor.layers, self.predictor.defaults)}
-        reader = self.reader if readers == 1 else LockedRefinementReader(self.reader.root)
+        shared = readers == 1 or getattr(self.reader, 'thread_safe', False)
+        reader = self.reader if shared else LockedRefinementReader(self.reader.root)
         started = time.perf_counter()
         installed = read_bytes = 0
         try:
@@ -174,7 +188,8 @@ class NativeHotRefinements:
 
     def _read_many(self, layer, experts):
         # Parallel reads need the locked reader, whose handle and manifest caches are thread-safe.
-        if len(experts) < 2 or not isinstance(self.reader, LockedRefinementReader):
+        if len(experts) < 2 or not (isinstance(self.reader, LockedRefinementReader)
+                                    or getattr(self.reader, 'thread_safe', False)):
             return (self.reader.read(layer, expert) for expert in experts)
         if getattr(self, '_prefill_pool', None) is None:
             from concurrent.futures import ThreadPoolExecutor
@@ -188,17 +203,38 @@ class NativeHotRefinements:
             sizes[key] = ExpertStore.refinement_bytes(self.reader, layer, expert)
         return sizes[key]
 
+    def _reservation(self, layer, expert):
+        # The archive reader's footprint is one record per read (none with direct reads), not the shard
+        # reader's three copies. NQ_REFINEMENT_RESERVE=3x keeps the shard reader's accounting for comparison.
+        if not getattr(self.reader, 'thread_safe', False) or os.environ.get('NQ_REFINEMENT_RESERVE') == '3x':
+            return None
+        return self.reader.bytes_for(layer, expert)
+
     def _queue(self):
         for key in self.order:
             layer, expert = key
             if expert in self.banks[layer].slots or expert in self.banks[layer].staging or key in self.worker.pending:
                 continue
-            if not self.worker.submit(key, self._size(layer, expert)):
+            if not self.worker.submit(key, self._size(layer, expert), self._reservation(layer, expert)):
                 break
+
+    _direct_lock = threading.Lock()  # instances built without __init__ (tests)
+
+    @staticmethod
+    def _deferred(layer, expert):
+        return None, 0, 0.0
+
+    def _direct_read(self, bank, layer, expert, slot):
+        count, elapsed = self.reader.read_into_slot(layer, expert, bank, slot)
+        with self._direct_lock:
+            self.reads['decode_bytes'] += count
+            self.reads['decode_worker_seconds'] += elapsed
 
     def _publish(self, key, value):
         target, expert = key
         payload, count, elapsed = value
+        if payload is None:
+            payload, count, elapsed = self.reader.read(target, expert)
         self.reads['decode_bytes'] += count
         self.reads['decode_worker_seconds'] += elapsed
         started = time.perf_counter()
@@ -292,8 +328,13 @@ class NativeHotRefinements:
             return
         if self._copy_pool is None:
             from concurrent.futures import ThreadPoolExecutor
-            self._copy_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='nestquant-install')
-        self._copies = list(self._copies) + [(bank, expert, slot, self._copy_pool.submit(bank.write, slot, payload))]
+            self._copy_pool = ThreadPoolExecutor(max_workers=getattr(self, 'install_threads', 2),
+                                                 thread_name_prefix='nestquant-install')
+        if payload is None:
+            future = self._copy_pool.submit(self._direct_read, bank, target, expert, slot)
+        else:
+            future = self._copy_pool.submit(bank.write, slot, payload)
+        self._copies = list(self._copies) + [(bank, expert, slot, future)]
 
     def plan(self, token):
         """Advance the predictor to the next target token and queue reads, without touching slot buffers.
@@ -441,7 +482,13 @@ class NativeHotRefinements:
                     staging_peak_bytes=self.worker.peak_reserved_bytes,
                     predictor_seconds=self.seconds, predictor_process_cpu_seconds=self.cpu_seconds,
                     predictor_backend=self.predictor_backend, predictor_memory=predictor_memory(self.predictor),
+                    reader=self.reader_info(),
                     **self.reads, unpublished_at_end=completed, coverage=self.metrics.report())
+
+    def reader_info(self):
+        reader = getattr(self, 'reader', None)
+        return dict(kind=type(reader).__name__, cache=getattr(reader, 'cache', False),
+                    readahead=getattr(reader, 'readahead', True), direct=getattr(self, 'direct_reads', False))
 
     def readiness_digest(self):
         return hashlib.sha256(self.ready.tobytes()).hexdigest()

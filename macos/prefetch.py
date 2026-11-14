@@ -13,11 +13,13 @@ class BoundedReader:
         self.peak_reserved_bytes = 0
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='nestquant-ssd')
 
-    def submit(self, key, payload_bytes):
+    def submit(self, key, payload_bytes, reservation=None):
         if self.executor is None:
             raise RuntimeError('Read-ahead worker is closed')
-        # Reserve the shard copies, merged arrays, and installation copy together.
-        reservation = 3 * payload_bytes + 1024**2
+        # Reserve the shard copies, merged arrays, and installation copy together, unless the caller knows
+        # the reader's real footprint (the expert-major archive holds one record buffer per read).
+        if reservation is None:
+            reservation = 3 * payload_bytes + 1024**2
         if reservation > self.budget_bytes:
             raise ValueError('One expert exceeds the read-ahead staging budget')
         if key in self.pending or len(self.pending) >= self.max_pending:
