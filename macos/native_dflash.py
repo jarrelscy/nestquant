@@ -276,6 +276,54 @@ def hot_set_prefill(model, drafter, ids, cache, hot, guard, chunk_size=FAST_CHUN
     return logits, hidden
 
 
+SEED_PROMPT = __import__('os').environ.get('NQ_SEED_PROMPT', '0') == '1'
+SEED_WEIGHT = float(__import__('os').environ.get('NQ_SEED_WEIGHT', '1.0'))
+
+
+def seed_hot_from_prompt(hot, salience, weight=SEED_WEIGHT):
+    """Seed each layer's hot pool from whole-prompt routing, as Spark's policy allows for prompt prefills.
+
+    The prompt's salience share is blended into the policy's moving average (weight 1.0 = equal mass to the
+    current average) and the pool is reset to the top experts by that score, keeping fixed experts. The
+    predictor's usual updates and hysteresis take over from there; new pool members are read in the background.
+    """
+    predictor = hot.predictor
+    changed = 0
+    for index, layer in enumerate(predictor.layers):
+        if layer not in salience:
+            continue
+        share = salience[layer] / max(float(salience[layer].sum()), 1e-30)
+        policy = predictor.policies[index]
+        inner = getattr(policy, 'inner', policy)
+        mass = float(inner.state.sum()) or 1.0
+        inner.state = inner.state + weight * mass * share
+        fixed = getattr(policy, 'fixed', np.zeros(288, dtype=bool))
+        score = inner.state / max(float(inner.state.sum()), 1e-30)
+        order = np.argsort(-score, kind='stable')
+        candidates = order[~fixed[order]]
+        new = fixed.copy()
+        new[candidates[:inner.nf - int(fixed.sum())]] = True
+        changed += int((new & ~inner.cur).sum())
+        inner.cur = new
+    return changed
+
+
+def refinement_supply(hot, decode_seconds):
+    """Separate prediction misses from delivery misses for the hot set during decode."""
+    fractions = hot.metrics.report()['call_fractions'] if hasattr(hot, 'metrics') else {}
+    wanted = fractions.get('wanted', 0.0)
+    delivered = fractions.get('wanted_ready', 0.0)
+    read_bytes = hot.reads.get('decode_bytes', 0)
+    return dict(wanted_call_fraction=wanted, wanted_and_ready_call_fraction=delivered,
+                late_call_fraction=fractions.get('late', 0.0),
+                cached_outside_wanted_fraction=fractions.get('cached_outside_wanted', 0.0),
+                delivery_fraction=delivered / wanted if wanted else None,
+                decode_read_gib=read_bytes / 2**30,
+                decode_read_gib_per_s=read_bytes / 2**30 / decode_seconds if decode_seconds else None,
+                reader_busy_seconds=hot.reads.get('decode_worker_seconds', 0.0),
+                installs=hot.reads.get('installed', 0), discarded=hot.reads.get('discarded', 0))
+
+
 def capture_prefill(model, drafter, ids, cache, hot, guard, suffix=False):
     """Prefill `ids` on top of whatever `cache` already holds, capturing the drafter's target hidden states.
 
@@ -297,6 +345,8 @@ def capture_prefill(model, drafter, ids, cache, hot, guard, suffix=False):
             logits = BATCHED(model, chunks, cache, guard, hot, capture=(wanted, _collapse))
         finally:
             BATCHED.stream_refinements = True
+        if SEED_PROMPT and not suffix and getattr(BATCHED, 'prompt_salience', None):
+            seed_hot_from_prompt(hot, BATCHED.prompt_salience)
         hidden = mx.concatenate([BATCHED.captured[index] for index in wanted], axis=-1)
         BATCHED.captured = {}
         mx.eval(hidden)
@@ -472,6 +522,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                                   if adaptive is not None else None),
                 refinement_installs=hot.reads['installed'], publication_seconds=hot.reads['decode_publication_seconds'],
                 ready_call_fraction=hot.report()['coverage']['call_fractions']['ready'],
+                refinement_supply=refinement_supply(hot, decode),
                 predictor_backend=hot.predictor_backend, decode_process_cpu_seconds=process_cpu,
                 decode_predictor_seconds=hot.seconds - predictor_start[0],
                 decode_predictor_cpu_seconds=hot.cpu_seconds - predictor_start[1])

@@ -284,6 +284,7 @@ class BatchedPrefill:
         """capture: optional (layer ids, collapse function). The collapsed output of each listed layer over the
         whole prompt is left in self.captured[layer] for block drafters."""
         self.captured = {}
+        self.prompt_salience = {}
         wanted = set(capture[0]) if capture else set()
         collapse = capture[1] if capture else None
 
@@ -449,6 +450,9 @@ class BatchedPrefill:
         total, top_k = route_ids.shape
         flat = route_ids.reshape(-1)
         counts = np.bincount(flat, minlength=288)
+        # Whole-prompt routing salience (sum of squared routing weights) per expert, for seeding the hot set.
+        squared = np.square(np.asarray(route_weights.astype(mx.float32)).reshape(-1))
+        self.prompt_salience[layer] = np.bincount(flat, weights=squared, minlength=288)
         order = np.argsort(flat, kind='stable').astype(np.uint32)
         starts = np.concatenate([[0], np.cumsum(counts)])
         used = counts > 0
