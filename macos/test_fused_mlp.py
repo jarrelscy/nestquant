@@ -89,6 +89,50 @@ class FusedMlpTest(unittest.TestCase):
             finally:
                 decoder.SPLIT_PRECISION, decoder.SPLIT_MIN_ROWS = saved
 
+    def test_optional_kernel_variants_are_bit_exact(self):
+        """Env-flag variants (NQ_REFINED_MAXR, NQ_REFINED_SPECIALIZED, NQ_FWHT_SIMD, NQ_PAIR_SUM, NQ_HALF_SUM,
+        NQ_REFINED_FOLD, NQ_WINDOW_PREFETCH) must reproduce the default kernels bit for bit."""
+        factories = ('_window_kernel', '_prep_pair_kernel', '_prep_kernel', '_post_pair_kernel', '_post_kernel')
+
+        def clear():
+            for name in factories:
+                getattr(decoder, name).cache_clear()
+
+        variants = [dict(REFINED_MAXR=2), dict(REFINED_MAXR=1), dict(REFINED_MAXR=2, SPECIALIZED_MEMBERS=(4, 1)),
+                    dict(FWHT_SIMD=True), dict(PAIR_SUM='bfi'), dict(PAIR_SUM='imadk'), dict(HALF_SUM='swar'),
+                    dict(REFINED_FOLD='float'), dict(WINDOW_PREFETCH=True)]
+        cases = []
+        for tokens in (1, 2, 8):
+            ids = [e for _ in range(tokens) for e in random.sample(range(12), 8)]   # small pool: groups of 3-8
+            route = mx.array(ids, dtype=mx.uint32)
+            mixed = mx.array([e % self.hot if e % 3 else COLD for e in ids], dtype=mx.uint32)
+            full = mx.array([e % self.hot for e in ids], dtype=mx.uint32)
+            x = mx.random.normal((tokens, 4096)).astype(mx.float16).astype(mx.float32)
+            cases += [(tokens, mode, x, route, refined) for mode, refined in
+                      (('base', None), ('mixed', mixed), ('refined', full))]
+        layer = self.layers[6]
+        want = [fused(layer, x, route, refined) for *_, x, route, refined in cases]
+        mx.eval(want)
+        for settings in variants:
+            saved = {key: getattr(decoder, key) for key in settings}
+            try:
+                for key, value in settings.items():
+                    setattr(decoder, key, value)
+                clear()
+                for (tokens, mode, x, route, refined), expected in zip(cases, want):
+                    got = fused(layer, x, route, refined)
+                    with self.subTest(settings=settings, tokens=tokens, mode=mode):
+                        self.assertTrue(mx.array_equal(got, expected, equal_nan=True).item())
+                    # The unfused projections share the grouping and rotation kernels.
+                    if tokens == 8:
+                        reference_out = reference(layer, x, route, refined)
+                        with self.subTest(settings=settings, path='unfused', mode=mode):
+                            self.assertTrue(mx.array_equal(reference_out, expected, equal_nan=True).item())
+            finally:
+                for key, value in saved.items():
+                    setattr(decoder, key, value)
+                clear()
+
     def test_grouping_disabled(self):
         saved = decoder.GROUP_SHARED_EXPERTS
         decoder.GROUP_SHARED_EXPERTS = False

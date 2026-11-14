@@ -300,6 +300,38 @@ MAD_MODE = 'mul32'    # refined combination mb * sb + n * sr + c: 'mul32' or 'ma
 # Refined pair packing: t = mb * sb + n * sr + 0x640080 < 2^23 for any 8-bit mb, n and sb, sr <= 1020, so t >> 8
 # already fits 16 bits ('nomask'); 'mask' keeps the previous explicit & 0xFFFF. Identical bits.
 PACK_MODE = 'nomask'
+# Base pair packing (NQ_PAIR_SUM). 'mul' (default): lo = (p0 * 0x10001) >> 16, hi = (p1 * 0x10001) & 0xFFFF0000, two
+# 32-bit multiplies (half rate on this GPU). 'bfi': [p1.lo:p0.lo] + [p1.hi:p0.hi] from two bit inserts and a shift,
+# no multiply. Both lanes hold sums <= 1020, so the add never carries across lanes: identical bits.
+PAIR_SUM = __import__('os').environ.get('NQ_PAIR_SUM', 'mul')
+# Refined fold (NQ_REFINED_FOLD). 'int' (default): t = mb * sb + n * sr + 0x640080 with four 32-bit multiplies per
+# pair, (t >> 8) packed as fp16 bits. 'float': the four byte sums packed as fp16 1024 + s (as for base rows), then
+# 1024 + code = floor(mb/256 * (1024 + sb) + n/256 * (1024 + sr) + 1024.5 - 4 (mb + n)) in float32. Every product
+# and partial sum is a multiple of 1/256 below 2^12 (mb + n <= 257), so all float32 steps are exact and the
+# floor equals (t >> 8) - 0x6400: identical bits.
+REFINED_FOLD = __import__('os').environ.get('NQ_REFINED_FOLD', 'int')
+
+
+# Byte-pair sums of a hash (NQ_HALF_SUM): 'mask' (default) (h & M) + ((h >> 8) & M), four simple ops; 'swar'
+# h - 255 * ((h >> 8) & M), two simple ops and a multiply-add (= b0 + b1 + (b2 + b3) << 16 exactly: no lane borrows).
+# 'swar_base' / 'swar_res' apply it to the base or the residual hashes only. Identical bits.
+HALF_SUM = __import__('os').environ.get('NQ_HALF_SUM', 'mask')
+
+
+def _half_sum(h, stream):
+    if HALF_SUM == 'swar' or HALF_SUM == f'swar_{stream}':
+        return f'({h} - 255u * (({h} >> 8) & 0x00FF00FFu))'
+    return f'(({h} & 0x00FF00FFu) + (({h} >> 8) & 0x00FF00FFu))'
+
+
+def _pair_bits(p0, p1):
+    """[S1 : S0] + 0x64006400 (fp16 1024 + S per lane) from the half-sum pairs p0, p1."""
+    if PAIR_SUM == 'imadk':
+        # (p * 0x10001 + 0x6400 << 16) = (S + 0x6400) << 16 + p.lo: the add rides on the multiply. Identical bits.
+        return f'((({p0} * 0x00010001u + 0x64000000u) >> 16) | (({p1} * 0x00010001u + 0x64000000u) & 0xFFFF0000u))'
+    if PAIR_SUM == 'bfi':
+        return f'(insert_bits({p0}, {p1}, 16u, 16u) + insert_bits({p1}, {p0} >> 16, 0u, 16u) + 0x64006400u)'
+    return f'(({_sum_lo(p0)} | {_sum_hi(p1)}) + 0x64006400u)'
 
 
 def _hash(s):
@@ -323,7 +355,8 @@ def _sum_hi(p):
 def _int_suffix():
     variant = (SUM_MODE, HASH_MODE, MAD_MODE)
     suffix = '' if variant == ('mul', 'mul32', 'mul32') else '_' + '_'.join(variant)
-    return suffix + ('_xf' if XV_FLOAT else '') + ('_nomask' if PACK_MODE == 'nomask' else '')
+    return (suffix + ('_xf' if XV_FLOAT else '') + ('_nomask' if PACK_MODE == 'nomask' else '')
+            + ('' if PAIR_SUM == 'mul' else f'_ps{PAIR_SUM}') + ('' if HALF_SUM == 'mask' else f'_hs{HALF_SUM}') + ('' if REFINED_FOLD == 'int' else f'_rf{REFINED_FOLD}'))
 
 
 def _mad(a, b, c):
@@ -472,21 +505,28 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
                 sb1 = state('base_window', 'base_shift', bka, bmask, j + 1)
                 sr0 = state('residual_window', 'residual_shift', rka, rmask, j)
                 sr1 = state('residual_window', 'residual_shift', rka, rmask, j + 1)
+                if REFINED_FOLD == 'float':
+                    fold = f"""                    float2 fs = float2(as_type<half2>({_pair_bits('p0', 'p1')}));
+                    float2 fr = float2(as_type<half2>({_pair_bits('q0', 'q1')}));
+                    float2 fv = metal::floor(fma(float2(fold_mb), fs, fma(float2(fold_n), fr, float2(fold_c))));
+                    w = fma(half2(fv), a2, b2);"""
+                else:
+                    fold = f"""                    uint t0 = {_mad('mb', _sum_lo('p0'), _mad('n', _sum_lo('q0'), '0x640080u'))};
+                    uint t1 = {_mad('mb', _sum_lo('p1'), _mad('n', _sum_lo('q1'), '0x640080u'))};
+                    w = fma(as_type<half2>({'(t0 >> 8)' if PACK_MODE == 'nomask' else '((t0 >> 8) & 0xFFFFu)'} | ((t1 << 8) & 0xFFFF0000u)), a2, b2);"""
                 return f"""
             {{
                 uint h0 = {_hash(sb0)}, h1 = {_hash(sb1)};
-                uint p0 = (h0 & 0x00FF00FFu) + ((h0 >> 8) & 0x00FF00FFu);
-                uint p1 = (h1 & 0x00FF00FFu) + ((h1 >> 8) & 0x00FF00FFu);
+                uint p0 = {_half_sum('h0', 'base')};
+                uint p1 = {_half_sum('h1', 'base')};
                 half2 w;
                 if (refined) {{
                     uint g0 = {_hash(sr0)}, g1 = {_hash(sr1)};
-                    uint q0 = (g0 & 0x00FF00FFu) + ((g0 >> 8) & 0x00FF00FFu);
-                    uint q1 = (g1 & 0x00FF00FFu) + ((g1 >> 8) & 0x00FF00FFu);
-                    uint t0 = {_mad('mb', _sum_lo('p0'), _mad('n', _sum_lo('q0'), '0x640080u'))};
-                    uint t1 = {_mad('mb', _sum_lo('p1'), _mad('n', _sum_lo('q1'), '0x640080u'))};
-                    w = fma(as_type<half2>({'(t0 >> 8)' if PACK_MODE == 'nomask' else '((t0 >> 8) & 0xFFFFu)'} | ((t1 << 8) & 0xFFFF0000u)), a2, b2);
+                    uint q0 = {_half_sum('g0', 'res')};
+                    uint q1 = {_half_sum('g1', 'res')};
+{fold}
                 }} else {{
-                    uint bits = ({_sum_lo('p0')} | {_sum_hi('p1')}) + 0x64006400u;
+                    uint bits = {_pair_bits('p0', 'p1')};
                     w = fma(as_type<half2>(bits), a2, b2);
                 }}
                 float wa = float(w.x), wb = float(w.y);
@@ -508,6 +548,39 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
                 for (uint m = 0; m < MAXR; ++m)
                     if (m < count) {target}[m] += w * float(xv[m][{ {'x0': 0, 'x1': 1, 'x8': 2, 'x9': 3}[x_value] }]);
             }}""")
+        # Software prefetch (NQ_WINDOW_PREFETCH): load the next chunk's base window, sign and (word-aligned, single
+        # window) residual window while the current chunk decodes. Same values, same arithmetic.
+        prefetch_residual = WINDOW_PREFETCH and residual_load_code == f'residual_window = {residual_load};\n'
+        if prefetch_residual:
+            residual_load_code = 'residual_window = pf_res;\n'
+        steps_per_group = 'CHUNKS' if positions == 8 else '(CHUNKS / 2u)'
+        chunk_of = (lambda c: f'chunk_group * CHUNKS + {c}' if positions == 8 else
+                    f'chunk_group * CHUNKS + 2u * ({c}) + lane / 16u')
+
+        def prefetch(c):
+            return (f'''            {{
+                uint pf_chunk = {chunk_of(c)};
+                uint pf_unit = SHARD_N ? strip * TK + pf_chunk : (pf_chunk >> 1) * (TN * 2u) + strip * 2u + (pf_chunk & 1u);
+                uint pf_ring = (expert * TK * TN + pf_unit) * 8u + g;
+                pf_variant = PACKED_VAR ? ((uint(variants[pf_ring >> 3]) >> (pf_ring & 7u)) & 1u) : uint(variants[pf_ring]);
+                pf_base = {load('base', 'pf_ring', 'base_offset', base_bytes)};
+''' + (f'''                if (refined) {{
+                    uint pf_rring = (hot * TK * TN + pf_unit) * 8u + g;
+                    pf_res = {load('residual', 'pf_rring', 'residual_offset', residual_bytes)};
+                }}
+''' if prefetch_residual else '') + '            }\n')
+        if WINDOW_PREFETCH:
+            prefetch_init = ('        uint pf_variant = 0; ulong pf_base = 0, pf_res = 0;\n' + prefetch('0u'))
+            prefetch_next = '\n' + prefetch(f'min(c + 1u, {steps_per_group} - 1u)')
+            variant_expr, base_window_expr = 'pf_variant', 'pf_base'
+        else:
+            prefetch_init = prefetch_next = ''
+            variant_expr = 'PACKED_VAR ? ((uint(variants[ring >> 3]) >> (ring & 7u)) & 1u) : uint(variants[ring])'
+            base_window_expr = base_load
+        float_fold = style == 'spark' and REFINED_FOLD == 'float'
+        fold_decl = ('\n            float fold_mb = 0.0f, fold_n = 0.0f, fold_c = 0.0f;' if float_fold else '')
+        fold_setup = ('\n                fold_mb = float(mb) * 0.00390625f; fold_n = float(n) * 0.00390625f;'
+                      '\n                fold_c = 1024.5f - 4.0f * float(mb + n);' if float_fold else '')
         source = f"""
         uint group = threadgroup_position_in_grid.x;
         uint row = threadgroup_position_in_grid.y;
@@ -544,16 +617,16 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
         uint residual_offsetb = residual_bitb / 8u;
     ''' if residual_split else ''}    float s0[MAXR], s1[MAXR];
         for (uint m = 0; m < MAXR; ++m) {{ s0[m] = 0.0f; s1[m] = 0.0f; }}
-        for (uint c = 0; c < CHUNKS{'' if positions == 8 else ' / 2u'}; ++c) {{
+{prefetch_init}        for (uint c = 0; c < CHUNKS{'' if positions == 8 else ' / 2u'}; ++c) {{
             uint chunk = chunk_group * CHUNKS + {'c' if positions == 8 else '2u * c + lane / 16u'};
             // Same as inverse[chunk * TN + strip] for both shard layouts (checked in the tests).
             uint unit = SHARD_N ? strip * TK + chunk : (chunk >> 1) * (TN * 2u) + strip * 2u + (chunk & 1u);
             uint ring = (expert * TK * TN + unit) * 8u + g;
-            uint variant = PACKED_VAR ? ((uint(variants[ring >> 3]) >> (ring & 7u)) & 1u) : uint(variants[ring]);
+            uint variant = {variant_expr};
             float sign = variant ? -1.0f : 1.0f;
             float a = float(as_type<half>(ushort(0x1eee))) * sign;
             float b = float(as_type<half>(ushort(0xc931))) * sign;
-            uint mb = 0, n = 0;
+            uint mb = 0, n = 0;{fold_decl}
             ulong residual_window = 0, residual_windowb = 0;
             uint residual_high = 0;
             if (refined) {{
@@ -576,10 +649,10 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
                     ch = half(t - 1024.0f * float(ah));
                 }}
                 a = float(ah) * sign;
-                b = float(ch) * sign;
+                b = float(ch) * sign;{fold_setup}
                 {residual_load_code}
             }}
-            ulong base_window = {base_load};
+            ulong base_window = {base_window_expr};{prefetch_next}
             uint base_window0 = uint(base_window), base_window8 = uint(base_window >> 8),
                  base_window16 = uint(base_window >> 16), base_window24 = uint(base_window >> 24),
                  base_window32 = uint(base_window >> 32);
@@ -666,11 +739,17 @@ def _window_kernel(base_k: float, residual_k: float, style: str = 'window', posi
         # slower (code size), while a refined launch holding only this copy runs grouped rows at the
         # cost of one decode. Every row then sums in the same order whether or not it has partners.
         refined_cases = specialized(section.replace('(refined)', '(true)'), spec_refined)
+        if REFINED_MAXR:
+            # Refined groups hold at most REFINED_MAXR rows (see _groups_source): smaller member arrays in the
+            # refined copy. Same per-row arithmetic.
+            refined_cases = (f'    constexpr int RGMAX = MAXR < {REFINED_MAXR} ? MAXR : {REFINED_MAXR};\n'
+                             + refined_cases.replace('MAXR', 'RGMAX'))
     source = (preamble + '    if (refined) {\n' + refined_cases + '    } else {\n'
               + specialized(section.replace('(refined)', '(false)'), spec_base) + '    }\n')
     name = (f'nq_matvec_{style}_{LOAD_MODE}_{int(base_k * 10000)}_{int(residual_k * 10000)}_m{spec_base}{spec_refined}'
             f'_p{positions}' + ('' if refined_group_positions == 8 else f'r{refined_group_positions}')
-            + ('' if WRAP_SHUFFLE else '_fb') + _int_suffix())
+            + ('' if WRAP_SHUFFLE else '_fb') + _int_suffix() + ('_pf' if WINDOW_PREFETCH else '')
+            + (f'_rm{REFINED_MAXR}' if REFINED_MAXR else ''))
     inputs = ['base', 'residual', 'words', 'variants', 'inverse', 'x', 'expert_ids', 'refined_ids', 'groups', 'ac_table']
     outputs = ['partial']
     # Precision-split launches (only=1: refined rows, only=2: base rows; the other rows' partial sums are
@@ -827,8 +906,17 @@ uint nq_sum_fast(uint state) {
 WINDOW_CHUNKS = 16
 # Member counts up to these (base-only rows, refined rows) get a compile-time specialized
 # accumulation in the window kernel; larger groups use the predicated MAXR loop (refined rows: only it).
-SPECIALIZED_MEMBERS = (4, 0)
+# NQ_REFINED_SPECIALIZED overrides the refined count (1 pairs well with NQ_REFINED_MAXR=2: a one-row refined copy
+# plus a two-member predicated copy).
+SPECIALIZED_MEMBERS = (4, int(__import__('os').environ.get('NQ_REFINED_SPECIALIZED', '0')))
 USE_AC_TABLE = True
+# Chunks per gate/up window threadgroup in expert_mlp_fused (NQ_GATE_UP_CHUNKS; 0 = WINDOW_CHUNKS). 32 covers the whole
+# 4096-wide input in one threadgroup: half the threadgroups and partial sums, but a different float32 summation order.
+# Largest group of refined rows sharing one decode (NQ_REFINED_MAXR; 0 = the same MAXR as base rows). Base rows keep
+# MAXR (specialized copies); the refined copy is one predicated loop whose member arrays scale with its MAXR.
+REFINED_MAXR = int(__import__('os').environ.get('NQ_REFINED_MAXR', '0'))
+WINDOW_PREFETCH = __import__('os').environ.get('NQ_WINDOW_PREFETCH', '0') != '0'
+GATE_UP_CHUNKS = int(__import__('os').environ.get('NQ_GATE_UP_CHUNKS', '0'))
 
 
 @lru_cache(maxsize=1)
@@ -879,6 +967,17 @@ _GROUPS = """
 """
 
 
+def _groups_source():
+    """_GROUPS, with refined rows in runs of at most REFINED_MAXR when that is set."""
+    if not REFINED_MAXR:
+        return _GROUPS
+    run = f'((MIXED && hot != 0xffffffffu) ? min(uint(MAXR), {REFINED_MAXR}u) : uint(MAXR))'
+    text = _GROUPS.replace('    uint before = 0;', f'    uint run = {run};\n    uint before = 0;')
+    text = text.replace('count < MAXR)', 'count < run)').replace('before % MAXR', 'before % run')
+    assert text.count('run') == 4
+    return text
+
+
 _FWHT = """
     threadgroup float buf[128];
     buf[t] = value;
@@ -892,6 +991,37 @@ _FWHT = """
     }
     value = buf[t] * 0.08838834764831845f;
 """
+# 128-point transform with the stages h = 1..16 as SIMD shuffles (no threadgroup round trip) and h = 32, 64 from one
+# threadgroup exchange (NQ_FWHT_SIMD). Each output takes the same additions and subtractions in the same order as
+# _FWHT, so results are identical. Needs 128 threads (four SIMD groups) per threadgroup.
+_FWHT_SIMD = """
+    threadgroup float buf[128];
+    for (ushort h = 1; h < 32; h <<= 1) {
+        float u = simd_shuffle_xor(value, h);
+        value = (t & h) ? (u - value) : (value + u);
+    }
+    buf[t] = value;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    {
+        uint l = t & 31u;
+        float a0 = buf[l], a1 = buf[l + 32u], a2 = buf[l + 64u], a3 = buf[l + 96u];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float b0 = a0 + a1, b1 = a0 - a1, b2 = a2 + a3, b3 = a2 - a3;
+        uint i = (t >> 5) & 3u;
+        value = i == 0u ? b0 + b2 : i == 1u ? b1 + b3 : i == 2u ? b0 - b2 : b1 - b3;
+    }
+    value = value * 0.08838834764831845f;
+"""
+FWHT_SIMD = __import__('os').environ.get('NQ_FWHT_SIMD', '0') != '0'
+
+
+def _fwht(decl=True):
+    text = _FWHT_SIMD if FWHT_SIMD else _FWHT
+    return text if decl else text.replace('    threadgroup float buf[128];\n', '', 1)
+
+
+def _fwht_tag():
+    return '_fs' if FWHT_SIMD else ''
 
 
 @lru_cache(maxsize=None)
@@ -911,15 +1041,16 @@ def _prep_kernel(grouped: bool = False):
     uint k = block * 128u + t;
     float su = ready ? float(ref_su[slot * K + k]) : float(base_su[e * K + k]);
     float value = x[row * K + k] * su;
-""" + _FWHT + """
+""" + _fwht() + """
     rotated[row * K + k] = half(value);
 """
     names, outputs = ['x', 'base_su', 'ref_su', 'route', 'refined'], ['rotated']
     if grouped:
-        source += "    if (block == 0 && t == 0) {\n" + _GROUPS + "    }\n"
+        source += "    if (block == 0 && t == 0) {\n" + _groups_source() + "    }\n"
         names += ['variants', 'words']
         outputs += ['groups']
-    return mx.fast.metal_kernel(name='nq_prep' + ('_grouped' if grouped else ''), input_names=names,
+    return mx.fast.metal_kernel(name='nq_prep' + _fwht_tag() + ('_grouped' if grouped else '')
+                                + (f'_rm{REFINED_MAXR}' if REFINED_MAXR and grouped else ''), input_names=names,
                                 output_names=outputs, source=source)
 
 
@@ -963,7 +1094,7 @@ def _post_kernel(rank: int):
     auto source = ready ? partial_r : partial;
     for (uint g = 0; g < G; ++g)
         value += source[((row * TN + strip) * G + g) * 16u + j];
-""" + _FWHT + """
+""" + _fwht() + """
     float sv = ready ? float(ref_sv[slot * N + n]) : float(base_sv[e * N + n]);
     float result = value * sv;
 """ + low_rank + """
@@ -972,7 +1103,7 @@ def _post_kernel(rank: int):
     names = ['partial', 'base_sv', 'ref_sv', 'route', 'refined', 'x', 'partial_r']
     if rank:
         names += ['lrV', 'lrU2', 'lrU4']
-    return mx.fast.metal_kernel(name=f'nq_post_r{rank}', input_names=names, output_names=['out'], source=source)
+    return mx.fast.metal_kernel(name=f'nq_post{_fwht_tag()}_r{rank}', input_names=names, output_names=['out'], source=source)
 
 
 def projection_fused(planes: dict, meta: dict, x: mx.array, route: mx.array, *,
@@ -1219,14 +1350,14 @@ def _prep_pair_kernel():
     uint k = block * 128u + t;
     float su = ready ? float(ref_su[slot * K + k]) : float(base_su[e * K + k]);
     float value = x[(row / E) * K + k] * su;
-""" + _FWHT + """
+""" + _fwht() + """
     (z ? rotated_u : rotated_g)[row * K + k] = half(value);
     if (GROUPED && z == 0 && block == 0 && t == 0) {
-""" + _GROUPS + """
+""" + _groups_source() + """
     }
 """
     return mx.fast.metal_kernel(
-        name='nq_prep_pair', input_names=['x', 'base_su_g', 'ref_su_g', 'base_su_u', 'ref_su_u', 'route', 'refined',
+        name='nq_prep_pair' + _fwht_tag() + (f'_rm{REFINED_MAXR}' if REFINED_MAXR else ''), input_names=['x', 'base_su_g', 'ref_su_g', 'base_su_u', 'ref_su_u', 'route', 'refined',
                                           'variants', 'words'],
         output_names=['rotated_g', 'rotated_u', 'groups'], source=source)
 
@@ -1258,7 +1389,7 @@ def _post_body(tag, rank):
     auto source = ready ? partial_r{tag} : partial_{tag};
     for (uint g = 0; g < G; ++g)
         value += source[((row * TN + strip) * G + g) * 16u + j];
-""" + _FWHT_NODECL + f"""
+""" + _fwht(False) + f"""
     float sv = ready ? float(ref_sv_{tag}[slot * N + n]) : float(base_sv_{tag}[e * N + n]);
     float result = value * sv;
 """ + low_rank + f"""
@@ -1296,7 +1427,7 @@ def _post_pair_kernel(rank_g: int, rank_u: int):
     float su = ready_d ? float(ref_su_d[slot * N + n]) : float(base_su_d[ed * N + n]);
     float value = act * su;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-""" + _FWHT_NODECL + """
+""" + _fwht(False) + """
     rotated_d[row * N + n] = half(value);
 """
     names = ['partial_g', 'partial_u', 'base_sv_g', 'ref_sv_g', 'base_sv_u', 'ref_sv_u', 'base_su_d', 'ref_su_d',
@@ -1305,7 +1436,7 @@ def _post_pair_kernel(rank_g: int, rank_u: int):
         names += ['lrV_g', 'lrU2_g', 'lrU4_g']
     if rank_u:
         names += ['lrV_u', 'lrU2_u', 'lrU4_u']
-    return mx.fast.metal_kernel(name=f'nq_post_pair_r{rank_g}_{rank_u}', input_names=names,
+    return mx.fast.metal_kernel(name=f'nq_post_pair{_fwht_tag()}_r{rank_g}_{rank_u}', input_names=names,
                                 output_names=['act_out', 'rotated_d'], source=source)
 
 
@@ -1344,7 +1475,7 @@ def expert_mlp_fused(planes: dict, tokens: mx.array, route: mx.array, experts_pe
         output_dtypes=[mx.float16, mx.float16, mx.uint32])
     if not grouped:
         groups = route
-    chunks = WINDOW_CHUNKS if tk % WINDOW_CHUNKS == 0 else 1
+    chunks = GATE_UP_CHUNKS if GATE_UP_CHUNKS and tk % GATE_UP_CHUNKS == 0 else (WINDOW_CHUNKS if tk % WINDOW_CHUNKS == 0 else 1)
     positions = LANE_POSITIONS if chunks % 2 == 0 else 8
     window_template = [('LEVEL', 2), ('TK', tk), ('TN', tn), ('BANKED', True), ('MIXED', mixed),
                        ('PACKED_VAR', gate_meta.get('var_bits', 8) == 1), ('CHUNKS', chunks), ('MAXR', max_rows),
