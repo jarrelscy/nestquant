@@ -661,7 +661,7 @@ def main():
                         help='Verify draft rows with the 1.5-bit base only (faster; quality not yet validated)')
     parser.add_argument('--capture-streams', choices=('mean', 'first'), default='mean')
     parser.add_argument('--predictor-backend', default=None,
-                        help="jT predictor: torch (default) or coreml[:ane|:cpu|:all]; env NQ_PREDICTOR_BACKEND")
+                        help="jT predictor: auto (default: coreml when available, else torch), torch, or coreml[:ane|:all]; env NQ_PREDICTOR_BACKEND")
     args = parser.parse_args()
     global CAPTURE_SHIFT
     CAPTURE_SHIFT = args.capture_shift

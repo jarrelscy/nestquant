@@ -546,7 +546,7 @@ def main():
     p.add_argument('--block-size', type=int, default=-8, help='DFlash verify block; negative = adaptive up to N')
     p.add_argument('--hot-fraction', type=float, default=0.15)
     p.add_argument('--predictor-backend', default=None,
-                   help="jT predictor: torch (default) or coreml[:ane|:cpu|:all]; env NQ_PREDICTOR_BACKEND")
+                   help="jT predictor: auto (default: coreml when available, else torch), torch, or coreml[:ane|:all]; env NQ_PREDICTOR_BACKEND")
     p.add_argument('--budget-gib', type=int, default=16)
     p.add_argument('--guard-gib', type=float, default=98)
     p.add_argument('--queue-timeout', type=float, default=900)

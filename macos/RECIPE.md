@@ -6,10 +6,10 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 
 | Workload | Decode tok/s | Notes |
 |---|---:|---|
-| Plain decode | ~21 | no drafter |
-| Coding benchmark, 6 tasks (average) | 33.9 | edit and fix tasks 38–47, new code 26–30, prose ~22 |
-| GSM8K, first 100 test problems | 34.0 | 99/100 correct |
-| Agent turns (Terminal-Bench, 2K–20K context) | ~27 median | prefix reuse, new turns prefill in ~1–8 s |
+| Plain decode, coding benchmark (average) | ~26 | ~25 at 8K–30K context |
+| DFlash2, coding benchmark, 6 tasks (average) | ~39 | edit, refactor and fix tasks 41–56, new code 27–34, prose ~27 |
+| GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build) |
+| Agent turns (Terminal-Bench, 2K–20K context) | ~27 median | earlier build; prefix reuse, new turns prefill in ~1–8 s |
 
 Peak memory is about 84–86 GiB. Quality settings: the full 1.5-bit expert base stays resident, 15% of expert
 slots hold 4-bit refinements (about half of all expert calls run at 4 bits), and every verified token uses
@@ -62,7 +62,18 @@ done
 cd -
 ```
 
-The server's default paths match these locations.
+Optional but recommended: convert the jT expert predictor to Core ML so it runs on the Neural Engine. This
+frees CPU time for the refinement readers. It uses a separate environment so the runtime's packages stay
+unchanged; the runtime finds it automatically and falls back to PyTorch if it is missing.
+
+```sh
+uv venv --python 3.12 .venv-coreml
+uv pip install --python .venv-coreml/bin/python coremltools torch==2.15.0 numpy safetensors
+.venv-coreml/bin/python macos/coreml_predictor.py convert
+```
+
+This writes `~/Models/GLM/predictor-coreml-v1/` (about 144 MB). The server's default paths match these
+locations.
 
 ## 4. Run the server
 

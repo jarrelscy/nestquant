@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+from pathlib import Path
 import threading
 import time
 
@@ -36,6 +37,17 @@ class LockedRefinementReader(RefinementReader):
             return RefinementReader._handle(self, layer, shard)
 
 
+def _coreml_available():
+    try:
+        from coreml_predictor import DEFAULT_PACKAGE, import_coremltools
+        if not Path(DEFAULT_PACKAGE).exists():
+            return False
+        import_coremltools()
+        return True
+    except Exception:
+        return False
+
+
 class NativeHotRefinements:
     # Defaults for instances built without __init__ (tests); __init__ enables background installs.
     background_installs = False
@@ -46,7 +58,10 @@ class NativeHotRefinements:
                  predictor_backend=None):
         # 'torch' (default) runs jT on the CPU with PyTorch; 'coreml' (or 'coreml:cpu', 'coreml:all') runs it
         # through Core ML, by default on the CPU and Neural Engine. NQ_PREDICTOR_BACKEND sets the default.
-        predictor_backend = predictor_backend or os.environ.get('NQ_PREDICTOR_BACKEND', 'torch')
+        predictor_backend = predictor_backend or os.environ.get('NQ_PREDICTOR_BACKEND', 'auto')
+        if predictor_backend == 'auto':
+            # Core ML (Neural Engine) when its converted package and coremltools are available, else PyTorch.
+            predictor_backend = 'coreml' if _coreml_available() else 'torch'
         backend, _, units = predictor_backend.partition(':')
         if backend not in ('torch', 'coreml') or (units and backend != 'coreml'):
             raise ValueError(f'Unknown predictor backend {predictor_backend!r}')
