@@ -13,8 +13,11 @@ The delivery model follows NativeHotRefinements with background installs:
   publish (step boundary): activate finished copies, then stage completed reads: reserve a slot (free, else
                            evict a resident expert outside the wanted set) and copy (`copy_ms`, 2 threads);
   verify                 : activate finished copies; the routed calls of the round run at 4 bits iff resident.
-Direct mode (`direct=True`) models reads that land straight in free slots: at publish, victims are evicted
-for missing wanted experts plus `spare` free slots per layer, and reads into free slots start at publish and
+Direct mode (`direct=True`) models reads that land straight in free slots (no staging copy). Each layer's bank
+has `extra` spare rows beyond its pool (total over layers, split in proportion to the pools; the staging
+budget's memory). At publish, resident experts outside the wanted set are evicted (lowest score first) until
+each layer has its spare rows free plus up to `evict_ahead` more for missing wanted experts; reads into free
+slots start at publish and
 at plan; a read becomes resident at the first publish/verify after it completes.
 
 Usage:
@@ -34,7 +37,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hot_policy  # noqa: E402
-from hot_policy import choose_victim, seed_from_prompt  # noqa: E402
+from hot_policy import choose_victim, seed_from_prompt, spare_rows  # noqa: E402
 
 ROOT = Path.home() / 'Models/GLM/GLM-5.3-Flash-NestQuant-1.5-4bit'
 COLD = 0xffffffff
@@ -176,7 +179,8 @@ class Bank:
 class Delivery:
     def __init__(self, budgets, defaults, cfg):
         self.cfg = cfg
-        self.banks = [Bank(budgets[i], defaults[i]) for i in range(42)]
+        self.extra = spare_rows(budgets, cfg['extra']) if cfg['direct'] else [0] * 42
+        self.banks = [Bank(budgets[i] + self.extra[i], defaults[i]) for i in range(42)]
         self.pending = OrderedDict()   # (layer index, expert) -> [submit, done or None]
         self.queue = deque()           # not yet started reads (keys)
         self.threads = [0.0] * cfg['readers']
@@ -263,9 +267,11 @@ class Delivery:
         if cfg['direct']:
             for key in [k for k, (s, d) in self.pending.items() if d is not None and d <= t]:
                 del self.pending[key]
-            # Free slots for missing wanted experts (plus spares), evicting outside the wanted set.
+            # Keep the spare rows free, plus up to evict_ahead slots for missing wanted experts.
             for i, bank in enumerate(self.banks):
-                need = int((wanted[i] & ~self.resident_row(i)).sum()) - len(bank.staging) + cfg['spare']
+                row = wanted[i] & ~self.resident_row(i)
+                missing = int(row.sum()) - sum(1 for e in bank.staging if row[e])
+                need = self.extra[i] + min(max(missing - self.extra[i], 0), cfg['evict_ahead'])
                 while bank.free < need:
                     victim = self.victim(i, wanted, priority)
                     if victim is None:
@@ -319,15 +325,16 @@ class Delivery:
 # ---------------------------------------------------------------------------------------------- simulation
 
 # The settings of the recorded runs (commit 46e443d). Configurations are overrides of these; NEW is the
-# hot_policy.DEFAULTS equivalent. Measured in-model: ~1.07 ms per install copy per thread, 4 install threads.
+# hot_policy.DEFAULTS equivalent (spare delivery: 64 spare slots = 512 MiB staging budget / 8.34 MB records).
+# Staged installs measured in-model at ~0.8-1.7 ms per copy per thread (4 install threads).
 BASE = dict(jt=dict(mix=0.75, hm=4.0, G=1, half_life=64.0), evict='fifo', seed=0.0,
-            readers=8, pending=48, read_ms=5.1, copy_ms=2.0, direct=False, spare=0, cancel=False,
+            readers=8, pending=48, read_ms=5.1, copy_ms=2.0, direct=False, extra=0, evict_ahead=0, cancel=False,
             verify_wait=False, verify_wait_ms=None, copy_threads=2, replay_wanted=False, replay_resident=False)
 
 
 NEW = dict(jt=dict(hot_policy.DEFAULTS['jt']), evict=hot_policy.DEFAULTS['evict'],
-           verify_wait=hot_policy.DEFAULTS['verify_wait'], pending=hot_policy.DEFAULTS['pending'], copy_ms=1.07,
-           copy_threads=4)
+           verify_wait=hot_policy.DEFAULTS['verify_wait'], direct=hot_policy.DEFAULTS['delivery'] == 'spare',
+           extra=64, pending=hot_policy.DEFAULTS['direct_inflight'], evict_ahead=hot_policy.DEFAULTS['evict_ahead'])
 
 
 class Score:
@@ -386,10 +393,6 @@ def simulate(paths_tapes, predictor, cfg, per_request=False):
             score = Score()
             p.net = TapeNet(tape)
             p.reset()
-            if cfg['spare']:
-                # Direct reads need free slots: the policy's pool is `spare` smaller than the bank.
-                for policy in p.policies:
-                    policy.inner.nf = max(int(policy.fixed.sum()) + 1, policy.inner.nf - cfg['spare'])
             delivery.reset()
             wanted = np.zeros((42, 288), dtype=bool)
             priority = np.zeros((42, 288))

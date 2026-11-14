@@ -13,8 +13,10 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 
 Peak memory is about 86 GiB. Quality settings (the defaults): the full 1.5-bit expert base stays resident, 20%
 of expert slots hold 4-bit refinements, and every verified token uses the same precision as plain decoding.
-About 43% of expert calls run at 4 bits on coding work and about 50% on agent-style prompts (the jT predictor
-chooses which experts to upgrade; the selection policy is tuned in `hot_policy.py`). With
+About 46% of expert calls run at 4 bits on coding work and about 52% on agent-style prompts (the jT predictor
+chooses which experts to upgrade; selection and delivery settings are in `hot_policy.py`). Upgrades are read
+straight into spare slots and become usable in the next forward pass; `NQ_REFINEMENT_DIRECT=staged` restores
+the older staged copies (about 3% faster decode, about 3 points fewer 4-bit calls). With
 `--hot-fraction 0.15 --budget-gib 16` the share is about 30% and memory about 84 GiB.
 
 ## 1. Requirements

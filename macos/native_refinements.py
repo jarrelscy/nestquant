@@ -84,6 +84,8 @@ class NativeHotRefinements:
         policy = hot_policy.settings()
         self.evict = policy['evict']
         self.verify_wait = policy['verify_wait']
+        self.evict_ahead = policy['evict_ahead']
+        self.direct_inflight = policy['direct_inflight']
         module, self.staging = staged_predictor()
         self.predictor = module.CommittedPredictor(
             root, preset='spark_256K_U_2630_flat50', device='cpu', dtype=torch.float32, fixed_fraction=0.2)
@@ -99,15 +101,33 @@ class NativeHotRefinements:
         self.reader = reader_from_env(root) if root is not None else None
         if self.reader is None:
             self.reader = LockedRefinementReader(root) if readers > 1 else RefinementReader(root)
-        # NQ_REFINEMENT_DIRECT=1 (archive reader, background installs): decode reads skip the staging buffer and
-        # the install copy. publish() reserves the slot first, then an install thread preadv's the record
-        # straight into it; the slot table still changes only at a later flip().
-        self.direct_reads = (hasattr(self.reader, 'read_into_slot') and os.environ.get('NQ_REFINEMENT_DIRECT') == '1'
-                             and os.environ.get('NQ_BACKGROUND_INSTALLS', '1') != '0')
-        # Background install copies (host memcpy into the slot planes); with verify_wait the next verify waits
-        # for them, so a few threads keep that wait short. Direct reads use one thread per reader.
-        self.install_threads = readers if self.direct_reads else int(os.environ.get('NQ_INSTALL_THREADS', '4'))
+        # Decode delivery (archive reader with background installs; hot_policy 'delivery', NQ_REFINEMENT_DIRECT):
+        #  spare  : each layer's bank has spare slots beyond its pool (the staging budget's memory). Reads of
+        #           missing wanted experts go straight into free slots from plan() on (one preadv, no staging
+        #           buffer, no copy); publish() keeps the spare slots free by evicting outside the wanted set.
+        #           A finished read joins the next step (verify or publish flip).
+        #  direct : publish() reserves the slot first, then an install thread preadv's the record into it.
+        #  staged : read into a staging buffer, copy into a slot reserved at the next publish.
+        # In every mode the slot table changes only at a flip() between steps.
+        can_direct = (hasattr(self.reader, 'read_into_slot') and getattr(self.reader, 'thread_safe', False) is True
+                      and os.environ.get('NQ_BACKGROUND_INSTALLS', '1') != '0')
+        delivery = policy['delivery'] if can_direct else 'staged'
+        self.direct_reads = delivery == 'direct'
+        self.spare_reads = delivery == 'spare'
+        self.delivery = delivery
+        # Background install copies (host memcpy into the slot planes). Direct and spare reads use one thread
+        # per reader.
+        self.install_threads = (readers if delivery != 'staged' else int(os.environ.get('NQ_INSTALL_THREADS', '4')))
         self._direct_lock = threading.Lock()
+        self._copies_lock = threading.Lock()
+        self.extra_rows = {}
+        if self.spare_reads:
+            # The staging budget becomes spare slots; the staged-read worker keeps a token budget.
+            record = max(self.reader.bytes_for(layer, 0) for layer in range(3, 45))
+            budgets = [self.predictor.budgets[layer] for layer in range(3, 45)]
+            spare = hot_policy.spare_rows(budgets, staging_mib * 1024**2 // record)
+            self.extra_rows = dict(zip(range(3, 45), spare))
+            staging_mib = 1
         self.worker = BoundedReader(self._deferred if self.direct_reads else self.reader.read,
                                     staging_mib * 1024**2, pending, readers)
         self.prefill_rows = prefill_rows
@@ -123,7 +143,7 @@ class NativeHotRefinements:
         self.reset()
 
     def attach(self, layer, base):
-        rows = self.predictor.budgets[layer]
+        rows = self.predictor.budgets[layer] + getattr(self, 'extra_rows', {}).get(layer, 0)
         proposed = PackedRefinementBank.bytes_for(base, rows)
         scratch = max(self.prefill_max_bytes, PackedRefinementBank.bytes_for(base, self.prefill_rows))
         if proposed + self.reserved_bytes() + scratch + self.worker.budget_bytes > self.budget_bytes:
@@ -234,6 +254,8 @@ class NativeHotRefinements:
         return self.reader.bytes_for(layer, expert)
 
     def _queue(self):
+        if getattr(self, 'spare_reads', False):
+            return self._queue_spare()
         for key in self.order:
             layer, expert = key
             if expert in self.banks[layer].slots or expert in self.banks[layer].staging or key in self.worker.pending:
@@ -244,16 +266,67 @@ class NativeHotRefinements:
                 self.__dict__.setdefault('_submitted', {})[key] = time.perf_counter()
 
     _direct_lock = threading.Lock()  # instances built without __init__ (tests)
+    _copies_lock = threading.Lock()
+    spare_reads = False
+
+    def _queue_spare(self):
+        """Start reads of missing wanted experts (loading priority order) straight into free slots.
+
+        Runs on the predictor hook thread (plan) while the GPU may be using the banks: take_free() only hands
+        out slots that no slot table references, and the table changes later, at a flip() between steps."""
+        if self._copy_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            self._copy_pool = ThreadPoolExecutor(max_workers=self.install_threads, thread_name_prefix='nestquant-read')
+        with self._copies_lock:
+            inflight = len(self._copies)
+        for layer, expert in self.order:
+            if inflight >= self.direct_inflight:
+                break
+            bank = self.banks[layer]
+            slot = bank.take_free(expert)
+            if slot is None:
+                continue
+            future = self._copy_pool.submit(self._direct_read, bank, layer, expert, slot, time.perf_counter())
+            with self._copies_lock:
+                self._copies = list(self._copies) + [(bank, expert, slot, future)]
+            inflight += 1
+
+    def _evict_for_reads(self):
+        """At a step boundary, free each layer's spare slots (and up to evict_ahead more for missing wanted
+        experts) by evicting resident experts outside the wanted set, lowest loading priority first."""
+        for layer, bank in self.banks.items():
+            row = self.wanted[layer - 3]
+            wanted = set(np.flatnonzero(row).tolist())
+            missing = sum(1 for expert in wanted if expert not in bank.slots and expert not in bank.staging)
+            extra = self.extra_rows.get(layer, 0)
+            need = extra + min(max(missing - extra, 0), self.evict_ahead)
+            scores = self._victim_scores(layer)
+            while len(bank.available) < need:
+                victim = hot_policy.choose_victim(bank.slots, wanted, scores)
+                if victim is None:
+                    break
+                bank.evict(victim)
+                self.reads['evicted_ahead'] = self.reads.get('evicted_ahead', 0) + 1
 
     @staticmethod
     def _deferred(layer, expert):
         return None, 0, 0.0
 
-    def _direct_read(self, bank, layer, expert, slot):
+    def _direct_read(self, bank, layer, expert, slot, submitted=None):
         count, elapsed = self.reader.read_into_slot(layer, expert, bank, slot)
+        if getattr(self, 'record', None) is not None:
+            self._record('read', layer, expert, submitted, time.perf_counter(), count, elapsed, True)
         with self._direct_lock:
+            self.reads['decode_reads'] = self.reads.get('decode_reads', 0) + 1
             self.reads['decode_bytes'] += count
             self.reads['decode_worker_seconds'] += elapsed
+
+    def _timed_write(self, bank, slot, payload):
+        started = time.perf_counter()
+        bank.write(slot, payload)
+        with self._direct_lock:
+            self.reads['install_copies'] = self.reads.get('install_copies', 0) + 1
+            self.reads['install_copy_seconds'] = self.reads.get('install_copy_seconds', 0.0) + time.perf_counter() - started
 
     def _publish(self, key, value):
         target, expert = key
@@ -314,7 +387,11 @@ class NativeHotRefinements:
         started = time.perf_counter()
         self._record_residency('publish')
         self.flip()
-        self.worker.poll(self._stage)
+        if getattr(self, 'spare_reads', False):
+            self._evict_for_reads()
+            self._queue_spare()
+        else:
+            self.worker.poll(self._stage)
         self.reads['decode_publication_seconds'] += time.perf_counter() - started
 
     def _victim_scores(self, layer):
@@ -326,7 +403,8 @@ class NativeHotRefinements:
     def flip_for_verify(self):
         """Activate finished copies before a verify. With verify_wait (and copy-based installs), wait for the
         copies started at the last publish so their experts join this verify instead of the next one."""
-        wait = getattr(self, 'verify_wait', False) and not getattr(self, 'direct_reads', False) and bool(self._copies)
+        wait = (getattr(self, 'verify_wait', False) and not getattr(self, 'direct_reads', False)
+                and not getattr(self, 'spare_reads', False) and bool(self._copies))
         started = time.perf_counter()
         self.flip(wait=wait)
         if wait:
@@ -335,25 +413,31 @@ class NativeHotRefinements:
             self._record_residency('verify')
 
     def flip(self, wait=False):
-        """Activate finished background copies (all of them with wait=True). Call between steps."""
+        """Activate finished background copies (all of them with wait=True). Call between steps.
+
+        The lock covers reads started concurrently by the predictor hook (spare delivery)."""
         if not self._copies:
             return
-        remaining = []
-        for bank, expert, slot, future in self._copies:
-            if not (wait or future.done()):
-                remaining.append((bank, expert, slot, future))
-                continue
+        with self._copies_lock:
+            copies = list(self._copies)
+            remaining = []
             try:
-                future.result()
-            except BaseException:
-                bank.release(expert, slot)
+                for index, (bank, expert, slot, future) in enumerate(copies):
+                    if not (wait or future.done()):
+                        remaining.append((bank, expert, slot, future))
+                        continue
+                    try:
+                        future.result()
+                    except BaseException:
+                        bank.release(expert, slot)
+                        remaining.extend(copies[index + 1:])
+                        raise
+                    bank.activate(expert, slot)
+                    self.reads['installed'] += 1
+                    if getattr(self, 'record', None) is not None:
+                        self._record('activate', bank_layer(self, bank), expert, time.perf_counter())
+            finally:
                 self._copies = remaining
-                raise
-            bank.activate(expert, slot)
-            self.reads['installed'] += 1
-            if getattr(self, 'record', None) is not None:
-                self._record('activate', bank_layer(self, bank), expert, time.perf_counter())
-        self._copies = remaining
 
     def drain(self):
         self.flip(wait=True)
@@ -384,7 +468,7 @@ class NativeHotRefinements:
         if payload is None:
             future = self._copy_pool.submit(self._direct_read, bank, target, expert, slot)
         else:
-            future = self._copy_pool.submit(bank.write, slot, payload)
+            future = self._copy_pool.submit(self._timed_write, bank, slot, payload)
         self._copies = list(self._copies) + [(bank, expert, slot, future)]
 
     def plan(self, token):

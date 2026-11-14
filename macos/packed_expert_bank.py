@@ -381,6 +381,23 @@ class PackedRefinementBank:
         self.activate(expert, slot)
         return True
 
+    def take_free(self, expert):
+        """Reserve a free slot (one outside the slot table, so no GPU work can read it) for `expert`, or None.
+        Unlike reserve() this never evicts, so it is safe while queued GPU work uses the bank."""
+        if expert in self.slots or expert in self.staging or not self.available:
+            return None
+        slot = self.available.pop()
+        self.staging[expert] = slot
+        return slot
+
+    def evict(self, expert):
+        """Remove a resident expert from the slot table and free its slot. Call between steps, like reserve()."""
+        self.finish()
+        slot = self.slots.pop(expert)
+        self.table[expert] = self.COLD_SLOT
+        self._device_table = None
+        self.available.append(slot)
+
     def reserve(self, expert, wanted, scores=None):
         """Take a slot for `expert`: a free one, else the slot of a resident expert outside `wanted`, which
         leaves the slot table at once. Returns None if the expert is resident or staged, or no slot is free.
