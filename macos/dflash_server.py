@@ -14,6 +14,8 @@ Run under the model lock, for example:
 """
 
 import argparse
+import hmac
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -412,9 +414,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def authorized(self):
+        """With --api-key set, require `Authorization: Bearer <key>` on every request except /health."""
+        key = getattr(self.server, 'api_key', None)
+        if not key:
+            return True
+        supplied = self.headers.get('Authorization', '')
+        if hmac.compare_digest(supplied.encode(), f'Bearer {key}'.encode()):
+            return True
+        self.reply(401, {'error': {'message': 'Invalid or missing API key', 'type': 'invalid_request_error',
+                                   'code': 'invalid_api_key'}})
+        return False
+
     def do_GET(self):
         path = self.path.split('?')[0].rstrip('/')
         service = self.server.service
+        if path not in ('/health', '/v1/health') and not self.authorized():
+            return
         if path in ('/health', '/v1/health'):
             self.reply(200, {'status': 'ok', 'busy': service.lock.locked()})
         elif path == '/v1/models':
@@ -427,6 +443,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split('?')[0].rstrip('/')
+        if not self.authorized():
+            return
         if path not in ('/v1/chat/completions', '/chat/completions'):
             self.reply(404, {'error': {'message': 'Unknown endpoint', 'type': 'invalid_request_error'}})
             return
@@ -516,9 +534,10 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, service):
+    def __init__(self, address, service, api_key=None):
         super().__init__(address, Handler)
         self.service = service
+        self.api_key = api_key
 
     def on_failure(self, error):
         print(json.dumps(dict(event='request_failed', error=f'{type(error).__name__}: {error}')), flush=True)
@@ -540,7 +559,11 @@ def main():
     p.add_argument('--archive', type=Path, default=HOME / 'Models/GLM/resident-banks-v1')
     p.add_argument('--backbone', type=Path, default=HOME / 'Models/GLM/backbone-affine4-e8-v1')
     p.add_argument('--drafter', type=Path, default=HOME / 'Models/GLM/drafters/dflash2')
+    p.add_argument('--host', default='127.0.0.1',
+                   help='Address to bind; 0.0.0.0 serves every network interface (use --api-key)')
     p.add_argument('--port', type=int, default=18090)
+    p.add_argument('--api-key', default=os.environ.get('NQ_SERVER_API_KEY'),
+                   help='Require "Authorization: Bearer <key>" (env NQ_SERVER_API_KEY); default: no key')
     p.add_argument('--model-name', default=MODEL, help='Name reported by /v1/models and in responses')
     p.add_argument('--max-context', type=int, default=32768, help='Prompt plus completion tokens (up to 65536)')
     p.add_argument('--block-size', type=int, default=-8, help='DFlash verify block; negative = adaptive up to N')
@@ -558,8 +581,13 @@ def main():
     session = DFlashSession(a)
     gpu, stop = GpuThread(), threading.Event()
     try:
-        with Server(('127.0.0.1', a.port), Service(session, a.model_name, a.queue_timeout, gpu=gpu)) as server:
-            print(json.dumps(dict(event='listening', url=f'http://127.0.0.1:{a.port}/v1')), flush=True)
+        with Server((a.host, a.port), Service(session, a.model_name, a.queue_timeout, gpu=gpu),
+                    api_key=a.api_key) as server:
+            if a.host not in ('127.0.0.1', 'localhost', '::1') and not a.api_key:
+                print(json.dumps(dict(event='warning', message=f'Serving on {a.host} without an API key: anyone '
+                                                               'who can reach this port can use the model')), flush=True)
+            print(json.dumps(dict(event='listening', url=f'http://{a.host}:{a.port}/v1',
+                                  api_key_required=bool(a.api_key))), flush=True)
             serving = threading.Thread(target=lambda: (server.serve_forever(), stop.set()), daemon=True)
             serving.start()
             try:

@@ -47,8 +47,9 @@ class FakeBackend:
 
 
 class ServerHarness:
-    def __init__(self, backend, queue_timeout=5.0):
-        self.server = Server(('127.0.0.1', 0), Service(backend, 'glm-nestquant', queue_timeout, log=lambda *a, **k: None))
+    def __init__(self, backend, queue_timeout=5.0, api_key=None):
+        self.server = Server(('127.0.0.1', 0), Service(backend, 'glm-nestquant', queue_timeout, log=lambda *a, **k: None),
+                             api_key=api_key)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -156,6 +157,23 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(finishes[-1], 'stop')
         self.assertEqual(chunks[-1]['usage']['completion_tokens'], len('Hello world'))
         self.assertEqual(chunks[0]['choices'][0]['delta']['role'], 'assistant')
+
+
+class ApiKeyTest(unittest.TestCase):
+    def test_key_required_except_health(self):
+        harness = ServerHarness(FakeBackend(), api_key='secret-key')
+        try:
+            body = dict(model='glm-nestquant', messages=[{'role': 'user', 'content': 'hi'}])
+            self.assertEqual(harness.request('POST', '/v1/chat/completions', body)[0], 401)
+            self.assertEqual(harness.request('GET', '/v1/models')[0], 401)
+            wrong = {'Authorization': 'Bearer nope'}
+            self.assertEqual(harness.request('POST', '/v1/chat/completions', body, wrong)[0], 401)
+            self.assertEqual(harness.request('GET', '/health')[0], 200)
+            good = {'Authorization': 'Bearer secret-key'}
+            self.assertEqual(harness.request('GET', '/v1/models', headers=good)[0], 200)
+            self.assertEqual(harness.request('POST', '/v1/chat/completions', body, good)[0], 200)
+        finally:
+            harness.close()
 
 
 class ConcurrencyTest(unittest.TestCase):

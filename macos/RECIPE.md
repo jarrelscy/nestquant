@@ -117,7 +117,9 @@ The server's default paths match these locations.
 .venv-macos/bin/python macos/dflash_server.py --port 18090 --max-context 32768
 ```
 
-Loading takes about 2 minutes. The server binds to 127.0.0.1, serves `POST /v1/chat/completions` (streaming
+Loading takes about 2 minutes. By default the server binds to 127.0.0.1 (this Mac only). To serve other
+machines, add `--host 0.0.0.0` and set an API key with `--api-key <key>` (or `NQ_SERVER_API_KEY`); clients
+then send `Authorization: Bearer <key>`. The server serves `POST /v1/chat/completions` (streaming
 and non-streaming) and `GET /v1/models`, and reports the model as `glm-nestquant`. Any API key is accepted.
 
 ```sh
