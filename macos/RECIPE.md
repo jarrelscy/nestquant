@@ -10,7 +10,7 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 | Plain decode, coding benchmark (average) | ~25.5 | |
 | GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build, 15% hot set) |
 | MMLU-Pro, first 152 test questions, through the server | 26.2 (median 30) | 128/152 correct (84.2%), sustained load |
-| Agent turns (Terminal-Bench, 2K–20K context) | ~27 median | earlier build; prefix reuse, new turns prefill in ~1–8 s |
+| Agent turns (Terminal-Bench 2.1, 9 tasks, 1K–20K context) | 35.3 (median 41) | 7/9 passed; 514 requests over ~2.3 h of sustained load |
 
 Peak memory is about 86 GiB. Quality settings (the defaults): the full 1.5-bit expert base stays resident, 20%
 of expert slots hold 4-bit refinements, and every verified token uses the same precision as plain decoding.
