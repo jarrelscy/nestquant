@@ -388,11 +388,19 @@ class ExpertMajorRefinementReader:
             os.close(fd)
 
 
+DEFAULT_ARCHIVE = Path.home() / 'Models/GLM/refinements-expert-major-v1'
+
+
 def reader_from_env(root):
-    """ExpertMajorRefinementReader when NQ_REFINEMENT_ARCHIVE is set, else None (use the shard reader)."""
+    """ExpertMajorRefinementReader for NQ_REFINEMENT_ARCHIVE, or for the default archive path when it exists;
+    None (use the shard reader) when neither is available or NQ_REFINEMENT_ARCHIVE is 0/off."""
     archive = os.environ.get('NQ_REFINEMENT_ARCHIVE')
-    if not archive:
+    if archive in ('0', 'off', 'none'):
         return None
+    if not archive:
+        if not (DEFAULT_ARCHIVE / 'index.json').exists():
+            return None
+        archive = str(DEFAULT_ARCHIVE)
     return ExpertMajorRefinementReader(Path(archive).expanduser(), root=root)
 
 

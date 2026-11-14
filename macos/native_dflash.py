@@ -644,8 +644,8 @@ def main():
     parser.add_argument('--archive', type=Path, required=True)
     parser.add_argument('--backbone', type=Path, required=True)
     parser.add_argument('--drafter', type=Path, required=True)
-    parser.add_argument('--hot-fraction', type=float, default=0.15)
-    parser.add_argument('--budget-gib', type=int, default=16)
+    parser.add_argument('--hot-fraction', type=float, default=0.2)
+    parser.add_argument('--budget-gib', type=int, default=22)
     parser.add_argument('--blocks', default='-8',
                         help='Comma list: 0 = plain decode, N = fixed verify block, -N = adaptive up to N (best)')
     parser.add_argument('--tokens', type=int, default=96)

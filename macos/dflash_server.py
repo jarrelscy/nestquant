@@ -544,10 +544,10 @@ def main():
     p.add_argument('--model-name', default=MODEL, help='Name reported by /v1/models and in responses')
     p.add_argument('--max-context', type=int, default=32768, help='Prompt plus completion tokens (up to 65536)')
     p.add_argument('--block-size', type=int, default=-8, help='DFlash verify block; negative = adaptive up to N')
-    p.add_argument('--hot-fraction', type=float, default=0.15)
+    p.add_argument('--hot-fraction', type=float, default=0.2)
     p.add_argument('--predictor-backend', default=None,
                    help="jT predictor: auto (default: coreml when available, else torch), torch, or coreml[:ane|:all]; env NQ_PREDICTOR_BACKEND")
-    p.add_argument('--budget-gib', type=int, default=16)
+    p.add_argument('--budget-gib', type=int, default=22)
     p.add_argument('--guard-gib', type=float, default=98)
     p.add_argument('--queue-timeout', type=float, default=900)
     p.add_argument('--no-reuse', action='store_true', help='Fresh prefill for every request')

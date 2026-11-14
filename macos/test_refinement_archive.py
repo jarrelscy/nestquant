@@ -246,9 +246,18 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual((reader.cache, reader.readahead), (False, True))
         reader.close()
         saved = os.environ.pop('NQ_REFINEMENT_ARCHIVE', None)
+        default = ra.DEFAULT_ARCHIVE
         try:
+            # No variable and no archive at the default path: shard reader.
+            ra.DEFAULT_ARCHIVE = Path(tempfile.gettempdir()) / 'no-such-refinement-archive'
+            self.assertIsNone(ra.reader_from_env(None))
+            # Explicitly disabled even when an archive exists.
+            ra.DEFAULT_ARCHIVE = default
+            os.environ['NQ_REFINEMENT_ARCHIVE'] = '0'
             self.assertIsNone(ra.reader_from_env(None))
         finally:
+            ra.DEFAULT_ARCHIVE = default
+            os.environ.pop('NQ_REFINEMENT_ARCHIVE', None)
             if saved is not None:
                 os.environ['NQ_REFINEMENT_ARCHIVE'] = saved
 

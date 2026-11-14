@@ -6,21 +6,23 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 
 | Workload | Decode tok/s | Notes |
 |---|---:|---|
-| Plain decode, coding benchmark (average) | ~26 | ~25 at 8K–30K context |
-| DFlash2, coding benchmark, 6 tasks (average) | ~39 | edit, refactor and fix tasks 41–56, new code 27–34, prose ~27 |
-| GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build) |
+| DFlash2, coding benchmark, 6 tasks (average) | ~35 | edit, refactor and fix tasks 43–51, new code 25–29, prose ~19 |
+| Plain decode, coding benchmark (average) | ~26 | ~25 at 8K–30K context (15% hot set) |
+| GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build, 15% hot set) |
 | Agent turns (Terminal-Bench, 2K–20K context) | ~27 median | earlier build; prefix reuse, new turns prefill in ~1–8 s |
 
-Peak memory is about 84–86 GiB. Quality settings: the full 1.5-bit expert base stays resident, 15% of expert
-slots hold 4-bit refinements (about half of all expert calls run at 4 bits), and every verified token uses
-the same precision as plain decoding.
+Peak memory is about 86 GiB. Quality settings (the defaults): the full 1.5-bit expert base stays resident, 20%
+of expert slots hold 4-bit refinements, and every verified token uses the same precision as plain decoding.
+About 40% of expert calls run at 4 bits on coding work (30–48% by task; the jT predictor chooses which experts
+to upgrade). With `--hot-fraction 0.15 --budget-gib 16` the share is about 30% and memory about 84 GiB.
 
 ## 1. Requirements
 
 - Apple silicon Mac with 128 GB of unified memory. Close other large applications; the process needs
-  about 86 GiB.
+  about 86 GiB with the default 20% hot set.
 - Use a proper power adapter. On a low-wattage charger the GPU throttles and decode becomes erratic.
-- About 260 GB of free disk: 176 GiB checkpoint, 55 GiB base archive, 5.5 GiB backbone, 2.3 GB drafter.
+- About 360 GB of free disk: 176 GiB checkpoint, 55 GiB base archive, 94 GB refinement archive, 5.5 GiB
+  backbone, 2.3 GB drafter.
 - Xcode Command Line Tools (`xcode-select --install`) and [uv](https://docs.astral.sh/uv/).
 
 ## 2. Code and environment
@@ -83,10 +85,12 @@ refinements (the converter verifies every record). It takes about 5 minutes and 
   --base "$HOME/Models/GLM/resident-banks-v1" --output "$HOME/Models/GLM/refinements-expert-major-v1"
 .venv-macos/bin/python macos/refinement_archive.py verify --model "$MODEL" \
   --base "$HOME/Models/GLM/resident-banks-v1" --output "$HOME/Models/GLM/refinements-expert-major-v1"
-export NQ_REFINEMENT_ARCHIVE="$HOME/Models/GLM/refinements-expert-major-v1"
 ```
 
-With the archive (15% hot experts, coding benchmark): prefill is about 2× faster (7–10 s instead of 14–17 s for
+The runtime uses the archive automatically when it exists at that path (set `NQ_REFINEMENT_ARCHIVE` to use
+another location, or to `0` to use the shard reader).
+
+Measured with a 15% hot set on the coding benchmark: prefill is about 2× faster (7–10 s instead of 14–17 s for
 360–1,700-token prompts), decode uses about 25% less CPU and about 3 GiB less memory, and more expert calls run
 at 4 bits (35% instead of 30%; late upgrades 8% instead of 14%). Because more calls take the 4-bit path, decode
 is about 5–10% slower. To keep today's decode speed and 4-bit share while still getting the faster prefill,
