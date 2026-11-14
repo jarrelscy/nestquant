@@ -784,3 +784,17 @@ Neither full-model trial completed a safe paired comparison. Both used 128 force
 The 128-row initial pass served 34,771 base-cache hits and required 8,237 misses. Its 3.00% refinement allocation served 19.66% of routed calls and 38.33% of routed salience. Requested refinements were ready for 96.03% of their routed calls. These are observed coverage counters, not an answer-accuracy score.
 
 The second pass stopped under pressure. Its completed first-pass log remained available, but no warm-cache gain is established. Confidence is high in the recorded measurements and unknown for paired throughput or quality. Fable on Max/high returned a usage limit, so no fresh review was obtained. See [the results, hashes, and limitations](results/2026-11-06-native-warm-replay.json).
+
+## Routed-expert window kernels: register pressure is a weak lever (2026-11-14)
+
+`gpu_regs/regs.py` reads each window kernel's GPR count from the `__GPU_METADATA` section of a Metal binary archive. The field was calibrated on synthetic kernels: N live floats read as N + 3. `maxTotalThreadsPerThreadgroup` reports 1024 for every variant, so it gives no signal. Default GPR counts (gate/up pair, down): decode-1 base 46/36, mixed 72/67; verify-2 base 59/50, mixed 78/75; verify-8 base 79/67, mixed 78/75. The refined path sets the count in every mixed launch.
+
+Opt-in variants, all bit-exact (`test_optional_kernel_variants_are_bit_exact`):
+
+- `NQ_GATE_UP_PAIR=0`: separate gate and up launches. This removes the per-thread pointer selects and saves 6–12 GPRs.
+- `NQ_SPLIT_PRECISION=static`: split launches compile only their own path. Base rows drop from 72–78 to 45–59 GPRs.
+- `NQ_NARROW=1`: 16-bit lane setup. Saves 0–4 GPRs.
+- `NQ_WINDOW_TG` = 32–512 threads. GPRs unchanged.
+- `NQ_MIXED_BASE_SPECIALIZED`: fewer base copies. Smaller code, GPRs unchanged.
+
+In interleaved layer benchmarks (`bench_expert_kernels.py`, L10/L11, 12 chained layers, 5×10 samples), none of these variants beat the noise. Every variant stayed within ±3% in every scenario, and the combination of all three GPR cuts measured −0.1% to +5%. A timing-only ablation that adds live registers gives a gentle linear slope with no occupancy cliff: +8/+16/+32 GPRs cost +1%/+3%/+8%. At 36–79 GPRs these kernels are limited by instruction issue, not occupancy. The earlier prefetch slowdown (+23%) therefore came from its extra work, not its registers. Data: `results/2026-11-14-register-variants-{tg,structure,padding}.json`.
