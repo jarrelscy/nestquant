@@ -6,8 +6,8 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 
 | Workload | Decode tok/s | Notes |
 |---|---:|---|
-| DFlash2, coding benchmark, 6 tasks (average) | ~35 | edit, refactor and fix tasks 43–51, new code 25–29, prose ~19 |
-| Plain decode, coding benchmark (average) | ~26 | ~25 at 8K–30K context (15% hot set) |
+| DFlash2, coding benchmark, 6 tasks (average) | ~32 | edit, refactor and fix tasks 35–45, new code 23–27, prose ~21 |
+| Plain decode, coding benchmark (average) | ~24 | |
 | GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build, 15% hot set) |
 | Agent turns (Terminal-Bench, 2K–20K context) | ~27 median | earlier build; prefix reuse, new turns prefill in ~1–8 s |
 
@@ -18,6 +18,16 @@ chooses which experts to upgrade; selection and delivery settings are in `hot_po
 straight into spare slots and become usable in the next forward pass; `NQ_REFINEMENT_DIRECT=staged` restores
 the older staged copies (about 3% faster decode, about 3 points fewer 4-bit calls). With
 `--hot-fraction 0.15 --budget-gib 16` the share is about 30% and memory about 84 GiB.
+
+### Presets
+
+| Preset | Settings | 4-bit expert calls (coding) | DFlash2 decode (coding avg) | Peak memory |
+|---|---|---:|---:|---:|
+| **Quality (default)** | `--hot-fraction 0.2 --budget-gib 22`, archive, spare-slot delivery | ~47% | ~32 tok/s | ~86 GiB |
+| Speed | `--hot-fraction 0.15 --budget-gib 16` and `NQ_REFINEMENT_DIRECT=staged` | ~30% | ~36–39 tok/s | ~84 GiB |
+
+A 4-bit expert call decodes two trellises instead of one, so more 4-bit calls means slower verify rounds.
+Single benchmark runs vary by about ±15% because generated text, and with it draft acceptance, changes.
 
 ## 1. Requirements
 
