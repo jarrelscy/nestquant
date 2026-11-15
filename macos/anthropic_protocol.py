@@ -115,6 +115,8 @@ def to_openai(body):
            'model': body.get('model')}
     if isinstance(choice, dict) and choice.get('type') == 'none':
         out['tool_choice'] = 'none'
+    if isinstance(body.get('thinking'), dict):
+        out['thinking'] = body['thinking']
     return out
 
 
@@ -131,6 +133,8 @@ def to_anthropic(response, model):
     choice = response['choices'][0]
     message = choice['message']
     content = []
+    if message.get('reasoning_content'):
+        content.append({'type': 'thinking', 'thinking': message['reasoning_content'], 'signature': ''})
     if message.get('content'):
         content.append({'type': 'text', 'text': message['content']})
     for call in message.get('tool_calls') or []:
@@ -167,7 +171,12 @@ def stream_events(message):
                  usage=dict(message['usage'], output_tokens=0))
     events = [sse_event('message_start', {'type': 'message_start', 'message': start})]
     for index, block in enumerate(message['content']):
-        if block['type'] == 'text':
+        if block['type'] == 'thinking':
+            events.append(sse_event('content_block_start', {'type': 'content_block_start', 'index': index,
+                                                            'content_block': {'type': 'thinking', 'thinking': ''}}))
+            events.append(sse_event('content_block_delta', {'type': 'content_block_delta', 'index': index,
+                                                            'delta': {'type': 'thinking_delta', 'thinking': block['thinking']}}))
+        elif block['type'] == 'text':
             events.append(sse_event('content_block_start', {'type': 'content_block_start', 'index': index,
                                                             'content_block': {'type': 'text', 'text': ''}}))
             events.append(sse_event('content_block_delta', {'type': 'content_block_delta', 'index': index,

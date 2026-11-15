@@ -289,6 +289,17 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(RequestError):
             parse_request({'messages': [{'role': 'user', 'content': [{'type': 'input_audio', 'input_audio': {}}]}]})
 
+    def test_thinking_mode(self):
+        from dflash_protocol import split_thinking, thinking_mode
+        base = {'messages': [{'role': 'user', 'content': 'x'}]}
+        self.assertIsNone(parse_request(base)['thinking'])
+        self.assertEqual(parse_request(dict(base, reasoning_effort='high'))['thinking'], 'high')
+        self.assertEqual(parse_request(dict(base, chat_template_kwargs={'enable_thinking': True}))['thinking'], 'max')
+        self.assertEqual(thinking_mode({'thinking': {'type': 'enabled', 'budget_tokens': 1000}}), 'max')
+        self.assertIsNone(thinking_mode({'thinking': {'type': 'disabled'}}))
+        self.assertEqual(split_thinking('step 1\nstep 2</think>\n\nAnswer: 4'), ('step 1\nstep 2', 'Answer: 4'))
+        self.assertEqual(split_thinking('still thinking'), ('still thinking', ''))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -476,6 +476,13 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
             rows = mx.concatenate(last_captured[0], axis=-1)[:, :len(committed)]
             mx.async_eval(rows)
             committed_hidden.append(rows)
+            if len(committed_hidden) >= 256:
+                # One small array per round would otherwise pile up over long (thinking) replies.
+                committed_hidden[:] = [mx.concatenate(committed_hidden, axis=1)]
+        if rounds_seen % 512 == 0:
+            # The collector is off during decode; long replies (thousands of rounds) leave cyclic garbage that holds
+            # Metal buffers, and Metal's live-buffer limit (~499k) is reached after a few 30k-token replies.
+            gc.collect(1)
         t_trace = time.perf_counter()
         trace = hot.take_trace()
         mx.eval([value for entry in trace.values() for value in entry])

@@ -26,7 +26,7 @@ import threading
 import time
 from concurrent.futures import Future
 
-from dflash_protocol import (MODEL, RequestError, image_sources, SSE_DONE, chunk, completion_id, completion_response,
+from dflash_protocol import (MODEL, RequestError, image_sources, split_thinking, SSE_DONE, chunk, completion_id, completion_response,
                              common_prefix_length, context_error, find_stop, parse_request, plan_reuse, safe_prefix_length, sse)
 
 MAX_BODY = 64 * 1024**2      # base64 images
@@ -76,7 +76,8 @@ class Service:
 
     def prepare(self, parsed):
         try:
-            ids = self.backend.encode(parsed['messages'], parsed['tools'])
+            ids = (self.backend.encode(parsed['messages'], parsed['tools'], thinking=parsed.get('thinking'))
+                   if parsed.get('thinking') else self.backend.encode(parsed['messages'], parsed['tools']))
         except RequestError:
             raise
         except Exception as error:   # template errors and the like
@@ -130,6 +131,9 @@ class Service:
             if cut is not None:
                 text, finish = text[:cut], 'stop'
         message = dict(role='assistant', content=text)
+        if parsed.get('thinking'):
+            reasoning, text = split_thinking(text)
+            message = dict(role='assistant', content=text, reasoning_content=reasoning)
         if parsed['tools'] and hasattr(backend, 'tool_calls'):
             parsed_calls = backend.tool_calls(text, parsed['tools'])
             if parsed_calls:
@@ -192,6 +196,7 @@ class DFlashSession:
             self.window = window - 1 if window and types and all(t == 'sliding_attention' for t in types) else None
             self.tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
             self.template = (Path(ng.__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
+            self.thinking_template = (args.model / 'chat_template.jinja').read_text()
             end = json.loads((args.model / 'generation_config.json').read_text())['eos_token_id']
             self.eos = {end} if isinstance(end, int) else set(end)
             self.tool_parser = load_tool_module('glm47')
@@ -221,13 +226,20 @@ class DFlashSession:
                               memory_gib=round(self._footprint(), 2))), flush=True)
 
     # ------------------------------------------------------------------ text
-    def encode(self, messages, tools):
+    def encode(self, messages, tools, thinking=None):
         sources = image_sources(messages)
         if sources and self.vision is None:
             raise RequestError('Image input is disabled on this server')
-        ids = list(self.tokenizer.apply_chat_template(messages, tools=tools or None, tokenize=True,
-                                                      return_dict=False, add_generation_prompt=True,
-                                                      chat_template=self.template))
+        if thinking:
+            # The checkpoint's own template: a 'Reasoning Effort' system line and an open <think> to reason in.
+            ids = list(self.tokenizer.apply_chat_template(messages, tools=tools or None, tokenize=True,
+                                                          return_dict=False, add_generation_prompt=True,
+                                                          chat_template=self.thinking_template,
+                                                          reasoning_effort=thinking if thinking != 'max' else None))
+        else:
+            ids = list(self.tokenizer.apply_chat_template(messages, tools=tools or None, tokenize=True,
+                                                          return_dict=False, add_generation_prompt=True,
+                                                          chat_template=self.template))
         if not sources:
             return ids
         import native_vision
@@ -439,6 +451,11 @@ class DFlashSession:
                 stats['cached_tokens_after'] = len(self.cache_ids)
         else:
             self.drop_state()
+        if out['rounds'] > 2000:
+            # After a long reply: a full collection and an empty buffer cache keep the live Metal buffer count low.
+            import gc
+            gc.collect()
+            mx.clear_cache()
         return dict(generated_ids=out['generated_ids'], stopped=out['stopped'], stats=stats)
 
     def close(self):

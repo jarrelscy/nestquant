@@ -148,7 +148,33 @@ def parse_request(body):
     options = body.get('stream_options') or {}
     return dict(messages=messages, max_tokens=limit, stop=stop, tools=tools, stream=stream,
                 include_usage=bool(isinstance(options, dict) and options.get('include_usage')),
-                model=body.get('model') or MODEL, temperature=temperature)
+                model=body.get('model') or MODEL, temperature=temperature, thinking=thinking_mode(body))
+
+
+def thinking_mode(body):
+    """Reasoning effort requested by the client: None (thinking off, the default), 'low', 'high' or 'max'.
+    Accepts OpenAI-style reasoning_effort, chat_template_kwargs.enable_thinking and Anthropic-style
+    thinking={"type": "enabled"}."""
+    effort = body.get('reasoning_effort')
+    if isinstance(effort, str) and effort.lower() in ('low', 'high', 'max'):
+        return effort.lower()
+    if isinstance(effort, str) and effort.lower() in ('medium', 'xhigh'):
+        return 'high'
+    kwargs = body.get('chat_template_kwargs') or {}
+    if isinstance(kwargs, dict) and kwargs.get('enable_thinking') is True:
+        return 'max'
+    thinking = body.get('thinking')
+    if isinstance(thinking, dict) and thinking.get('type') in ('enabled', 'adaptive'):
+        return 'max'
+    return None
+
+
+def split_thinking(text):
+    """(reasoning, answer) of a reply generated after an opening <think>: the reasoning ends at </think>."""
+    if '</think>' not in text:
+        return text.strip(), ''
+    reasoning, answer = text.split('</think>', 1)
+    return reasoning.replace('<think>', '').strip(), answer.strip()
 
 
 # ---------------------------------------------------------------------------------------------- prefix reuse
