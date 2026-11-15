@@ -289,6 +289,18 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(RequestError):
             parse_request({'messages': [{'role': 'user', 'content': [{'type': 'input_audio', 'input_audio': {}}]}]})
 
+    def test_long_reply_saved(self):
+        import tempfile
+        from pathlib import Path as P
+        with tempfile.TemporaryDirectory() as folder:
+            backend = FakeBackend(reply='x' * 40)
+            service = Service(backend, 'glm-nestquant', 5.0, log=lambda *a, **k: None)
+            service.long_reply_dir, service.long_reply_tokens = folder, 30
+            service.run(parse_request({'messages': [{'role': 'user', 'content': 'hi'}]}), [104, 105], 100)
+            saved = list(P(folder).glob('reply-*.json'))
+            self.assertEqual(len(saved), 1)
+            self.assertEqual(json.loads(saved[0].read_text())['reply'], 'x' * 40)
+
     def test_sampling_parameters(self):
         base = {'messages': [{'role': 'user', 'content': 'x'}]}
         parsed = parse_request(dict(base, temperature=1.0, top_p=0.95))

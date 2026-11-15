@@ -74,6 +74,22 @@ class Service:
         self.log = log
         self.requests = 0
 
+    long_reply_dir = None          # set from --long-reply-dir
+    long_reply_tokens = 16384
+
+    def _save_long_reply(self, ids, generated, finish, stats):
+        """Keep the full text of a long reply (and the end of its prompt) for inspection."""
+        try:
+            backend = self.backend
+            path = Path(self.long_reply_dir) / f'reply-{time.strftime("%Y%m%d-%H%M%S")}-n{self.requests}.json'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(dict(
+                n=self.requests, prompt_tokens=len(ids), completion_tokens=len(generated), finish_reason=finish,
+                thinking=stats.get('thinking'), temperature=stats.get('temperature'),
+                prompt_tail=backend.decode(ids[-3000:]), reply=backend.decode(generated)), indent=1))
+        except Exception as error:      # logging must never fail a request
+            self.log(json.dumps(dict(event='long_reply_save_failed', error=str(error))), flush=True)
+
     def prepare(self, parsed):
         try:
             ids = (self.backend.encode(parsed['messages'], parsed['tools'], thinking=parsed.get('thinking'))
@@ -154,6 +170,8 @@ class Service:
         self.requests += 1
         self.log(json.dumps(dict(event='request', n=self.requests, prompt_tokens=len(ids),
                                  completion_tokens=len(generated), finish_reason=finish, **timings)), flush=True)
+        if self.long_reply_dir is not None and len(generated) >= self.long_reply_tokens:
+            self._save_long_reply(ids, generated, finish, stats)
         response = completion_response(self.model_name, message, finish, len(ids), len(generated),
                                        stats.get('reused_tokens', 0), timings, cid)
         return response
@@ -755,6 +773,9 @@ def main():
     p.add_argument('--queue-timeout', type=float, default=900)
     p.add_argument('--no-reuse', action='store_true', help='Fresh prefill for every request')
     p.add_argument('--no-vision', action='store_true', help='Do not load the vision tower (saves ~1.1 GB)')
+    p.add_argument('--long-reply-dir', type=Path, default=None,
+                   help='Save the text of replies of at least --long-reply-tokens tokens here')
+    p.add_argument('--long-reply-tokens', type=int, default=16384)
     p.add_argument('--anthropic-thinking', choices=('off', 'low', 'high', 'max'), default='off',
                    help='Reasoning effort for /v1/messages requests that ask for thinking (Claude Code asks on every turn)')
     p.add_argument('--temperature', type=float, default=0.0,
@@ -768,6 +789,7 @@ def main():
     anthropic_protocol.ANTHROPIC_THINKING = None if a.anthropic_thinking == 'off' else a.anthropic_thinking
     session = DFlashSession(a)
     gpu, stop = GpuThread(), threading.Event()
+    Service.long_reply_dir, Service.long_reply_tokens = a.long_reply_dir, a.long_reply_tokens
     try:
         with Server((a.host, a.port), Service(session, a.model_name, a.queue_timeout, gpu=gpu),
                     api_key=a.api_key) as server:
