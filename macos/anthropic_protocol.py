@@ -111,7 +111,8 @@ def to_openai(body):
                                                        'parameters': tool.get('input_schema') or {}}})
     choice = body.get('tool_choice') or {}
     out = {'messages': messages, 'max_tokens': body.get('max_tokens'), 'stream': bool(body.get('stream')),
-           'stop': body.get('stop_sequences') or None, 'temperature': body.get('temperature'), 'tools': tools,
+           'stop': body.get('stop_sequences') or None, 'temperature': body.get('temperature'),
+           'top_p': body.get('top_p'), 'tools': tools,
            'model': body.get('model')}
     if isinstance(choice, dict) and choice.get('type') == 'none':
         out['tool_choice'] = 'none'

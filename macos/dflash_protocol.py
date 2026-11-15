@@ -142,13 +142,17 @@ def parse_request(body):
     if body.get('tool_choice') == 'none':
         tools = []
     temperature = body.get('temperature')
-    if temperature is not None and not isinstance(temperature, (int, float)):
-        raise RequestError('temperature must be a number')
+    if temperature is not None and (not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2):
+        raise RequestError('temperature must be a number between 0 and 2')
+    top_p = body.get('top_p')
+    if top_p is not None and (not isinstance(top_p, (int, float)) or not 0 < top_p <= 1):
+        raise RequestError('top_p must be a number in (0, 1]')
     stream = bool(body.get('stream', False))
     options = body.get('stream_options') or {}
     return dict(messages=messages, max_tokens=limit, stop=stop, tools=tools, stream=stream,
                 include_usage=bool(isinstance(options, dict) and options.get('include_usage')),
-                model=body.get('model') or MODEL, temperature=temperature, thinking=thinking_mode(body))
+                model=body.get('model') or MODEL, temperature=temperature, top_p=top_p,
+                thinking=thinking_mode(body))
 
 
 def thinking_mode(body):

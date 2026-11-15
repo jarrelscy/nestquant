@@ -167,7 +167,10 @@ matches a cached one. Up to 16 images per request, 20 MiB each.
 
 What to expect:
 - One request at a time; others queue.
-- Greedy decoding only (`temperature` and `top_p` are accepted and ignored). Thinking is off.
+- Sampling: requests may set `temperature` and `top_p`; requests without them use the server defaults
+  (`--temperature`, `--top-p`; 0 = greedy). `~/startnq.sh`-style launches use temperature 1.0, top_p 0.95.
+  Speculative decoding stays exact under sampling. Thinking is off unless a request sets `reasoning_effort`
+  (or Anthropic `thinking`).
 - The backbone (attention, dense layers, shared experts, router, embeddings) runs as MLX 4-bit with 8-bit
   embeddings. The checkpoint ships it as FP8/bf16 and the model card's reference runtime loads it as MLX 8-bit,
   so this recipe's backbone is lower precision than the reference. The routed experts are NestQuant as shipped.

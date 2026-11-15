@@ -403,6 +403,30 @@ def capture_prefill(model, drafter, ids, cache, hot, guard, suffix=False):
 CACHE_EVAL_EVERY = 16
 
 
+def token_sampler(temperature=0.0, top_p=1.0):
+    """Next-token rule for target logits (..., vocab): argmax at temperature 0, otherwise a sample from
+    softmax(logits / temperature) restricted to the top-p nucleus.
+
+    With the deterministic DFlash2 drafter this makes speculative decoding exact: each verify position samples
+    y ~ p; the walk accepts the draft token x when y == x (probability p(x)) and otherwise emits y, which is then a
+    sample from p restricted to y != x, the residual distribution of standard speculative sampling."""
+    if not temperature or temperature <= 0:
+        return lambda logits: logits.argmax(axis=-1)
+
+    def sample(logits):
+        scaled = logits.astype(mx.float32) / temperature
+        if top_p < 1.0:
+            order = mx.argsort(-scaled, axis=-1)
+            sorted_logits = mx.take_along_axis(scaled, order, axis=-1)
+            probs = mx.softmax(sorted_logits, axis=-1)
+            outside = (mx.cumsum(probs, axis=-1) - probs) > top_p
+            sorted_logits = mx.where(outside, -mx.inf, sorted_logits)
+            picked = mx.random.categorical(sorted_logits, axis=-1)
+            return mx.take_along_axis(order, picked[..., None], axis=-1)[..., 0]
+        return mx.random.categorical(scaled, axis=-1)
+    return sample
+
+
 def cache_arrays(cache):
     """The arrays held directly by every leaf of a model cache (attributes, and lists/tuples of them)."""
     def leaves(entry):
@@ -425,7 +449,7 @@ def cache_arrays(cache):
 
 
 def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, guard, block_size,
-                  should_stop=None, on_token=None, record_hidden=False):
+                  should_stop=None, on_token=None, record_hidden=False, temperature=0.0, top_p=1.0):
     """DFlash rounds after a prefill whose last-token logits gave `first`.
 
     `hidden` holds the target hidden rows of the context the drafter should see (the drafters use a 2,047-row
@@ -579,6 +603,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
         if prune:
             draft_fn = drafter.draft_block
         sampler = ConfidenceSampler() if prune else (lambda value: value.argmax(axis=-1))
+        verify_sampler = token_sampler(temperature, top_p)     # the drafter stays greedy (see token_sampler)
         confidence = [None]
         PRUNE_LOG.clear()
 
@@ -618,7 +643,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                 with mx.stream(stream):
                     verify_input = mx.concatenate([mx.array([[bonus]], dtype=mx.int32), draft], axis=1)
                     captured, state, target = dflash_loop._dflash_verify_greedy(lm, verify_input, cache, target_ids,
-                                                                                sampler)
+                                                                                verify_sampler)
                     verified_hidden = mx.concatenate(captured, axis=-1)
                 # The routing trace feeds only the predictor; evaluating it with the verify keeps its readback
                 # from waiting behind the next draft.

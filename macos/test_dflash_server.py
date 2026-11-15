@@ -28,8 +28,8 @@ class FakeBackend:
     def decode(self, ids):
         return ''.join(chr(i) for i in ids)
 
-    def generate(self, ids, max_tokens, should_stop=None, on_token=None):
-        self.calls.append(dict(ids=ids, max_tokens=max_tokens))
+    def generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=None, top_p=None):
+        self.calls.append(dict(ids=ids, max_tokens=max_tokens, temperature=temperature, top_p=top_p))
         time.sleep(self.delay)
         script = [ord(c) for c in self.reply] + [EOS]
         generated, stopped = [], None
@@ -288,6 +288,14 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(image_sources(parsed['messages']), ['data:image/png;base64,AA==', 'https://example.com/x.png'])
         with self.assertRaises(RequestError):
             parse_request({'messages': [{'role': 'user', 'content': [{'type': 'input_audio', 'input_audio': {}}]}]})
+
+    def test_sampling_parameters(self):
+        base = {'messages': [{'role': 'user', 'content': 'x'}]}
+        parsed = parse_request(dict(base, temperature=1.0, top_p=0.95))
+        self.assertEqual((parsed['temperature'], parsed['top_p']), (1.0, 0.95))
+        for bad in ({'temperature': 3}, {'top_p': 0}, {'top_p': 1.5}):
+            with self.assertRaises(RequestError):
+                parse_request(dict(base, **bad))
 
     def test_thinking_mode(self):
         from dflash_protocol import split_thinking, thinking_mode

@@ -155,6 +155,25 @@ class FastLoopTest(unittest.TestCase):
         self.assertEqual(fast['committed_ids'], ref['committed_ids'])
 
 
+class TokenSamplerTest(unittest.TestCase):
+    def test_greedy_and_sampling(self):
+        logits = mx.array([[0.0, 2.0, 1.0, -1.0]])
+        self.assertEqual(nd.token_sampler(0.0)(logits).item(), 1)
+        mx.random.seed(0)
+        sample = nd.token_sampler(1.0)
+        draws = mx.concatenate([sample(mx.broadcast_to(logits, (4000, 4))) for _ in range(5)])
+        counts = [int((draws == k).sum().item()) for k in range(4)]
+        expected = mx.softmax(logits[0]).tolist()
+        for k in range(4):
+            self.assertAlmostEqual(counts[k] / 20000, expected[k], delta=0.015)
+        # A nucleus smaller than the top token's probability keeps only the top token.
+        nucleus = nd.token_sampler(1.0, top_p=0.3)
+        self.assertTrue(bool((nucleus(mx.broadcast_to(logits, (500, 4))) == 1).all().item()))
+        # top_p=0.9 drops the least likely token (cumulative mass before it is 0.96).
+        drawn = nd.token_sampler(1.0, top_p=0.9)(mx.broadcast_to(logits, (4000, 4)))
+        self.assertEqual(int((drawn == 3).sum().item()), 0)
+
+
 class CacheArraysTest(unittest.TestCase):
     def test_collects_leaf_arrays(self):
         a, b, c = mx.zeros((2,)), mx.ones((3,)), mx.zeros((1,))

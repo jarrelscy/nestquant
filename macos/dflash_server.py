@@ -120,7 +120,13 @@ class Service:
 
         started = time.perf_counter()
         args = (ids, max_tokens, should_stop if stops else None, on_token if emit else None)
-        out = self.gpu.call(backend.generate, *args) if self.gpu is not None else backend.generate(*args)
+        kwargs = {}
+        if parsed.get('temperature') is not None:
+            kwargs['temperature'] = parsed['temperature']
+        if parsed.get('top_p') is not None:
+            kwargs['top_p'] = parsed['top_p']
+        call = (lambda: backend.generate(*args, **kwargs)) if kwargs else (lambda: backend.generate(*args))
+        out = self.gpu.call(call) if self.gpu is not None else call()
         generated = list(out['generated_ids'])
         if out['stopped'] == 'eos':
             generated = generated[:-1]
@@ -214,6 +220,8 @@ class DFlashSession:
             self.close()
             raise
         self.max_context = args.max_context
+        self.default_temperature = float(getattr(args, 'temperature', 0.0) or 0.0)
+        self.default_top_p = float(getattr(args, 'top_p', 1.0) or 1.0)
         self.block_size = args.block_size
         self.reuse = not args.no_reuse
         self.cache = None
@@ -355,9 +363,11 @@ class DFlashSession:
                 and state['checkpoint']['length'] >= PARK_MIN_TOKENS and self._footprint() < PARK_MAX_GIB)
 
     # ------------------------------------------------------------------ generation
-    def generate(self, ids, max_tokens, should_stop=None, on_token=None):
+    def generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=None, top_p=None):
+        temperature = self.default_temperature if temperature is None else float(temperature)
+        top_p = self.default_top_p if top_p is None else float(top_p)
         try:
-            return self._generate(ids, max_tokens, should_stop, on_token)
+            return self._generate(ids, max_tokens, should_stop, on_token, temperature, top_p)
         except RuntimeError as error:
             if 'Resource limit' not in str(error):
                 raise
@@ -369,9 +379,9 @@ class DFlashSession:
             import gc
             gc.collect()
             self.mx.clear_cache()
-            return self._generate(ids, max_tokens, should_stop, on_token)
+            return self._generate(ids, max_tokens, should_stop, on_token, temperature, top_p)
 
-    def _generate(self, ids, max_tokens, should_stop=None, on_token=None):
+    def _generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=0.0, top_p=1.0):
         mx, nd, ng = self.mx, self.nd, self.ng
         mode, reused = ('fresh', 0)
         if self.reuse and self.cache is not None:
@@ -429,7 +439,7 @@ class DFlashSession:
         self.ctx_hidden = self._trim_ctx(ctx)
         mx.eval(self.ctx_hidden)
         del ctx, hidden
-        first = ng.greedy(logits)
+        first = int(nd.token_sampler(temperature, top_p)(logits.reshape(-1)).item())
         prefill_seconds = time.perf_counter() - started
         flat = logits.reshape(-1).astype(mx.float32)
         top = mx.argsort(-flat)[:5]
@@ -438,8 +448,8 @@ class DFlashSession:
         checkpoint = self._take_checkpoint(len(ids)) if self.reuse else None
         out = nd.dflash_decode(self.model, self.drafter, self.cache, self.ctx_hidden, first, max_tokens, self.eos,
                                self.hot, self.guard, self.block_size, should_stop=should_stop, on_token=on_token,
-                               record_hidden=self.reuse)
-        stats = dict(mode=mode, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
+                               record_hidden=self.reuse, temperature=temperature, top_p=top_p)
+        stats = dict(mode=mode, temperature=temperature, top_p=top_p, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
                      slot='parked' if swapped else 'live', parked_tokens=len(self.parked['cache_ids']) if self.parked else 0,
                      prefill_path=nd.LAST_PREFILL_PATH,
                      common_prefix=lcp,
@@ -743,6 +753,9 @@ def main():
     p.add_argument('--queue-timeout', type=float, default=900)
     p.add_argument('--no-reuse', action='store_true', help='Fresh prefill for every request')
     p.add_argument('--no-vision', action='store_true', help='Do not load the vision tower (saves ~1.1 GB)')
+    p.add_argument('--temperature', type=float, default=0.0,
+                   help='Sampling temperature when a request does not set one (0 = greedy)')
+    p.add_argument('--top-p', type=float, default=1.0, help='Nucleus sampling when a request does not set top_p')
     a = p.parse_args()
     if not 1024 <= a.port <= 65535 or not 1024 <= a.max_context <= 65536 or a.block_size == 0:
         p.error('Use a port in 1024-65535, --max-context in 1024-65536 and a non-zero block size')
