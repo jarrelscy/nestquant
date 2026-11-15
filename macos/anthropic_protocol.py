@@ -29,10 +29,10 @@ def _text_of(content):
     raise RequestError('Unsupported content')
 
 
-# Claude Code sends thinking={"type": "adaptive"} on every request. Honouring it means every agent turn reasons at
-# full effort (often 30k+ tokens, ~20 minutes here), so Anthropic-style thinking is ignored unless the server enables
-# it (--anthropic-thinking). OpenAI-style reasoning_effort is always honoured.
-ANTHROPIC_THINKING = False
+# Claude Code sends thinking={"type": "adaptive"} on every request. The server maps it to this reasoning effort
+# (--anthropic-thinking low|high|max), or ignores it when None. At max effort agent turns often exceed 30k tokens
+# (~20 minutes each here). OpenAI-style reasoning_effort is always honoured.
+ANTHROPIC_THINKING = None
 
 
 def strip_volatile(text):
@@ -78,18 +78,21 @@ def to_openai(body):
         if not isinstance(content, list):
             raise RequestError('Message content must be a string or a list of blocks')
         if role == 'assistant':
-            text, calls = [], []
+            text, calls, reasoning = [], [], []
             for block in content:
                 kind = block.get('type') if isinstance(block, dict) else None
-                if kind == 'text':
+                if kind == 'thinking':
+                    reasoning.append(block.get('thinking') or '')
+                elif kind == 'text':
                     text.append(block.get('text') or '')
                 elif kind == 'tool_use':
                     calls.append({'id': block.get('id'), 'type': 'function',
                                   'function': {'name': block.get('name'), 'arguments': block.get('input') or {}}})
-                # thinking and redacted_thinking blocks are not replayed (thinking is off).
             entry = {'role': 'assistant', 'content': ''.join(text)}
             if calls:
                 entry['tool_calls'] = calls
+            if reasoning:      # replayed so the prompt matches the cached tokens of that turn
+                entry['reasoning_content'] = ''.join(reasoning)
             messages.append(entry)
             continue
         parts = []
@@ -122,8 +125,9 @@ def to_openai(body):
            'model': body.get('model')}
     if isinstance(choice, dict) and choice.get('type') == 'none':
         out['tool_choice'] = 'none'
-    if ANTHROPIC_THINKING and isinstance(body.get('thinking'), dict):
-        out['thinking'] = body['thinking']
+    thinking = body.get('thinking')
+    if ANTHROPIC_THINKING and isinstance(thinking, dict) and thinking.get('type') in ('enabled', 'adaptive'):
+        out['reasoning_effort'] = ANTHROPIC_THINKING
     return out
 
 

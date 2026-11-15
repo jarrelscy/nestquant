@@ -177,7 +177,10 @@ What to expect:
 - Multi-turn conversations reuse the previous turn's state: only the new text is prefilled. New text up to
   256 tokens prefills in about 1.5 s, up to 8,192 tokens at about 250–280 tok/s. Fresh prompts and longer
   additions prefill at about 260–400 tok/s with every routed expert at 4 bits.
-- Context up to 32K tokens is tested (`--max-context` accepts up to 65,536).
+- Context: `--max-context` accepts up to 131,072. A 77,604-token prompt prefilled in 213 s (364 tok/s), decoded at
+  24 tok/s and peaked at 94 GiB; a full 131K context would reach about 98 GiB, so keep clients near 110K.
+- Thinking: OpenAI `reasoning_effort` per request; Anthropic `thinking` (Claude Code sends it every turn) maps to
+  `--anthropic-thinking off|low|high|max` (startnq.sh uses max, the model's default effort).
 
 ## 5. Benchmarks
 

@@ -54,11 +54,15 @@ class ConversionTest(unittest.TestCase):
     def test_thinking_ignored_unless_enabled(self):
         body = {'max_tokens': 5, 'messages': [{'role': 'user', 'content': 'hi'}], 'thinking': {'type': 'adaptive'}}
         self.assertIsNone(ap.parse_messages_request(body)['thinking'])
-        ap.ANTHROPIC_THINKING = True
+        ap.ANTHROPIC_THINKING = 'high'
         try:
-            self.assertEqual(ap.parse_messages_request(body)['thinking'], 'max')
+            self.assertEqual(ap.parse_messages_request(body)['thinking'], 'high')
+            replay = dict(body, messages=[{'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': [
+                {'type': 'thinking', 'thinking': 'plan', 'signature': ''}, {'type': 'text', 'text': 'done'}]},
+                {'role': 'user', 'content': 'next'}])
+            self.assertEqual(ap.parse_messages_request(replay)['messages'][1]['reasoning_content'], 'plan')
         finally:
-            ap.ANTHROPIC_THINKING = False
+            ap.ANTHROPIC_THINKING = None
 
     def test_billing_header_is_dropped(self):
         body = lambda cch: {'max_tokens': 5, 'messages': [{'role': 'user', 'content': 'hi'}], 'system': [

@@ -745,7 +745,7 @@ def main():
     p.add_argument('--api-key', default=os.environ.get('NQ_SERVER_API_KEY'),
                    help='Require "Authorization: Bearer <key>" (env NQ_SERVER_API_KEY); default: no key')
     p.add_argument('--model-name', default=MODEL, help='Name reported by /v1/models and in responses')
-    p.add_argument('--max-context', type=int, default=32768, help='Prompt plus completion tokens (up to 65536)')
+    p.add_argument('--max-context', type=int, default=32768, help='Prompt plus completion tokens (up to 131072)')
     p.add_argument('--block-size', type=int, default=-8, help='DFlash verify block; negative = adaptive up to N')
     p.add_argument('--hot-fraction', type=float, default=0.2)
     p.add_argument('--predictor-backend', default=None,
@@ -755,17 +755,17 @@ def main():
     p.add_argument('--queue-timeout', type=float, default=900)
     p.add_argument('--no-reuse', action='store_true', help='Fresh prefill for every request')
     p.add_argument('--no-vision', action='store_true', help='Do not load the vision tower (saves ~1.1 GB)')
-    p.add_argument('--anthropic-thinking', action='store_true',
-                   help='Honour the thinking parameter of /v1/messages requests (Claude Code sends it on every turn)')
+    p.add_argument('--anthropic-thinking', choices=('off', 'low', 'high', 'max'), default='off',
+                   help='Reasoning effort for /v1/messages requests that ask for thinking (Claude Code asks on every turn)')
     p.add_argument('--temperature', type=float, default=0.0,
                    help='Sampling temperature when a request does not set one (0 = greedy)')
     p.add_argument('--top-p', type=float, default=1.0, help='Nucleus sampling when a request does not set top_p')
     a = p.parse_args()
-    if not 1024 <= a.port <= 65535 or not 1024 <= a.max_context <= 65536 or a.block_size == 0:
-        p.error('Use a port in 1024-65535, --max-context in 1024-65536 and a non-zero block size')
+    if not 1024 <= a.port <= 65535 or not 1024 <= a.max_context <= 131072 or a.block_size == 0:
+        p.error('Use a port in 1024-65535, --max-context in 1024-131072 and a non-zero block size')
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     import anthropic_protocol
-    anthropic_protocol.ANTHROPIC_THINKING = a.anthropic_thinking
+    anthropic_protocol.ANTHROPIC_THINKING = None if a.anthropic_thinking == 'off' else a.anthropic_thinking
     session = DFlashSession(a)
     gpu, stop = GpuThread(), threading.Event()
     try:
