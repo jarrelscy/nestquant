@@ -29,6 +29,12 @@ def _text_of(content):
     raise RequestError('Unsupported content')
 
 
+# Claude Code sends thinking={"type": "adaptive"} on every request. Honouring it means every agent turn reasons at
+# full effort (often 30k+ tokens, ~20 minutes here), so Anthropic-style thinking is ignored unless the server enables
+# it (--anthropic-thinking). OpenAI-style reasoning_effort is always honoured.
+ANTHROPIC_THINKING = False
+
+
 def strip_volatile(text):
     """Drop lines that change on every request at the start of a prompt. Claude Code begins its system prompt with
     `x-anthropic-billing-header: ...; cch=<per-request value>;`, which would defeat prefix reuse at token 0."""
@@ -116,7 +122,7 @@ def to_openai(body):
            'model': body.get('model')}
     if isinstance(choice, dict) and choice.get('type') == 'none':
         out['tool_choice'] = 'none'
-    if isinstance(body.get('thinking'), dict):
+    if ANTHROPIC_THINKING and isinstance(body.get('thinking'), dict):
         out['thinking'] = body['thinking']
     return out
 

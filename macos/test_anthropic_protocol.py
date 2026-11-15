@@ -51,6 +51,15 @@ class ConversionTest(unittest.TestCase):
             {'role': 'user', 'content': 'go'}]})
         self.assertEqual([m['role'] for m in parsed['messages']], ['user', 'system', 'user'])
 
+    def test_thinking_ignored_unless_enabled(self):
+        body = {'max_tokens': 5, 'messages': [{'role': 'user', 'content': 'hi'}], 'thinking': {'type': 'adaptive'}}
+        self.assertIsNone(ap.parse_messages_request(body)['thinking'])
+        ap.ANTHROPIC_THINKING = True
+        try:
+            self.assertEqual(ap.parse_messages_request(body)['thinking'], 'max')
+        finally:
+            ap.ANTHROPIC_THINKING = False
+
     def test_billing_header_is_dropped(self):
         body = lambda cch: {'max_tokens': 5, 'messages': [{'role': 'user', 'content': 'hi'}], 'system': [
             {'type': 'text', 'text': f'x-anthropic-billing-header: cc_version=2.1.3; cch={cch};'},
