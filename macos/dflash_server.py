@@ -356,6 +356,22 @@ class DFlashSession:
 
     # ------------------------------------------------------------------ generation
     def generate(self, ids, max_tokens, should_stop=None, on_token=None):
+        try:
+            return self._generate(ids, max_tokens, should_stop, on_token)
+        except RuntimeError as error:
+            if 'Resource limit' not in str(error):
+                raise
+            # Metal's live-buffer limit: a long conversation's cached state has accumulated too many buffers. Drop
+            # every cached state (both slots), collect, and answer the request from a fresh prefill.
+            print(json.dumps(dict(event='buffer_limit_recovery', prompt_tokens=len(ids))), flush=True)
+            self.parked = None
+            self.drop_state()
+            import gc
+            gc.collect()
+            self.mx.clear_cache()
+            return self._generate(ids, max_tokens, should_stop, on_token)
+
+    def _generate(self, ids, max_tokens, should_stop=None, on_token=None):
         mx, nd, ng = self.mx, self.nd, self.ng
         mode, reused = ('fresh', 0)
         if self.reuse and self.cache is not None:
