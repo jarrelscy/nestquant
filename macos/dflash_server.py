@@ -467,11 +467,6 @@ class DFlashSession:
                 stats['cached_tokens_after'] = len(self.cache_ids)
         else:
             self.drop_state()
-        if out['rounds'] > 2000:
-            # After a long reply: a full collection and an empty buffer cache keep the live Metal buffer count low.
-            import gc
-            gc.collect()
-            mx.clear_cache()
         return dict(generated_ids=out['generated_ids'], stopped=out['stopped'], stats=stats)
 
     def close(self):

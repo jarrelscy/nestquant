@@ -155,6 +155,16 @@ class FastLoopTest(unittest.TestCase):
         self.assertEqual(fast['committed_ids'], ref['committed_ids'])
 
 
+class CacheArraysTest(unittest.TestCase):
+    def test_collects_leaf_arrays(self):
+        a, b, c = mx.zeros((2,)), mx.ones((3,)), mx.zeros((1,))
+        leaf1 = SimpleNamespace(keys=a, offset=4, pair=(b, 'x'))
+        group = SimpleNamespace(caches=[SimpleNamespace(pooled=c)])
+        found = nd.cache_arrays([leaf1, group])
+        self.assertEqual(len(found), 3)
+        self.assertTrue(all(any(x is y for y in found) for x in (a, b, c)))
+
+
 class PruneTest(unittest.TestCase):
     def setUp(self):
         self.device = mx.default_device()

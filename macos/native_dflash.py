@@ -400,6 +400,30 @@ def capture_prefill(model, drafter, ids, cache, hot, guard, suffix=False):
     return logits, hidden
 
 
+CACHE_EVAL_EVERY = 16
+
+
+def cache_arrays(cache):
+    """The arrays held directly by every leaf of a model cache (attributes, and lists/tuples of them)."""
+    def leaves(entry):
+        if isinstance(entry, (list, tuple)):
+            for item in entry:
+                yield from leaves(item)
+        elif hasattr(entry, 'caches'):          # CacheList
+            yield from leaves(entry.caches)
+        elif hasattr(entry, '__dict__'):
+            yield entry
+
+    out = []
+    for leaf in leaves(cache):
+        for value in vars(leaf).values():
+            if isinstance(value, mx.array):
+                out.append(value)
+            elif isinstance(value, (list, tuple)):
+                out.extend(item for item in value if isinstance(item, mx.array))
+    return out
+
+
 def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, guard, block_size,
                   should_stop=None, on_token=None, record_hidden=False):
     """DFlash rounds after a prefill whose last-token logits gave `first`.
@@ -479,10 +503,12 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
             if len(committed_hidden) >= 256:
                 # One small array per round would otherwise pile up over long (thinking) replies.
                 committed_hidden[:] = [mx.concatenate(committed_hidden, axis=1)]
-        if rounds_seen % 512 == 0:
-            # The collector is off during decode; long replies (thousands of rounds) leave cyclic garbage that holds
-            # Metal buffers, and Metal's live-buffer limit (~499k) is reached after a few 30k-token replies.
-            gc.collect(1)
+        if rounds_seen % CACHE_EVAL_EVERY == 0:
+            # Some cache fields (PoolingCache's indexer state, KVCache bookkeeping) are updated every round but never
+            # read until much later, so their lazy graphs grow by ~150 arrays per round and pin those buffers.
+            # Evaluating them caps the graph; without it Metal's live-buffer limit (~499k) is hit after a few
+            # thousand rounds.
+            mx.async_eval(cache_arrays(cache))
         t_trace = time.perf_counter()
         trace = hot.take_trace()
         mx.eval([value for entry in trace.values() for value in entry])
@@ -668,6 +694,7 @@ def dflash_decode(model, drafter, cache, hidden, first, max_tokens, eos, hot, gu
                 finish_round(int(drafter.accept_lens[-1]))
         else:
             rounds = None
+        mx.eval(cache_arrays(cache))
         mx.synchronize()
         if pending_hook is not None:
             pending_hook.result()
