@@ -30,6 +30,8 @@ from dflash_protocol import (MODEL, RequestError, image_sources, SSE_DONE, chunk
                              common_prefix_length, context_error, find_stop, parse_request, plan_reuse, safe_prefix_length, sse)
 
 MAX_BODY = 64 * 1024**2      # base64 images
+PARK_MIN_TOKENS = 2048       # second cache slot: conversations at least this long are kept during side requests
+PARK_MAX_GIB = 100.0
 HOME = Path.home()
 
 
@@ -213,6 +215,7 @@ class DFlashSession:
         self.cache_ids = []
         self.ctx_hidden = None
         self.checkpoint = None
+        self.parked = None
         print(json.dumps(dict(event='ready', drafter=kind, target_layers=nd.target_layers(self.drafter),
                               drafter_window=self.window, max_context=self.max_context,
                               memory_gib=round(self._footprint(), 2))), flush=True)
@@ -333,12 +336,35 @@ class DFlashSession:
         self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint = None, [], None, None
         self.mx.clear_cache()
 
+    def _worth_parking(self, state):
+        """Keep a conversation in the second slot when it is long enough to be costly to prefill again and memory
+        allows. Needs its end-of-prompt checkpoint, from which it resumes."""
+        return (state['cache'] is not None and state['checkpoint'] is not None
+                and state['checkpoint']['length'] >= PARK_MIN_TOKENS and self._footprint() < PARK_MAX_GIB)
+
     # ------------------------------------------------------------------ generation
     def generate(self, ids, max_tokens, should_stop=None, on_token=None):
         mx, nd, ng = self.mx, self.nd, self.ng
         mode, reused = ('fresh', 0)
         if self.reuse and self.cache is not None:
             mode, reused = plan_reuse(self.cache_ids, self.checkpoint['length'] if self.checkpoint else 0, ids)
+        swapped = False
+        if self.reuse and self.parked is not None:
+            # A second slot keeps a long conversation while a different prompt (a client's side request) runs.
+            # Resume it from its checkpoint (which also restores the predictor) when it covers more of `ids`.
+            p_ids, p_checkpoint = self.parked['cache_ids'], self.parked['checkpoint']
+            usable = min(common_prefix_length(p_ids, ids), len(ids) - 1)
+            if p_checkpoint['length'] <= usable and p_checkpoint['length'] > reused:
+                live = dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint)
+                self.cache, self.cache_ids = self.parked['cache'], p_ids
+                self.ctx_hidden, self.checkpoint = self.parked['ctx'], p_checkpoint
+                self.parked = live if self._worth_parking(live) else None
+                mode, reused, swapped = 'rollback', p_checkpoint['length'], True
+        if mode == 'fresh' and not swapped and self.reuse and self.cache is not None:
+            live = dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint)
+            if self._worth_parking(live):
+                self.parked = live
+                self.cache = None     # the parked slot owns it now
         lcp = common_prefix_length(self.cache_ids, ids)
         cache, cache_ids, ctx, checkpoint = self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint
         # Until this request finishes cleanly the live state is unknown; a failure leaves nothing to reuse.
@@ -386,6 +412,7 @@ class DFlashSession:
                                self.hot, self.guard, self.block_size, should_stop=should_stop, on_token=on_token,
                                record_hidden=self.reuse)
         stats = dict(mode=mode, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
+                     slot='parked' if swapped else 'live', parked_tokens=len(self.parked['cache_ids']) if self.parked else 0,
                      prefill_path=nd.LAST_PREFILL_PATH,
                      common_prefix=lcp,
                      prefill_seconds=round(prefill_seconds, 3),
@@ -447,6 +474,8 @@ class Handler(BaseHTTPRequestHandler):
         supplied = self.headers.get('Authorization', '')
         if hmac.compare_digest(supplied.encode(), f'Bearer {key}'.encode()):
             return True
+        if hmac.compare_digest(self.headers.get('x-api-key', '').encode(), key.encode()):     # Anthropic clients
+            return True
         self.reply(401, {'error': {'message': 'Invalid or missing API key', 'type': 'invalid_request_error',
                                    'code': 'invalid_api_key'}})
         return False
@@ -469,6 +498,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split('?')[0].rstrip('/')
         if not self.authorized():
+            return
+        if path in ('/v1/messages', '/v1/messages/count_tokens'):
+            self.anthropic(path)
             return
         if path not in ('/v1/chat/completions', '/chat/completions'):
             self.reply(404, {'error': {'message': 'Unknown endpoint', 'type': 'invalid_request_error'}})
@@ -505,6 +537,89 @@ class Handler(BaseHTTPRequestHandler):
             self.server.on_failure(error)
             self.safe_reply(500, {'error': {'message': f'Runtime error: {type(error).__name__}: {error}',
                                             'type': 'server_error'}})
+
+    def read_json(self):
+        if self.headers.get('Origin') is not None:
+            raise RequestError('Browser origins are not accepted', status=403)
+        length = int(self.headers.get('Content-Length', '0'))
+        if not 0 < length <= MAX_BODY:
+            raise RequestError('Request body is empty or too large')
+        try:
+            return json.loads(self.rfile.read(length))
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise RequestError('Request body is not valid JSON') from error
+
+    def anthropic(self, path):
+        """Anthropic Messages API (POST /v1/messages and /v1/messages/count_tokens)."""
+        import anthropic_protocol as ap
+        service = self.server.service
+        try:
+            body = self.read_json()
+            if path.endswith('count_tokens'):
+                body = dict(body, max_tokens=1)
+            parsed = ap.parse_messages_request(body)
+            ids, max_tokens = service.prepare(parsed)
+        except RequestError as error:
+            if getattr(error, 'code', None) == 'context_length_exceeded':
+                # Anthropic's wording, which Claude Code recognises and answers by compacting the conversation.
+                numbers = [int(word) for word in str(error.args[0]).replace('.', ' ').split() if word.isdigit()]
+                error = RequestError(f'prompt is too long: {numbers[1]} tokens > {numbers[0]} maximum')
+            self.reply(error.status, ap.error_payload(error))
+            return
+        except (ValueError, TimeoutError) as error:
+            self.reply(400, ap.error_payload(RequestError(str(error))))
+            return
+        if path.endswith('count_tokens'):
+            self.reply(200, {'input_tokens': len(ids)})
+            return
+        model = parsed['model'] or service.model_name
+        if not parsed['stream']:
+            try:
+                self.reply(200, ap.to_anthropic(service.run(parsed, ids, max_tokens), model))
+            except RequestError as error:
+                self.safe_reply(error.status, ap.error_payload(error))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as error:
+                self.server.on_failure(error)
+                self.safe_reply(500, ap.error_payload(RequestError(f'Runtime error: {type(error).__name__}: {error}',
+                                                                   status=500)))
+            return
+        # Streaming: the reply is generated whole (tool calls are parsed from the finished text); pings keep the
+        # connection alive meanwhile, then the message is sent as a complete event sequence.
+        result, done = {}, threading.Event()
+
+        def work():
+            try:
+                result['response'] = service.run(parsed, ids, max_tokens)
+            except BaseException as error:     # reported below
+                result['error'] = error
+            finally:
+                done.set()
+
+        threading.Thread(target=work, daemon=True).start()
+        try:
+            self._streaming = True
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            while not done.wait(5.0):
+                self.wfile.write(ap.PING)
+                self.wfile.flush()
+            error = result.get('error')
+            if error is not None:
+                if not isinstance(error, RequestError):
+                    self.server.on_failure(error)
+                    error = RequestError(f'Runtime error: {type(error).__name__}: {error}', status=500)
+                self.wfile.write(ap.sse_event('error', ap.error_payload(error)))
+            else:
+                for event in ap.stream_events(ap.to_anthropic(result['response'], model)):
+                    self.wfile.write(event)
+            self.wfile.flush()
+        except OSError:
+            pass
 
     def safe_reply(self, status, payload):
         if getattr(self, '_streaming', False):

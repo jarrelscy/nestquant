@@ -1,0 +1,12 @@
+#!/bin/zsh
+# Terminal-Bench 2.1 with the Claude Code harness against the local server (Anthropic Messages API).
+# Usage: tbench_cc.sh <job-name> [harbor task filters...]
+export PATH=$HOME/.local/bin:$PATH
+JOB=$1; shift
+cd ~/src/tbench; export PYTHONPATH=$HOME/src/nestquant/macos/tbench
+ANTHROPIC_API_KEY=local .venv/bin/harbor run -p datasets/terminal-bench-2-1/terminal-bench-2-1 -a local_claude_code:LocalClaudeCode \
+  -m anthropic/glm-nestquant --base-url http://host.docker.internal:8000 \
+  --ae CLAUDE_CODE_ATTRIBUTION_HEADER=0 --ae CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+  --ae API_TIMEOUT_MS=3600000 --ae CLAUDE_CODE_MAX_CONTEXT_TOKENS=65536 --ae CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192 \
+  --agent-timeout-multiplier 6 "$@" -n 1 -o jobs --job-name $JOB -y -q
+echo "harbor exit $? $(date)"
