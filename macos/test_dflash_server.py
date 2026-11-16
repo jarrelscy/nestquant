@@ -21,7 +21,7 @@ class FakeBackend:
         self.eos = {EOS}
         self.calls = []
 
-    def encode(self, messages, tools):
+    def encode(self, messages, tools, thinking=None):
         text = ''.join(f"<{m['role']}>{m['content']}" for m in messages) + '<assistant>'
         return [ord(c) for c in text]
 

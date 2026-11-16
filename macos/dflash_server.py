@@ -677,19 +677,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.safe_reply(500, ap.error_payload(RequestError(f'Runtime error: {type(error).__name__}: {error}',
                                                                    status=500)))
             return
-        # Streaming: the reply is generated whole (tool calls are parsed from the finished text); pings keep the
-        # connection alive meanwhile, then the message is sent as a complete event sequence.
-        result, done = {}, threading.Event()
+        # Streaming: message_start goes out at once and the reasoning of a thinking reply streams live as a thinking
+        # block, so client watchdogs (time to first event, idle time) see progress during long turns. Text and
+        # tool_use blocks follow when the reply is complete, because tool calls are parsed from the finished text.
+        import queue as queue_module
+        result, done, deltas = {}, threading.Event(), queue_module.Queue()
+        thinking = bool(parsed.get('thinking'))
 
         def work():
             try:
-                result['response'] = service.run(parsed, ids, max_tokens)
+                emit = deltas.put if thinking else None
+                result['response'] = service.run(parsed, ids, max_tokens, emit=emit)
             except BaseException as error:     # reported below
                 result['error'] = error
             finally:
                 done.set()
 
         threading.Thread(target=work, daemon=True).start()
+        mid = ap.message_id()
+        streamed = []          # reasoning text already sent
         try:
             self._streaming = True
             self.send_response(200)
@@ -697,9 +703,39 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-cache')
             self.send_header('Connection', 'close')
             self.end_headers()
-            while not done.wait(5.0):
-                self.wfile.write(ap.PING)
+            self.wfile.write(ap.message_start_event(mid, model, len(ids)))
+            if thinking:
+                self.wfile.write(ap.block_start_event(0, {'type': 'thinking', 'thinking': ''}))
+            self.wfile.flush()
+            quiet = 0.0
+            while True:
+                finished = done.wait(0.5)
+                text = ''
+                while True:
+                    try:
+                        text += deltas.get_nowait()
+                    except queue_module.Empty:
+                        break
+                if text:
+                    sent = ''.join(streamed)
+                    if '</think>' not in sent:
+                        piece = text
+                        if '</think>' in sent + text:
+                            piece = (sent + text).split('</think>', 1)[0][len(sent):]
+                            streamed.append(text)   # record the close so nothing more is streamed live
+                        else:
+                            streamed.append(text)
+                        if piece:
+                            self.wfile.write(ap.thinking_delta_event(0, piece))
+                    quiet = 0.0
+                else:
+                    quiet += 0.5
+                    if quiet >= 5.0:
+                        self.wfile.write(ap.PING)
+                        quiet = 0.0
                 self.wfile.flush()
+                if finished:
+                    break
             error = result.get('error')
             if error is not None:
                 if not isinstance(error, RequestError):
@@ -707,7 +743,10 @@ class Handler(BaseHTTPRequestHandler):
                     error = RequestError(f'Runtime error: {type(error).__name__}: {error}', status=500)
                 self.wfile.write(ap.sse_event('error', ap.error_payload(error)))
             else:
-                for event in ap.stream_events(ap.to_anthropic(result['response'], model)):
+                message = ap.to_anthropic(result['response'], model)
+                message['id'] = mid
+                live = ''.join(streamed).split('</think>', 1)[0] if thinking else None
+                for event in ap.stream_events(message, started=True, live_thinking=live):
                     self.wfile.write(event)
             self.wfile.flush()
         except OSError:

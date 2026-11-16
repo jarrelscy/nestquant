@@ -127,6 +127,27 @@ class MessagesEndpointTest(unittest.TestCase):
                  if line.startswith('data: ') and 'message_delta' in line][0]
         self.assertEqual(delta['delta']['stop_reason'], 'tool_use')
 
+    def test_streaming_thinking_live(self):
+        self.start('plan step one. plan step two.</think>Final answer')
+        ap.ANTHROPIC_THINKING = 'high'
+        try:
+            status, _, payload = self.post('/v1/messages', self.body(stream=True, thinking={'type': 'adaptive'}))
+        finally:
+            ap.ANTHROPIC_THINKING = None
+        self.assertEqual(status, 200)
+        lines = payload.decode().splitlines()
+        events = [line[7:] for line in lines if line.startswith('event: ')]
+        data = [json.loads(line[6:]) for line in lines if line.startswith('data: ')]
+        self.assertEqual(events[0], 'message_start')
+        self.assertEqual(data[1]['content_block']['type'], 'thinking')
+        thinking = ''.join(d['delta']['thinking'] for d in data if d.get('delta', {}).get('type') == 'thinking_delta')
+        self.assertEqual(thinking.strip(), 'plan step one. plan step two.')
+        texts = [d for d in data if d.get('type') == 'content_block_start' and d['content_block']['type'] == 'text']
+        self.assertEqual(texts[0]['index'], 1)
+        text = ''.join(d['delta']['text'] for d in data if d.get('delta', {}).get('type') == 'text_delta')
+        self.assertEqual(text, 'Final answer')
+        self.assertEqual(events[-1], 'message_stop')
+
     def test_count_tokens_and_errors(self):
         self.start('x')
         status, _, payload = self.post('/v1/messages/count_tokens', {'model': 'm', 'messages': [{'role': 'user', 'content': 'hi'}]})

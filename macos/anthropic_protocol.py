@@ -176,12 +176,45 @@ def sse_event(kind, payload):
 PING = sse_event('ping', {'type': 'ping'})
 
 
-def stream_events(message):
-    """The event sequence of a streamed Anthropic message whose content is already complete."""
-    start = dict(message, content=[], stop_reason=None, stop_sequence=None,
-                 usage=dict(message['usage'], output_tokens=0))
-    events = [sse_event('message_start', {'type': 'message_start', 'message': start})]
-    for index, block in enumerate(message['content']):
+def message_start_event(mid, model, input_tokens):
+    return sse_event('message_start', {'type': 'message_start', 'message': {
+        'id': mid, 'type': 'message', 'role': 'assistant', 'model': model, 'content': [], 'stop_reason': None,
+        'stop_sequence': None, 'usage': {'input_tokens': input_tokens, 'cache_read_input_tokens': 0,
+                                         'cache_creation_input_tokens': 0, 'output_tokens': 0}}})
+
+
+def block_start_event(index, block):
+    return sse_event('content_block_start', {'type': 'content_block_start', 'index': index, 'content_block': block})
+
+
+def thinking_delta_event(index, text):
+    return sse_event('content_block_delta', {'type': 'content_block_delta', 'index': index,
+                                             'delta': {'type': 'thinking_delta', 'thinking': text}})
+
+
+def stream_events(message, started=False, live_thinking=None):
+    """The event sequence of a streamed Anthropic message whose content is complete.
+
+    started: message_start was already sent. live_thinking: reasoning already streamed as an open thinking block at
+    index 0 (None when no block was opened); the rest of the reasoning is sent and the block closed."""
+    events = []
+    if not started:
+        start = dict(message, content=[], stop_reason=None, stop_sequence=None,
+                     usage=dict(message['usage'], output_tokens=0))
+        events.append(sse_event('message_start', {'type': 'message_start', 'message': start}))
+    blocks = list(message['content'])
+    offset = 0
+    if live_thinking is not None:
+        reasoning = blocks[0]['thinking'] if blocks and blocks[0]['type'] == 'thinking' else ''
+        if blocks and blocks[0]['type'] == 'thinking':
+            blocks = blocks[1:]
+        sent = live_thinking.strip()
+        if reasoning.startswith(sent) and len(reasoning) > len(sent):
+            events.append(thinking_delta_event(0, reasoning[len(sent):]))
+        events.append(sse_event('content_block_stop', {'type': 'content_block_stop', 'index': 0}))
+        offset = 1
+    for position, block in enumerate(blocks):
+        index = position + offset
         if block['type'] == 'thinking':
             events.append(sse_event('content_block_start', {'type': 'content_block_start', 'index': index,
                                                             'content_block': {'type': 'thinking', 'thinking': ''}}))
