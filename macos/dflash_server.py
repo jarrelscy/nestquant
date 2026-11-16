@@ -137,6 +137,8 @@ class Service:
         started = time.perf_counter()
         args = (ids, max_tokens, should_stop if stops else None, on_token if emit else None)
         kwargs = {}
+        if parsed.get('thinking'):
+            kwargs['thinking'] = parsed['thinking']
         if parsed.get('temperature') is not None:
             kwargs['temperature'] = parsed['temperature']
         if parsed.get('top_p') is not None:
@@ -175,6 +177,28 @@ class Service:
         response = completion_response(self.model_name, message, finish, len(ids), len(generated),
                                        stats.get('reused_tokens', 0), timings, cid)
         return response
+
+
+def thinking_budgeted(run, ids, max_tokens, should_stop, on_token, budget, think_end, close_ids):
+    """Generate with at most `budget` tokens of reasoning. run(prompt, limit, should_stop, on_token) generates one
+    segment. When the reply reaches the budget without closing its reasoning (`think_end`), `close_ids` (a short
+    sentence ending in </think>) is appended and generation continues from there; with prefix reuse the continuation
+    prefills only the new tokens. A reply that closed its reasoning in time but was cut at the budget continues
+    unchanged."""
+    if not budget or max_tokens <= budget:
+        return run(ids, max_tokens, should_stop, on_token)
+    first = run(ids, budget, should_stop, on_token)
+    generated = list(first['generated_ids'])
+    if first['stopped'] or len(generated) < budget:
+        return first
+    inject = [] if think_end in generated else list(close_ids)
+    head = generated + inject
+    stop = (lambda tail: should_stop(head + tail)) if should_stop is not None else None
+    emit = (lambda tail: on_token(head + tail)) if on_token is not None else None
+    rest = run(list(ids) + head, max_tokens - len(head), stop, emit)
+    stats = dict(rest.get('stats', {}), thinking_budget=budget, thinking_forced_close=bool(inject),
+                 first_segment_seconds=first.get('stats', {}).get('decode_seconds'))
+    return dict(generated_ids=head + list(rest['generated_ids']), stopped=rest['stopped'], stats=stats)
 
 
 class DFlashSession:
@@ -221,6 +245,11 @@ class DFlashSession:
             self.tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
             self.template = (Path(ng.__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
             self.thinking_template = (args.model / 'chat_template.jinja').read_text()
+            self.think_end = self.tokenizer.convert_tokens_to_ids('</think>')
+            self.think_close = self.tokenizer.encode(
+                '\n\nI have reasoned enough; time is limited, so I will act on what I have now.\n</think>',
+                add_special_tokens=False)
+            self.thinking_budget = int(getattr(args, 'thinking_budget', 0) or 0)
             end = json.loads((args.model / 'generation_config.json').read_text())['eos_token_id']
             self.eos = {end} if isinstance(end, int) else set(end)
             self.tool_parser = load_tool_module('glm47')
@@ -383,9 +412,14 @@ class DFlashSession:
                 and state['checkpoint']['length'] >= PARK_MIN_TOKENS and self._footprint() < PARK_MAX_GIB)
 
     # ------------------------------------------------------------------ generation
-    def generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=None, top_p=None):
+    def generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=None, top_p=None, thinking=None):
         temperature = self.default_temperature if temperature is None else float(temperature)
         top_p = self.default_top_p if top_p is None else float(top_p)
+        budget = self.thinking_budget if thinking else 0
+        run = lambda prompt, limit, stop, emit: self._recover(prompt, limit, stop, emit, temperature, top_p)
+        return thinking_budgeted(run, ids, max_tokens, should_stop, on_token, budget, self.think_end, self.think_close)
+
+    def _recover(self, ids, max_tokens, should_stop, on_token, temperature, top_p):
         try:
             return self._generate(ids, max_tokens, should_stop, on_token, temperature, top_p)
         except RuntimeError as error:
@@ -776,6 +810,8 @@ def main():
     p.add_argument('--long-reply-dir', type=Path, default=None,
                    help='Save the text of replies of at least --long-reply-tokens tokens here')
     p.add_argument('--long-reply-tokens', type=int, default=16384)
+    p.add_argument('--thinking-budget', type=int, default=0,
+                   help='Close the reasoning after this many tokens and continue to the answer (0 = no limit)')
     p.add_argument('--anthropic-thinking', choices=('off', 'low', 'high', 'max'), default='off',
                    help='Reasoning effort for /v1/messages requests that ask for thinking (Claude Code asks on every turn)')
     p.add_argument('--temperature', type=float, default=0.0,

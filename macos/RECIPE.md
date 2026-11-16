@@ -181,6 +181,8 @@ What to expect:
   24 tok/s and peaked at 94 GiB; a full 131K context would reach about 98 GiB, so keep clients near 110K.
 - Thinking: OpenAI `reasoning_effort` per request; Anthropic `thinking` (Claude Code sends it every turn) maps to
   `--anthropic-thinking off|low|high|max` (startnq.sh uses high; max over-plans hard tasks past 65K tokens on this hardware).
+- Thinking budget: `--thinking-budget N` closes the reasoning after N tokens (appending a short sentence and
+  `</think>`) and the model continues to its answer or tool call. startnq.sh uses 16,384.
 
 ## 5. Benchmarks
 

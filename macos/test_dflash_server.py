@@ -28,7 +28,7 @@ class FakeBackend:
     def decode(self, ids):
         return ''.join(chr(i) for i in ids)
 
-    def generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=None, top_p=None):
+    def generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=None, top_p=None, thinking=None):
         self.calls.append(dict(ids=ids, max_tokens=max_tokens, temperature=temperature, top_p=top_p))
         time.sleep(self.delay)
         script = [ord(c) for c in self.reply] + [EOS]
@@ -251,6 +251,55 @@ class StopTest(unittest.TestCase):
         self.assertEqual(safe_prefix_length('hello </cm', ['</cmd>']), len('hello '))
         self.assertEqual(safe_prefix_length('hello', ['</cmd>']), 5)
         self.assertEqual(safe_prefix_length('ab�', []), 2)
+
+
+class ThinkingBudgetTest(unittest.TestCase):
+    END, CLOSE = 9, [7, 8, 9]
+
+    def runner(self, script):
+        """A run() that replays `script` (the model's full reply) from where the prompt leaves off."""
+        calls = []
+
+        def run(prompt, limit, should_stop, on_token):
+            calls.append((list(prompt), limit))
+            done = len(prompt) - 2           # the base prompt is [1, 2]
+            tokens = script[done:done + limit] if done <= len(script) else []
+            stopped = 'eos' if done + limit >= len(script) else None
+            if on_token is not None:
+                on_token(tokens)
+            return dict(generated_ids=tokens, stopped=stopped, stats=dict(decode_seconds=1.0))
+        return run, calls
+
+    def test_no_budget_or_short_reply(self):
+        from dflash_server import thinking_budgeted
+        run, calls = self.runner([5] * 10)
+        out = thinking_budgeted(run, [1, 2], 100, None, None, 0, self.END, self.CLOSE)
+        self.assertEqual(len(out['generated_ids']), 10)
+        self.assertEqual(len(calls), 1)
+        run, calls = self.runner([5, 9, 6])
+        out = thinking_budgeted(run, [1, 2], 100, None, None, 50, self.END, self.CLOSE)
+        self.assertEqual(out['generated_ids'], [5, 9, 6])
+        self.assertEqual(len(calls), 1)
+
+    def test_forced_close(self):
+        from dflash_server import thinking_budgeted
+        seen = []
+        script = [5] * 30
+        run, calls = self.runner(script)
+        out = thinking_budgeted(run, [1, 2], 100, None, lambda g: seen.append(list(g)), 10, self.END, self.CLOSE)
+        self.assertEqual(out['generated_ids'][:13], [5] * 10 + self.CLOSE)
+        self.assertTrue(out['stats']['thinking_forced_close'])
+        self.assertEqual(calls[1][0], [1, 2] + [5] * 10 + self.CLOSE)
+        self.assertEqual(calls[1][1], 100 - 13)
+        self.assertEqual(seen[-1], out['generated_ids'])     # streaming sees the joined reply
+
+    def test_closed_in_time_continues_unchanged(self):
+        from dflash_server import thinking_budgeted
+        script = [5, 5, 9] + [6] * 20
+        run, calls = self.runner(script)
+        out = thinking_budgeted(run, [1, 2], 100, None, None, 10, self.END, self.CLOSE)
+        self.assertEqual(out['generated_ids'], script)
+        self.assertFalse(out['stats']['thinking_forced_close'])
 
 
 class ParseTest(unittest.TestCase):
