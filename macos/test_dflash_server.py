@@ -159,6 +159,29 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(chunks[0]['choices'][0]['delta']['role'], 'assistant')
 
 
+class AliasTest(unittest.TestCase):
+    def test_alias_listed_and_echoed(self):
+        server = Server(('127.0.0.1', 0), Service(FakeBackend(), 'glm-nestquant', 5.0, log=lambda *a, **k: None,
+                                                  aliases=['local']))
+        harness = ServerHarness.__new__(ServerHarness)
+        harness.server, harness.port = server, server.server_address[1]
+        harness.thread = threading.Thread(target=server.serve_forever, daemon=True)
+        harness.thread.start()
+        try:
+            ids = [m['id'] for m in json.loads(harness.request('GET', '/v1/models')[2])['data']]
+            self.assertEqual(ids, ['glm-nestquant', 'local'])
+            self.assertEqual(harness.request('GET', '/v1/models/local')[0], 200)
+            self.assertEqual(harness.request('GET', '/v1/models/other')[0], 404)
+            body = dict(model='local', messages=[{'role': 'user', 'content': 'hi'}])
+            reply = json.loads(harness.request('POST', '/v1/chat/completions', body)[2])
+            self.assertEqual(reply['model'], 'local')
+            body['model'] = 'something-else'
+            reply = json.loads(harness.request('POST', '/v1/chat/completions', body)[2])
+            self.assertEqual(reply['model'], 'glm-nestquant')
+        finally:
+            harness.close()
+
+
 class ApiKeyTest(unittest.TestCase):
     def test_key_required_except_health(self):
         harness = ServerHarness(FakeBackend(), api_key='secret-key')

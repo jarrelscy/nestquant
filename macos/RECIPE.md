@@ -156,13 +156,15 @@ server with these settings, each of which an environment variable can change:
 | Thinking for Claude Code requests | high effort | `NQ_THINKING` (off, low, high, max) |
 | Thinking budget | 16,384 tokens | `NQ_THINKING_BUDGET` (0 = no limit) |
 | API key | none | `NQ_API_KEY` |
+| Model names | `glm-nestquant` and `local` | `NQ_MODEL_ALIAS` |
 
 The log is `~/.nestquant/server.log`. Replies of 16,384 tokens or more are saved to `~/.nestquant/long-replies/`.
 Without an API key, anyone on your network can use the server; set `NQ_API_KEY` to require
 `Authorization: Bearer <key>` (OpenAI clients) or `x-api-key: <key>` (Anthropic clients).
 
 The server serves `POST /v1/chat/completions` (OpenAI), `POST /v1/messages` (Anthropic, used by Claude Code)
-and `GET /v1/models`, and reports the model as `glm-nestquant`. The examples below use port 8000.
+and `GET /v1/models`, and lists the model as `glm-nestquant` and `local`. Requests may name either (any other
+name is also accepted and answered by the same model). The examples below use port 8000.
 
 ```sh
 curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{

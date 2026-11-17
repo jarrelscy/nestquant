@@ -7,7 +7,7 @@
 # Environment overrides: NQ_PORT (8000), NQ_HOST (0.0.0.0), NQ_MAX_CONTEXT (131072), NQ_THINKING (high: effort for
 # Anthropic thinking requests; off|low|high|max), NQ_THINKING_BUDGET (16384: reasoning tokens before the server closes
 # the thinking and the model answers; 0 = no limit), NQ_MIN_AVAILABLE_GIB (95),
-# NQ_TEMPERATURE (1.0), NQ_TOP_P (0.95), NQ_API_KEY (unset = no key), NQ_REPO (this checkout).
+# NQ_MODEL_ALIAS (local: second model name), NQ_TEMPERATURE (1.0), NQ_TOP_P (0.95), NQ_API_KEY (unset = no key), NQ_REPO (this checkout, else ~/src/nestquant).
 setopt ERR_RETURN NO_UNSET PIPE_FAIL
 
 PORT=${NQ_PORT:-8000}
@@ -18,7 +18,11 @@ TEMPERATURE=${NQ_TEMPERATURE:-1.0}
 TOP_P=${NQ_TOP_P:-0.95}
 THINKING=${NQ_THINKING:-high}
 THINKING_BUDGET=${NQ_THINKING_BUDGET:-16384}
-REPO=${NQ_REPO:-${0:A:h:h:h}}     # the checkout this script lives in (macos/scripts/startnq.sh)
+MODEL_ALIAS=${NQ_MODEL_ALIAS:-local}
+# The checkout this script lives in (macos/scripts/startnq.sh), else ~/src/nestquant (for a copy elsewhere).
+repo_here=${0:A:h:h:h}
+[[ -f $repo_here/macos/dflash_server.py ]] || repo_here=$HOME/src/nestquant
+REPO=${NQ_REPO:-$repo_here}
 STATE=$HOME/.nestquant
 PIDFILE=$STATE/server.pid
 LOG=$STATE/server.log
@@ -72,7 +76,7 @@ fi
 echo "Memory check passed: ${available_gib} GiB available of ${total_gib} GiB."
 
 # 4. Start under the GPU lock (released when the server exits).
-args=(--host "$HOST" --port "$PORT" --max-context "$MAX_CONTEXT" --temperature "$TEMPERATURE" --top-p "$TOP_P" --anthropic-thinking "$THINKING" --thinking-budget "$THINKING_BUDGET" --long-reply-dir "$STATE/long-replies")
+args=(--host "$HOST" --port "$PORT" --max-context "$MAX_CONTEXT" --temperature "$TEMPERATURE" --top-p "$TOP_P" --anthropic-thinking "$THINKING" --thinking-budget "$THINKING_BUDGET" --model-alias "$MODEL_ALIAS" --long-reply-dir "$STATE/long-replies")
 [[ -n ${NQ_API_KEY:-} ]] && args+=(--api-key "$NQ_API_KEY")
 cd "$REPO"
 nohup /bin/zsh -c '
@@ -88,7 +92,7 @@ echo "Starting NestQuant server (pid $(cat "$PIDFILE")); loading takes about 2 m
 for _ in {1..90}; do
   if health; then
     echo "NestQuant server is up on $HOST:$PORT."
-    echo "  OpenAI:    http://$HOST:$PORT/v1/chat/completions   (model glm-nestquant)"
+    echo "  OpenAI:    http://$HOST:$PORT/v1/chat/completions   (model glm-nestquant or $MODEL_ALIAS)"
     echo "  Anthropic: http://$HOST:$PORT/v1/messages"
     echo "  Default sampling: temperature $TEMPERATURE, top_p $TOP_P (requests can override); Anthropic thinking: $THINKING, thinking budget $THINKING_BUDGET tokens"
     exit 0

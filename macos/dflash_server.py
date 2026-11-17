@@ -65,14 +65,19 @@ class GpuThread:
 class Service:
     """Model-agnostic request handling around a backend with encode/decode/generate (see DFlashSession)."""
 
-    def __init__(self, backend, model_name=MODEL, queue_timeout=900.0, log=print, gpu=None):
+    def __init__(self, backend, model_name=MODEL, queue_timeout=900.0, log=print, gpu=None, aliases=()):
         self.gpu = gpu
         self.backend = backend
         self.model_name = model_name
+        self.model_names = [model_name] + [a for a in aliases if a and a != model_name]
         self.queue_timeout = queue_timeout
         self.lock = threading.Lock()
         self.log = log
         self.requests = 0
+
+    def reported_name(self, requested):
+        """The model name to report: the requested name when it is one of the served names."""
+        return requested if requested in self.model_names else self.model_name
 
     long_reply_dir = None          # set from --long-reply-dir
     long_reply_tokens = 16384
@@ -174,7 +179,7 @@ class Service:
                                  completion_tokens=len(generated), finish_reason=finish, **timings)), flush=True)
         if self.long_reply_dir is not None and len(generated) >= self.long_reply_tokens:
             self._save_long_reply(ids, generated, finish, stats)
-        response = completion_response(self.model_name, message, finish, len(ids), len(generated),
+        response = completion_response(self.reported_name(parsed.get('model')), message, finish, len(ids), len(generated),
                                        stats.get('reused_tokens', 0), timings, cid)
         return response
 
@@ -580,10 +585,16 @@ class Handler(BaseHTTPRequestHandler):
         if path in ('/health', '/v1/health'):
             self.reply(200, {'status': 'ok', 'busy': service.lock.locked()})
         elif path == '/v1/models':
-            self.reply(200, dict(object='list', data=[dict(id=service.model_name, object='model', created=0,
-                                                         owned_by='local')]))
+            self.reply(200, dict(object='list', data=[dict(id=name, object='model', created=0, owned_by='local')
+                                                      for name in service.model_names]))
         elif path.startswith('/v1/models/'):
-            self.reply(200, dict(id=service.model_name, object='model', created=0, owned_by='local'))
+            name = path[len('/v1/models/'):]
+            if name in service.model_names:
+                self.reply(200, dict(id=name, object='model', created=0, owned_by='local'))
+            else:
+                self.reply(404, {'error': {'message': f'Unknown model {name!r}; served models: '
+                                                      f'{", ".join(service.model_names)}',
+                                           'type': 'invalid_request_error', 'code': 'model_not_found'}})
         else:
             self.reply(404, {'error': {'message': 'Unknown endpoint', 'type': 'invalid_request_error'}})
 
@@ -762,7 +773,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def stream(self, service, parsed, ids, max_tokens):
         cid = completion_id()
-        model = service.model_name
+        model = service.reported_name(parsed.get('model'))
         alive = [True]
         started = [False]
 
@@ -836,6 +847,8 @@ def main():
     p.add_argument('--api-key', default=os.environ.get('NQ_SERVER_API_KEY'),
                    help='Require "Authorization: Bearer <key>" (env NQ_SERVER_API_KEY); default: no key')
     p.add_argument('--model-name', default=MODEL, help='Name reported by /v1/models and in responses')
+    p.add_argument('--model-alias', action='append', default=[],
+                   help='Another model name to list and answer to (repeatable); requests may use any name')
     p.add_argument('--max-context', type=int, default=32768, help='Prompt plus completion tokens (up to 131072)')
     p.add_argument('--block-size', type=int, default=-8, help='DFlash verify block; negative = adaptive up to N')
     p.add_argument('--hot-fraction', type=float, default=0.2)
@@ -866,7 +879,7 @@ def main():
     gpu, stop = GpuThread(), threading.Event()
     Service.long_reply_dir, Service.long_reply_tokens = a.long_reply_dir, a.long_reply_tokens
     try:
-        with Server((a.host, a.port), Service(session, a.model_name, a.queue_timeout, gpu=gpu),
+        with Server((a.host, a.port), Service(session, a.model_name, a.queue_timeout, gpu=gpu, aliases=a.model_alias),
                     api_key=a.api_key) as server:
             if a.host not in ('127.0.0.1', 'localhost', '::1') and not a.api_key:
                 print(json.dumps(dict(event='warning', message=f'Serving on {a.host} without an API key: anyone '
