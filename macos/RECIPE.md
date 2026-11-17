@@ -10,7 +10,7 @@ an M5 Max (40-core GPU, 128 GiB) on AC power, macOS 27.2:
 | Plain decode, coding benchmark (average) | ~25.5 | |
 | GSM8K, first 100 test problems | 34.0 | 99/100 correct (earlier build, 15% hot set) |
 | MMLU-Pro, first 152 test questions, through the server | 26.2 (median 30) | 128/152 correct (84.2%), sustained load |
-| Agent turns (Terminal-Bench 2.1, 9 tasks, 1K–20K context) | 35.3 (median 41) | 7/9 passed; 514 requests over ~2.3 h of sustained load |
+| Terminal-Bench 2.1 with Claude Code, thinking on, first 20 of 89 tasks | 39.7 (median request 30) | 19/20 passed (95%); 1,051 requests, 1.08M output tokens, 7.6 h of decode; context median 28K, up to 78K |
 
 Peak memory is about 86 GiB. Quality settings (the defaults): the full 1.5-bit expert base stays resident, 20%
 of expert slots hold 4-bit refinements, and every verified token uses the same precision as plain decoding.
@@ -42,7 +42,11 @@ The numbers above are from short runs (192 tokens, a few minutes of GPU work). A
   Acceptance and the 4-bit share did not change.
 - When the server runs nonstop (MMLU-Pro, 136 requests over about an hour, 130–1,024-token answers), decode
   averaged 26.2 tok/s: median 30, 10th percentile 24, 90th percentile 34, with dips to 7–16 tok/s on some long
-  answers.
+  answers. That run predates draft pruning.
+- Terminal-Bench 2.1 with Claude Code (thinking on, about 14 hours of agent work over the first 20 tasks):
+  1,080,425 output tokens at 39.7 tok/s overall. Per request the median was 30 tok/s (10th percentile 25,
+  90th percentile 39); long replies decode faster than short ones because their drafts are accepted more often.
+  93.5% of prompt tokens came from the cache.
 
 Expect lower and more variable decode than the table when the server runs for a long time. The most likely
 reason is the adapter's power limit, but this is not confirmed. To check on your machine, run
@@ -231,8 +235,11 @@ the exact settings and `macos/tbench/local_claude_code.py` installs Claude Code 
 3. Start the server (`macos/scripts/startnq.sh`), then run all 89 tasks:
    `macos/tbench/run_claude_code.sh <job-name>` (add `-i <task>` to run single tasks).
 
-Result so far (thinking on at high effort, 16K thinking budget, temperature 1.0): 19 of the first 20 tasks
-passed. Each task takes about 20 minutes on average, so all 89 take about 30 hours. On the 96 W adapter the
+Result so far (thinking on at high effort, 16K thinking budget, temperature 1.0): **19 of the first 20 tasks
+passed (95%)**. The one failure, caffe-cifar-10, passed 5 of its 6 checks but did not set the `CPU_ONLY` CMake
+flag. The thinking budget closed runaway reasoning 20 times. Z.ai reports 84.3% for the full-precision model
+over all 89 tasks; the first 20 are the alphabetical start of the list, not a random sample. Each task takes
+about 40 minutes on average, so all 89 take about 2.5 days. On the 96 W adapter the
 battery drains under this load; pause runs when it falls low.
 
 ## 5. Benchmarks
