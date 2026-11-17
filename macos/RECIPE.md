@@ -133,28 +133,46 @@ The server's default paths match these locations.
 
 ## 4. Run the server
 
+Start and stop the server with the scripts in `macos/scripts/`:
+
 ```sh
-.venv-macos/bin/python macos/dflash_server.py --port 18090 --max-context 32768
+macos/scripts/startnq.sh     # starts the server on 0.0.0.0:8000 and waits until it answers (about 2 minutes)
+macos/scripts/stopnq.sh      # stops it
 ```
 
-Loading takes about 2 minutes. By default the server binds to 127.0.0.1 (this Mac only). To serve other
-machines, add `--host 0.0.0.0` and set an API key with `--api-key <key>` (or `NQ_SERVER_API_KEY`); clients
-then send `Authorization: Bearer <key>`. The server serves `POST /v1/chat/completions` (streaming
-and non-streaming) and `GET /v1/models`, and reports the model as `glm-nestquant`. Any API key is accepted.
+Both are safe to run twice. `startnq.sh` refuses to start when another model process is running or when less
+than 95 GiB of memory is free or reclaimable (starting without that headroom can freeze macOS). It starts the
+server with these settings, each of which an environment variable can change:
+
+| Setting | Default | Variable |
+|---|---|---|
+| Address | 0.0.0.0:8000 | `NQ_HOST`, `NQ_PORT` |
+| Context (prompt plus reply) | 131,072 tokens | `NQ_MAX_CONTEXT` |
+| Sampling | temperature 1.0, top_p 0.95 | `NQ_TEMPERATURE`, `NQ_TOP_P` |
+| Thinking for Claude Code requests | high effort | `NQ_THINKING` (off, low, high, max) |
+| Thinking budget | 16,384 tokens | `NQ_THINKING_BUDGET` (0 = no limit) |
+| API key | none | `NQ_API_KEY` |
+
+The log is `~/.nestquant/server.log`. Replies of 16,384 tokens or more are saved to `~/.nestquant/long-replies/`.
+Without an API key, anyone on your network can use the server; set `NQ_API_KEY` to require
+`Authorization: Bearer <key>` (OpenAI clients) or `x-api-key: <key>` (Anthropic clients).
+
+The server serves `POST /v1/chat/completions` (OpenAI), `POST /v1/messages` (Anthropic, used by Claude Code)
+and `GET /v1/models`, and reports the model as `glm-nestquant`. The examples below use port 8000.
 
 ```sh
-curl http://127.0.0.1:18090/v1/chat/completions -H 'Content-Type: application/json' -d '{
+curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
   "model": "glm-nestquant", "max_tokens": 256,
   "messages": [{"role": "user", "content": "Write a Python function that reverses a linked list."}]}'
 ```
 
-With LiteLLM-based tools, use model `openai/glm-nestquant` and base URL `http://127.0.0.1:18090/v1`.
+With LiteLLM-based tools, use model `openai/glm-nestquant` and base URL `http://127.0.0.1:8000/v1`.
 
 Images work the OpenAI way: add `image_url` parts (base64 `data:` URLs or `http(s)://` links) to a message.
 
 ```sh
 IMG=$(base64 -i photo.png)
-curl http://127.0.0.1:18090/v1/chat/completions -H 'Content-Type: application/json' -d '{
+curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
   "model": "glm-nestquant", "max_tokens": 256,
   "messages": [{"role": "user", "content": [
     {"type": "image_url", "image_url": {"url": "data:image/png;base64,'"$IMG"'"}},
@@ -184,6 +202,39 @@ What to expect:
 - Thinking budget: `--thinking-budget N` closes the reasoning after N tokens (appending a short sentence and
   `</think>`) and the model continues to its answer or tool call. startnq.sh uses 16,384.
 
+### Claude Code
+
+Point Claude Code at the server:
+
+```sh
+ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_API_KEY=local ANTHROPIC_MODEL=glm-nestquant \
+CLAUDE_CODE_ATTRIBUTION_HEADER=0 CLAUDE_CODE_MAX_CONTEXT_TOKENS=110000 CLAUDE_CODE_MAX_OUTPUT_TOKENS=65536 \
+API_TIMEOUT_MS=7200000 CLAUDE_STREAM_IDLE_TIMEOUT_MS=3600000 claude
+```
+
+- Claude Code asks for thinking on every turn; the server answers at the effort set by `NQ_THINKING` and streams
+  the reasoning live, so long turns do not time out. A turn can take several minutes.
+- `CLAUDE_CODE_ATTRIBUTION_HEADER=0` keeps the start of the prompt identical between requests, so the server
+  reuses its cache. The server also removes Claude Code's per-request billing line for the same reason.
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS=110000` keeps the conversation below the server's 131,072-token limit and
+  memory peak.
+
+### Terminal-Bench 2.1
+
+The Terminal-Bench run uses Harbor with Claude Code against this server. `macos/tbench/run_claude_code.sh` holds
+the exact settings and `macos/tbench/local_claude_code.py` installs Claude Code in the task containers.
+
+1. Install Docker through Colima with Rosetta (the task images are x86-64; Claude Code crashes under QEMU):
+   `sudo softwareupdate --install-rosetta --agree-to-license`, then `colima start --vm-type vz --vz-rosetta`.
+2. Install Harbor in `~/src/tbench/.venv` and download the dataset:
+   `harbor dataset download terminal-bench/terminal-bench-2-1 -o ~/src/tbench/datasets/terminal-bench-2-1`.
+3. Start the server (`macos/scripts/startnq.sh`), then run all 89 tasks:
+   `macos/tbench/run_claude_code.sh <job-name>` (add `-i <task>` to run single tasks).
+
+Result so far (thinking on at high effort, 16K thinking budget, temperature 1.0): 19 of the first 20 tasks
+passed. Each task takes about 20 minutes on average, so all 89 take about 30 hours. On the 96 W adapter the
+battery drains under this load; pause runs when it falls low.
+
 ## 5. Benchmarks
 
 ```sh
@@ -199,7 +250,7 @@ What to expect:
 
 # MMLU-Pro through a running server (questions: a JSON list of rows from TIGER-Lab/MMLU-Pro, test split)
 .venv-macos/bin/python macos/eval_mmlu_pro.py --questions mmlu_pro.json \
-  --url http://127.0.0.1:18090/v1/chat/completions --output mmlu-pro.json   # add --resume to continue a run
+  --url http://127.0.0.1:8000/v1/chat/completions --output mmlu-pro.json   # add --resume to continue a run
 ```
 
 MMLU-Pro uses a zero-shot chain-of-thought prompt, greedy decoding and up to 1,024 answer tokens. On the first
