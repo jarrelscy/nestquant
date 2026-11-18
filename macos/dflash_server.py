@@ -36,6 +36,7 @@ MAX_BODY = 64 * 1024**2      # base64 images
 PARK_MIN_TOKENS = 2048       # extra cache slots: conversations at least this long are kept during other requests
 PARK_SLOTS = 4               # conversations kept besides the live one (each 30K-token conversation is ~0.8 GiB)
 PARK_MAX_GIB = 100.0
+MAX_CHECKPOINTS = 6          # restore points kept per conversation (end of each prompt, start of each extension)
 HOME = Path.home()
 
 
@@ -66,15 +67,32 @@ class GpuThread:
                 future.set_exception(error)
 
 
+def best_checkpoint(cache_ids, checkpoints, ids):
+    """The restore point of a conversation that covers the longest prefix of `ids` (at least one token of `ids`
+    must remain to prefill, unless it is an exact replay), or None."""
+    usable = min(common_prefix_length(cache_ids, ids), len(ids) - 1)
+    best = None
+    for checkpoint in checkpoints or []:
+        if checkpoint is None or checkpoint['length'] > len(cache_ids):
+            continue
+        if checkpoint['length'] <= usable or exact_replay(cache_ids, checkpoint, ids):
+            if best is None or checkpoint['length'] > best['length']:
+                best = checkpoint
+    return best
+
+
+def slot_checkpoints(slot):
+    return slot.get('checkpoints') or ([slot['checkpoint']] if slot.get('checkpoint') else [])
+
+
 def choose_slot(slots, ids, reused):
-    """Index of the parked conversation whose end-of-prompt checkpoint covers the longest prefix of `ids`, longer
-    than `reused`, or None. A checkpoint equal to the whole prompt counts (exact replay)."""
+    """Index of the parked conversation with a restore point covering the longest prefix of `ids`, longer than
+    `reused`, or None. A restore point equal to the whole prompt counts (exact replay)."""
     best, best_length = None, reused
     for index, slot in enumerate(slots):
-        length = slot['checkpoint']['length']
-        if length > best_length and (exact_replay(slot['cache_ids'], slot['checkpoint'], ids) or
-                                     length <= min(common_prefix_length(slot['cache_ids'], ids), len(ids) - 1)):
-            best, best_length = index, length
+        checkpoint = best_checkpoint(slot['cache_ids'], slot_checkpoints(slot), ids)
+        if checkpoint is not None and checkpoint['length'] > best_length:
+            best, best_length = index, checkpoint['length']
     return best
 
 
@@ -455,6 +473,7 @@ class DFlashSession:
         self.ctx_hidden = None
         self.checkpoint = None
         self.parked = []
+        self.checkpoints = []
         self.last_thinking = None
         # Conversations dropped from the cache (oldest slot evicted, or no room); a later fresh prompt that shares
         # their start counts as an eviction miss, the signal that more cache slots would have helped.
@@ -586,7 +605,19 @@ class DFlashSession:
 
     def drop_state(self):
         self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint = None, [], None, None
+        self.checkpoints = []
         self.mx.clear_cache()
+
+    def _live_state(self):
+        return dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint,
+                    checkpoints=list(self.checkpoints))
+
+    def _remember_checkpoint(self, checkpoint):
+        if checkpoint is None:
+            return
+        kept = [c for c in self.checkpoints if c['length'] != checkpoint['length']] + [checkpoint]
+        kept.sort(key=lambda c: c['length'])
+        self.checkpoints = kept[-MAX_CHECKPOINTS:]
 
     def _park(self, state):
         """Keep a conversation in a parked slot; the least recently used slots go first when over the limit."""
@@ -627,8 +658,9 @@ class DFlashSession:
     def _worth_parking(self, state):
         """Keep a conversation in a parked slot when slots are enabled, it is long enough to be costly to prefill
         again and memory allows. Needs its end-of-prompt checkpoint, from which it resumes."""
-        return (PARK_SLOTS > 0 and state['cache'] is not None and state['checkpoint'] is not None
-                and state['checkpoint']['length'] >= PARK_MIN_TOKENS and self._footprint() < PARK_MAX_GIB)
+        points = slot_checkpoints(state)
+        return (PARK_SLOTS > 0 and state['cache'] is not None and bool(points)
+                and max(c['length'] for c in points) >= PARK_MIN_TOKENS and self._footprint() < PARK_MAX_GIB)
 
     # ------------------------------------------------------------------ generation
     def generate(self, ids, max_tokens, should_stop=None, on_token=None, temperature=None, top_p=None, thinking=None):
@@ -658,9 +690,13 @@ class DFlashSession:
         mx, nd, ng = self.mx, self.nd, self.ng
         mode, reused = ('fresh', 0)
         if self.reuse and self.cache is not None:
-            mode, reused = plan_reuse(self.cache_ids, self.checkpoint['length'] if self.checkpoint else 0, ids)
-        if self.reuse and exact_replay(self.cache_ids, self.checkpoint, ids):
-            mode, reused = 'replay', len(ids)
+            mode, reused = plan_reuse(self.cache_ids, 0, ids)          # 'extend' or 'fresh'
+            if mode != 'extend':
+                checkpoint = best_checkpoint(self.cache_ids, self.checkpoints, ids)
+                if checkpoint is not None:
+                    self.checkpoint = checkpoint
+                    replay = exact_replay(self.cache_ids, checkpoint, ids)
+                    mode, reused = ('replay', len(ids)) if replay else ('rollback', checkpoint['length'])
         swapped = False
         if self.reuse and self.parked and mode != 'replay':
             # Parked slots keep other conversations (a client's side requests or subagents). Resume the one whose
@@ -668,15 +704,16 @@ class DFlashSession:
             best = choose_slot(self.parked, ids, reused)
             if best is not None:
                 slot = self.parked.pop(best)
-                live = dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint)
+                live = self._live_state()
                 if self._worth_parking(live):
                     self._park(live)
-                self.cache, self.cache_ids = slot['cache'], slot['cache_ids']
-                self.ctx_hidden, self.checkpoint = slot['ctx'], slot['checkpoint']
+                self.cache, self.cache_ids, self.ctx_hidden = slot['cache'], slot['cache_ids'], slot['ctx']
+                self.checkpoints = slot_checkpoints(slot)
+                self.checkpoint = best_checkpoint(self.cache_ids, self.checkpoints, ids)
                 replay = exact_replay(self.cache_ids, self.checkpoint, ids)
                 mode, reused, swapped = ('replay' if replay else 'rollback'), self.checkpoint['length'], True
         if mode == 'fresh' and not swapped and self.reuse and self.cache is not None:
-            live = dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint)
+            live = self._live_state()
             if self._worth_parking(live):
                 self._park(live)
                 self.cache = None     # the parked slot owns it now
@@ -685,8 +722,10 @@ class DFlashSession:
         miss_tokens = self._eviction_miss(ids) if mode == 'fresh' and self.reuse else 0
         lcp = common_prefix_length(self.cache_ids, ids)
         cache, cache_ids, ctx, checkpoint = self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint
+        checkpoints = self.checkpoints
         # Until this request finishes cleanly the live state is unknown; a failure leaves nothing to reuse.
         self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint = None, [], None, None
+        self.checkpoints = []
         started = time.perf_counter()
         if mode == 'fresh':
             if cache is not None:
@@ -704,6 +743,12 @@ class DFlashSession:
             self._resume_prefill()
             if self.cache_ids != ids[:reused] or self._kv_offset() != reused:
                 raise RuntimeError('Reused cache does not hold the expected prefix')
+            # Restore points past `reused` describe tokens that are about to change.
+            self.checkpoints = [c for c in checkpoints if c['length'] <= reused]
+            if mode == 'extend' and reused >= PARK_MIN_TOKENS and all(c['length'] != reused for c in self.checkpoints):
+                # Clients branch off the end of the previous reply (Claude Code's side requests do), so keep a
+                # restore point here as well as at the end of each prompt.
+                self._remember_checkpoint(self._take_checkpoint(reused))
             self.checkpoint, cache = None, None
         suffix = ids[reused:]
         rows = self.vision.rows_for(suffix) if self.vision is not None and mode != 'replay' else None
@@ -768,7 +813,9 @@ class DFlashSession:
                     self.ctx_hidden = self._trim_ctx(mx.concatenate([self.ctx_hidden] + rows, axis=1))
                     mx.eval(self.ctx_hidden)
                 self.checkpoint = checkpoint
+                self._remember_checkpoint(checkpoint)
                 stats['cached_tokens_after'] = len(self.cache_ids)
+                stats['restore_points'] = len(self.checkpoints)
         else:
             self.drop_state()
         return dict(generated_ids=out['generated_ids'], stopped=out['stopped'], stats=stats)

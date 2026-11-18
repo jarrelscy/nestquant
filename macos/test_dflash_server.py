@@ -277,6 +277,19 @@ class SlotChoiceTest(unittest.TestCase):
         self.assertIsNone(choose_slot([b, a], ids, 90))     # live state already covers as much
         self.assertIsNone(choose_slot([b], list(range(40)), 0))
 
+    def test_branch_from_earlier_restore_point(self):
+        from dflash_server import best_checkpoint, choose_slot
+        # The conversation was extended by a side request; the next real turn branches before its end-of-prompt
+        # restore point, at the start of the extension.
+        ids = list(range(13621))
+        points = [dict(length=13325), dict(length=13507), dict(length=13571, logits=object())]
+        branch = list(range(13507)) + [-1] * 8
+        self.assertEqual(best_checkpoint(ids, points, branch)['length'], 13507)
+        self.assertEqual(best_checkpoint(ids, points, list(range(13600)))['length'], 13571)
+        self.assertIsNone(best_checkpoint(ids, points, list(range(13000))))
+        slot = dict(cache_ids=ids, checkpoint=points[-1], checkpoints=points)
+        self.assertEqual(choose_slot([slot], branch, 0), 0)
+
     def test_exact_replay(self):
         from dflash_server import choose_slot, exact_replay
         a = self.slot(list(range(30)) + [9, 9], 30)    # prompt of 30 tokens, then 2 generated
