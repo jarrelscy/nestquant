@@ -159,6 +159,15 @@ server with these settings, each of which an environment variable can change:
 | Model names | `glm-nestquant` and `local` | `NQ_MODEL_ALIAS` |
 
 The log is `~/.nestquant/server.log`. Replies of 16,384 tokens or more are saved to `~/.nestquant/long-replies/`.
+
+To watch the server, run `macos/scripts/nqstat.py -w` (refreshes every 2 s; `--json` prints the raw data). It shows
+requests running and queued, the current request's phase and decode speed, the last request's prefill and decode
+speed, recent averages, GPU utilisation and memory, and the server's and the system's memory. The same data is at
+`GET /metrics`.
+
+The server keeps the live conversation plus up to 4 parked ones (`PARK_SLOTS`), so a client that switches between
+conversations (Claude Code's main session and its side requests or subagents) resumes each from cache instead of
+re-reading it. A prompt sent again unchanged is answered from the saved state with no prefill.
 Without an API key, anyone on your network can use the server; set `NQ_API_KEY` to require
 `Authorization: Bearer <key>` (OpenAI clients) or `x-api-key: <key>` (Anthropic clients).
 

@@ -264,6 +264,45 @@ class PrefixPlanTest(unittest.TestCase):
         self.assertEqual(plan_reuse([1, 2, 3, 4, 5], 2, [1, 2, 3]), ('rollback', 2))
 
 
+class SlotChoiceTest(unittest.TestCase):
+    def slot(self, ids, length, logits=True):
+        return dict(cache_ids=list(ids), checkpoint=dict(length=length, logits=object() if logits else None))
+
+    def test_longest_usable_checkpoint(self):
+        from dflash_server import choose_slot
+        a = self.slot(range(100), 90)                 # conversation A, checkpoint at 90
+        b = self.slot(list(range(50)) + [7] * 60, 105)  # shares 50 tokens with A
+        ids = list(range(95))                          # A extended
+        self.assertEqual(choose_slot([b, a], ids, 0), 1)
+        self.assertIsNone(choose_slot([b, a], ids, 90))     # live state already covers as much
+        self.assertIsNone(choose_slot([b], list(range(40)), 0))
+
+    def test_exact_replay(self):
+        from dflash_server import choose_slot, exact_replay
+        a = self.slot(list(range(30)) + [9, 9], 30)    # prompt of 30 tokens, then 2 generated
+        self.assertTrue(exact_replay(a['cache_ids'], a['checkpoint'], list(range(30))))
+        self.assertFalse(exact_replay(a['cache_ids'], a['checkpoint'], list(range(31))))
+        self.assertEqual(choose_slot([a], list(range(30)), 0), 0)
+        no_logits = self.slot(list(range(30)) + [9], 30, logits=False)
+        self.assertIsNone(choose_slot([no_logits], list(range(30)), 0))
+
+
+class MetricsTest(unittest.TestCase):
+    def test_metrics_endpoint(self):
+        harness = ServerHarness(FakeBackend())
+        try:
+            harness.request('POST', '/v1/chat/completions', dict(model='m', messages=[{'role': 'user', 'content': 'hi'}]))
+            status, _, payload = harness.request('GET', '/metrics')
+            self.assertEqual(status, 200)
+            metrics = json.loads(payload)
+            self.assertEqual(metrics['requests'], dict(running=0, queued=0, served=1, failed=0))
+            self.assertEqual(metrics['last']['completion_tokens'], len('Hello world'))
+            self.assertIn('utilization_percent', metrics['gpu'] or {'utilization_percent': None})
+            self.assertIn('process_gib', metrics['memory'])
+        finally:
+            harness.close()
+
+
 class StopTest(unittest.TestCase):
     def test_find_stop(self):
         self.assertEqual(find_stop('abc</cmd>def', ['</cmd>', 'zz']), 3)

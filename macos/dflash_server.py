@@ -14,6 +14,9 @@ Run under the model lock, for example:
 """
 
 import argparse
+import subprocess
+import re
+import collections
 import hmac
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,7 +33,8 @@ from dflash_protocol import (MODEL, RequestError, image_sources, split_thinking,
                              common_prefix_length, context_error, find_stop, parse_request, plan_reuse, safe_prefix_length, sse)
 
 MAX_BODY = 64 * 1024**2      # base64 images
-PARK_MIN_TOKENS = 2048       # second cache slot: conversations at least this long are kept during side requests
+PARK_MIN_TOKENS = 2048       # extra cache slots: conversations at least this long are kept during other requests
+PARK_SLOTS = 4               # conversations kept besides the live one (each 30K-token conversation is ~0.8 GiB)
 PARK_MAX_GIB = 100.0
 HOME = Path.home()
 
@@ -62,6 +66,66 @@ class GpuThread:
                 future.set_exception(error)
 
 
+def choose_slot(slots, ids, reused):
+    """Index of the parked conversation whose end-of-prompt checkpoint covers the longest prefix of `ids`, longer
+    than `reused`, or None. A checkpoint equal to the whole prompt counts (exact replay)."""
+    best, best_length = None, reused
+    for index, slot in enumerate(slots):
+        length = slot['checkpoint']['length']
+        if length > best_length and (exact_replay(slot['cache_ids'], slot['checkpoint'], ids) or
+                                     length <= min(common_prefix_length(slot['cache_ids'], ids), len(ids) - 1)):
+            best, best_length = index, length
+    return best
+
+
+def exact_replay(cache_ids, checkpoint, ids):
+    """True when `ids` is exactly the prompt a checkpoint was taken at, so its saved logits answer it directly."""
+    return (checkpoint is not None and checkpoint.get('logits') is not None and checkpoint['length'] == len(ids)
+            and list(cache_ids[:len(ids)]) == list(ids))
+
+
+def gpu_stats():
+    """GPU utilisation and memory from the IOAccelerator performance statistics (no root needed)."""
+    try:
+        text = subprocess.run(['/usr/sbin/ioreg', '-r', '-d', '1', '-c', 'IOAccelerator', '-w0'], capture_output=True,
+                              text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    def number(key):
+        found = re.search(r'"' + re.escape(key) + r'"=(\d+)', text)
+        return int(found.group(1)) if found else None
+    in_use, allocated = number('In use system memory'), number('Alloc system memory')
+    return dict(utilization_percent=number('Device Utilization %'), renderer_percent=number('Renderer Utilization %'),
+                tiler_percent=number('Tiler Utilization %'),
+                memory_in_use_gib=round(in_use / 2**30, 2) if in_use is not None else None,
+                memory_allocated_gib=round(allocated / 2**30, 2) if allocated is not None else None)
+
+
+def memory_stats():
+    """Server process footprint and system memory."""
+    from resources import process_usage, system_pressure, vm_snapshot
+    out = {}
+    try:
+        usage = process_usage()
+        out.update(process_gib=round(usage.phys_footprint / 2**30, 2),
+                   process_peak_gib=round(usage.lifetime_max_phys_footprint / 2**30, 2))
+    except OSError:
+        pass
+    snapshot = vm_snapshot()
+    counters, page = snapshot.get('counters'), snapshot.get('page_size_bytes')
+    if counters and page:
+        free = sum(counters.get(name, 0) for name in ('Pages free', 'Pages inactive', 'Pages speculative',
+                                                      'Pages purgeable'))
+        out['system_available_gib'] = round(free * page / 2**30, 1)
+    try:
+        import os as os_module
+        out['system_total_gib'] = round(os_module.sysconf('SC_PAGE_SIZE') * os_module.sysconf('SC_PHYS_PAGES') / 2**30)
+        out['pressure'] = {1: 'normal', 2: 'warning', 4: 'critical'}.get(system_pressure(), 'unknown')
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 class Service:
     """Model-agnostic request handling around a backend with encode/decode/generate (see DFlashSession)."""
 
@@ -74,6 +138,14 @@ class Service:
         self.lock = threading.Lock()
         self.log = log
         self.requests = 0
+        # Live metrics (GET /metrics).
+        self.started_at = time.time()
+        self.waiting = 0
+        self.failed = 0
+        self.active = None
+        self.history = collections.deque(maxlen=200)
+        self.totals = dict(prompt_tokens=0, prefilled_tokens=0, completion_tokens=0, decode_seconds=0.0,
+                           prefill_seconds=0.0)
 
     def reported_name(self, requested):
         """The model name to report: the requested name when it is one of the served names."""
@@ -110,12 +182,69 @@ class Service:
 
     def run(self, parsed, ids, max_tokens, emit=None, cid=None):
         """Generate one completion. emit(text_delta) is called while streaming. Returns the response dict."""
-        if not self.lock.acquire(timeout=self.queue_timeout):
+        self.waiting += 1
+        try:
+            acquired = self.lock.acquire(timeout=self.queue_timeout)
+        finally:
+            self.waiting -= 1
+        if not acquired:
             raise RequestError('The server is busy with another request', status=503, kind='server_error')
+        self.active = dict(started=time.time(), prompt_tokens=len(ids), max_tokens=max_tokens, phase='prefill',
+                           generated=0, first_token_at=None, thinking=parsed.get('thinking'))
         try:
             return self._run(parsed, ids, max_tokens, emit, cid)
+        except BaseException:
+            self.failed += 1
+            raise
         finally:
+            self.active = None
             self.lock.release()
+
+    def _progress(self, generated):
+        active = self.active
+        if active is not None:
+            if active['first_token_at'] is None:
+                active['first_token_at'], active['phase'] = time.time(), 'decode'
+            active['generated'] = len(generated)
+
+    def metrics(self):
+        """Live server metrics: requests, current progress, recent speeds, GPU and memory."""
+        now = time.time()
+        backend = self.backend
+        active = self.active
+        current = None
+        if active is not None:
+            elapsed = now - active['started']
+            current = dict(phase=active['phase'], elapsed_seconds=round(elapsed, 1),
+                           prompt_tokens=active['prompt_tokens'], generated_tokens=active['generated'],
+                           max_tokens=active['max_tokens'], thinking=active['thinking'])
+            if active['first_token_at'] is not None:
+                decode_elapsed = now - active['first_token_at']
+                current['prefill_seconds'] = round(active['first_token_at'] - active['started'], 1)
+                if decode_elapsed > 0.5:
+                    current['decode_tok_s'] = round(active['generated'] / decode_elapsed, 1)
+        recent = list(self.history)[-20:]
+
+        def mean(key):
+            values = [h[key] for h in recent if h.get(key)]
+            return round(sum(values) / len(values), 1) if values else None
+        totals = self.totals
+        prompt = totals['prompt_tokens']
+        return dict(
+            status='ok', uptime_seconds=round(now - self.started_at), models=self.model_names,
+            requests=dict(running=1 if active is not None else 0, queued=self.waiting, served=self.requests,
+                          failed=self.failed),
+            current=current, last=self.history[-1] if self.history else None,
+            recent=dict(requests=len(recent), prefill_tok_s=mean('prefill_tok_s'), decode_tok_s=mean('decode_tok_s'),
+                        completion_tokens=sum(h['completion_tokens'] for h in recent)),
+            totals=dict(totals, decode_tok_s=round(totals['completion_tokens'] / totals['decode_seconds'], 1)
+                        if totals['decode_seconds'] else None,
+                        cache_reuse_percent=round(100 * (1 - totals['prefilled_tokens'] / prompt), 1) if prompt else None),
+            gpu=gpu_stats(), memory=memory_stats(),
+            settings=dict(max_context=getattr(backend, 'max_context', None),
+                          temperature=getattr(backend, 'default_temperature', None),
+                          top_p=getattr(backend, 'default_top_p', None),
+                          thinking_budget=getattr(backend, 'thinking_budget', None)))
 
     def _run(self, parsed, ids, max_tokens, emit, cid):
         backend = self.backend
@@ -140,7 +269,12 @@ class Service:
                 sent[0] = end
 
         started = time.perf_counter()
-        args = (ids, max_tokens, should_stop if stops else None, on_token if emit else None)
+        def progress(generated):
+            self._progress(generated)
+            if emit:
+                on_token(generated)
+
+        args = (ids, max_tokens, should_stop if stops else None, progress)
         kwargs = {}
         if parsed.get('thinking'):
             kwargs['thinking'] = parsed['thinking']
@@ -173,8 +307,20 @@ class Service:
         if emit is not None and len(text) > sent[0] and 'tool_calls' not in message:
             emit(text[sent[0]:])
         stats = out.get('stats', {})
+        stats['thinking'] = parsed.get('thinking')
         timings = dict(stats, elapsed_seconds=round(time.perf_counter() - started, 3))
         self.requests += 1
+        self.history.append(dict(
+            n=self.requests, finished=round(time.time()), prompt_tokens=len(ids), completion_tokens=len(generated),
+            prefilled_tokens=stats.get('prefilled_tokens'), prefill_seconds=stats.get('prefill_seconds'),
+            prefill_tok_s=stats.get('prefill_tok_s'), decode_tok_s=stats.get('decode_tok_s'),
+            elapsed_seconds=timings['elapsed_seconds'], finish_reason=finish, thinking=stats.get('thinking')))
+        totals = self.totals
+        totals['prompt_tokens'] += len(ids)
+        totals['prefilled_tokens'] += stats.get('prefilled_tokens') or 0
+        totals['completion_tokens'] += len(generated)
+        totals['decode_seconds'] += stats.get('decode_seconds') or 0.0
+        totals['prefill_seconds'] += stats.get('prefill_seconds') or 0.0
         self.log(json.dumps(dict(event='request', n=self.requests, prompt_tokens=len(ids),
                                  completion_tokens=len(generated), finish_reason=finish, **timings)), flush=True)
         if self.long_reply_dir is not None and len(generated) >= self.long_reply_tokens:
@@ -280,7 +426,7 @@ class DFlashSession:
         self.cache_ids = []
         self.ctx_hidden = None
         self.checkpoint = None
-        self.parked = None
+        self.parked = []
         self.last_thinking = None
         print(json.dumps(dict(event='ready', drafter=kind, target_layers=nd.target_layers(self.drafter),
                               drafter_window=self.window, max_context=self.max_context,
@@ -410,6 +556,12 @@ class DFlashSession:
         self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint = None, [], None, None
         self.mx.clear_cache()
 
+    def _park(self, state):
+        """Keep a conversation in a parked slot; the least recently used slots go first when over the limit."""
+        self.parked.append(state)
+        while len(self.parked) > PARK_SLOTS or (len(self.parked) > 1 and self._footprint() >= PARK_MAX_GIB):
+            self.parked.pop(0)
+
     def _worth_parking(self, state):
         """Keep a conversation in the second slot when it is long enough to be costly to prefill again and memory
         allows. Needs its end-of-prompt checkpoint, from which it resumes."""
@@ -433,7 +585,7 @@ class DFlashSession:
             # Metal's live-buffer limit: a long conversation's cached state has accumulated too many buffers. Drop
             # every cached state (both slots), collect, and answer the request from a fresh prefill.
             print(json.dumps(dict(event='buffer_limit_recovery', prompt_tokens=len(ids))), flush=True)
-            self.parked = None
+            self.parked = []
             self.drop_state()
             import gc
             gc.collect()
@@ -445,22 +597,26 @@ class DFlashSession:
         mode, reused = ('fresh', 0)
         if self.reuse and self.cache is not None:
             mode, reused = plan_reuse(self.cache_ids, self.checkpoint['length'] if self.checkpoint else 0, ids)
+        if self.reuse and exact_replay(self.cache_ids, self.checkpoint, ids):
+            mode, reused = 'replay', len(ids)
         swapped = False
-        if self.reuse and self.parked is not None:
-            # A second slot keeps a long conversation while a different prompt (a client's side request) runs.
-            # Resume it from its checkpoint (which also restores the predictor) when it covers more of `ids`.
-            p_ids, p_checkpoint = self.parked['cache_ids'], self.parked['checkpoint']
-            usable = min(common_prefix_length(p_ids, ids), len(ids) - 1)
-            if p_checkpoint['length'] <= usable and p_checkpoint['length'] > reused:
+        if self.reuse and self.parked and mode != 'replay':
+            # Parked slots keep other conversations (a client's side requests or subagents). Resume the one whose
+            # checkpoint covers the most of `ids` when it beats the live state.
+            best = choose_slot(self.parked, ids, reused)
+            if best is not None:
+                slot = self.parked.pop(best)
                 live = dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint)
-                self.cache, self.cache_ids = self.parked['cache'], p_ids
-                self.ctx_hidden, self.checkpoint = self.parked['ctx'], p_checkpoint
-                self.parked = live if self._worth_parking(live) else None
-                mode, reused, swapped = 'rollback', p_checkpoint['length'], True
+                if self._worth_parking(live):
+                    self._park(live)
+                self.cache, self.cache_ids = slot['cache'], slot['cache_ids']
+                self.ctx_hidden, self.checkpoint = slot['ctx'], slot['checkpoint']
+                replay = exact_replay(self.cache_ids, self.checkpoint, ids)
+                mode, reused, swapped = ('replay' if replay else 'rollback'), self.checkpoint['length'], True
         if mode == 'fresh' and not swapped and self.reuse and self.cache is not None:
             live = dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint)
             if self._worth_parking(live):
-                self.parked = live
+                self._park(live)
                 self.cache = None     # the parked slot owns it now
         lcp = common_prefix_length(self.cache_ids, ids)
         cache, cache_ids, ctx, checkpoint = self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint
@@ -477,15 +633,19 @@ class DFlashSession:
             self.ctx_hidden = None
         else:
             self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint = cache, cache_ids, ctx, checkpoint
-            if mode == 'rollback':
+            replay_logits = self.checkpoint.get('logits') if mode == 'replay' else None
+            if mode in ('rollback', 'replay'):
                 self._restore_checkpoint()
             self._resume_prefill()
             if self.cache_ids != ids[:reused] or self._kv_offset() != reused:
                 raise RuntimeError('Reused cache does not hold the expected prefix')
             self.checkpoint, cache = None, None
         suffix = ids[reused:]
-        rows = self.vision.rows_for(suffix) if self.vision is not None else None
-        if rows is not None:
+        rows = self.vision.rows_for(suffix) if self.vision is not None and mode != 'replay' else None
+        if mode == 'replay':
+            # The same prompt as a checkpoint: its state is restored and its saved last-token logits answer it.
+            logits, hidden = replay_logits, None
+        elif rows is not None:
             import native_vision
             with self.model.model.embed_tokens.supplying(rows):
                 logits, hidden = nd.capture_prefill(self.model, self.drafter,
@@ -494,10 +654,12 @@ class DFlashSession:
         else:
             logits, hidden = nd.capture_prefill(self.model, self.drafter, suffix, self.cache, self.hot, self.guard,
                                                 suffix=reused > 0)
-        ctx = hidden if self.ctx_hidden is None else mx.concatenate([self.ctx_hidden, hidden], axis=1)
-        self.ctx_hidden = self._trim_ctx(ctx)
+        if hidden is not None:
+            ctx = hidden if self.ctx_hidden is None else mx.concatenate([self.ctx_hidden, hidden], axis=1)
+            self.ctx_hidden = self._trim_ctx(ctx)
+            del ctx
         mx.eval(self.ctx_hidden)
-        del ctx, hidden
+        del hidden
         first = int(nd.token_sampler(temperature, top_p)(logits.reshape(-1)).item())
         prefill_seconds = time.perf_counter() - started
         flat = logits.reshape(-1).astype(mx.float32)
@@ -505,12 +667,15 @@ class DFlashSession:
         top5 = [[int(i), round(float(v), 3)] for i, v in zip(top.tolist(), flat[top].tolist())]
         self.cache_ids = list(ids)
         checkpoint = self._take_checkpoint(len(ids)) if self.reuse else None
+        if checkpoint is not None:
+            checkpoint['logits'] = logits      # lets an identical prompt skip prefill (replay)
         out = nd.dflash_decode(self.model, self.drafter, self.cache, self.ctx_hidden, first, max_tokens, self.eos,
                                self.hot, self.guard, self.block_size, should_stop=should_stop, on_token=on_token,
                                record_hidden=self.reuse, temperature=temperature, top_p=top_p)
-        stats = dict(mode=mode, temperature=temperature, top_p=top_p, thinking=self.last_thinking, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
-                     slot='parked' if swapped else 'live', parked_tokens=len(self.parked['cache_ids']) if self.parked else 0,
-                     prefill_path=nd.LAST_PREFILL_PATH,
+        stats = dict(mode=mode, temperature=temperature, top_p=top_p, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
+                     slot='parked' if swapped else 'live', parked_slots=len(self.parked),
+                     parked_tokens=sum(len(slot['cache_ids']) for slot in self.parked),
+                     prefill_path='replay' if mode == 'replay' else nd.LAST_PREFILL_PATH,
                      common_prefix=lcp,
                      prefill_seconds=round(prefill_seconds, 3),
                      prefill_tok_s=round(len(suffix) / prefill_seconds, 1) if prefill_seconds > 0 else None,
@@ -583,7 +748,9 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ('/health', '/v1/health') and not self.authorized():
             return
         if path in ('/health', '/v1/health'):
-            self.reply(200, {'status': 'ok', 'busy': service.lock.locked()})
+            self.reply(200, {'status': 'ok', 'busy': service.lock.locked(), 'queued': service.waiting})
+        elif path in ('/metrics', '/v1/metrics'):
+            self.reply(200, service.metrics())
         elif path == '/v1/models':
             self.reply(200, dict(object='list', data=[dict(id=name, object='model', created=0, owned_by='local')
                                                       for name in service.model_names]))
