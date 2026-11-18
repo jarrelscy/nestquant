@@ -186,7 +186,13 @@ if the server is already near its 100 GiB cache cap, more slots will not help.
 The server keeps the live conversation plus up to 4 parked ones (`NQ_CACHE_SLOTS`, about 25 MB per 1,000
 tokens each; the oldest are dropped when the server reaches 100 GiB), so a client that switches between
 conversations (Claude Code's main session and its side requests or subagents) resumes each from cache instead of
-re-reading it. A prompt sent again unchanged is answered from the saved state with no prefill.
+re-reading it. A prompt sent again unchanged is answered from the saved state with no prefill. Each conversation keeps
+up to 6 restore points (the end of every prompt and the start of every extension), so a request that branches
+off an earlier turn, as Claude Code's background side requests do, re-reads only its new tokens. When a second
+conversation starts with the same text as an earlier one (Claude Code sessions and subagents share about 9K
+tokens of system prompt and tool definitions), the server keeps a copy of the state at the end of the shared
+part (about 0.25 GiB); later sessions start from it and read only their own part, in under a second instead of
+about 25 seconds.
 Without an API key, anyone on your network can use the server; set `NQ_API_KEY` to require
 `Authorization: Bearer <key>` (OpenAI clients) or `x-api-key: <key>` (Anthropic clients).
 

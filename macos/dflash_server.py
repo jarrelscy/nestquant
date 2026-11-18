@@ -36,6 +36,8 @@ MAX_BODY = 64 * 1024**2      # base64 images
 PARK_MIN_TOKENS = 2048       # extra cache slots: conversations at least this long are kept during other requests
 PARK_SLOTS = 4               # conversations kept besides the live one (each 30K-token conversation is ~0.8 GiB)
 PARK_MAX_GIB = 100.0
+SHARED_PREFIX_MIN = 4096     # shared starts (system prompt and tools common to new sessions) at least this long
+SHARED_PREFIX_KEEP = 2       # independent copies of shared starts kept
 MAX_CHECKPOINTS = 6          # restore points kept per conversation (end of each prompt, start of each extension)
 HOME = Path.home()
 
@@ -474,6 +476,10 @@ class DFlashSession:
         self.checkpoint = None
         self.parked = []
         self.checkpoints = []
+        # Full, independent copies of model state at the end of a start shared by different conversations (Claude
+        # Code sessions and subagents begin with the same system prompt and tools); a new conversation that begins
+        # the same way copies one and reads only its own part.
+        self.shared_prefixes = []
         self.last_thinking = None
         # Conversations dropped from the cache (oldest slot evicted, or no room); a later fresh prompt that shares
         # their start counts as an eviction miss, the signal that more cache slots would have helped.
@@ -608,6 +614,63 @@ class DFlashSession:
         self.checkpoints = []
         self.mx.clear_cache()
 
+    def _shared_prefix_for(self, ids):
+        """The longest stored shared start that `ids` begins with (leaving at least one token), or None."""
+        best = None
+        for entry in self.shared_prefixes:
+            n = entry['length']
+            if n < len(ids) and tuple(ids[:n]) == entry['ids'] and (best is None or n > best['length']):
+                best = entry
+        return best
+
+    def _shared_split(self, ids):
+        """Where a fresh prompt stops matching every known conversation, if that is far enough in to be worth a
+        shared-start copy (and contains no image tokens)."""
+        import numpy as np
+        prompt = np.asarray(ids, dtype=np.int64)
+        known = ([np.asarray(slot['cache_ids'], dtype=np.int64) for slot in self.parked]
+                 + [entry[0] for entry in self.evicted])
+        best = 0
+        for other in known:
+            n = min(len(other), len(prompt) - 1)
+            if n <= best:
+                continue
+            differ = np.nonzero(other[:n] != prompt[:n])[0]
+            best = max(best, int(differ[0]) if len(differ) else n)
+        if best < SHARED_PREFIX_MIN or prompt[:best].min() < 0:
+            return 0
+        return best
+
+    def _save_shared_prefix(self, length):
+        from native_prefix import arrays, clone, predictor_snapshot
+        parts = [(type(leaf), clone(leaf.prefix_cache_snapshot())) for leaf in self._leaves()]
+        self.mx.eval(arrays([part for _, part in parts]))
+        predictor, _ = predictor_snapshot(self.hot)
+        entry = dict(ids=tuple(self.cache_ids[:length]), length=length, parts=parts, predictor=predictor,
+                     position=self.hot.position, ctx=self.ctx_hidden,
+                     bytes=sum(a.nbytes for a in arrays([part for _, part in parts])))
+        self.shared_prefixes = [e for e in self.shared_prefixes if e['ids'] != entry['ids']] + [entry]
+        self.shared_prefixes = self.shared_prefixes[-SHARED_PREFIX_KEEP:]
+        return entry
+
+    def _restore_shared_prefix(self, entry):
+        """Build a fresh cache holding an independent copy of a shared start."""
+        from native_prefix import arrays, clone, restore_predictor
+        self.cache = self.model.make_cache()
+        self.hot.reset()
+        for leaf, (kind, part) in zip(self._leaves(), entry['parts'], strict=True):
+            if type(leaf) is not kind:
+                raise RuntimeError('Shared start does not match the cache layout')
+            leaf.prefix_cache_restore(clone(part))
+        self.mx.eval(arrays([leaf.state for leaf in self._leaves()]))
+        restore_predictor(self.hot, entry['predictor'])
+        predictor = self.hot.predictor
+        predictor.ahead, predictor.ahead_started = None, False
+        self.hot.position = entry['position']
+        self.ctx_hidden = entry['ctx']
+        self.cache_ids = list(entry['ids'])
+        self.checkpoints, self.checkpoint = [], None
+
     def _live_state(self):
         return dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint,
                     checkpoints=list(self.checkpoints))
@@ -627,9 +690,10 @@ class DFlashSession:
 
     def _remember_evicted(self, state):
         ids = state.get('cache_ids') or []
-        if len(ids) >= PARK_MIN_TOKENS:
+        points = [c['length'] for c in slot_checkpoints(state) if c]
+        if len(ids) >= PARK_MIN_TOKENS and points:
             import numpy as np
-            self.evicted.append(np.asarray(ids, dtype=np.int32))
+            self.evicted.append((np.asarray(ids, dtype=np.int32), points))
             self.cache_counters['evictions'] += 1
 
     def _eviction_miss(self, ids):
@@ -639,12 +703,14 @@ class DFlashSession:
         import numpy as np
         prompt = np.asarray(ids, dtype=np.int32)
         best, best_index = 0, None
-        for index, old in enumerate(self.evicted):
+        for index, (old, points) in enumerate(self.evicted):
             n = min(len(old), len(prompt))
             differ = np.nonzero(old[:n] != prompt[:n])[0]
-            common = int(differ[0]) if len(differ) else n
-            if common > best:
-                best, best_index = common, index
+            usable = min(int(differ[0]) if len(differ) else n, len(prompt) - 1)
+            # Only a restore point inside the shared part would have saved the re-read.
+            saved = max((point for point in points if point <= usable), default=0)
+            if saved > best:
+                best, best_index = saved, index
         if best < PARK_MIN_TOKENS:
             return 0
         del self.evicted[best_index]
@@ -653,6 +719,8 @@ class DFlashSession:
     def cache_metrics(self):
         parked = list(self.parked)
         return dict(slots=PARK_SLOTS, cached=len(parked), cached_tokens=[len(p['cache_ids']) for p in parked],
+                    shared_starts=[e['length'] for e in self.shared_prefixes],
+                    shared_start_gib=round(sum(e['bytes'] for e in self.shared_prefixes) / 2**30, 2),
                     live_tokens=len(self.cache_ids), memory_cap_gib=PARK_MAX_GIB, **self.cache_counters)
 
     def _worth_parking(self, state):
@@ -719,6 +787,13 @@ class DFlashSession:
                 self.cache = None     # the parked slot owns it now
             else:
                 self._remember_evicted(live)
+        shared, split_at = None, 0
+        if mode == 'fresh' and self.reuse:
+            shared = self._shared_prefix_for(ids)
+            if shared is not None:
+                mode, reused = 'shared', shared['length']
+            elif len(ids) > SHARED_PREFIX_MIN:
+                split_at = self._shared_split(ids)
         miss_tokens = self._eviction_miss(ids) if mode == 'fresh' and self.reuse else 0
         lcp = common_prefix_length(self.cache_ids, ids)
         cache, cache_ids, ctx, checkpoint = self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint
@@ -727,14 +802,31 @@ class DFlashSession:
         self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint = None, [], None, None
         self.checkpoints = []
         started = time.perf_counter()
-        if mode == 'fresh':
+        if mode in ('fresh', 'shared'):
             if cache is not None:
                 del cache
                 cache_ids, ctx, checkpoint = [], None, None
                 mx.clear_cache()
-            self.cache = self.model.make_cache()
-            self.hot.reset()
-            self.ctx_hidden = None
+            if mode == 'shared':
+                self._restore_shared_prefix(shared)
+                self._resume_prefill()
+                if self.cache_ids != ids[:reused] or self._kv_offset() != reused:
+                    raise RuntimeError('Shared start does not hold the expected prefix')
+            else:
+                self.cache = self.model.make_cache()
+                self.hot.reset()
+                self.ctx_hidden = None
+                if split_at:
+                    # Read the start shared with another conversation first and keep an independent copy of it.
+                    head_logits, head_hidden = nd.capture_prefill(self.model, self.drafter, ids[:split_at], self.cache,
+                                                                  self.hot, self.guard, suffix=False)
+                    self.ctx_hidden = self._trim_ctx(head_hidden)
+                    mx.eval(self.ctx_hidden)
+                    del head_logits, head_hidden
+                    self.cache_ids = list(ids[:split_at])
+                    self._save_shared_prefix(split_at)
+                    self._resume_prefill()
+                    reused = split_at
         else:
             self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint = cache, cache_ids, ctx, checkpoint
             replay_logits = self.checkpoint.get('logits') if mode == 'replay' else None
@@ -787,13 +879,15 @@ class DFlashSession:
             counters['eviction_misses'] += 1
             counters['eviction_miss_tokens'] += miss_tokens
             counters['eviction_miss_seconds'] += prefill_seconds * miss_tokens / max(len(suffix), 1)
-        stats = dict(mode=mode, temperature=temperature, top_p=top_p, eviction_miss_tokens=miss_tokens, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
+        stats = dict(mode=mode, temperature=temperature, top_p=top_p, eviction_miss_tokens=miss_tokens, reused_tokens=0 if split_at else reused, prefilled_tokens=len(ids) - (0 if split_at else reused),
+                     shared_prefix_tokens=shared['length'] if shared else (split_at or 0), first_top5=top5,
                      slot='parked' if swapped else 'live', parked_slots=len(self.parked),
                      parked_tokens=sum(len(slot['cache_ids']) for slot in self.parked),
                      prefill_path='replay' if mode == 'replay' else nd.LAST_PREFILL_PATH,
                      common_prefix=lcp,
                      prefill_seconds=round(prefill_seconds, 3),
-                     prefill_tok_s=round(len(suffix) / prefill_seconds, 1) if prefill_seconds > 0 else None,
+                     prefill_tok_s=round((len(ids) - (0 if split_at else reused)) / prefill_seconds, 1)
+                     if prefill_seconds > 0 else None,
                      decode_seconds=round(out['decode_seconds'], 3),
                      decode_tok_s=round(out['decode_tps'], 2) if out['decode_tps'] else None,
                      rounds=out['rounds'], mean_accepted=round(out['mean_accepted'], 3),

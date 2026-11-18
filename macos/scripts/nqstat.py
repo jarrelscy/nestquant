@@ -71,7 +71,9 @@ def render(m):
         sizes = ', '.join(f"{t:,}" for t in cache.get('cached_tokens', []))
         lines.append(f"Cache      {cache['cached']} of {cache['slots']} conversations cached" + (f" ({sizes} tokens)" if sizes else '')
                      + f", {cache.get('eviction_misses', 0)} re-read after eviction"
-                     f" ({number(round(cache.get('eviction_miss_seconds', 0)))} s lost)")
+                     f" ({number(round(cache.get('eviction_miss_seconds', 0)))} s lost)"
+                     + (f", shared start {', '.join(f'{n:,}' for n in cache['shared_starts'])} tokens"
+                        f" ({cache.get('shared_start_gib')} GiB)" if cache.get('shared_starts') else ''))
     modes = rec.get('modes')
     if modes:
         lines.append('Reuse      ' + ', '.join(f'{k} {modes[k]}' for k in ('extend', 'rollback', 'replay', 'fresh') if k in modes)

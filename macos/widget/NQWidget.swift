@@ -250,7 +250,9 @@ final class Widget: NSObject, NSApplicationDelegate {
             let sizes = (cache["cached_tokens"] as? [NSNumber])?.map { compact($0.doubleValue) }.joined(separator: ", ") ?? ""
             let misses = Int(num(cache["eviction_misses"]) ?? 0)
             row("CACHE", "\(Int(num(cache["cached"]) ?? 0))/\(Int(num(cache["slots"]) ?? 0)) conversations"
-                + (sizes.isEmpty ? "" : " (\(sizes))") + " · \(misses) re-read after eviction",
+                + (sizes.isEmpty ? "" : " (\(sizes))") + " · \(misses) re-read after eviction"
+                + ((cache["shared_starts"] as? [NSNumber]).flatMap { $0.isEmpty ? nil : " · shared start "
+                    + $0.map { compact($0.doubleValue) }.joined(separator: ", ") } ?? ""),
                 color: misses > 0 ? .systemYellow : white)
         }
         if let modes = recent["modes"] as? [String: NSNumber], !modes.isEmpty {
