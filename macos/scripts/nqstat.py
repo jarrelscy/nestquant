@@ -41,7 +41,10 @@ def render(m):
     lines = []
     r, gpu, mem = m['requests'], m.get('gpu') or {}, m.get('memory') or {}
     lines.append(f"NestQuant server   up {duration(m['uptime_seconds'])}   models: {', '.join(m['models'])}")
-    lines.append(f"Requests   running {r['running']}   queued {r['queued']}   served {r['served']}   failed {r['failed']}")
+    st = m.get('settings') or {}
+    lines.append(f"Requests   running {r['running']}   queued {r['queued']}   served {r['served']}   failed {r['failed']}"
+                 + (f"   cached conversations {st['cached_conversations']} of {st['cache_slots']}"
+                    if st.get('cache_slots') is not None else ''))
     c = m.get('current')
     if c:
         if c['phase'] == 'prefill':

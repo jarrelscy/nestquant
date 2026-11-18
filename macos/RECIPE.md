@@ -157,6 +157,7 @@ server with these settings, each of which an environment variable can change:
 | Thinking budget | 16,384 tokens | `NQ_THINKING_BUDGET` (0 = no limit) |
 | API key | none | `NQ_API_KEY` |
 | Model names | `glm-nestquant` and `local` | `NQ_MODEL_ALIAS` |
+| Cached conversations besides the current one | 4 | `NQ_CACHE_SLOTS` (0–64) |
 
 The log is `~/.nestquant/server.log`. Replies of 16,384 tokens or more are saved to `~/.nestquant/long-replies/`.
 
@@ -165,7 +166,8 @@ requests running and queued, the current request's phase and decode speed, the l
 speed, recent averages, GPU utilisation and memory, and the server's and the system's memory. The same data is at
 `GET /metrics`.
 
-The server keeps the live conversation plus up to 4 parked ones (`PARK_SLOTS`), so a client that switches between
+The server keeps the live conversation plus up to 4 parked ones (`NQ_CACHE_SLOTS`, about 25 MB per 1,000
+tokens each; the oldest are dropped when the server reaches 100 GiB), so a client that switches between
 conversations (Claude Code's main session and its side requests or subagents) resumes each from cache instead of
 re-reading it. A prompt sent again unchanged is answered from the saved state with no prefill.
 Without an API key, anyone on your network can use the server; set `NQ_API_KEY` to require

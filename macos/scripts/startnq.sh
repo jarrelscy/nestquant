@@ -7,7 +7,8 @@
 # Environment overrides: NQ_PORT (8000), NQ_HOST (0.0.0.0), NQ_MAX_CONTEXT (131072), NQ_THINKING (high: effort for
 # Anthropic thinking requests; off|low|high|max), NQ_THINKING_BUDGET (16384: reasoning tokens before the server closes
 # the thinking and the model answers; 0 = no limit), NQ_MIN_AVAILABLE_GIB (95),
-# NQ_MODEL_ALIAS (local: second model name), NQ_TEMPERATURE (1.0), NQ_TOP_P (0.95), NQ_API_KEY (unset = no key), NQ_REPO (this checkout, else ~/src/nestquant).
+# NQ_MODEL_ALIAS (local: second model name), NQ_CACHE_SLOTS (4: conversations cached besides the current
+# one, ~25 MB per 1K tokens each), NQ_TEMPERATURE (1.0), NQ_TOP_P (0.95), NQ_API_KEY (unset = no key), NQ_REPO (this checkout, else ~/src/nestquant).
 setopt ERR_RETURN NO_UNSET PIPE_FAIL
 
 PORT=${NQ_PORT:-8000}
@@ -19,6 +20,7 @@ TOP_P=${NQ_TOP_P:-0.95}
 THINKING=${NQ_THINKING:-high}
 THINKING_BUDGET=${NQ_THINKING_BUDGET:-16384}
 MODEL_ALIAS=${NQ_MODEL_ALIAS:-local}
+CACHE_SLOTS=${NQ_CACHE_SLOTS:-4}
 # The checkout this script lives in (macos/scripts/startnq.sh), else ~/src/nestquant (for a copy elsewhere).
 repo_here=${0:A:h:h:h}
 [[ -f $repo_here/macos/dflash_server.py ]] || repo_here=$HOME/src/nestquant
@@ -76,7 +78,7 @@ fi
 echo "Memory check passed: ${available_gib} GiB available of ${total_gib} GiB."
 
 # 4. Start under the GPU lock (released when the server exits).
-args=(--host "$HOST" --port "$PORT" --max-context "$MAX_CONTEXT" --temperature "$TEMPERATURE" --top-p "$TOP_P" --anthropic-thinking "$THINKING" --thinking-budget "$THINKING_BUDGET" --model-alias "$MODEL_ALIAS" --long-reply-dir "$STATE/long-replies")
+args=(--host "$HOST" --port "$PORT" --max-context "$MAX_CONTEXT" --temperature "$TEMPERATURE" --top-p "$TOP_P" --anthropic-thinking "$THINKING" --thinking-budget "$THINKING_BUDGET" --model-alias "$MODEL_ALIAS" --cache-slots "$CACHE_SLOTS" --long-reply-dir "$STATE/long-replies")
 [[ -n ${NQ_API_KEY:-} ]] && args+=(--api-key "$NQ_API_KEY")
 cd "$REPO"
 nohup /bin/zsh -c '

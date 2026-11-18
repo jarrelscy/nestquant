@@ -244,7 +244,8 @@ class Service:
             settings=dict(max_context=getattr(backend, 'max_context', None),
                           temperature=getattr(backend, 'default_temperature', None),
                           top_p=getattr(backend, 'default_top_p', None),
-                          thinking_budget=getattr(backend, 'thinking_budget', None)))
+                          thinking_budget=getattr(backend, 'thinking_budget', None),
+                          cache_slots=PARK_SLOTS, cached_conversations=len(getattr(backend, 'parked', []) or [])))
 
     def _run(self, parsed, ids, max_tokens, emit, cid):
         backend = self.backend
@@ -563,9 +564,9 @@ class DFlashSession:
             self.parked.pop(0)
 
     def _worth_parking(self, state):
-        """Keep a conversation in the second slot when it is long enough to be costly to prefill again and memory
-        allows. Needs its end-of-prompt checkpoint, from which it resumes."""
-        return (state['cache'] is not None and state['checkpoint'] is not None
+        """Keep a conversation in a parked slot when slots are enabled, it is long enough to be costly to prefill
+        again and memory allows. Needs its end-of-prompt checkpoint, from which it resumes."""
+        return (PARK_SLOTS > 0 and state['cache'] is not None and state['checkpoint'] is not None
                 and state['checkpoint']['length'] >= PARK_MIN_TOKENS and self._footprint() < PARK_MAX_GIB)
 
     # ------------------------------------------------------------------ generation
@@ -1029,6 +1030,8 @@ def main():
     p.add_argument('--long-reply-dir', type=Path, default=None,
                    help='Save the text of replies of at least --long-reply-tokens tokens here')
     p.add_argument('--long-reply-tokens', type=int, default=16384)
+    p.add_argument('--cache-slots', type=int, default=PARK_SLOTS,
+                   help='Conversations kept in cache besides the current one (0-64; memory cap PARK_MAX_GIB)')
     p.add_argument('--thinking-budget', type=int, default=0,
                    help='Close the reasoning after this many tokens and continue to the answer (0 = no limit)')
     p.add_argument('--anthropic-thinking', choices=('off', 'low', 'high', 'max'), default='off',
@@ -1039,6 +1042,9 @@ def main():
     a = p.parse_args()
     if not 1024 <= a.port <= 65535 or not 1024 <= a.max_context <= 131072 or a.block_size == 0:
         p.error('Use a port in 1024-65535, --max-context in 1024-131072 and a non-zero block size')
+    if not 0 <= a.cache_slots <= 64:
+        p.error('Use --cache-slots between 0 and 64')
+    globals()['PARK_SLOTS'] = a.cache_slots
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     import anthropic_protocol
     anthropic_protocol.ANTHROPIC_THINKING = None if a.anthropic_thinking == 'off' else a.anthropic_thinking
