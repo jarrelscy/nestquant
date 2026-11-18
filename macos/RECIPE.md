@@ -166,6 +166,23 @@ requests running and queued, the current request's phase and decode speed, the l
 speed, recent averages, GPU utilisation and memory, and the server's and the system's memory. The same data is at
 `GET /metrics`.
 
+For a desktop widget, build and open `NQ Widget.app` (needs only the Xcode Command Line Tools):
+
+```sh
+macos/widget/build.sh                      # builds ~/Applications/NQ Widget.app
+open ~/Applications/NQ\ Widget.app
+```
+
+It sits on the desktop and refreshes every 2 s: requests processing and queued, what the current request is
+doing, decode and prefill speed, time to first token, session totals and cache reuse, cached conversations and
+re-reads after eviction with advice on `NQ_CACHE_SLOTS`, GPU, memory and battery. Drag it to move it;
+right-click for "Keep on top" and "Quit". For another server, `defaults write ai.nestquant.widget url
+http://<host>:8000/metrics` (and `apiKey <key>` if needed). Add it to Login Items to start it at login.
+
+The cache advice comes from re-reads after eviction: when a conversation pushed out of the cache comes back and
+must be read again, the server counts it and the time it cost. If that count grows, raise `NQ_CACHE_SLOTS`;
+if the server is already near its 100 GiB cache cap, more slots will not help.
+
 The server keeps the live conversation plus up to 4 parked ones (`NQ_CACHE_SLOTS`, about 25 MB per 1,000
 tokens each; the oldest are dropped when the server reaches 100 GiB), so a client that switches between
 conversations (Claude Code's main session and its side requests or subagents) resumes each from cache instead of

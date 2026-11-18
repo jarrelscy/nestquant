@@ -84,6 +84,23 @@ def exact_replay(cache_ids, checkpoint, ids):
             and list(cache_ids[:len(ids)]) == list(ids))
 
 
+def cache_advice(cache, process_gib):
+    """One-line advice on NQ_CACHE_SLOTS from eviction misses and memory."""
+    if not cache:
+        return None
+    misses, slots = cache.get('eviction_misses', 0), cache.get('slots', 0)
+    near_cap = process_gib is not None and process_gib >= cache.get('memory_cap_gib', 100) - 3
+    if misses:
+        seconds = round(cache.get('eviction_miss_seconds', 0))
+        if near_cap:
+            return (f'{misses} conversations were re-read after eviction ({seconds} s), but memory is near the '
+                    f'{cache.get("memory_cap_gib")} GiB cache cap; more slots will not help')
+        return f'Raise NQ_CACHE_SLOTS (now {slots}): {misses} conversations were re-read after eviction ({seconds} s)'
+    if slots and cache.get('cached', 0) >= slots:
+        return f'All {slots} cache slots are in use; raise NQ_CACHE_SLOTS if re-reads after eviction appear'
+    return f'Cache slots are enough ({cache.get("cached", 0)} of {slots} in use, no re-reads after eviction)'
+
+
 def gpu_stats():
     """GPU utilisation and memory from the IOAccelerator performance statistics (no root needed)."""
     try:
@@ -230,17 +247,26 @@ class Service:
             return round(sum(values) / len(values), 1) if values else None
         totals = self.totals
         prompt = totals['prompt_tokens']
+        cache = backend.cache_metrics() if hasattr(backend, 'cache_metrics') else None
+        memory = memory_stats()
+        advice = cache_advice(cache, memory.get('process_gib'))
         return dict(
             status='ok', uptime_seconds=round(now - self.started_at), models=self.model_names,
             requests=dict(running=1 if active is not None else 0, queued=self.waiting, served=self.requests,
                           failed=self.failed),
             current=current, last=self.history[-1] if self.history else None,
             recent=dict(requests=len(recent), prefill_tok_s=mean('prefill_tok_s'), decode_tok_s=mean('decode_tok_s'),
-                        completion_tokens=sum(h['completion_tokens'] for h in recent)),
+                        completion_tokens=sum(h['completion_tokens'] for h in recent),
+                        time_to_first_token_seconds=mean('prefill_seconds'),
+                        large_prefill_tok_s=(lambda big: round(sum(big) / len(big), 1) if big else None)(
+                            [h['prefill_tok_s'] for h in list(self.history)[-50:]
+                             if h.get('prefill_tok_s') and (h.get('prefilled_tokens') or 0) >= 1000]),
+                        modes=dict(collections.Counter(h.get('mode') or 'unknown' for h in list(self.history)[-50:]))),
+            cache=cache, advice=advice,
             totals=dict(totals, decode_tok_s=round(totals['completion_tokens'] / totals['decode_seconds'], 1)
                         if totals['decode_seconds'] else None,
                         cache_reuse_percent=round(100 * (1 - totals['prefilled_tokens'] / prompt), 1) if prompt else None),
-            gpu=gpu_stats(), memory=memory_stats(),
+            gpu=gpu_stats(), memory=memory,
             settings=dict(max_context=getattr(backend, 'max_context', None),
                           temperature=getattr(backend, 'default_temperature', None),
                           top_p=getattr(backend, 'default_top_p', None),
@@ -315,7 +341,8 @@ class Service:
             n=self.requests, finished=round(time.time()), prompt_tokens=len(ids), completion_tokens=len(generated),
             prefilled_tokens=stats.get('prefilled_tokens'), prefill_seconds=stats.get('prefill_seconds'),
             prefill_tok_s=stats.get('prefill_tok_s'), decode_tok_s=stats.get('decode_tok_s'),
-            elapsed_seconds=timings['elapsed_seconds'], finish_reason=finish, thinking=stats.get('thinking')))
+            elapsed_seconds=timings['elapsed_seconds'], finish_reason=finish, thinking=stats.get('thinking'),
+            mode=stats.get('mode'), eviction_miss_tokens=stats.get('eviction_miss_tokens') or 0))
         totals = self.totals
         totals['prompt_tokens'] += len(ids)
         totals['prefilled_tokens'] += stats.get('prefilled_tokens') or 0
@@ -429,6 +456,10 @@ class DFlashSession:
         self.checkpoint = None
         self.parked = []
         self.last_thinking = None
+        # Conversations dropped from the cache (oldest slot evicted, or no room); a later fresh prompt that shares
+        # their start counts as an eviction miss, the signal that more cache slots would have helped.
+        self.evicted = collections.deque(maxlen=32)
+        self.cache_counters = dict(evictions=0, eviction_misses=0, eviction_miss_tokens=0, eviction_miss_seconds=0.0)
         print(json.dumps(dict(event='ready', drafter=kind, target_layers=nd.target_layers(self.drafter),
                               drafter_window=self.window, max_context=self.max_context,
                               memory_gib=round(self._footprint(), 2))), flush=True)
@@ -561,7 +592,37 @@ class DFlashSession:
         """Keep a conversation in a parked slot; the least recently used slots go first when over the limit."""
         self.parked.append(state)
         while len(self.parked) > PARK_SLOTS or (len(self.parked) > 1 and self._footprint() >= PARK_MAX_GIB):
-            self.parked.pop(0)
+            self._remember_evicted(self.parked.pop(0))
+
+    def _remember_evicted(self, state):
+        ids = state.get('cache_ids') or []
+        if len(ids) >= PARK_MIN_TOKENS:
+            import numpy as np
+            self.evicted.append(np.asarray(ids, dtype=np.int32))
+            self.cache_counters['evictions'] += 1
+
+    def _eviction_miss(self, ids):
+        """Tokens of `ids` that an evicted conversation already covered (0 if none); forgets that conversation."""
+        if not self.evicted or len(ids) < PARK_MIN_TOKENS:
+            return 0
+        import numpy as np
+        prompt = np.asarray(ids, dtype=np.int32)
+        best, best_index = 0, None
+        for index, old in enumerate(self.evicted):
+            n = min(len(old), len(prompt))
+            differ = np.nonzero(old[:n] != prompt[:n])[0]
+            common = int(differ[0]) if len(differ) else n
+            if common > best:
+                best, best_index = common, index
+        if best < PARK_MIN_TOKENS:
+            return 0
+        del self.evicted[best_index]
+        return best
+
+    def cache_metrics(self):
+        parked = list(self.parked)
+        return dict(slots=PARK_SLOTS, cached=len(parked), cached_tokens=[len(p['cache_ids']) for p in parked],
+                    live_tokens=len(self.cache_ids), memory_cap_gib=PARK_MAX_GIB, **self.cache_counters)
 
     def _worth_parking(self, state):
         """Keep a conversation in a parked slot when slots are enabled, it is long enough to be costly to prefill
@@ -619,6 +680,9 @@ class DFlashSession:
             if self._worth_parking(live):
                 self._park(live)
                 self.cache = None     # the parked slot owns it now
+            else:
+                self._remember_evicted(live)
+        miss_tokens = self._eviction_miss(ids) if mode == 'fresh' and self.reuse else 0
         lcp = common_prefix_length(self.cache_ids, ids)
         cache, cache_ids, ctx, checkpoint = self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint
         # Until this request finishes cleanly the live state is unknown; a failure leaves nothing to reuse.
@@ -673,7 +737,12 @@ class DFlashSession:
         out = nd.dflash_decode(self.model, self.drafter, self.cache, self.ctx_hidden, first, max_tokens, self.eos,
                                self.hot, self.guard, self.block_size, should_stop=should_stop, on_token=on_token,
                                record_hidden=self.reuse, temperature=temperature, top_p=top_p)
-        stats = dict(mode=mode, temperature=temperature, top_p=top_p, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
+        if miss_tokens:
+            counters = self.cache_counters
+            counters['eviction_misses'] += 1
+            counters['eviction_miss_tokens'] += miss_tokens
+            counters['eviction_miss_seconds'] += prefill_seconds * miss_tokens / max(len(suffix), 1)
+        stats = dict(mode=mode, temperature=temperature, top_p=top_p, eviction_miss_tokens=miss_tokens, reused_tokens=reused, prefilled_tokens=len(suffix), first_top5=top5,
                      slot='parked' if swapped else 'live', parked_slots=len(self.parked),
                      parked_tokens=sum(len(slot['cache_ids']) for slot in self.parked),
                      prefill_path='replay' if mode == 'replay' else nd.LAST_PREFILL_PATH,

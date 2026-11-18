@@ -303,6 +303,17 @@ class MetricsTest(unittest.TestCase):
             harness.close()
 
 
+class CacheAdviceTest(unittest.TestCase):
+    def test_advice(self):
+        from dflash_server import cache_advice
+        base = dict(slots=4, cached=1, memory_cap_gib=100.0, eviction_misses=0, eviction_miss_seconds=0.0)
+        self.assertIn('enough', cache_advice(base, 86.0))
+        self.assertIn('All 4', cache_advice(dict(base, cached=4), 86.0))
+        self.assertIn('Raise NQ_CACHE_SLOTS', cache_advice(dict(base, eviction_misses=3, eviction_miss_seconds=120), 86.0))
+        self.assertIn('will not help', cache_advice(dict(base, eviction_misses=3), 98.5))
+        self.assertIsNone(cache_advice(None, 86.0))
+
+
 class StopTest(unittest.TestCase):
     def test_find_stop(self):
         self.assertEqual(find_stop('abc</cmd>def', ['</cmd>', 'zz']), 3)

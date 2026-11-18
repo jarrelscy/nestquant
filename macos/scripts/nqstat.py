@@ -66,6 +66,21 @@ def render(m):
                  f" {number(rec.get('decode_tok_s'))} tok/s")
     lines.append(f"Totals     {number(tot['completion_tokens'])} tokens generated at {number(tot.get('decode_tok_s'))} tok/s,"
                  f" {number(tot.get('cache_reuse_percent'))}% of prompt tokens from cache")
+    cache = m.get('cache')
+    if cache:
+        sizes = ', '.join(f"{t:,}" for t in cache.get('cached_tokens', []))
+        lines.append(f"Cache      {cache['cached']} of {cache['slots']} conversations cached" + (f" ({sizes} tokens)" if sizes else '')
+                     + f", {cache.get('eviction_misses', 0)} re-read after eviction"
+                     f" ({number(round(cache.get('eviction_miss_seconds', 0)))} s lost)")
+    modes = rec.get('modes')
+    if modes:
+        lines.append('Reuse      ' + ', '.join(f'{k} {modes[k]}' for k in ('extend', 'rollback', 'replay', 'fresh') if k in modes)
+                     + ' (last 50 requests)')
+    if rec.get('time_to_first_token_seconds') is not None or rec.get('large_prefill_tok_s') is not None:
+        lines.append(f"Prefill    first token avg {number(rec.get('time_to_first_token_seconds'))} s,"
+                     f" large prompts avg {number(rec.get('large_prefill_tok_s'))} tok/s")
+    if m.get('advice'):
+        lines.append(f"Advice     {m['advice']}")
     lines.append(f"GPU        {number(gpu.get('utilization_percent'))}% busy, {number(gpu.get('memory_in_use_gib'))} GiB in use")
     lines.append(f"Memory     server {number(mem.get('process_gib'))} GiB (peak {number(mem.get('process_peak_gib'))}),"
                  f" system available {number(mem.get('system_available_gib'))} of {number(mem.get('system_total_gib'))} GiB,"
