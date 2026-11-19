@@ -255,8 +255,16 @@ final class Widget: NSObject, NSApplicationDelegate {
                     + $0.map { compact($0.doubleValue) }.joined(separator: ", ") } ?? ""),
                 color: misses > 0 ? .systemYellow : white)
         }
+        if let kv = m["shared_kv"] as? [String: Any] {
+            let chunks = num(kv["chunks"]) ?? 0
+            row("SHARED KV", "\(Int(num(kv["hits"]) ?? 0))/\(Int(num(kv["lookups"]) ?? 0)) restored · "
+                + "\(compact(chunks * 7168)) tokens · \(rate((num(kv["bytes"]) ?? 0) / 1e9)) GB @ "
+                + "\(rate(num(kv["megabytes_per_second"]))) MB/s"
+                + ((num(kv["errors"]) ?? 0) > 0 ? " · \(Int(num(kv["errors"])!)) errors" : ""),
+                color: (num(kv["errors"]) ?? 0) > 0 ? .systemYellow : white)
+        }
         if let modes = recent["modes"] as? [String: NSNumber], !modes.isEmpty {
-            let order = ["extend", "rollback", "replay", "fresh"]
+            let order = ["extend", "rollback", "replay", "shared", "remote", "fresh"]
             let parts = order.compactMap { k in modes[k].map { "\(k) \($0.intValue)" } }
             row("REUSE", parts.joined(separator: " · ") + "  (last 50)")
         }

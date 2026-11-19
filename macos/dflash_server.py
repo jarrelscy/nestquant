@@ -270,6 +270,11 @@ class Service:
         totals = self.totals
         prompt = totals['prompt_tokens']
         cache = backend.cache_metrics() if hasattr(backend, 'cache_metrics') else None
+        shared_kv = getattr(getattr(backend, 'kvshare', None), 'stats', None)
+        if shared_kv is not None:
+            shared_kv = dict(shared_kv, host=backend.kvshare.host,
+                             megabytes_per_second=round(shared_kv['bytes'] / 1e6 / shared_kv['seconds'], 1)
+                             if shared_kv['seconds'] else None)
         memory = memory_stats()
         advice = cache_advice(cache, memory.get('process_gib'))
         return dict(
@@ -284,7 +289,7 @@ class Service:
                             [h['prefill_tok_s'] for h in list(self.history)[-50:]
                              if h.get('prefill_tok_s') and (h.get('prefilled_tokens') or 0) >= 1000]),
                         modes=dict(collections.Counter(h.get('mode') or 'unknown' for h in list(self.history)[-50:]))),
-            cache=cache, advice=advice,
+            cache=cache, advice=advice, shared_kv=shared_kv,
             totals=dict(totals, decode_tok_s=round(totals['completion_tokens'] / totals['decode_seconds'], 1)
                         if totals['decode_seconds'] else None,
                         cache_reuse_percent=round(100 * (1 - totals['prefilled_tokens'] / prompt), 1) if prompt else None),
@@ -446,6 +451,12 @@ class DFlashSession:
             self.tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
             self.template = (Path(ng.__file__).resolve().parents[1] / 'spark/flash/thinking_off.jinja').read_text()
             self.thinking_template = (args.model / 'chat_template.jinja').read_text()
+            # A shared-cache deployment must tokenize exactly like the vLLM servers that write the cache, so it
+            # renders every request with their chat template (thinking on and off) when one is given.
+            self.shared_template = Path(args.chat_template).read_text() if getattr(args, 'chat_template', None) else None
+            import kvshare
+            self.kvshare = kvshare.SharedKV.from_env() if not getattr(args, 'no_kvshare', False) else None
+            self.kvshare_min_gain = int(getattr(args, 'kvshare_min_tokens', 7168))
             self.think_end = self.tokenizer.convert_tokens_to_ids('</think>')
             self.think_close = self.tokenizer.encode(
                 '\n\nI have reasoned enough; time is limited, so I will act on what I have now.\n</think>',
@@ -497,7 +508,15 @@ class DFlashSession:
         sources = image_sources(messages)
         if sources and self.vision is None:
             raise RequestError('Image input is disabled on this server')
-        if thinking:
+        if self.shared_template is not None:
+            # vLLM's convention: enable_thinking=False turns reasoning off; otherwise reasoning_effort low/high, or max.
+            kwargs = dict(enable_thinking=False) if not thinking else (
+                dict(enable_thinking=True, reasoning_effort=thinking) if thinking in ('low', 'high')
+                else dict(enable_thinking=True))
+            ids = list(self.tokenizer.apply_chat_template(messages, tools=tools or None, tokenize=True,
+                                                          return_dict=False, add_generation_prompt=True,
+                                                          chat_template=self.shared_template, **kwargs))
+        elif thinking:
             # The checkpoint's own template: a 'Reasoning Effort' system line and an open <think> to reason in.
             ids = list(self.tokenizer.apply_chat_template(messages, tools=tools or None, tokenize=True,
                                                           return_dict=False, add_generation_prompt=True,
@@ -684,6 +703,65 @@ class DFlashSession:
         self.cache_ids = list(entry['ids'])
         self.checkpoints, self.checkpoint = [], None
 
+    def _restore_shared_kv(self, data, length, token_ids=None):
+        """Build a fresh cache holding `length` tokens decoded from the shared store (kvshare.assemble output)."""
+        import numpy as np
+        from mlx_vlm.models.cache import ArraysCache, KVCache, PoolingCache
+        mx = self.mx
+        self.cache = self.model.make_cache()
+        self.hot.reset()
+        layers = self.model.model.layers if hasattr(self.model, 'model') else self.model.layers
+        act_dtype = next(layer.self_attn.kv_a_layernorm.weight.dtype for layer in layers
+                         if hasattr(layer.self_attn, 'kv_a_layernorm'))
+        for index, (layer, entry) in enumerate(zip(layers, self.cache)):
+            if isinstance(entry, ArraysCache):
+                conv, state = data['kda'][index]
+                entry.cache[0] = mx.array(conv[None]).astype(act_dtype)
+                entry.cache[1] = mx.array(state[None], dtype=mx.float32)
+                continue
+            parts = entry.caches
+            attention = layer.self_attn
+            dtype = attention.kv_a_layernorm.weight.dtype
+            latent = mx.array(data['latent'][index][None, None]).astype(dtype)
+            parts[0].state = (latent, mx.zeros((1, 1, length, 0), dtype=dtype))
+            if len(parts) == 4:
+                parts[1].state = (mx.ones((1, 1, length, 1), dtype=mx.bool_), mx.zeros((1, 1, length, 0), dtype=mx.bool_))
+                pool = parts[2]
+                key_dtype = attention.indexer.k_norm.weight.dtype
+                pool.pooled = mx.array(data['index'][index][None]).astype(key_dtype)
+                pool.buf_kv = pool.buf_gate = None
+                pool.remainder = 0
+        mx.eval([leaf.state for leaf in self._leaves() if getattr(leaf, 'state', None) is not None])
+        self.cache_ids = list(token_ids[:length])
+        self.ctx_hidden = None
+        self.checkpoints, self.checkpoint = [], None
+
+    def _fetch_shared_kv(self, ids, reused):
+        """Fetch and decode the longest stored prefix of `ids` from the shared store when it beats `reused` by at
+        least the minimum gain. Returns ((data, tokens), stats) or (None, stats). Leaves local state untouched."""
+        import kvshare
+        shared = self.kvshare
+        usable = (len(ids) - 1) // kvshare.CHUNK * kvshare.CHUNK          # at least one token left to prefill
+        if shared is None or usable < reused + self.kvshare_min_gain or min(ids[:usable]) < 0:
+            return None, None
+        started = time.perf_counter()
+        try:
+            n, hashes = shared.available_chunks(ids[:usable])
+            if n == 0 or n * kvshare.CHUNK < reused + self.kvshare_min_gain:
+                return None, dict(lookup_seconds=round(time.perf_counter() - started, 3), stored_chunks=n)
+            group0, group1, fetch_seconds = shared.fetch(hashes, n)
+            decode_started = time.perf_counter()
+            data = kvshare.assemble(group0, group1, n)
+            del group0, group1
+            decode_seconds = time.perf_counter() - decode_started
+        except Exception as error:      # the shared store is optional: fall back to the local path
+            print(json.dumps(dict(event='kvshare_error', error=f'{type(error).__name__}: {error}')), flush=True)
+            return None, dict(error=f'{type(error).__name__}: {error}')
+        return (data, n * kvshare.CHUNK), dict(
+            chunks=n, fetch_seconds=round(fetch_seconds, 2), decode_seconds=round(decode_seconds, 2),
+            seconds=round(time.perf_counter() - started, 2),
+            megabytes=round((2 * n * kvshare.G0_BYTES + 2 * kvshare.G1_BYTES) / 1e6))
+
     def _live_state(self):
         return dict(cache=self.cache, cache_ids=self.cache_ids, ctx=self.ctx_hidden, checkpoint=self.checkpoint,
                     checkpoints=list(self.checkpoints))
@@ -815,6 +893,17 @@ class DFlashSession:
                 mode, reused = 'shared', shared['length']
             elif len(ids) > SHARED_PREFIX_MIN:
                 split_at = self._shared_split(ids)
+        remote_stats = None
+        if self.reuse and self.kvshare is not None and mode != 'replay':
+            # The shared store wins only for a longer prefix than the local state gives.
+            fetched, remote_stats = self._fetch_shared_kv(ids, max(reused, shared['length'] if shared else 0, split_at))
+            if fetched is not None:
+                if self.cache is not None:
+                    live = self._live_state()
+                    if self._worth_parking(live):
+                        self._park(live)
+                self._restore_shared_kv(fetched[0], fetched[1], ids)
+                mode, reused, shared, split_at = 'remote', fetched[1], None, 0
         miss_tokens = self._eviction_miss(ids) if mode == 'fresh' and self.reuse else 0
         lcp = common_prefix_length(self.cache_ids, ids)
         cache, cache_ids, ctx, checkpoint = self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint
@@ -900,7 +989,7 @@ class DFlashSession:
             counters['eviction_misses'] += 1
             counters['eviction_miss_tokens'] += miss_tokens
             counters['eviction_miss_seconds'] += prefill_seconds * miss_tokens / max(len(suffix), 1)
-        stats = dict(mode=mode, temperature=temperature, top_p=top_p, eviction_miss_tokens=miss_tokens, reused_tokens=0 if split_at else reused, prefilled_tokens=len(ids) - (0 if split_at else reused),
+        stats = dict(mode=mode, temperature=temperature, top_p=top_p, shared_kv=remote_stats, eviction_miss_tokens=miss_tokens, reused_tokens=0 if split_at else reused, prefilled_tokens=len(ids) - (0 if split_at else reused),
                      shared_prefix_tokens=shared['length'] if shared else (split_at or 0), first_top5=top5,
                      slot='parked' if swapped else 'live', parked_slots=len(self.parked),
                      parked_tokens=sum(len(slot['cache_ids']) for slot in self.parked),
@@ -1262,6 +1351,12 @@ def main():
     p.add_argument('--long-reply-dir', type=Path, default=None,
                    help='Save the text of replies of at least --long-reply-tokens tokens here')
     p.add_argument('--long-reply-tokens', type=int, default=16384)
+    p.add_argument('--chat-template', default=None,
+                   help='Render every request with this template (thinking via enable_thinking/reasoning_effort), '
+                        'e.g. the vLLM servers\' template when sharing their KV cache')
+    p.add_argument('--no-kvshare', action='store_true', help='Ignore NQ_KVSHARE_HOST (the shared KV store)')
+    p.add_argument('--kvshare-min-tokens', type=int, default=7168,
+                   help='Restore from the shared store only when it covers at least this many more tokens')
     p.add_argument('--cache-slots', type=int, default=PARK_SLOTS,
                    help='Conversations kept in cache besides the current one (0-64; memory cap PARK_MAX_GIB)')
     p.add_argument('--thinking-budget', type=int, default=0,

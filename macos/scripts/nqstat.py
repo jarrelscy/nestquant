@@ -76,11 +76,16 @@ def render(m):
                         f" ({cache.get('shared_start_gib')} GiB)" if cache.get('shared_starts') else ''))
     modes = rec.get('modes')
     if modes:
-        lines.append('Reuse      ' + ', '.join(f'{k} {modes[k]}' for k in ('extend', 'rollback', 'replay', 'fresh') if k in modes)
+        lines.append('Reuse      ' + ', '.join(f'{k} {modes[k]}' for k in ('extend', 'rollback', 'replay', 'shared', 'remote', 'fresh') if k in modes)
                      + ' (last 50 requests)')
     if rec.get('time_to_first_token_seconds') is not None or rec.get('large_prefill_tok_s') is not None:
         lines.append(f"Prefill    first token avg {number(rec.get('time_to_first_token_seconds'))} s,"
                      f" large prompts avg {number(rec.get('large_prefill_tok_s'))} tok/s")
+    kv = m.get('shared_kv')
+    if kv:
+        lines.append(f"Shared KV  {kv['host']}: {kv['hits']} of {kv['lookups']} lookups restored, {kv['chunks']} chunks"
+                     f" ({kv['chunks'] * 7168:,} tokens), {kv['bytes'] / 1e9:.2f} GB at {number(kv.get('megabytes_per_second'))} MB/s"
+                     + (f", {kv['errors']} errors" if kv.get('errors') else ''))
     if m.get('advice'):
         lines.append(f"Advice     {m['advice']}")
     lines.append(f"GPU        {number(gpu.get('utilization_percent'))}% busy, {number(gpu.get('memory_in_use_gib'))} GiB in use")

@@ -242,6 +242,33 @@ What to expect:
 - Thinking budget: `--thinking-budget N` closes the reasoning after N tokens (appending a short sentence and
   `</think>`) and the model continues to its answer or tool call. startnq.sh uses 16,384.
 
+### Shared KV cache (read from vLLM servers)
+
+The server can restore long prompt prefixes from a KV cache that vLLM + LMCache servers running GLM-5.3-Flash
+write to a shared Kvrocks (LMCache's `resp` L2 tier). It reads only; it never writes. Turn it on in
+`~/.nestquant/server.env` (read by `startnq.sh`, kept out of the repo):
+
+```sh
+NQ_KVSHARE_HOST=192.168.0.11          # Kvrocks; port NQ_KVSHARE_PORT (6666)
+NQ_CHAT_TEMPLATE=$HOME/src/nestquant/macos/templates/glm53-vllm-served.jinja
+```
+
+The password is read from `~/.config/lmcache-shared/kvrocks.pass` (mode 600). `macos/kvshare.py` computes
+LMCache's keys (a BLAKE3 chain over 7,168-token chunks), fetches the objects and converts them: fp8 MLA latents,
+Hadamard-rotated fp8 indexer keys and the KDA states, reassembled from the writers' two ranks (TP=2, DCP=2). The
+layout matches bigbox's deployment (model path `/model`, chunk 7168, `--separate-object-groups`); the format is
+described in bigbox:~/lmcache-shared-format.md.
+
+- A prompt restores the longest stored prefix of complete chunks when it beats the local cache by at least one
+  chunk, then prefills the rest (which also rebuilds the drafter's context).
+- Requests must tokenize exactly as on the vLLM servers, so `NQ_CHAT_TEMPLATE` renders every request with their
+  template (it renders the same text as this server's own templates, thinking on and off).
+- Each chunk is 214 MB, about 4 s over Wi-Fi at 50 MB/s, against about 20 s to prefill 7,168 tokens here.
+  Self-test (own cache encoded in the vLLM format): an 18K-token prompt prefilled in 26 s instead of 49 s with
+  the same first token. Values are fp8, so continuations drift slightly from a local prefill.
+- `nqstat.py`, the widget and `/metrics` show lookups, restores, chunks and transfer speed. A failing store is
+  logged (`kvshare_error`) and the request falls back to the local path.
+
 ### Claude Code
 
 Point Claude Code at the server:

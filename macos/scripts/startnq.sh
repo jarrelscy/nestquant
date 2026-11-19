@@ -7,6 +7,7 @@
 # Environment overrides: NQ_PORT (8000), NQ_HOST (0.0.0.0), NQ_MAX_CONTEXT (131072), NQ_THINKING (high: effort for
 # Anthropic thinking requests; off|low|high|max), NQ_THINKING_BUDGET (16384: reasoning tokens before the server closes
 # the thinking and the model answers; 0 = no limit), NQ_MIN_AVAILABLE_GIB (95),
+# NQ_KVSHARE_HOST/PORT (shared vLLM KV store, read-only; unset = off), NQ_CHAT_TEMPLATE (template for every request),
 # NQ_MODEL_ALIAS (local: second model name), NQ_CACHE_SLOTS (4: conversations cached besides the current
 # one, ~25 MB per 1K tokens each), NQ_TEMPERATURE (1.0), NQ_TOP_P (0.95), NQ_API_KEY (unset = no key), NQ_REPO (this checkout, else ~/src/nestquant).
 setopt ERR_RETURN NO_UNSET PIPE_FAIL
@@ -31,6 +32,8 @@ LOG=$STATE/server.log
 LOCK=/tmp/nestquant-model.lock
 
 mkdir -p "$STATE"
+# Machine-specific settings (e.g. the shared KV store) live in ~/.nestquant/server.env, outside the repo.
+[[ -f $STATE/server.env ]] && { set -a; source "$STATE/server.env"; set +a; }
 
 health() { curl -s -m 3 "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -q '"status": "ok"'; }
 
@@ -78,8 +81,10 @@ fi
 echo "Memory check passed: ${available_gib} GiB available of ${total_gib} GiB."
 
 # 4. Start under the GPU lock (released when the server exits).
+CHAT_TEMPLATE=${NQ_CHAT_TEMPLATE:-}
 args=(--host "$HOST" --port "$PORT" --max-context "$MAX_CONTEXT" --temperature "$TEMPERATURE" --top-p "$TOP_P" --anthropic-thinking "$THINKING" --thinking-budget "$THINKING_BUDGET" --model-alias "$MODEL_ALIAS" --cache-slots "$CACHE_SLOTS" --long-reply-dir "$STATE/long-replies")
 [[ -n ${NQ_API_KEY:-} ]] && args+=(--api-key "$NQ_API_KEY")
+[[ -n $CHAT_TEMPLATE ]] && args+=(--chat-template "$CHAT_TEMPLATE")
 cd "$REPO"
 nohup /bin/zsh -c '
   until mkdir '"$LOCK"' 2>/dev/null; do sleep 2; done
@@ -96,6 +101,7 @@ for _ in {1..90}; do
     echo "NestQuant server is up on $HOST:$PORT."
     echo "  OpenAI:    http://$HOST:$PORT/v1/chat/completions   (model glm5.3-flash or $MODEL_ALIAS)"
     echo "  Anthropic: http://$HOST:$PORT/v1/messages"
+    [[ -n ${NQ_KVSHARE_HOST:-} ]] && echo "  Shared KV cache: ${NQ_KVSHARE_HOST}:${NQ_KVSHARE_PORT:-6666} (read-only)"
     echo "  Default sampling: temperature $TEMPERATURE, top_p $TOP_P (requests can override); Anthropic thinking: $THINKING, thinking budget $THINKING_BUDGET tokens"
     exit 0
   fi
