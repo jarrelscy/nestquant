@@ -156,7 +156,7 @@ server with these settings, each of which an environment variable can change:
 | Thinking for Claude Code requests | high effort | `NQ_THINKING` (off, low, high, max) |
 | Thinking budget | 16,384 tokens | `NQ_THINKING_BUDGET` (0 = no limit) |
 | API key | none | `NQ_API_KEY` |
-| Model names | `glm-nestquant` and `local` | `NQ_MODEL_ALIAS` |
+| Model names | `glm5.3-flash` and `local` | `NQ_MODEL_ALIAS` |
 | Cached conversations besides the current one | 4 | `NQ_CACHE_SLOTS` (0–64) |
 
 The log is `~/.nestquant/server.log`. Replies of 16,384 tokens or more are saved to `~/.nestquant/long-replies/`.
@@ -197,23 +197,23 @@ Without an API key, anyone on your network can use the server; set `NQ_API_KEY` 
 `Authorization: Bearer <key>` (OpenAI clients) or `x-api-key: <key>` (Anthropic clients).
 
 The server serves `POST /v1/chat/completions` (OpenAI), `POST /v1/messages` (Anthropic, used by Claude Code)
-and `GET /v1/models`, and lists the model as `glm-nestquant` and `local`. Requests may name either (any other
+and `GET /v1/models`, and lists the model as `glm5.3-flash` and `local`. Requests may name either (any other
 name is also accepted and answered by the same model). The examples below use port 8000.
 
 ```sh
 curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "glm-nestquant", "max_tokens": 256,
+  "model": "glm5.3-flash", "max_tokens": 256,
   "messages": [{"role": "user", "content": "Write a Python function that reverses a linked list."}]}'
 ```
 
-With LiteLLM-based tools, use model `openai/glm-nestquant` and base URL `http://127.0.0.1:8000/v1`.
+With LiteLLM-based tools, use model `openai/glm5.3-flash` and base URL `http://127.0.0.1:8000/v1`.
 
 Images work the OpenAI way: add `image_url` parts (base64 `data:` URLs or `http(s)://` links) to a message.
 
 ```sh
 IMG=$(base64 -i photo.png)
 curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "glm-nestquant", "max_tokens": 256,
+  "model": "glm5.3-flash", "max_tokens": 256,
   "messages": [{"role": "user", "content": [
     {"type": "image_url", "image_url": {"url": "data:image/png;base64,'"$IMG"'"}},
     {"type": "text", "text": "What is in this image?"}]}]}'
@@ -247,7 +247,7 @@ What to expect:
 Point Claude Code at the server:
 
 ```sh
-ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_API_KEY=local ANTHROPIC_MODEL=glm-nestquant \
+ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_API_KEY=local ANTHROPIC_MODEL=glm5.3-flash \
 CLAUDE_CODE_ATTRIBUTION_HEADER=0 CLAUDE_CODE_MAX_CONTEXT_TOKENS=110000 CLAUDE_CODE_MAX_OUTPUT_TOKENS=65536 \
 API_TIMEOUT_MS=7200000 CLAUDE_STREAM_IDLE_TIMEOUT_MS=3600000 claude
 ```

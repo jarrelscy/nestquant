@@ -35,7 +35,9 @@ from dflash_protocol import (MODEL, RequestError, image_sources, split_thinking,
 MAX_BODY = 64 * 1024**2      # base64 images
 PARK_MIN_TOKENS = 2048       # extra cache slots: conversations at least this long are kept during other requests
 PARK_SLOTS = 4               # conversations kept besides the live one (each 30K-token conversation is ~0.8 GiB)
-PARK_MAX_GIB = 100.0
+PARK_MAX_GIB = 89.0           # cached conversations are dropped above this footprint; set to --guard-gib minus
+                             # PARK_HEADROOM_GIB at start-up so a large prefill on top still fits under the guard
+PARK_HEADROOM_GIB = 9.0
 SHARED_PREFIX_MIN = 4096     # shared starts (system prompt and tools common to new sessions) at least this long
 SHARED_PREFIX_KEEP = 2       # independent copies of shared starts kept
 MAX_CHECKPOINTS = 6          # restore points kept per conversation (end of each prompt, start of each extension)
@@ -614,6 +616,17 @@ class DFlashSession:
         self.checkpoints = []
         self.mx.clear_cache()
 
+    def drop_all(self):
+        """Free every cached conversation, restore point and shared start (memory recovery)."""
+        for state in self.parked:
+            self._remember_evicted(state)
+        self.parked = []
+        self.shared_prefixes = []
+        self.drop_state()
+        import gc
+        gc.collect()
+        self.mx.clear_cache()
+
     def _shared_prefix_for(self, ids):
         """The longest stored shared start that `ids` begins with (leaving at least one token), or None."""
         best = None
@@ -740,6 +753,14 @@ class DFlashSession:
 
     def _recover(self, ids, max_tokens, should_stop, on_token, temperature, top_p):
         try:
+            return self._generate(ids, max_tokens, should_stop, on_token, temperature, top_p)
+        except MemoryError as error:
+            # Cached conversations pushed the footprint over the guard. Free all of them and answer from a fresh
+            # prefill; if that still does not fit, the error reaches the client.
+            print(json.dumps(dict(event='memory_recovery', prompt_tokens=len(ids), error=str(error),
+                                  cached=len(self.parked))), flush=True)
+            self.drop_all()
+            self.guard.check(force=True)
             return self._generate(ids, max_tokens, should_stop, on_token, temperature, top_p)
         except RuntimeError as error:
             if 'Resource limit' not in str(error):
@@ -1202,9 +1223,10 @@ class Server(ThreadingHTTPServer):
     def on_failure(self, error):
         print(json.dumps(dict(event='request_failed', error=f'{type(error).__name__}: {error}')), flush=True)
         backend = self.service.backend
-        if hasattr(backend, 'drop_state'):
+        drop = getattr(backend, 'drop_all', None) or getattr(backend, 'drop_state', None)
+        if drop is not None:
             gpu = self.service.gpu
-            gpu.call(backend.drop_state) if gpu is not None else backend.drop_state()
+            gpu.call(drop) if gpu is not None else drop()
         if isinstance(error, MemoryError) and hasattr(backend, 'guard'):
             try:
                 backend.guard.check(force=True)
@@ -1255,6 +1277,7 @@ def main():
     if not 0 <= a.cache_slots <= 64:
         p.error('Use --cache-slots between 0 and 64')
     globals()['PARK_SLOTS'] = a.cache_slots
+    globals()['PARK_MAX_GIB'] = a.guard_gib - PARK_HEADROOM_GIB
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     import anthropic_protocol
     anthropic_protocol.ANTHROPIC_THINKING = None if a.anthropic_thinking == 'off' else a.anthropic_thinking

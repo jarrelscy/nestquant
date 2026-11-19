@@ -81,7 +81,7 @@ def main():
     for turn in range(1, args.turns + 1):
         content = (TASK if turn == 1 else 'New terminal output:\n') + terminal_output(turn)
         messages.append({'role': 'user', 'content': content})
-        out = post(args.url, dict(model='glm-nestquant', messages=messages, max_tokens=args.max_tokens,
+        out = post(args.url, dict(model='glm5.3-flash', messages=messages, max_tokens=args.max_tokens,
                                   temperature=0.7))
         rows.append(summary(f'turn{turn}', out))
         reply = out['choices'][0]['message']['content']
@@ -90,7 +90,7 @@ def main():
         if turn < args.turns:
             messages.append({'role': 'assistant', 'content': reply})
     # Same final prompt again: cannot extend (needs one new token) and the checkpoint sits at its end -> fresh.
-    fresh = post(args.url, dict(model='glm-nestquant', messages=messages, max_tokens=args.max_tokens))
+    fresh = post(args.url, dict(model='glm5.3-flash', messages=messages, max_tokens=args.max_tokens))
     rows.append(summary('final_prompt_fresh', fresh))
     fresh_reply = fresh['choices'][0]['message']['content']
     same = next((i for i, (a, b) in enumerate(zip(replies[-1], fresh_reply)) if a != b),
@@ -101,7 +101,7 @@ def main():
     # Truncated previous reply -> the prompt diverges inside the cached reply -> rollback to the checkpoint.
     messages_rb = messages + [{'role': 'assistant', 'content': fresh_reply[:len(fresh_reply) // 2]},
                               {'role': 'user', 'content': 'Your previous reply was cut off. Reply again, briefly.'}]
-    rollback = post(args.url, dict(model='glm-nestquant', messages=messages_rb, max_tokens=64))
+    rollback = post(args.url, dict(model='glm5.3-flash', messages=messages_rb, max_tokens=64))
     rows.append(summary('truncated_reply_rollback', rollback))
     print(json.dumps(dict(rollback_reply_head=rollback['choices'][0]['message']['content'][:200])), flush=True)
     if args.output:

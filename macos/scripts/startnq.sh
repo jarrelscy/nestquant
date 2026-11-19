@@ -94,7 +94,7 @@ echo "Starting NestQuant server (pid $(cat "$PIDFILE")); loading takes about 2 m
 for _ in {1..90}; do
   if health; then
     echo "NestQuant server is up on $HOST:$PORT."
-    echo "  OpenAI:    http://$HOST:$PORT/v1/chat/completions   (model glm-nestquant or $MODEL_ALIAS)"
+    echo "  OpenAI:    http://$HOST:$PORT/v1/chat/completions   (model glm5.3-flash or $MODEL_ALIAS)"
     echo "  Anthropic: http://$HOST:$PORT/v1/messages"
     echo "  Default sampling: temperature $TEMPERATURE, top_p $TOP_P (requests can override); Anthropic thinking: $THINKING, thinking budget $THINKING_BUDGET tokens"
     exit 0

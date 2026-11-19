@@ -87,7 +87,7 @@ def main():
     p.add_argument('--url', default='http://127.0.0.1:8000/v1/chat/completions')
     p.add_argument('--judge-url', default=None)
     p.add_argument('--api-key', default='local')
-    p.add_argument('--model', default='glm-nestquant')
+    p.add_argument('--model', default='glm5.3-flash')
     p.add_argument('--max-tokens', type=int, default=4096)
     p.add_argument('--reasoning-effort', default=None, help='low, high or max: answer with thinking on')
     p.add_argument('--output', type=Path, required=True)

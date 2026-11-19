@@ -43,7 +43,7 @@ def main():
     for index, row in enumerate(rows):
         if row['question_id'] in done_ids:
             continue
-        body = json.dumps(dict(model='glm-nestquant', max_tokens=a.max_tokens, temperature=0,
+        body = json.dumps(dict(model='glm5.3-flash', max_tokens=a.max_tokens, temperature=0,
                                messages=[{'role': 'user', 'content': prompt(row)}])).encode()
         request = urllib.request.Request(a.url, body, {'Content-Type': 'application/json',
                                                        'Authorization': f'Bearer {a.api_key}'})

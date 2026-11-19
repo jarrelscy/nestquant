@@ -5,7 +5,7 @@ import json
 import time
 from uuid import uuid4
 
-MODEL = 'glm-nestquant'
+MODEL = 'glm5.3-flash'
 DEFAULT_MAX_TOKENS = 4096
 
 
