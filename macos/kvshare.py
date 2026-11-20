@@ -68,8 +68,9 @@ def object_key(chunk_hash, rank, group):
 class Resp:
     """Minimal RESP2 client (AUTH, EXISTS, GET) with buffered bulk reads."""
 
-    def __init__(self, host, port, password=None, timeout=30.0):
-        self.sock = socket.create_connection((host, port), timeout=timeout)
+    def __init__(self, host, port, password=None, timeout=10.0, connect_timeout=2.0):
+        self.sock = socket.create_connection((host, port), timeout=connect_timeout)
+        self.sock.settimeout(timeout)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 << 20)
         self.buffer = bytearray()
@@ -224,7 +225,23 @@ class SharedKV:
         self.connections = connections
         self._pool = []
         self._lock = threading.Lock()
-        self.stats = dict(lookups=0, hits=0, chunks=0, bytes=0, seconds=0.0, errors=0)
+        self.stats = dict(lookups=0, hits=0, chunks=0, bytes=0, seconds=0.0, errors=0, skipped=0)
+        # After a failure the store is skipped for RETRY_SECONDS, so an unreachable store costs one short
+        # connection attempt per interval instead of a wait on every request.
+        self.retry_seconds = 60.0
+        self.down_until = 0.0
+        self.last_error = None
+
+    def available(self):
+        if time.monotonic() < self.down_until:
+            self.stats['skipped'] += 1
+            return False
+        return True
+
+    def failed(self, error):
+        self.stats['errors'] += 1
+        self.last_error = f'{type(error).__name__}: {error}'
+        self.down_until = time.monotonic() + self.retry_seconds
 
     @classmethod
     def from_env(cls):
@@ -251,7 +268,7 @@ class SharedKV:
         """Run run(client) on a pooled connection; a dropped connection (Kvrocks restarted, idle timeout) is
         replaced and the call retried once."""
         for attempt in (0, 1):
-            client = self._client()
+            client = self._client()       # connection errors here (refused, unreachable) go straight to the caller
             try:
                 result = run(client)
             except (ConnectionError, OSError):
@@ -287,8 +304,8 @@ class SharedKV:
                 if all(last):
                     break
                 n -= 1
-        except Exception:
-            self.stats['errors'] += 1
+        except Exception as error:
+            self.failed(error)
             raise
         return n, hashes
 
@@ -318,7 +335,7 @@ class SharedKV:
         for thread in threads:
             thread.join()
         if errors:
-            self.stats['errors'] += 1
+            self.failed(errors[0])
             raise errors[0]
         seconds = time.perf_counter() - started
         self.stats['hits'] += 1

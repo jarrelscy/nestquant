@@ -272,7 +272,8 @@ class Service:
         cache = backend.cache_metrics() if hasattr(backend, 'cache_metrics') else None
         shared_kv = getattr(getattr(backend, 'kvshare', None), 'stats', None)
         if shared_kv is not None:
-            shared_kv = dict(shared_kv, host=backend.kvshare.host,
+            shared_kv = dict(shared_kv, host=backend.kvshare.host, last_error=backend.kvshare.last_error,
+                             paused_seconds=max(0, round(backend.kvshare.down_until - time.monotonic())),
                              megabytes_per_second=round(shared_kv['bytes'] / 1e6 / shared_kv['seconds'], 1)
                              if shared_kv['seconds'] else None)
         memory = memory_stats()
@@ -744,6 +745,8 @@ class DFlashSession:
         usable = (len(ids) - 1) // kvshare.CHUNK * kvshare.CHUNK          # at least one token left to prefill
         if shared is None or usable < reused + self.kvshare_min_gain or min(ids[:usable]) < 0:
             return None, None
+        if not shared.available():
+            return None, dict(skipped='store unavailable after an error; retrying later')
         started = time.perf_counter()
         try:
             n, hashes = shared.available_chunks(ids[:usable])
@@ -902,8 +905,18 @@ class DFlashSession:
                     live = self._live_state()
                     if self._worth_parking(live):
                         self._park(live)
-                self._restore_shared_kv(fetched[0], fetched[1], ids)
-                mode, reused, shared, split_at = 'remote', fetched[1], None, 0
+                try:
+                    self._restore_shared_kv(fetched[0], fetched[1], ids)
+                    mode, reused, shared, split_at = 'remote', fetched[1], None, 0
+                except Exception as error:      # a bad block must not fail the request: prefill locally instead
+                    print(json.dumps(dict(event='kvshare_error', error=f'restore: {type(error).__name__}: {error}')),
+                          flush=True)
+                    self.kvshare.failed(error)
+                    remote_stats = dict(error=f'restore: {type(error).__name__}: {error}')
+                    self.cache, self.cache_ids, self.ctx_hidden = None, [], None
+                    self.checkpoints, self.checkpoint = [], None
+                    self.mx.clear_cache()
+                    mode, reused, shared, split_at = 'fresh', 0, None, 0
         miss_tokens = self._eviction_miss(ids) if mode == 'fresh' and self.reuse else 0
         lcp = common_prefix_length(self.cache_ids, ids)
         cache, cache_ids, ctx, checkpoint = self.cache, self.cache_ids, self.ctx_hidden, self.checkpoint

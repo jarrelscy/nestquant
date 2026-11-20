@@ -59,5 +59,25 @@ class ReconnectTest(unittest.TestCase):
         self.assertEqual(len(made), 1)
 
 
+class UnavailableTest(unittest.TestCase):
+    def test_unreachable_store_fails_fast_and_pauses(self):
+        import time
+        shared = kv.SharedKV('10.255.255.1', 6666, 'x')          # no route: the connect attempt times out
+        started = time.perf_counter()
+        with self.assertRaises(OSError):
+            shared.available_chunks(list(range(8000)))
+        self.assertLess(time.perf_counter() - started, 4)
+        self.assertFalse(shared.available())                       # paused after the failure
+        self.assertEqual(shared.stats['errors'], 1)
+        shared.down_until = 0
+        self.assertTrue(shared.available())
+
+    def test_refused_connection(self):
+        shared = kv.SharedKV('127.0.0.1', 1, 'x')
+        with self.assertRaises(OSError):
+            shared.available_chunks(list(range(8000)))
+        self.assertFalse(shared.available())
+
+
 if __name__ == '__main__':
     unittest.main()

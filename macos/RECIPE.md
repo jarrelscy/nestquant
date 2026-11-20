@@ -268,6 +268,9 @@ described in bigbox:~/lmcache-shared-format.md.
   served: 2 chunks (14,336 tokens) restored in 6.5 s, the remaining 6,603 tokens prefilled locally, 16.8 s to
   the first token instead of 45.7 s, and the same answer in substance as bigbox's. Values are fp8, so
   continuations drift slightly from a local prefill.
+- If the store is unavailable, requests fall back to a local prefill and never fail because of it: a refused
+  connection costs nothing, an unreachable host 2 s (connection timeout), and after any error the store is skipped
+  for 60 s. A block that cannot be restored is logged (`kvshare_error`) and the prompt is prefilled locally.
 - If Kvrocks restarts, the server replaces its dropped connection and retries once. (The vLLM writers' LMCache
   client does not reconnect: restart them after a Kvrocks restart.)
 - `nqstat.py`, the widget and `/metrics` show lookups, restores, chunks and transfer speed. A failing store is
