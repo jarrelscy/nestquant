@@ -40,5 +40,24 @@ class DecodeTest(unittest.TestCase):
         self.assertTrue((latent[0::2] == 1.0).all() and (latent[1::2] == 2.0).all())
 
 
+class ReconnectTest(unittest.TestCase):
+    def test_dropped_connection_is_replaced(self):
+        class Dead:
+            closed = False
+            def pipeline(self, commands): raise ConnectionError('Kvrocks closed the connection')
+            def close(self): self.closed = True
+        class Live:
+            def pipeline(self, commands): return [1] * len(commands)
+            def close(self): pass
+        shared = kv.SharedKV('h')
+        dead = Dead()
+        shared._pool = [dead]
+        made = []
+        shared._client = lambda: shared._pool.pop() if shared._pool else made.append(Live()) or made[-1]
+        self.assertEqual(shared._call(lambda c: c.pipeline([1, 2])), [1, 1])
+        self.assertTrue(dead.closed)
+        self.assertEqual(len(made), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

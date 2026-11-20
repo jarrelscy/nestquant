@@ -263,9 +263,13 @@ described in bigbox:~/lmcache-shared-format.md.
   chunk, then prefills the rest (which also rebuilds the drafter's context).
 - Requests must tokenize exactly as on the vLLM servers, so `NQ_CHAT_TEMPLATE` renders every request with their
   template (it renders the same text as this server's own templates, thinking on and off).
-- Each chunk is 214 MB, about 4 s over Wi-Fi at 50 MB/s, against about 20 s to prefill 7,168 tokens here.
-  Self-test (own cache encoded in the vLLM format): an 18K-token prompt prefilled in 26 s instead of 49 s with
-  the same first token. Values are fp8, so continuations drift slightly from a local prefill.
+- A prefix of N chunks fetches 54 MB per chunk plus 160 MB of KDA state for the last one (214 MB for one chunk,
+  269 MB for two), about 50 MB/s over Wi-Fi. Measured with a 20,939-token prompt that bigbox's vLLM had just
+  served: 2 chunks (14,336 tokens) restored in 6.5 s, the remaining 6,603 tokens prefilled locally, 16.8 s to
+  the first token instead of 45.7 s, and the same answer in substance as bigbox's. Values are fp8, so
+  continuations drift slightly from a local prefill.
+- If Kvrocks restarts, the server replaces its dropped connection and retries once. (The vLLM writers' LMCache
+  client does not reconnect: restart them after a Kvrocks restart.)
 - `nqstat.py`, the widget and `/metrics` show lookups, restores, chunks and transfer speed. A failing store is
   logged (`kvshare_error`) and the request falls back to the local path.
 

@@ -247,31 +247,49 @@ class SharedKV:
         with self._lock:
             self._pool.append(client)
 
+    def _call(self, run):
+        """Run run(client) on a pooled connection; a dropped connection (Kvrocks restarted, idle timeout) is
+        replaced and the call retried once."""
+        for attempt in (0, 1):
+            client = self._client()
+            try:
+                result = run(client)
+            except (ConnectionError, OSError):
+                client.close()
+                with self._lock:
+                    for stale in self._pool:
+                        stale.close()
+                    self._pool.clear()
+                if attempt:
+                    raise
+                continue
+            except Exception:
+                client.close()
+                raise
+            self._release(client)
+            return result
+
     def available_chunks(self, token_ids):
         """Number of leading chunks of `token_ids` stored completely (group 0 for each, group 1 for the last)."""
         hashes = chunk_hashes(token_ids)
         if not hashes:
             return 0, hashes
         self.stats['lookups'] += 1
-        client = self._client()
+        keys = [object_key(h, r, 0) for h in hashes for r in (0, 1)]
         try:
-            keys = [object_key(h, r, 0) for h in hashes for r in (0, 1)]
-            present = client.pipeline([('EXISTS', k) for k in keys])
+            present = self._call(lambda client: client.pipeline([('EXISTS', k) for k in keys]))
+            n = 0
+            while n < len(hashes) and present[2 * n] and present[2 * n + 1]:
+                n += 1
+            while n:
+                last = self._call(lambda client: client.pipeline(
+                    [('EXISTS', object_key(hashes[n - 1], r, 1)) for r in (0, 1)]))
+                if all(last):
+                    break
+                n -= 1
         except Exception:
-            client.close()
             self.stats['errors'] += 1
             raise
-        self._release(client)
-        n = 0
-        while n < len(hashes) and present[2 * n] and present[2 * n + 1]:
-            n += 1
-        while n:
-            client = self._client()
-            last = client.pipeline([('EXISTS', object_key(hashes[n - 1], r, 1)) for r in (0, 1)])
-            self._release(client)
-            if all(last):
-                break
-            n -= 1
         return n, hashes
 
     def fetch(self, hashes, n):
@@ -281,19 +299,14 @@ class SharedKV:
         started = time.perf_counter()
 
         def worker(part):
-            client = None
             try:
-                client = self._client()
                 for c, r, g in part:
-                    data = client.command('GET', object_key(hashes[c], r, g))
+                    data = self._call(lambda client: client.command('GET', object_key(hashes[c], r, g)))
                     expected = G0_BYTES if g == 0 else G1_BYTES
                     if data is None or len(data) != expected:
                         raise ValueError(f'object {(c, r, g)} missing or {0 if data is None else len(data)} bytes')
                     results[(c, r, g)] = data
-                self._release(client)
             except Exception as error:      # reported below
-                if client is not None:
-                    client.close()
                 errors.append(error)
 
         # Large group-1 objects first so they overlap the many group-0 ones.
